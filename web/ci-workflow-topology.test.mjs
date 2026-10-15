@@ -10,6 +10,34 @@ const workflowFiles = (await readdir(workflowDir))
 
 assert.ok(workflowFiles.length > 0, "CI workflow inventory must not be empty");
 
+test("PR Fast Gate owns unconditional Rust format and lint checks", async () => {
+  const [fast, ci] = await Promise.all([
+    readFile(new URL("pr-fast.yml", workflowDir), "utf8"),
+    readFile(new URL("ci.yml", workflowDir), "utf8"),
+  ]);
+  assert.match(fast, /^on:\n  pull_request:\n\npermissions:/m,
+    "Fast Gate must select every PR without filters");
+  const rustLint = fast.split("  rust-lint:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  const rust = ci.split("\n  rust:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  assert.ok(rustLint, "Fast Gate must retain its Rust lint job");
+  assert.ok(rust, "main CI must retain its full Rust job");
+  assert.doesNotMatch(rustLint, /^\s+(?:if|continue-on-error):/m,
+    "Rust lint job and its steps must remain unconditional and fail closed");
+  for (const [name, command] of [
+    ["Format workspace", "cargo fmt --all -- --check"],
+    ["Clippy workspace", "cargo clippy --workspace --all-targets --all-features -- -D warnings"],
+  ]) {
+    assert.ok(rustLint.split("\n").includes(`        run: ${command}`),
+      `Fast Gate must run ${command} without ignoring failure`);
+    const step = rust.split(`      - name: ${name}\n`)[1]?.split("      - name:")[0];
+    assert.equal(step?.trim(), `if: github.event_name != 'pull_request'\n        run: ${command}`,
+      `${name} must retain the same command for every non-PR event`);
+  }
+  const tests = rust.split("      - name: Test workspace\n")[1]?.split("      - name:")[0];
+  assert.equal(tests?.trim(), "run: cargo test --workspace --all-features",
+    "full workspace tests must run for PRs without ignoring failures");
+});
+
 const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],

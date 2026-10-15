@@ -454,7 +454,7 @@ test("a late sparse read cannot cross a failed callback phase into its successor
   assert.equal(continuation.callbackRequest.phaseTokenJson, nextToken);
   assert.equal(continuation.callbackRequest.read, null);
   assert.equal(readCalls, 2, "a stale read result must not replay or replace the successor read");
-  void api.completeContinuationCallback(context, nextToken, "successor batch");
+  void api.completeContinuationCallback(continuation.context, nextToken, "successor batch");
   assert.equal(await nextCallback, "successor batch");
 });
 
@@ -576,8 +576,18 @@ test("a trapped host never publishes late success or request errors", () => {
   ]);
 });
 
-test("source compilation never replays module effects or changes fixtures", () => {
-  assert.match(source, /compile_authoring_source\(\s*__noon_source\s*\)/);
+test("source compilation never replays module effects or changes fixtures", async () => {
+  const diagnostics = await readFile(new URL("./authoring-diagnostic-runtime.js", import.meta.url), "utf8");
+  const authoring = source.slice(
+    source.indexOf("async function runAuthoringSource"),
+    source.indexOf("async function runCanonicalCallbackPhase"),
+  );
+  // Diagnostics moved compilation to the shared wrapper; source still compiles
+  // once with its actual filename and executes only in the canonical worker.
+  assert.match(diagnostics, /compile_authoring_source\(\s*__noon_source,\s*filename=__noon_filename\s*\)/);
+  assert.equal(diagnostics.match(/compile_authoring_source\(/g)?.length, 1);
+  assert.equal(authoring.match(/withAuthoringDiagnostics\(/g)?.length, 1);
+  assert.doesNotMatch(authoring, /compile_authoring_source/);
   assert.match(source, /await execute_authoring_module\(__noon_code, __noon_namespace\)/);
   assert.match(source, /__noon_namespace\[MODULE_BARRIER_GLOBAL\] = await_module_source_barrier/);
   assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);

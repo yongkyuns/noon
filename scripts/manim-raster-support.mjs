@@ -287,7 +287,7 @@ export function browserArgs(backend, { gpuMode = "software" } = {}) {
   }
   if (gpuMode === "hardware") {
     return [
-      "--disable-features=WebGPU",
+      "--disable-features=WebGPU,WebGPUService,WebGPUBlobCache",
       "--use-gpu-in-tests",
       "--ignore-gpu-blocklist",
       "--force-high-performance-gpu",

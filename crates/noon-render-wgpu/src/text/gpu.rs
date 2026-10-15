@@ -874,6 +874,8 @@ mod tests {
 
     fn raster_key(glyph_id: u16) -> GlyphRasterKey {
         GlyphRasterKey {
+            outline_profile: noon_core::GlyphOutlineProfile::Font,
+            outline_size_bits: 0,
             font: FontResourceHandle {
                 arena: 0,
                 id: FontResourceId::new(0),

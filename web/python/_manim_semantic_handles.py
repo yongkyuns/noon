@@ -397,6 +397,19 @@ def _attach_geometry_options(
         self._canonical_live_target_context = context
 
 
+def _empty_path_init(
+    self: _base.Mobject, *, color=None, kind: str = "Mobject", **kwargs: Any,
+) -> None:
+    """Construct a point-free wrapper through the shared Rust geometry owner."""
+    parsed = _base.BLACK if color is None else _constructor_color("color", color)
+    if _geometry_options is None:
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
+    options = engine_call(_geometry_options.emptyPath)
+    _apply_constructor_color(options, parsed)
+    _apply_shared_constructor_options(options, kwargs)
+    _attach_geometry_options(self, options, kind)
+
+
 def _circle_init(
     self: _compat.Circle,
     radius: float = 1.0,
@@ -1495,6 +1508,8 @@ def _group_paint(self, operation, arguments):
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     phase = _ACTIVE_CANONICAL_CONTEXT.get()
     if phase is not None:
+        if operation == "OwnColor":
+            raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
         phase.paint_family(handle, operation, arguments)
         return self
     context = _group_target_context(self)
@@ -1515,10 +1530,10 @@ def _family_color_arguments(color):
     return (True, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _group_set_color(self, color):
+def _group_set_color(self, color, family=True):
     parsed = _compat._as_color("color", color)
     arguments = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    return _group_paint(self, "Color", arguments)
+    return _group_paint(self, "Color" if family else "OwnColor", arguments)
 
 
 def _group_set_fill(self, color=None, opacity=None):
@@ -1906,17 +1921,46 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
-def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0) -> None:
+def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError("get_family during staged callback membership is not supported")
+    # Rust selects the membership and order. This walk only resolves returned
+    # semantic identities to their existing host wrappers, preserving aliases.
+    _, handle = _family_member_handle(self)
+    if handle is None:
+        raise RuntimeError("get_family requires a shared Rust semantic handle")
+    keys = [str(key) for key in engine_call(handle.familyKeys)]
+    wrappers = {}
+    pending = [self]
+    while pending:
+        wrapper = pending.pop()
+        key = _family_wrapper_key(wrapper)
+        if key in wrappers:
+            continue
+        wrappers[key] = wrapper
+        if _is_shared_family(wrapper):
+            pending.extend(wrapper.submobjects)
+    try:
+        return [wrappers[key] for key in keys]
+    except KeyError as error:
+        raise RuntimeError("shared family identity has no Python wrapper") from error
+
+
+def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
     if _create_family_handle is None or _new_membership_batch is None:
         raise RuntimeError("Group construction requires the shared Rust authoring host")
     z_index = _ir._finite_number("z_index", z_index)
+    parsed = _base.BLACK if color is None else _compat._as_color("color", color)
+    arguments = () if parsed == _base.WHITE else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     family = (
-        engine_call(context.liveCreateFamily, batch, z_index)
+        engine_call(context.liveCreateFamilyWithColor if arguments else context.liveCreateFamily,
+                    batch, z_index, *arguments)
         if context is not None
-        else engine_call(_create_family_handle, batch, z_index)
+        else engine_call(_create_family_handle, batch, z_index, *arguments)
     )
     self._semantic_family_handle = family
     self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}

@@ -234,6 +234,12 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    /// Complete a family method target, including its non-rendered own color.
+    FamilyMethodTargetTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     /// Match ordered family members by activation-time normalized point geometry.
     MatchingFamilyTransformTo {
         source: &'a MobjectFamily,
@@ -1505,13 +1511,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         let bounds = mobject.layout_bounds_at(transform)?;
         let boundary = mobject.boundary_bounds_at(transform)?;
-        let center = boundary.map_or(
-            (
-                f64::from(transform.translation.x),
-                f64::from(transform.translation.y),
-            ),
-            |b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5),
-        );
+        let center = crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0));
         Ok(EffectiveMobjectLayout {
             center,
             width: bounds.map_or(0.0, Bounds2D64::width),
@@ -2156,13 +2156,29 @@ impl<'a> LiveSession<'a> {
                 source,
                 target_state,
                 options,
+            }
+            | AnimationCompositionRequest::FamilyMethodTargetTo {
+                source,
+                target_state,
+                options,
             } => {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
-                Request::FamilyTransformTo {
-                    source: source.node_id(),
-                    target_state: target_state.node_id(),
-                    options: *options,
+                if matches!(
+                    request,
+                    AnimationCompositionRequest::FamilyMethodTargetTo { .. }
+                ) {
+                    Request::FamilyMethodTargetTo {
+                        source: source.node_id(),
+                        target_state: target_state.node_id(),
+                        options: *options,
+                    }
+                } else {
+                    Request::FamilyTransformTo {
+                        source: source.node_id(),
+                        target_state: target_state.node_id(),
+                        options: *options,
+                    }
                 }
             }
             AnimationCompositionRequest::MatchingFamilyTransformTo {
@@ -2978,7 +2994,23 @@ impl<'a> LiveSession<'a> {
         blue: f64,
         alpha: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| edit_color(style, red, green, blue, alpha))
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.color_transaction(red, green, blue, alpha, true)?)
+    }
+
+    /// Publish root-only authored color while preserving every descendant.
+    pub fn set_family_own_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.color_transaction(red, green, blue, alpha, false)?)
     }
 
     /// Match a donor's effective RGB in one coherent family publication.

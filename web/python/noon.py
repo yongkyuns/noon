@@ -252,8 +252,22 @@ def _callback_operations():
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
-    def __init__(self) -> None:
-        raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
+    def __init__(
+        self, color: Color = WHITE, name: str | None = None, dim: int = 3,
+        target: Mobject | None = None, z_index: float = 0,
+    ) -> None:
+        from operator import index
+        if isinstance(dim, bool):
+            raise TypeError("Mobject dimension must be an integer")
+        dimension = index(dim)
+        if dimension < 0:
+            raise ValueError("Mobject dimension must be non-negative")
+        if dimension not in (2, 3):
+            raise NotImplementedError("Mobject currently supports planar dimensions 2 and 3")
+        _semantic_operations()._empty_path_init(self, color=color, kind="Mobject", z_index=z_index)
+        self.name = self.__class__.__name__ if name is None else name
+        self.dim = dim
+        self.target = target
 
     def get_group_class(self):
         from _manim_compat import Group
@@ -397,6 +411,11 @@ class Mobject:
     def get_color(self) -> Color:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
+
+    def get_family(self, recurse: bool = True) -> list[Mobject]:
+        """Return existing wrappers in shared family order, including this root."""
+        from _manim_semantic_handles import _get_family
+        return _get_family(self)
 
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
@@ -895,12 +914,53 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "rate_functions": "_manim_rate_functions",
+    "unit": "_manim_unit",
+
+    "CubicBezier": "_manim_geometry",
+    "get_winding_number": "_manim_user_vectors",
+    "bezier": "_manim_user_vectors",
+    "partial_bezier_points": "_manim_user_vectors",
+    "split_bezier": "_manim_user_vectors",
+    "subdivide_bezier": "_manim_user_vectors",
+    "bezier_remap": "_manim_user_vectors",
+    "point_lies_on_bezier": "_manim_user_vectors",
+    "proportions_along_bezier_curve_for_point": "_manim_user_vectors",
+    "is_closed": "_manim_user_vectors",
+    "straight_path": "_manim_user_vectors",
+    "line_intersection": "_manim_user_vectors",
+    "find_intersection": "_manim_user_vectors",
+    "quaternion_mult": "_manim_user_vectors",
+    "quaternion_from_angle_axis": "_manim_user_vectors",
+    "angle_axis_from_quaternion": "_manim_user_vectors",
+    "quaternion_conjugate": "_manim_user_vectors",
+    "thick_diagonal": "_manim_user_vectors",
+    "rotation_about_z": "_manim_user_vectors",
+    "rotation_matrix": "_manim_user_vectors",
+    "cartesian_to_spherical": "_manim_user_vectors",
+    "spherical_to_cartesian": "_manim_user_vectors",
+    "complex_to_R3": "_manim_user_vectors",
+    "R3_to_complex": "_manim_user_vectors",
+    "complex_func_to_R3_func": "_manim_user_vectors",
+    "center_of_mass": "_manim_user_vectors",
+    "midpoint": "_manim_user_vectors",
+    "normalize": "_manim_user_vectors",
+    "angle_of_vector": "_manim_user_vectors",
+    "angle_between_vectors": "_manim_user_vectors",
+    "shoelace": "_manim_user_vectors",
+    "shoelace_direction": "_manim_user_vectors",
+    "cross2d": "_manim_user_vectors",
     "add_extension_if_not_present": "_manim_file_paths",
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
     "seek_full_path_from_defaults": "_manim_file_paths",
     "ensure_executable": "_manim_file_paths",
     "modify_atime": "_manim_file_paths",
+    "interpolate": "_manim_interpolation",
+    "integer_interpolate": "_manim_interpolation",
+    "mid": "_manim_interpolation",
+    "inverse_interpolate": "_manim_interpolation",
+    "match_interpolate": "_manim_interpolation",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",
@@ -975,9 +1035,15 @@ _PUBLIC_EXPORTS = {
     "smoothstep": "_manim_rate_functions",
     "smootherstep": "_manim_rate_functions",
     "smoothererstep": "_manim_rate_functions",
+    "slow_into": "_manim_rate_functions",
+    "double_smooth": "_manim_rate_functions",
     "rush_into": "_manim_rate_functions",
     "rush_from": "_manim_rate_functions",
     "there_and_back": "_manim_rate_functions",
+    "there_and_back_with_pause": "_manim_rate_functions",
+    "running_start": "_manim_rate_functions",
+    "wiggle": "_manim_rate_functions",
+    "exponential_decay": "_manim_rate_functions",
     "not_quite_there": "_manim_rate_functions",
     "squish_rate_func": "_manim_rate_functions",
     "Add": "_manim_composition",
@@ -1020,6 +1086,7 @@ _PUBLIC_EXPORTS = {
     "RESAMPLING_ALGORITHMS": "_manim_image",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",
+    "ScreenRectangle": "_manim_compat",
     "Square": "_manim_compat",
     "Line": "_manim_compat",
     "Path": "_manim_compat",
@@ -1054,6 +1121,7 @@ _PUBLIC_EXPORTS = {
     "Sector": "_manim_shared_geometry",
     "Annulus": "_manim_shared_geometry",
     "Dot": "_manim_geometry",
+    "AnnotationDot": "_manim_geometry",
     "Ellipse": "_manim_geometry",
     "Triangle": "_manim_geometry",
     "Polygram": "_manim_polygon",

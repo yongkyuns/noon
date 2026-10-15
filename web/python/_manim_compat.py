@@ -101,15 +101,9 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
-    def __init__(self, *, color=None, **kwargs):
-        from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
-        from _noon_errors import engine_call
-        if _geometry_options is None:
-            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-        options = engine_call(_geometry_options.emptyPath)
-        _apply_shared_constructor_options(options, kwargs)
-        _apply_constructor_color(options, color)
-        _attach_geometry_options(self, options, "VMobject")
+    def __init__(self, *, color=_base.WHITE, **kwargs):
+        from _manim_semantic_handles import _empty_path_init
+        _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
@@ -164,6 +158,10 @@ class VMobject(Mobject):
     def get_num_curves(self):
         from _manim_path_queries import curve_count
         return curve_count(self)
+
+    def get_num_points(self):
+        from _manim_path_queries import point_count
+        return point_count(self)
 
     def get_nth_curve_points(self, n):
         from _manim_path_queries import curve_points
@@ -308,6 +306,23 @@ class Rectangle(VMobject):
         _rectangle_init(self, width, height, color=color, **kwargs)
 
 
+class ScreenRectangle(Rectangle):
+    """Manim screen call shape over shared rectangle geometry and bounds."""
+
+    def __init__(
+        self, aspect_ratio: float = 16.0 / 9.0, height: float = 4, **kwargs: Any
+    ) -> None:
+        super().__init__(width=aspect_ratio * height, height=height, **kwargs)
+
+    @property
+    def aspect_ratio(self) -> float:
+        return self.width / self.height
+
+    @aspect_ratio.setter
+    def aspect_ratio(self, value: float) -> None:
+        self.stretch_to_fit_width(value * self.height)
+
+
 class Square(Rectangle):
     def __init__(
         self,
@@ -409,9 +424,9 @@ class Group(Mobject):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
 
-    def __init__(self, *mobjects: object, z_index: float = 0) -> None:
+    def __init__(self, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
         from _manim_semantic_handles import _group_init
-        _group_init(self, *mobjects, z_index=z_index)
+        _group_init(self, *mobjects, z_index=z_index, color=color)
 
     @property
     def submobjects(self) -> list[object]:
@@ -512,11 +527,11 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_rotate
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
-    def set_color(self, color: object) -> Group:
+    def set_color(self, color: object, family: bool = True) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_color(self, color)
         from _manim_semantic_handles import _group_set_color
-        return _group_set_color(self, color)
+        return _group_set_color(self, color, family=family)
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:

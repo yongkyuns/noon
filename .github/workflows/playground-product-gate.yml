@@ -566,7 +566,8 @@ jobs:
   compare:
     name: Runtime, visual, latency, and FPS regression
     needs: [build, measure-adjacent, measure-cumulative]
-    if: ${{ always() }}
+    # Report failed prerequisites, but let superseded runs release their slot.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -690,4 +691,4 @@ jobs:
           name: playground-product-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
           path: candidate/browser-smoke-artifacts/product-gate
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3

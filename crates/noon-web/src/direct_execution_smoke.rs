@@ -1215,6 +1215,14 @@ pub async fn create_direct_path_construction_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+#[wasm_bindgen(js_name = createDirectCubicBezierSmokeRenderer)]
+pub async fn create_direct_cubic_bezier_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::cubic_bezier::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 #[wasm_bindgen(js_name = createDirectPathSelectionSmokeRenderer)]
 pub async fn create_direct_path_selection_smoke_renderer(
     canvas: OffscreenCanvas,
@@ -1336,11 +1344,19 @@ pub async fn create_direct_moving_zoomed_scene_around_renderer(
         .await
 }
 
-/// Ordinary method targets with three shared polynomial rate functions.
+/// Ordinary method targets with five shared deterministic rate functions.
 #[wasm_bindgen(js_name = createDirectPolynomialRatesRenderer)]
 pub async fn create_direct_polynomial_rates_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::polynomial_rates::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPolynomialEasingsRenderer)]
+pub async fn create_direct_polynomial_easings_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::polynomial_rates::easing_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

@@ -308,6 +308,9 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
             class OwnedFace:
                 def __init__(self, token): self.token, self.freed = token, False
                 def cloneFace(self): return OwnedFace(self.token)
+                def withMetricsProfile(self, profile):
+                    profile_calls.append((self.token, profile))
+                    return OwnedFace((self.token, profile))
                 def free(self): self.freed = True
             def make_face(family, data, index):
                 bridge_calls.append((family, bytes(data), index))
@@ -344,6 +347,18 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
                 else: raise AssertionError("invalid bundled family accepted")
             assert len(bundled_calls) == before
 
+            profile_calls = []
+            fractional = face.with_metrics_profile("cairo-coretext")
+            assert fractional is not face and face.metrics_profile == "cairo-freetype"
+            assert fractional.metrics_profile == "cairo-coretext"
+            assert fractional.family == face.family and fractional.face_index == face.face_index
+            assert fractional._clone_for_text().token == ("times-face", "cairo-coretext")
+            assert profile_calls == [("times-face", "cairo-coretext")]
+            for invalid in (None, "unknown"):
+                try: face.with_metrics_profile(invalid)
+                except (TypeError, ValueError): pass
+                else: raise AssertionError("invalid metrics accepted")
+            assert profile_calls == [("times-face", "cairo-coretext")]
             assert copy.copy(face) is face and copy.deepcopy(face) is face
             try: face.family = "changed"
             except AttributeError: pass

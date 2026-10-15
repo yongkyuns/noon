@@ -224,6 +224,7 @@ impl ExecutionSession {
             lifecycle_root,
             lifecycle_removals,
             family_transform,
+            family_colors,
             object_entries: entries,
             scalar_entries,
         } = &pending.kind;
@@ -374,6 +375,9 @@ impl ExecutionSession {
                 &mut completed_styles,
                 *completion,
             );
+        }
+        for (family, color) in family_colors {
+            semantic.set_family_color(*family, *color);
         }
         for (object, style) in &completed_styles {
             semantic.replace_style(*object, style.clone());

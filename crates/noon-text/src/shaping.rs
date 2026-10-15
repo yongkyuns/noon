@@ -5,21 +5,20 @@
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
+#[cfg(test)]
+use crate::outline::outline_commands_to_path;
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting, GlyphRun,
     PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
     TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
+    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2,
 };
 #[cfg(test)]
-use swash::zeno::PathData;
-use swash::{
-    scale::ScaleContext, shape::ShapeContext, text::Script, zeno::Command as ZenoCommand, FontRef,
-    GlyphId,
-};
+use swash::{scale::ScaleContext, zeno::PathData};
+use swash::{shape::ShapeContext, text::Script, FontRef, GlyphId};
 
-pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v5";
+pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10/skrifa-0.44.0";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v6";
 const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
 // `Text` sends its line step through ManimPango after dividing by 4.8. Pango
 // uses 96 device units per inch for its point-sized font metrics, so the SVG
@@ -30,45 +29,15 @@ const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
 const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
 
-/// Shared unhinted glyph geometry in the requested layout coordinate space.
-/// Bounds construction and retained drawing use the same extraction. This
-/// preserves Swash's existing size/variation behavior and Q/C control points;
-/// it performs no Cairo-grid or platform-dependent coordinate substitution.
-#[doc(hidden)]
-pub fn unhinted_glyph_scaler<'a>(
-    context: &'a mut ScaleContext,
-    font: FontRef<'a>,
-    size: f32,
-    variations: &[([u8; 4], f32)],
-) -> swash::scale::Scaler<'a> {
-    context
-        .builder(font)
-        .size(size)
-        .hint(false)
-        .variations(variations.iter())
-        .build()
-}
-
-/// Convert Swash/Zeno geometry without changing curve degree or coordinates.
-#[doc(hidden)]
-pub fn outline_commands_to_path(commands: impl Iterator<Item = ZenoCommand>) -> VectorPath {
-    let mut path = VectorPath::new();
-    for command in commands {
-        path = match command {
-            ZenoCommand::MoveTo(p) => path.move_to(Vec2::new(p.x, p.y)),
-            ZenoCommand::LineTo(p) => path.line_to(Vec2::new(p.x, p.y)),
-            ZenoCommand::QuadTo(c, p) => {
-                path.quadratic_to(Vec2::new(c.x, c.y), Vec2::new(p.x, p.y))
-            }
-            ZenoCommand::CurveTo(a, b, p) => path.cubic_to(
-                Vec2::new(a.x, a.y),
-                Vec2::new(b.x, b.y),
-                Vec2::new(p.x, p.y),
-            ),
-            ZenoCommand::Close => path.close(),
-        };
-    }
-    path
+/// Explicit layout environment for native text; the portable default is stable
+/// across hosts. This changes preparation only, never the presentation clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NativeFontMetricsProfile {
+    #[default]
+    CairoFreeType,
+    /// Fractional Pango layout with Cairo/CoreText paths, for static monochrome
+    /// TrueType faces. CFF, variable and intrinsic color faces are unsupported.
+    CairoCoreText,
 }
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
@@ -79,6 +48,7 @@ pub struct NativeFontFace {
     pub face_key: Arc<str>,
     pub face_index: u32,
     pub data: Arc<[u8]>,
+    metrics_profile: NativeFontMetricsProfile,
 }
 
 impl NativeFontFace {
@@ -101,7 +71,38 @@ impl NativeFontFace {
             face_key,
             face_index,
             data,
+            metrics_profile: NativeFontMetricsProfile::default(),
         })
+    }
+
+    pub fn metrics_profile(&self) -> NativeFontMetricsProfile {
+        self.metrics_profile
+    }
+
+    /// Select a deterministic metrics recipe without copying the font bytes.
+    pub fn with_metrics_profile(
+        mut self,
+        profile: NativeFontMetricsProfile,
+    ) -> Result<Self, NativeTextError> {
+        if profile == NativeFontMetricsProfile::CairoCoreText
+            && !crate::outline::supports_coretext_metrics(&self.data, self.face_index)
+        {
+            return Err(NativeTextError::UnsupportedFontMetricsProfile);
+        }
+        self.metrics_profile = profile;
+        Ok(self)
+    }
+
+    fn outline_profile(&self) -> Result<noon_core::GlyphOutlineProfile, NativeTextError> {
+        match self.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => {
+                crate::outline::native_outline_profile(&self.data, self.face_index)
+                    .map_err(|_| NativeTextError::InvalidGlyphOutline)
+            }
+            NativeFontMetricsProfile::CairoCoreText => {
+                Ok(noon_core::GlyphOutlineProfile::CairoCoreText)
+            }
+        }
     }
 }
 
@@ -150,6 +151,8 @@ pub enum NativeTextError {
         face_index: u32,
     },
     InvalidFontSize,
+    InvalidGlyphOutline,
+    UnsupportedFontMetricsProfile,
     InvalidLineSpacing,
     SourceTooLarge,
     InvalidStyleSpan {
@@ -173,6 +176,13 @@ impl fmt::Display for NativeTextError {
                 formatter,
                 "invalid OpenType font face at index {face_index}"
             ),
+            Self::UnsupportedFontMetricsProfile => write!(
+                formatter,
+                "Cairo/CoreText metrics require a static monochrome TrueType face"
+            ),
+            Self::InvalidGlyphOutline => {
+                write!(formatter, "invalid or unsupported OpenType glyph outline")
+            }
             Self::InvalidFontSize => write!(
                 formatter,
                 "native text font size must be finite and positive"
@@ -221,14 +231,14 @@ struct SourceLine<'a> {
 /// caches without retaining frontend-specific text state.
 pub struct NativeTextCompiler {
     shape_context: ShapeContext,
-    scale_context: ScaleContext,
+    outline_context: crate::outline::GlyphOutlineContext,
 }
 
 impl NativeTextCompiler {
     pub fn new() -> Self {
         Self {
             shape_context: ShapeContext::new(),
-            scale_context: ScaleContext::new(),
+            outline_context: crate::outline::GlyphOutlineContext::default(),
         }
     }
 
@@ -315,9 +325,13 @@ impl NativeTextCompiler {
                     &mut render_items,
                     identity.clone(),
                     options,
-                    options.fill,
                     baseline_y,
-                    Vec::new(),
+                    ShapedRun {
+                        fill: options.fill,
+                        glyphs: Vec::new(),
+                        visual_bounds: None,
+                    },
+                    base_font.outline_profile()?,
                 );
                 remember_font(&mut used_fonts, identity, base_font.data.clone());
                 // Empty lines advance the next baseline, but contribute no
@@ -361,14 +375,10 @@ impl NativeTextCompiler {
                 let ShapedGroup {
                     end_x,
                     runs: shaped_runs,
+                    outline_profile,
                 } = shaped;
-                for ShapedRun {
-                    fill,
-                    glyphs,
-                    visual_bounds,
-                } in shaped_runs
-                {
-                    if let Some(bounds) = visual_bounds {
+                for shaped_run in shaped_runs {
+                    if let Some(bounds) = shaped_run.visual_bounds {
                         let bounds = Rect::new(
                             Vec2::new(bounds.min.x, bounds.min.y + baseline_y),
                             Vec2::new(bounds.max.x, bounds.max.y + baseline_y),
@@ -381,9 +391,9 @@ impl NativeTextCompiler {
                         &mut render_items,
                         identity.clone(),
                         options,
-                        fill,
                         baseline_y,
-                        glyphs,
+                        shaped_run,
+                        outline_profile,
                     );
                 }
                 remember_font(&mut used_fonts, identity, font.data.clone());
@@ -446,6 +456,15 @@ impl NativeTextCompiler {
                 face_index: font.face_index,
             },
         )?;
+        let shaping_size = match font.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => options.font_size,
+            NativeFontMetricsProfile::CairoCoreText => {
+                // Glyph placement and paths must use the same resolved size.
+                (crate::outline::coretext_layout_size(options.font_size)
+                    .map_err(|_| NativeTextError::InvalidGlyphOutline)?
+                    * 3.6) as f32
+            }
+        };
         let mut shaper = self
             .shape_context
             .builder_with_id(
@@ -456,10 +475,14 @@ impl NativeTextCompiler {
                 ],
             )
             .script(Script::Latin)
-            .size(options.font_size)
+            .size(shaping_size)
             .variations(variations)
             .build();
         shaper.add_str(text);
+        let layout_unit = match font.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => MANIM_PANGO_LAYOUT_PIXEL,
+            NativeFontMetricsProfile::CairoCoreText => MANIM_PANGO_LAYOUT_PIXEL / 1024.0,
+        };
         let mut cursor_x = initial_x;
         let mut projected = Vec::<ProjectedRun>::new();
         let mut paint_span = 0_usize;
@@ -505,8 +528,7 @@ impl NativeTextCompiler {
             }
             *cluster_ordinal = cluster_ordinal.saturating_add(1);
             let raw_advance = cluster.advance();
-            let positioned_advance =
-                (raw_advance / MANIM_PANGO_LAYOUT_PIXEL).round() * MANIM_PANGO_LAYOUT_PIXEL;
+            let positioned_advance = (raw_advance / layout_unit).round() * layout_unit;
             if let Some(glyph) = run.glyphs[first_cluster_glyph..].last_mut() {
                 glyph.advance.x += positioned_advance - raw_advance;
             }
@@ -515,12 +537,18 @@ impl NativeTextCompiler {
         if let Some(error) = boundary_error {
             return Err(error);
         }
-        let mut scaler = unhinted_glyph_scaler(
-            &mut self.scale_context,
-            font_ref,
-            options.font_size,
-            variations,
-        );
+        let outline_profile = font.outline_profile()?;
+        let mut scaler = self
+            .outline_context
+            .scaler(
+                font_ref,
+                font.face_index,
+                options.font_size,
+                variations,
+                outline_profile,
+            )
+            .map_err(|_| NativeTextError::InvalidGlyphOutline)?;
+        let mut outline_error = false;
         let mut glyph_bounds = HashMap::<GlyphId, Option<Rect>>::new();
         let runs = projected
             .into_iter()
@@ -530,16 +558,14 @@ impl NativeTextCompiler {
                     .iter_mut()
                     .filter_map(|glyph| {
                         let glyph_id = GlyphId::try_from(glyph.glyph_id).ok()?;
-                        let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| {
-                            scaler.scale_outline(glyph_id).and_then(|outline| {
-                                let b = outline.bounds();
-                                (!b.is_empty()).then(|| {
-                                    Rect::new(
-                                        Vec2::new(b.min.x, b.min.y),
-                                        Vec2::new(b.max.x, b.max.y),
-                                    )
-                                })
-                            })
+                        let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| match scaler
+                            .outline(glyph_id)
+                        {
+                            Ok(path) => path.conservative_bounds(),
+                            Err(_) => {
+                                outline_error = true;
+                                None
+                            }
                         });
                         bounds.map(|bounds| {
                             glyph.bounds =
@@ -555,7 +581,11 @@ impl NativeTextCompiler {
                 }
             })
             .collect();
+        if outline_error {
+            return Err(NativeTextError::InvalidGlyphOutline);
+        }
         Ok(ShapedGroup {
+            outline_profile,
             end_x: cursor_x,
             runs,
         })
@@ -573,6 +603,7 @@ struct ProjectedRun {
     glyphs: Vec<PositionedGlyph>,
 }
 struct ShapedGroup {
+    outline_profile: noon_core::GlyphOutlineProfile,
     end_x: f32,
     runs: Vec<ShapedRun>,
 }
@@ -588,20 +619,21 @@ fn push_run(
     render_items: &mut Vec<TextRenderItem>,
     font: FontFaceIdentity,
     options: &NativeTextOptions,
-    fill: Option<Color>,
     baseline_y: f32,
-    glyphs: Vec<PositionedGlyph>,
+    shaped: ShapedRun,
+    outline_profile: noon_core::GlyphOutlineProfile,
 ) {
     let index = u32::try_from(runs.len()).expect("native text run count exceeds retained limits");
     runs.push(GlyphRun {
+        outline_profile,
         font,
         variations: options.variations.clone(),
         font_size: options.font_size,
         direction: TextDirection::LeftToRight,
-        fill,
+        fill: shaped.fill,
         stroke: None,
         transform: TextAffineTransform::translation(0.0, baseline_y),
-        glyphs: glyphs.into(),
+        glyphs: shaped.glyphs.into(),
     });
     render_items.push(TextRenderItem::GlyphRun(index));
 }
@@ -800,6 +832,7 @@ fn layout_artifact(
     kind: TextSourceKind,
 ) -> TextLayoutArtifact {
     let mut identity = format!("{NATIVE_TEXT_BACKEND_VERSION}\0{NATIVE_TEXT_TEMPLATE_VERSION}\0{:?}\0{}\0{}\0{:08x}\0{:08x}\0", kind, base_font.face_key, base_font.face_index, options.font_size.to_bits(), options.line_spacing.to_bits());
+    append_metrics_identity(&mut identity, base_font);
     append_color_identity(&mut identity, options.fill);
     for setting in options.variations.iter() {
         identity.push('\0');
@@ -814,6 +847,7 @@ fn layout_artifact(
             "\0{}:{}:{}:{}",
             span.source_span.start, span.source_span.end, span.font.face_key, span.font.face_index
         ));
+        append_metrics_identity(&mut identity, &span.font);
         append_color_identity(&mut identity, span.fill);
     }
     identity.push('\0');
@@ -829,6 +863,12 @@ fn layout_artifact(
         )),
         artifact_fingerprint: Arc::from(format!("{:016x}", fingerprint_u64(identity.as_bytes()))),
         backend_payload_key: None,
+    }
+}
+
+fn append_metrics_identity(identity: &mut String, font: &NativeFontFace) {
+    if font.metrics_profile == NativeFontMetricsProfile::CairoCoreText {
+        identity.push_str("\0cairo-coretext");
     }
 }
 
@@ -880,6 +920,114 @@ mod tests {
             .expect("Typst test assets include at least one font");
         NativeFontFace::new("Bundled Test Font", Arc::<[u8]>::from(bytes), 0).unwrap()
     }
+    fn static_truetype_font() -> NativeFontFace {
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        NativeFontFace::new("TrueType Test Face", Arc::<[u8]>::from(bytes), 0).unwrap()
+    }
+
+    #[test]
+    fn explicit_coretext_metrics_preserve_face_bytes_and_separate_layout() {
+        let font = static_truetype_font();
+        let selected = font
+            .clone()
+            .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        assert_eq!(
+            font.metrics_profile(),
+            NativeFontMetricsProfile::CairoFreeType
+        );
+        assert!(Arc::ptr_eq(&font.data, &selected.data));
+        assert_eq!(font.face_key, selected.face_key);
+        let options = NativeTextOptions::new(42.0);
+        let mut compiler = NativeTextCompiler::new();
+        let portable = compiler.compile_plain("Agj", &font, &options).unwrap();
+        let coretext = compiler.compile_plain("Agj", &selected, &options).unwrap();
+        assert_eq!(
+            portable.resource.runs[0].font,
+            coretext.resource.runs[0].font
+        );
+        assert_eq!(
+            coretext.resource.runs[0].outline_profile,
+            noon_core::GlyphOutlineProfile::CairoCoreText
+        );
+        assert_ne!(portable.resource.bounds, coretext.resource.bounds);
+        assert_ne!(
+            portable.resource.layout_artifact,
+            coretext.resource.layout_artifact
+        );
+        for glyph in coretext.resource.runs[0].glyphs.iter() {
+            let units = glyph.advance.x / (MANIM_PANGO_LAYOUT_PIXEL / 1024.0);
+            assert!((units - units.round()).abs() < 0.01);
+        }
+        let reset = selected
+            .with_metrics_profile(NativeFontMetricsProfile::CairoFreeType)
+            .unwrap();
+        assert_eq!(
+            compiler
+                .compile_plain("Agj", &reset, &options)
+                .unwrap()
+                .resource,
+            portable.resource
+        );
+    }
+
+    #[test]
+    fn coretext_metrics_reject_cff_before_compilation() {
+        let font = libertinus_serif_regular_font();
+        assert_eq!(
+            font.clone()
+                .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+                .unwrap_err(),
+            NativeTextError::UnsupportedFontMetricsProfile
+        );
+        assert!(NativeTextCompiler::new()
+            .compile_plain("Agj", &font, &NativeTextOptions::new(42.0))
+            .is_ok());
+    }
+
+    #[test]
+    fn coretext_point_grid_preserves_native_bundled_font_placement() {
+        // Pango/CoreText observations for the bundled DejaVu Sans Mono Bold
+        // face at 67 points. The first embedded TrueType face is this font.
+        let font = static_truetype_font()
+            .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_plain("Frame", &font, &NativeTextOptions::new(67.0))
+            .unwrap();
+        let glyphs = &artifact.resource.runs[0].glyphs;
+        assert_eq!(glyphs.len(), 5);
+        for (glyph, expected) in
+            glyphs
+                .iter()
+                .zip([0.0, 11.2041015625, 22.408203125, 33.6123046875, 44.81640625])
+        {
+            let relative_x = (f64::from(glyph.origin.x) - f64::from(glyphs[0].origin.x)) / 3.6;
+            assert!((relative_x - expected).abs() < 1e-5);
+        }
+        assert!((f64::from(artifact.resource.bounds.width()) / 72.0 - 2.6802734).abs() < 1e-6);
+        assert!((f64::from(artifact.resource.bounds.height()) / 72.0 - 0.69140625).abs() < 1e-6);
+        let markup = compiler
+            .compile_styled(
+                "Frame",
+                &font,
+                &NativeTextOptions::new(67.0),
+                &[NativeTextSpan {
+                    source_span: TextSourceSpan::new(0, 5),
+                    font: font.clone(),
+                    fill: None,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            markup.resource.runs[0].glyphs,
+            artifact.resource.runs[0].glyphs
+        );
+    }
+
     fn alternate_font() -> NativeFontFace {
         let bytes = typst_assets::fonts()
             .nth(1)
@@ -1303,7 +1451,7 @@ mod tests {
     #[test]
     fn shared_outline_preserves_existing_points_at_small_and_normal_sizes() {
         let mut original = ScaleContext::new();
-        let mut shared = ScaleContext::new();
+        let mut shared = crate::outline::GlyphOutlineContext::default();
         for bytes in typst_assets::fonts() {
             let font = FontRef::from_index(bytes, 0).unwrap();
             for size in [0.1, 1.0, 3.6, 17.3, 42.0] {
@@ -1316,7 +1464,8 @@ mod tests {
                         .iter()
                         .map(|p| Vec2::new(p.x, p.y))
                         .collect();
-                    let outline = unhinted_glyph_scaler(&mut shared, font, size, &[])
+                    let outline = shared
+                        .font_scaler(font, size, &[])
                         .scale_outline(id)
                         .unwrap();
                     let path = outline_commands_to_path(outline.path().commands());
@@ -1350,15 +1499,22 @@ mod tests {
         let font = bundled_font();
         let face = FontRef::from_index(&font.data, font.face_index as usize).unwrap();
         let mut compiler = NativeTextCompiler::new();
-        let mut context = ScaleContext::new();
+        let mut context = crate::outline::GlyphOutlineContext::default();
         let artifact = compiler
             .compile_plain("oooo oooo", &font, &NativeTextOptions::new(42.0))
             .unwrap();
         for glyph in artifact.resource.runs[0].glyphs.iter() {
-            let outline = unhinted_glyph_scaler(&mut context, face, 42.0, &[])
-                .scale_outline(glyph.glyph_id as GlyphId)
+            let path = context
+                .scaler(
+                    face,
+                    font.face_index,
+                    42.0,
+                    &[],
+                    artifact.resource.runs[0].outline_profile,
+                )
+                .unwrap()
+                .outline(glyph.glyph_id as GlyphId)
                 .unwrap();
-            let path = outline_commands_to_path(outline.path().commands());
             if let Some(bounds) = path
                 .conservative_bounds()
                 .filter(|b| b.min.x < b.max.x && b.min.y < b.max.y)

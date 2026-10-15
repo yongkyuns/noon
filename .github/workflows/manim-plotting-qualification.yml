@@ -31,18 +31,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  plotting:
+  build:
+    name: Exact-source plotting package and full validation
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Prepare validation evidence before package preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/plotting-integration
+          git rev-parse HEAD > ci-artifacts/plotting-integration/source-sha.txt
+          git status --porcelain --untracked-files=all > ci-artifacts/plotting-integration/worktree-before-build.txt
       - name: Build exact-source browser package
         uses: ./.github/actions/dev-wasm-build
         with:
           preflight: 'true'
           cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Retain package-build outcome
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f web/ci-artifact.json ]]; then
+            cp web/ci-artifact.json ci-artifacts/plotting-integration/package-build.json
+          fi
       - name: Verify animated plotting factories in the built package
         shell: bash
         run: |
@@ -75,6 +91,85 @@ jobs:
           mkdir -p ci-artifacts/plotting-integration
           git status --porcelain --untracked-files=all > ci-artifacts/plotting-integration/worktree-before.txt
           bash scripts/check.sh full "$VALIDATION_BASE" 2>&1 | tee ci-artifacts/plotting-integration/full-check.log
+      - name: Authenticate the final validated package
+        run: |
+          node .github/ci/wasm-build.mjs stamp
+          node .github/ci/wasm-build.mjs verify
+      - name: Publish the exact-source package
+        uses: actions/upload-artifact@v7
+        with:
+          name: plotting-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/pkg/
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+            web/runtime-build-identity.json
+            web/ci-artifact.json
+            web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 3
+      - name: Retain integrated validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: plotting-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-artifacts/plotting-integration/
+          if-no-files-found: error
+          retention-days: 3
+
+  qualify:
+    name: Plotting / ${{ matrix.case }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: plotting
+            script: scripts/plotting-qualification.mjs
+            mode: ''
+          - case: polygons
+            script: scripts/polygon-qualification.mjs
+            mode: ''
+          - case: constructor-defaults
+            script: scripts/constructor-defaults-qualification.mjs
+            mode: ''
+          - case: paint-fade
+            script: scripts/paint-fade-qualification.mjs
+            mode: ''
+          - case: match-color
+            script: scripts/match-color-qualification.mjs
+            mode: ''
+          - case: coordinates
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: 'coordinates'
+          - case: number-line
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: 'number-line'
+          - case: single
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: ''
+          - case: synchronized
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: 'synchronized'
+          - case: gapped
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: 'gapped'
+          - case: live
+            script: scripts/time-series-plotting-qualification.mjs
+            mode: 'live'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Download the same validated package
+        uses: actions/download-artifact@v8
+        with:
+          name: plotting-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: web
+      - name: Verify exact checkout and every package byte
+        run: node .github/ci/wasm-build.mjs verify
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -84,54 +179,55 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Qualify paired plotting and resumed Python authoring
-        run: node scripts/plotting-qualification.mjs
-      - name: Qualify paired polygon constructors
+      - name: Qualify the unchanged paired case
         env:
+          NOON_CASE_SCRIPT: ${{ matrix.script }}
+          NOON_CASE_MODE: ${{ matrix.mode }}
           NOON_POLYGON_ARTIFACTS: plotting-artifacts/polygons
-        run: node scripts/polygon-qualification.mjs
-      - name: Qualify Python constructor defaults against direct Rust construction
-        env:
           NOON_CONSTRUCTOR_DEFAULTS_ARTIFACTS: plotting-artifacts/constructor-defaults
-        run: node scripts/constructor-defaults-qualification.mjs
-      - name: Qualify leaf and recursive family paint fades
-        env:
           NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade
-        run: node scripts/paint-fade-qualification.mjs
-      - name: Qualify observed color matching against direct Rust construction
-        env:
           NOON_MATCH_COLOR_ARTIFACTS: plotting-artifacts/match-color
-        run: node scripts/match-color-qualification.mjs
-      - name: Qualify animated axes and graph reveals
-        run: node scripts/time-series-plotting-qualification.mjs coordinates
-      - name: Qualify animated NumberLine and transformed live queries
-        run: node scripts/time-series-plotting-qualification.mjs number-line
-      - name: Qualify numeric labels and timestamp-synchronized playback
-        run: node scripts/time-series-plotting-qualification.mjs
-      - name: Qualify synchronized multi-series playback
-        run: node scripts/time-series-plotting-qualification.mjs synchronized
-      - name: Qualify explicit outages and marker recovery
-        run: node scripts/time-series-plotting-qualification.mjs gapped
-      - name: Qualify coordinates constructed after playback starts
-        run: node scripts/time-series-plotting-qualification.mjs live
-      - name: Record tested checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$NOON_CASE_MODE" ]]; then
+            node "$NOON_CASE_SCRIPT" "$NOON_CASE_MODE"
+          else
+            node "$NOON_CASE_SCRIPT"
+          fi
+      - name: Record tested checkout and case
         if: always()
         shell: bash
         env:
           VALIDATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+          NOON_CASE: ${{ matrix.case }}
         run: |
           set -euo pipefail
           mkdir -p plotting-artifacts
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
           printf '%s\n' "$VALIDATION_BASE" > plotting-artifacts/base-sha.txt
+          printf '%s\n' "$NOON_CASE" > plotting-artifacts/case.txt
           git diff --binary "$VALIDATION_BASE"...HEAD > plotting-artifacts/integration.diff
-          if [[ -d ci-artifacts/plotting-integration ]]; then
-            cp ci-artifacts/plotting-integration/*.log ci-artifacts/plotting-integration/*.txt plotting-artifacts/
-          fi
-      # Upload the full plotting evidence only if qualification fails.
-      - uses: actions/upload-artifact@v7
-        if: failure()
+      - name: Retain every executed case, including cancellation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: plotting-${{ github.event.pull_request.head.sha || github.sha }}
+          name: plotting-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: plotting-artifacts/
-          retention-days: 7
+          if-no-files-found: error
+          retention-days: 3
+
+  plotting:
+    name: plotting
+    needs: [build, qualify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require the package and every original paired case
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          CASES_RESULT: ${{ needs.qualify.result }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$CASES_RESULT" = success

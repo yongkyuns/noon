@@ -11,6 +11,47 @@
   },
   "fixtures": [
     {
+      "id": "polynomial-easings",
+      "reference_frame_rate": 120,
+      "scene": "PolynomialEasings",
+      "source": "parity/manim-v0.21/core-examples/polynomial_easings.py",
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Twelve shared deterministic polynomial easing tracks. Original Cairo reference materialization uses 120 fps to represent every unchanged requested checkpoint exactly, including 0.125 and 0.375 seconds. No arbitrary Python playback claim."
+    },
+    {
+      "id": "cubic-bezier",
+      "scene": "CubicBezierConstructor",
+      "source": "parity/manim-v0.21/core-examples/cubic_bezier.py",
+      "expected_duration": 0.2,
+      "sample_times": [
+        0,
+        0.1,
+        0.16666666666666666
+      ],
+      "notes": "New authored constructor probe over unchanged shared cubic geometry; original source executes with import-only substitution. Covers one curve, control-point count and an interior parameter query."
+    },
+    {
+      "id": "annotation-dot",
+      "scene": "AnnotationDotConstructor",
+      "source": "parity/manim-v0.21/core-examples/annotation_dot.py",
+      "expected_duration": 0.2,
+      "sample_times": [
+        0,
+        0.1,
+        0.16666666666666666
+      ],
+      "notes": "Shared Dot geometry, separate default fill/stroke paint and explicit color precedence; static authored constructor profile. No samples or tolerances relaxed."
+    },
+    {
       "id": "polynomial-rates",
       "scene": "PolynomialRates",
       "source": "parity/manim-v0.21/core-examples/polynomial_rates.py",
@@ -22,7 +63,7 @@
         0.7666666666666666,
         0.9666666666666667
       ],
-      "notes": "Three existing shared method-target tracks use pinned polynomial rate functions; current source/raster qualification is required."
+      "notes": "Five shared method-target tracks exercise three polynomial rates plus slow_into and double_smooth at unchanged sample times; current source/raster qualification is required."
     },
     {
       "id": "math-table",

@@ -10,6 +10,62 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_constructor_color_is_passed_in_the_single_family_creation(self):
+        handle = Mock()
+        for context in (None, Mock()):
+            with patch.object(handles, "_create_family_handle", return_value=handle) as create, \
+                 patch.object(handles, "_new_membership_batch", return_value=Mock()), \
+                 patch.object(handles, "_live_constructor_context", return_value=context):
+                group = compat.Group(color=compat._base.GREEN)
+            expected = (compat._base.GREEN.red, compat._base.GREEN.green,
+                        compat._base.GREEN.blue, compat._base.GREEN.alpha)
+            if context is None:
+                self.assertEqual(create.call_args.args[1:], (0.0, *expected))
+                handle.setOwnColor.assert_not_called()
+            else:
+                context.liveCreateFamily.assert_not_called()
+                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected))
+
+    def test_omitted_constructor_color_is_white_but_explicit_none_is_black(self):
+        with patch.object(handles, "_create_family_handle") as create, \
+             patch.object(handles, "_new_membership_batch", return_value=Mock()), \
+             patch.object(handles, "_live_constructor_context", return_value=None):
+            compat.Group()
+            self.assertEqual(create.call_args.args[1:], (0.0,))
+            compat.Group(color=None)
+            self.assertEqual(create.call_args.args[1:], (0.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_invalid_constructor_color_rejects_before_family_allocation(self):
+        with patch.object(handles, "_create_family_handle") as create, \
+             patch.object(handles, "_new_membership_batch") as batch:
+            with self.assertRaises((TypeError, ValueError)):
+                compat.Group(color=object())
+        create.assert_not_called()
+        batch.assert_not_called()
+
+
+    def test_root_only_color_uses_one_shared_root_operation(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        with patch.object(handles, "_group_target_context", return_value=None):
+            self.assertIs(group.set_color(compat._base.BLUE, family=False), group)
+        group._semantic_family_handle.setOwnColor.assert_called_once_with(
+            compat._base.BLUE.red, compat._base.BLUE.green, compat._base.BLUE.blue, compat._base.BLUE.alpha)
+        group._semantic_family_handle.setColor.assert_not_called()
+
+    def test_root_only_callback_color_fails_before_leaf_mutation(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "metadata writes"):
+                group.set_color(compat._base.BLUE, family=False)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_not_called()
+
+
     def test_leaf_fade_forwards_default_and_live_calls_without_python_alpha_math(self):
         for live in (False, True):
             leaf = identity_only_wrapper(compat.Square)

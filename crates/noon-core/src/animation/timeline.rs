@@ -59,10 +59,24 @@ pub enum RateFunction {
     Smoothstep,
     Smootherstep,
     Smoothererstep,
+    SlowInto,
+    DoubleSmooth,
     RushInto,
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInQuad,
+    EaseOutQuad,
+    EaseInOutQuad,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInQuart,
+    EaseOutQuart,
+    EaseInOutQuart,
+    EaseInQuint,
+    EaseOutQuint,
+    EaseInOutQuint,
+
     /// Hold the source value at normalized progress 0, then switch to the target.
     StepStart,
     /// Hold the source value until normalized progress reaches 1, then switch.
@@ -76,11 +90,24 @@ impl RateFunction {
         match self {
             Self::Linear => progress,
             Self::Smooth => manim_smooth(progress),
-            // Evaluate the cancellation-prone polynomials once in f64, then
-            // project to the planar track's existing f32 precision.
-            Self::Smoothstep | Self::Smootherstep | Self::Smoothererstep => {
-                self.evaluate_f64(f64::from(progress)) as f32
-            }
+            // Evaluate the polynomial and new monotone rates once in f64,
+            // then project to the planar track's existing f32 precision.
+            Self::Smoothstep
+            | Self::Smootherstep
+            | Self::Smoothererstep
+            | Self::SlowInto
+            | Self::DoubleSmooth
+            | Self::EaseInQuad
+            | Self::EaseOutQuad
+            | Self::EaseInOutQuad
+            | Self::EaseInCubic
+            | Self::EaseOutCubic
+            | Self::EaseInQuart
+            | Self::EaseOutQuart
+            | Self::EaseInOutQuart
+            | Self::EaseInQuint
+            | Self::EaseOutQuint
+            | Self::EaseInOutQuint => self.evaluate_f64(f64::from(progress)) as f32,
             Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
             Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => {
@@ -126,6 +153,25 @@ impl RateFunction {
             Self::Smoothererstep => {
                 35.0 * p.powi(4) - 84.0 * p.powi(5) + 70.0 * p.powi(6) - 20.0 * p.powi(7)
             }
+            Self::SlowInto => (1.0 - (1.0 - p) * (1.0 - p)).sqrt(),
+            Self::DoubleSmooth => {
+                if p < 0.5 {
+                    0.5 * manim_smooth_f64(2.0 * p)
+                } else {
+                    0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
+                }
+            }
+            Self::EaseInQuad => p * p,
+            Self::EaseOutQuad => 1.0 - (1.0 - p) * (1.0 - p),
+            Self::EaseInOutQuad => polynomial_in_out(p, 2),
+            Self::EaseInCubic => p * p * p,
+            Self::EaseOutCubic => 1.0 - (1.0 - p).powi(3),
+            Self::EaseInQuart => p * p * p * p,
+            Self::EaseOutQuart => 1.0 - (1.0 - p).powi(4),
+            Self::EaseInOutQuart => polynomial_in_out(p, 4),
+            Self::EaseInQuint => p * p * p * p * p,
+            Self::EaseOutQuint => 1.0 - (1.0 - p).powi(5),
+            Self::EaseInOutQuint => polynomial_in_out(p, 5),
             Self::RushInto => 2.0 * manim_smooth_f64(p / 2.0),
             Self::RushFrom => 2.0 * manim_smooth_f64(p / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => manim_smooth_f64(if p < 0.5 { 2.0 * p } else { 2.0 * (1.0 - p) }),
@@ -151,6 +197,14 @@ impl RateFunction {
                 }
             }
         }
+    }
+}
+
+fn polynomial_in_out(p: f64, degree: i32) -> f64 {
+    if p < 0.5 {
+        2.0_f64.powi(degree - 1) * p.powi(degree)
+    } else {
+        1.0 - (-2.0 * p + 2.0).powi(degree) / 2.0
     }
 }
 
@@ -1009,6 +1063,53 @@ mod tests {
                 assert_eq!(rate.evaluate(progress as f32), expected as f32);
             }
         }
+    }
+
+    #[test]
+    fn polynomial_easings_match_unchanged_manim_finite_samples() {
+        let mut count = 0;
+        for row in include_str!("polynomial_easing_reference.csv")
+            .lines()
+            .filter(|s| !s.starts_with('#'))
+        {
+            let values = row.split(',').collect::<Vec<_>>();
+            let rate = RateFunction::from_semantic_id(values[0]).unwrap();
+            let progress = values[1].parse::<f64>().unwrap();
+            let expected = values[2].parse::<f64>().unwrap();
+            assert!(
+                (rate.evaluate_f64(progress) - expected).abs() < 1e-14,
+                "{row}"
+            );
+            assert_eq!(rate.evaluate(progress as f32), expected as f32, "{row}");
+            count += 1;
+        }
+        assert_eq!(count, 420);
+    }
+
+    #[test]
+    fn slow_and_double_smooth_rates_match_pinned_values_at_both_precisions() {
+        for (rate, quarter, three_quarters) in [
+            (
+                RateFunction::SlowInto,
+                0.6614378277661477_f64,
+                0.9682458365518543,
+            ),
+            (RateFunction::DoubleSmooth, 0.25, 0.75),
+        ] {
+            for (progress, expected) in [
+                (-1.0, 0.0),
+                (0.0, 0.0),
+                (0.25, quarter),
+                (0.75, three_quarters),
+                (1.0, 1.0),
+                (2.0, 1.0),
+            ] {
+                assert!((rate.evaluate_f64(progress) - expected).abs() < 1e-15);
+                assert_eq!(rate.evaluate(progress as f32), expected as f32);
+            }
+        }
+        assert_eq!(RateFunction::DoubleSmooth.evaluate_f64(0.5), 0.5);
+        assert!((RateFunction::SlowInto.evaluate_f64(0.5) - 0.8660254037844386).abs() < 1e-15);
     }
 
     #[test]

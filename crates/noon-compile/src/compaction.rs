@@ -451,6 +451,7 @@ mod tests {
             kind: TextSourceKind::Plain,
             runs: Arc::from([GlyphRun {
                 font: face,
+                outline_profile: noon_core::GlyphOutlineProfile::Font,
                 variations: Arc::from([]),
                 font_size: 12.0,
                 direction: TextDirection::LeftToRight,

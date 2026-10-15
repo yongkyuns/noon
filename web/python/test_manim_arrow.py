@@ -7,6 +7,21 @@ from pathlib import Path
 
 
 class ManimArrowFacadeTests(unittest.TestCase):
+    def test_arrow_color_observes_current_shaft_paint_instead_of_group_metadata(self):
+        from unittest.mock import Mock, patch
+        import noon
+        import _manim_geometry as geometry
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        for cls in (noon.Arrow, noon.Vector, noon.DoubleArrow):
+            with self.subTest(cls=cls.__name__):
+                arrow = identity_only_wrapper(cls, submobjects=[])
+                arrow._shaft = Mock()
+                arrow._shaft.get_color.side_effect = [noon.RED, noon.BLUE]
+                with patch.object(geometry, "_group_get_color", return_value=noon.WHITE):
+                    self.assertEqual(arrow.get_color(), noon.RED)
+                    self.assertEqual(arrow.get_color(), noon.BLUE)
+
     def test_arrow_family_delegates_constructor_semantics_to_shared_rust(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()

@@ -280,3 +280,141 @@ fn paired_style_example_uses_shared_runtime_with_local_paint_results() {
     assert_eq!(colors[2].blue, 1.0);
     assert!((colors[2].alpha - 0.7).abs() < 1e-6);
 }
+
+#[test]
+fn family_own_color_is_independent_of_leaves_and_recursive_writes_include_nested_roots() {
+    let mut scene = Scene::new();
+    let mut red = scene.square(1.0).unwrap();
+    red.set_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    let mut green = scene.circle(0.5).unwrap();
+    green.set_color(0.0, 1.0, 0.0, 1.0).unwrap();
+    let nested = scene.family(&[(&red).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&green).into()]).unwrap();
+    let empty = scene.family(&[]).unwrap();
+    assert_eq!(root.own_color().unwrap(), Color::WHITE);
+    assert_eq!(nested.own_color().unwrap(), Color::WHITE);
+    assert_eq!(empty.own_color().unwrap(), Color::WHITE);
+    root.set_own_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    assert_eq!(root.own_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    assert_eq!(nested.own_color().unwrap(), Color::WHITE);
+    assert_eq!(red.manim_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+    assert_eq!(green.manim_color().unwrap(), Color::rgb(0.0, 1.0, 0.0));
+    root.set_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    assert_eq!(root.own_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+    assert_eq!(nested.own_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+    assert_eq!(green.manim_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+    let copy = root.copy_family().unwrap();
+    assert_eq!(copy.root().own_color().unwrap(), root.own_color().unwrap());
+    copy.root().set_own_color(0.0, 1.0, 0.0, 1.0).unwrap();
+    assert_eq!(root.own_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+}
+
+#[test]
+fn live_root_only_color_preserves_leaf_paint_and_publishes_coherently() {
+    let mut scene = Scene::new();
+    let mut leaf = scene.square(1.0).unwrap();
+    leaf.set_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    let root = scene.family(&[(&leaf).into()]).unwrap();
+    scene.add_many(&[(&root).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .set_family_own_color(&root, 0.0, 0.0, 1.0, 1.0)
+        .unwrap();
+    assert_eq!(root.own_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    assert_eq!(leaf.manim_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
+    let before = scene.revision();
+    assert!(scene
+        .live(&mut session)
+        .set_family_own_color(&root, f64::NAN, 0.0, 0.0, 1.0)
+        .is_err());
+    assert_eq!(scene.revision(), before);
+    session.advance_to(0.1).unwrap();
+}
+
+#[test]
+fn copied_and_become_family_metadata_preserve_aliases_and_independence() {
+    let mut scene = Scene::new();
+    let leaf = scene.square(0.5).unwrap();
+    let nested = scene.family(&[(&leaf).into()]).unwrap();
+    let source = scene.family(&[(&nested).into(), (&nested).into()]).unwrap();
+    source.set_own_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    nested.set_own_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    let copied = source.copy_family().unwrap();
+    assert_eq!(
+        copied.root().own_color().unwrap(),
+        Color::rgba(1.0, 0.0, 0.0, 1.0)
+    );
+    assert_eq!(
+        copied.family(&nested).unwrap().own_color().unwrap(),
+        Color::rgba(0.0, 0.0, 1.0, 1.0)
+    );
+    copied.root().set_own_color(0.0, 1.0, 0.0, 1.0).unwrap();
+    assert_eq!(source.own_color().unwrap(), Color::rgba(1.0, 0.0, 0.0, 1.0));
+    let target_leaf = scene.square(0.8).unwrap();
+    let target_nested = scene.family(&[(&target_leaf).into()]).unwrap();
+    let target = scene
+        .family(&[(&target_nested).into(), (&target_nested).into()])
+        .unwrap();
+    target.set_own_color(0.0, 1.0, 0.0, 1.0).unwrap();
+    target_nested.set_own_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    source
+        .become_family(&target, noon::ManimBecomeOptions::default())
+        .unwrap();
+    assert_eq!(source.own_color().unwrap(), Color::rgba(0.0, 1.0, 0.0, 1.0));
+    assert_eq!(nested.own_color().unwrap(), Color::rgba(1.0, 0.0, 0.0, 1.0));
+    let empty = scene.family(&[]).unwrap();
+    let empty_target = scene.family(&[]).unwrap();
+    empty_target.set_own_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    empty
+        .become_family(&empty_target, noon::ManimBecomeOptions::default())
+        .unwrap();
+    assert_eq!(empty.own_color().unwrap(), Color::rgba(0.0, 0.0, 1.0, 1.0));
+}
+
+#[test]
+fn initial_family_color_and_membership_publish_atomically_without_leaf_recolor() {
+    let mut scene = Scene::new();
+    let leaf = scene.square(0.5).unwrap();
+    let before = leaf.state().unwrap();
+    let revision = scene.revision();
+    let family = MobjectFamily::create_with_own_color(
+        scene.integration_store().clone(),
+        &[(&leaf).into()],
+        3.0,
+        Color::GREEN,
+    )
+    .unwrap();
+    assert_eq!(family.own_color().unwrap(), Color::GREEN);
+    assert_eq!(leaf.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let revision = scene.revision();
+    assert!(MobjectFamily::create_with_own_color(
+        scene.integration_store().clone(),
+        &[(&leaf).into()],
+        3.0,
+        Color::rgba(f32::NAN, 0.0, 0.0, 1.0)
+    )
+    .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(leaf.state().unwrap(), before);
+    scene.add(&leaf).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let revision = scene.revision();
+    let live_family = noon::integration::publish_family_creation_with_color(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        &[(&leaf).into()],
+        4.0,
+        Color::BLUE,
+    )
+    .unwrap();
+    assert_eq!(live_family.own_color().unwrap(), Color::BLUE);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        scene.revision()
+    );
+    assert_eq!(leaf.state().unwrap(), before);
+}

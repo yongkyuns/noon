@@ -29,6 +29,7 @@ import initNoonWeb, {
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
+import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
@@ -397,7 +398,9 @@ async function initializePyodide() {
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
-  self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
+  self.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
+    ? authoringStore.createFamilyWithColor(batch, zIndex, ...color)
+    : authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
@@ -625,7 +628,7 @@ function continuationMembershipRootKeys(context, tokenJson) {
   const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
   if (callback.player === null || callback.player === undefined ||
       typeof callback.player.callbackMembershipRootKeys !== "function") {
-    throw new Error("semantic continuation callback has no pinned membership collector");
+    throw new Error("semantic continuation has no pinned membership collector");
   }
   return callback.player.callbackMembershipRootKeys(tokenJson);
 }
@@ -940,6 +943,7 @@ async function handleRequest(request) {
           pyodide,
           request.source,
           request.context,
+          requestId,
         );
         const workerRunCompletedAtMs = performance.now();
         if (run.continuation !== null) {
@@ -1115,18 +1119,10 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
   }
 }
 
-async function runAuthoringSource(pyodide, source, context) {
-  await prepareAuthoringDependencies(pyodide, source);
-
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_source", source);
-  globals.set("__noon_context_json", JSON.stringify(context));
-
-  try {
-    const resultJson = await pyodide.runPythonAsync(
-      `
+async function runAuthoringSource(pyodide, source, context, requestId) {
+  return withAuthoringDiagnostics(pyodide, source, context, requestId, async (globals) => {
+    await prepareAuthoringDependencies(pyodide, source);
+    return pyodide.runPythonAsync(diagnosedHostCode(`
 import json
 import _manim_updaters
 from _manim_scene import (
@@ -1136,7 +1132,7 @@ from _manim_scene import (
     execution_context,
 )
 from _manim_source_execution import (
-    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
+    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL,
     authoring_source_scope, execute_authoring_module,
 )
 from noon import Scene
@@ -1145,9 +1141,6 @@ __noon_namespace = {
     "context": json.loads(__noon_context_json),
     "__name__": "__main__",
 }
-__noon_code, __noon_portable_constructs = compile_authoring_source(
-    __noon_source
-)
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
 if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
@@ -1197,7 +1190,7 @@ if isinstance(__noon_result, Scene):
 
 else:
     raise TypeError("Python authoring result must be a noon.Scene")
-json.dumps(
+__noon_result_json = json.dumps(
     {
         "kind": "semantic_scene",
         "semantic_execution": __noon_semantic,
@@ -1206,13 +1199,8 @@ json.dumps(
     separators=(",", ":"),
     allow_nan=False,
 )
-`,
-      { globals },
-    );
-    return resultJson;
-  } finally {
-    globals.destroy();
-  }
+`), { globals });
+  });
 }
 
 async function runCanonicalCallbackPhase(pyodide, sessionId, frame, player) {
@@ -1335,6 +1323,7 @@ function postError(requestId, error) {
     requestId,
     message: error instanceof Error ? error.message : String(error),
     diagnostic: error instanceof Error && error.stack ? { stack: error.stack } : null,
+    ...authoringDiagnosticPayload(error),
   });
 }
 

@@ -3,7 +3,7 @@ import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 
 export const polynomialRateCases = [{
   id: "polynomial-rates", sourcePath: "parity/manim-v0.21/core-examples/polynomial_rates.py",
-  scene: "PolynomialRates", factory: "createDirectPolynomialRatesRenderer", objectCount: 3,
+  scene: "PolynomialRates", factory: "createDirectPolynomialRatesRenderer", objectCount: 5,
   duration: 1, sampleTime: 0.25, playback: "live",
 }];
 

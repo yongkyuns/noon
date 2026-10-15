@@ -98,4 +98,4 @@ jobs:
         with:
           name: native-export-output
           path: output-proof/
-          retention-days: 14
+          retention-days: 3

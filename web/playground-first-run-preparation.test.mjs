@@ -122,7 +122,7 @@ assert.doesNotMatch(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*const preparation = runtimePreparation;[\s\S]*runtimePreparation = null;[\s\S]*preparation\?\.candidate\.terminate\(\);[\s\S]*player\?\.terminate\(\);/,
+  /pagehide[\s\S]*const preparation = runtimePreparation;[\s\S]*runtimePreparation = null;[\s\S]*preparation\.candidate\.terminate\(\);[\s\S]*adoptRuntimeCanvas\(preparation\.candidate\);[\s\S]*discardEarlyContinuationRuntime\(player\);/,
   "page teardown must release an unpublished prepared owner before the published player",
 );
 

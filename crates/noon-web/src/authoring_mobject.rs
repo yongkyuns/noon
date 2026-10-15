@@ -171,6 +171,18 @@ mod wasm {
 
     use crate::authoring_error::js_error;
 
+    fn family_query_keys(target: noon::MobjectTarget<'_>) -> Result<Vec<String>, JsValue> {
+        target
+            .family_nodes()
+            .map(|nodes| {
+                nodes
+                    .into_iter()
+                    .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                    .collect()
+            })
+            .map_err(typed_js_error)
+    }
+
     pub(crate) type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
     #[wasm_bindgen]
@@ -214,6 +226,33 @@ mod wasm {
                     error,
                 ))
             })
+        }
+
+        /// Return a new font input with an explicit deterministic metrics recipe.
+        #[wasm_bindgen(js_name = withMetricsProfile)]
+        pub fn with_metrics_profile(&self, profile: &str) -> Result<Self, JsValue> {
+            let profile = match profile {
+                "cairo-freetype" => noon::NativeFontMetricsProfile::CairoFreeType,
+                "cairo-coretext" => noon::NativeFontMetricsProfile::CairoCoreText,
+                _ => {
+                    return Err(js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.invalid_metrics_profile",
+                        "unknown native font metrics profile",
+                    )))
+                }
+            };
+            self.face
+                .clone()
+                .with_metrics_profile(profile)
+                .map(|face| Self { face })
+                .map_err(|error| {
+                    js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.unsupported_metrics_profile",
+                        error,
+                    ))
+                })
         }
 
         /// Resolve the shared engine's embedded regular face without a byte transfer.
@@ -502,6 +541,26 @@ mod wasm {
             };
             handle
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createFamilyWithColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_family_with_color(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+            z_index: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            let color = super::family_color(true, red, green, blue, alpha)
+                .map_err(js_error)?
+                .expect("required family color");
+            batch
+                .create_family_with_color(Rc::clone(&self.semantics), z_index, color)
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
 
@@ -1070,6 +1129,25 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = manimColor)]
+        pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.semantic_family()?
+                .own_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = setOwnColor)]
+        pub fn set_own_color(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = worldFamilyCenter)]
         pub fn world_family_center(&self) -> Result<Vec<f64>, JsValue> {
             let center = self.family.world_center().map_err(js_error)?;
@@ -1363,6 +1441,12 @@ mod wasm {
         }
 
         /// Observe authoritative family order when a frontend requests members.
+        #[wasm_bindgen(js_name = familyKeys)]
+        pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
+            family_query_keys(noon::MobjectTarget::from(&self.family))
+        }
+
+        /// Observe authoritative direct membership when a frontend requests members.
         #[wasm_bindgen(js_name = memberKeys)]
         pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
             let store = self.family.integration_store().borrow();
@@ -1433,6 +1517,10 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmPathQuery {
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> u32 {
+            self.value.point_count() as u32
+        }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
@@ -1745,6 +1833,11 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = semanticGeneration)]
         pub fn semantic_generation(&self) -> u32 {
             self.handle.node_id().generation()
+        }
+
+        #[wasm_bindgen(js_name = familyKeys)]
+        pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
+            family_query_keys(noon::MobjectTarget::from(&self.handle))
         }
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {

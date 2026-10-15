@@ -327,10 +327,19 @@ impl SceneMembershipBatch {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.create_family_with_color(store, z_index, noon::Color::WHITE)
+    }
+
+    fn create_family_with_color(
+        &self,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        z_index: f64,
+        color: noon::Color,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create_with_z_index(store, &self.family_members()?, z_index)
+        noon::MobjectFamily::create_with_own_color(store, &self.family_members()?, z_index, color)
             .map_err(AuthoringFailure::from)
     }
 
@@ -410,6 +419,7 @@ enum OrdinaryCompositionChild {
     FamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
+        method_target: bool,
         options: noon_core::AnimationOptions,
     },
     MatchingFamilyTransformTo {
@@ -1621,12 +1631,23 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
+                    method_target,
                     options,
-                } => noon::AnimationCompositionRequest::FamilyTransformTo {
-                    source,
-                    target_state,
-                    options: *options,
-                },
+                } => {
+                    if *method_target {
+                        noon::AnimationCompositionRequest::FamilyMethodTargetTo {
+                            source,
+                            target_state,
+                            options: *options,
+                        }
+                    } else {
+                        noon::AnimationCompositionRequest::FamilyTransformTo {
+                            source,
+                            target_state,
+                            options: *options,
+                        }
+                    }
+                }
                 OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
                     target_state,
@@ -2355,6 +2376,7 @@ impl CanonicalAuthoringScene {
                     source,
                     target_state,
                     options,
+                    ..
                 }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
@@ -2650,6 +2672,26 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_family(members, z_index)
             }
+            PlayerOwnership::Unstarted => {
+                Err("live family creation requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_family_with_color(
+        &mut self,
+        members: &[noon::MobjectTarget<'_>],
+        z_index: f64,
+        color: noon::Color,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_family_with_color(members, z_index, color),
             PlayerOwnership::Unstarted => {
                 Err("live family creation requires an active canonical session".into())
             }
@@ -3712,6 +3754,15 @@ mod wasm {
             self.inner.create_family(store, z_index)
         }
 
+        pub(crate) fn create_family_with_color(
+            &self,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+            z_index: f64,
+            color: noon::Color,
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+            self.inner.create_family_with_color(store, z_index, color)
+        }
+
         pub(crate) fn edit_family(
             &self,
             family: &noon::MobjectFamily,
@@ -4609,8 +4660,36 @@ mod wasm {
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
+                    method_target: false,
                     options,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyMethodTargetTo)]
+        pub fn append_family_method_target_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.append_family_transform_to(
+                source,
+                target_state,
+                child_run_time,
+                rate_function,
+                lag_ratio,
+                path_arc,
+            )?;
+            let Some(OrdinaryCompositionChild::FamilyTransformTo { method_target, .. }) =
+                self.children.last_mut()
+            else {
+                unreachable!("family target append always stages one family child");
+            };
+            *method_target = true;
             Ok(())
         }
 
@@ -8505,6 +8584,34 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveCreateFamilyWithColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_create_family_with_color(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+            z_index: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
+                .map_err(typed_js_error)?
+                .expect("required family color");
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            if batch.kind != SceneMembershipBatchKind::Add {
+                return Err(typed_js_error("family creation requires an add batch"));
+            }
+            self.inner
+                .live_family_with_color(
+                    &batch.family_members().map_err(typed_js_error)?,
+                    z_index,
+                    color,
+                )
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(typed_js_error)
+        }
+
         /// Commit all requested direct-member edits before returning wrapper decisions.
         #[wasm_bindgen(js_name = liveEditFamilyMembership)]
         pub fn live_edit_family_membership(
@@ -8655,6 +8762,23 @@ mod wasm {
                 .live_match_family_style(&source.semantic_family()?, &target.semantic_family()?)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyOwnColor)]
+        pub fn live_set_family_own_color(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_color(&family, red, green, blue, alpha)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_set_family_color(
@@ -10055,6 +10179,36 @@ mod tests {
     }
 
     #[test]
+    fn live_family_constructor_color_preserves_children_and_owner_revision() {
+        let mut context = CanonicalAuthoringScene::default();
+        let child = context.scene.square(0.5).unwrap();
+        let before = child.state().unwrap();
+        context.bind_mobject(ObjectId::new(0), &child).unwrap();
+        assert!(context
+            .live_family_with_color(&[(&child).into()], 0.0, noon::Color::GREEN)
+            .is_err());
+        context.live_player(1.0).unwrap();
+        let revision = context.scene.revision();
+        let family = context
+            .live_family_with_color(&[(&child).into()], 3.0, noon::Color::GREEN)
+            .unwrap();
+        assert_eq!(family.own_color().unwrap(), noon::Color::GREEN);
+        assert_eq!(child.state().unwrap(), before);
+        assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
+        context.live_target_editor(&child).unwrap();
+        let revision = context.scene.revision();
+        assert!(context
+            .live_family_with_color(
+                &[(&child).into()],
+                0.0,
+                noon::Color::rgba(f32::NAN, 0.0, 0.0, 1.0)
+            )
+            .is_err());
+        assert_eq!(context.scene.revision(), revision);
+        assert_eq!(child.state().unwrap(), before);
+    }
+
+    #[test]
     fn live_family_target_publication_keeps_the_execution_owner_coherent() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
@@ -10222,6 +10376,7 @@ mod tests {
         context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: pair,
             target_state: target_pair,
             options: AnimationOptions::new()
@@ -11422,6 +11577,73 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_and_method_family_targets_keep_original_root_completion_distinct() {
+        for method_target in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let leaf = context.scene.square(0.5).unwrap();
+            let source = context.scene.family(&[(&leaf).into()]).unwrap();
+            let mut target_leaf = leaf.target_editor().unwrap();
+            target_leaf.shift(1.0, 0.0).unwrap();
+            let target = context.scene.family(&[(&target_leaf).into()]).unwrap();
+            let green = noon_core::Color::GREEN;
+            target
+                .set_own_color(
+                    green.red.into(),
+                    green.green.into(),
+                    green.blue.into(),
+                    green.alpha.into(),
+                )
+                .unwrap();
+            context
+                .edit_membership(SceneMembershipBatch {
+                    kind: SceneMembershipBatchKind::Add,
+                    spatial_domain: None,
+                    members: vec![OwnedSceneMembershipMember::Family(source.clone())],
+                    bindings: vec![(ObjectId::new(0), leaf.clone())],
+                })
+                .unwrap();
+            let children = [OrdinaryCompositionChild::FamilyTransformTo {
+                source: source.clone(),
+                target_state: target,
+                method_target,
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            }];
+            let end = context
+                .begin_ordinary_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            let mut player = context.take_execution_player(end, 1).unwrap();
+            player.live_advance_segment_to(0.5).unwrap();
+            assert_eq!(source.own_color().unwrap(), noon_core::Color::WHITE);
+            player.live_advance_segment_to(end).unwrap();
+            player.live_complete_segment().unwrap();
+            assert_eq!(
+                source.own_color().unwrap(),
+                if method_target {
+                    noon_core::Color::GREEN
+                } else {
+                    noon_core::Color::WHITE
+                }
+            );
+            assert_eq!(
+                player
+                    .live_effective(&leaf)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
+                1.0
+            );
+        }
+    }
+
+    #[test]
     fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
@@ -11451,12 +11673,14 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::ThereAndBack);
         let invalid = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: source.clone(),
             target_state: invalid_target,
             options: transform_options,
         }];
         let revision = context.scene.integration_store().borrow().scene_revision();
         let reversed = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: source.clone(),
             target_state: target.clone(),
             options: transform_options.reverse_rate_function(true),
@@ -11485,6 +11709,7 @@ mod tests {
 
         let children = [
             OrdinaryCompositionChild::FamilyTransformTo {
+                method_target: false,
                 source: source.clone(),
                 target_state: target,
                 options: transform_options,
