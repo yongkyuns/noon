@@ -327,10 +327,19 @@ impl SceneMembershipBatch {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.create_family_with_color(store, z_index, noon::Color::WHITE)
+    }
+
+    fn create_family_with_color(
+        &self,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        z_index: f64,
+        color: noon::Color,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create_with_z_index(store, &self.family_members()?, z_index)
+        noon::MobjectFamily::create_with_own_color(store, &self.family_members()?, z_index, color)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2673,6 +2682,26 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_family_with_color(
+        &mut self,
+        members: &[noon::MobjectTarget<'_>],
+        z_index: f64,
+        color: noon::Color,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_family_with_color(members, z_index, color),
+            PlayerOwnership::Unstarted => {
+                Err("live family creation requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_shift_family(
         &mut self,
         family: &noon::MobjectFamily,
@@ -3723,6 +3752,15 @@ mod wasm {
             z_index: f64,
         ) -> Result<noon::MobjectFamily, AuthoringFailure> {
             self.inner.create_family(store, z_index)
+        }
+
+        pub(crate) fn create_family_with_color(
+            &self,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+            z_index: f64,
+            color: noon::Color,
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+            self.inner.create_family_with_color(store, z_index, color)
         }
 
         pub(crate) fn edit_family(
@@ -8546,6 +8584,34 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveCreateFamilyWithColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_create_family_with_color(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+            z_index: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
+                .map_err(typed_js_error)?
+                .expect("required family color");
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            if batch.kind != SceneMembershipBatchKind::Add {
+                return Err(typed_js_error("family creation requires an add batch"));
+            }
+            self.inner
+                .live_family_with_color(
+                    &batch.family_members().map_err(typed_js_error)?,
+                    z_index,
+                    color,
+                )
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(typed_js_error)
+        }
+
         /// Commit all requested direct-member edits before returning wrapper decisions.
         #[wasm_bindgen(js_name = liveEditFamilyMembership)]
         pub fn live_edit_family_membership(
@@ -10110,6 +10176,36 @@ mod tests {
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
         context.live_target_editor(&source).unwrap();
+    }
+
+    #[test]
+    fn live_family_constructor_color_preserves_children_and_owner_revision() {
+        let mut context = CanonicalAuthoringScene::default();
+        let child = context.scene.square(0.5).unwrap();
+        let before = child.state().unwrap();
+        context.bind_mobject(ObjectId::new(0), &child).unwrap();
+        assert!(context
+            .live_family_with_color(&[(&child).into()], 0.0, noon::Color::GREEN)
+            .is_err());
+        context.live_player(1.0).unwrap();
+        let revision = context.scene.revision();
+        let family = context
+            .live_family_with_color(&[(&child).into()], 3.0, noon::Color::GREEN)
+            .unwrap();
+        assert_eq!(family.own_color().unwrap(), noon::Color::GREEN);
+        assert_eq!(child.state().unwrap(), before);
+        assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
+        context.live_target_editor(&child).unwrap();
+        let revision = context.scene.revision();
+        assert!(context
+            .live_family_with_color(
+                &[(&child).into()],
+                0.0,
+                noon::Color::rgba(f32::NAN, 0.0, 0.0, 1.0)
+            )
+            .is_err());
+        assert_eq!(context.scene.revision(), revision);
+        assert_eq!(child.state().unwrap(), before);
     }
 
     #[test]

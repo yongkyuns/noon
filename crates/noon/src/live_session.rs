@@ -1511,13 +1511,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         let bounds = mobject.layout_bounds_at(transform)?;
         let boundary = mobject.boundary_bounds_at(transform)?;
-        let center = boundary.map_or(
-            (
-                f64::from(transform.translation.x),
-                f64::from(transform.translation.y),
-            ),
-            |b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5),
-        );
+        let center = crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0));
         Ok(EffectiveMobjectLayout {
             center,
             width: bounds.map_or(0.0, Bounds2D64::width),

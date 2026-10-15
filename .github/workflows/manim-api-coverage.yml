@@ -11,7 +11,11 @@ on:
       - '.github/workflows/manim-api-coverage.yml'
       - 'compat/manim-v0.21.0.json'
       - 'scripts/manim-api-coverage.py'
+      - 'scripts/manim-unit-scalars.py'
+      - 'web/python/_manim_unit.py'
+      - 'web/python/test_manim_unit.py'
       - 'scripts/manim-polynomial-easings.py'
+      - 'scripts/manim-nonstandard-rate-data.py'
       - 'scripts/manim-user-rotation-matrices.py'
       - 'web/python/_manim_user_vectors.py'
       - 'web/python/test_manim_user_rotation_matrices.py'
@@ -23,6 +27,7 @@ on:
       - 'web/python/_manim_rate_functions.py'
       - 'web/python/test_manim_polynomial_easings.py'
       - 'web/python/test_manim_rate_intervals.py'
+      - 'web/python/test_manim_nonstandard_rate_data.py'
       - 'web/python/test_manim_api_coverage_policy.py'
       - 'web/python/test_manim_user_intersections.py'
   workflow_dispatch:
@@ -70,16 +75,23 @@ jobs:
       - name: Test public namespace policy and private helper boundaries
         run: |
           python -m unittest discover -s web/python -p test_manim_api_coverage_policy.py -v
+          python -m unittest discover -s web/python -p test_manim_unit.py -v
           python -m unittest discover -s web/python -p test_manim_user_intersections.py -v
           python -m unittest discover -s web/python -p test_manim_polynomial_easings.py -v
           python -m unittest discover -s web/python -p test_manim_rate_intervals.py -v
+          python -m unittest discover -s web/python -p test_manim_nonstandard_rate_data.py -v
           python -m unittest discover -s web/python -p test_manim_user_rotation_matrices.py -v
 
       - name: Qualify module-only polynomial easing callables
         run: python scripts/manim-polynomial-easings.py .pinned-manim-reference --installed-manim
 
+      - name: Qualify explicit nonstandard rate user data
+        run: python scripts/manim-nonstandard-rate-data.py .pinned-manim-reference --installed-manim
       - name: Qualify explicit user-data rotation matrices
         run: python scripts/manim-user-rotation-matrices.py .pinned-manim-reference --installed-manim
+
+      - name: Qualify module-only scalar units against complete Manim
+        run: python scripts/manim-unit-scalars.py .pinned-manim-reference
 
       - name: Validate and report public API coverage
         run: |

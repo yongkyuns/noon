@@ -423,9 +423,10 @@ function setPlaybackRuntimeStatus(playbackState, detail = "") {
 }
 
 function setBusy(busy) {
-  const canSupersedeActiveAnimation =
-    sceneRunPromise !== null && activeSourceContinuation !== null;
-  sceneButton.disabled = busy && !canSupersedeActiveAnimation;
+  // Unchanged warmup joins its current build. Edited source retires that
+  // build before starting its replacement.
+  const canRequestRun = activeRunRequest !== null && isCurrentRun(activeRunRequest.token);
+  sceneButton.disabled = busy && !canRequestRun;
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
   gallerySearch.disabled = busy;
   categorySelect.disabled = busy;
@@ -849,7 +850,11 @@ function discardEarlyContinuationRuntime(attachedPlayer) {
 
 async function supersedeActiveSourceContinuation() {
   const continuation = activeSourceContinuation;
-  if (continuation === null) return false;
+  if (continuation === null) {
+    if (sceneRunPromise === null) return false;
+    await stopForSourceEdit();
+    return true;
+  }
 
   previousPreview.hold(canvas);
   playbackControls?.setControllable(false);

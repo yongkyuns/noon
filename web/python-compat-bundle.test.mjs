@@ -29,6 +29,17 @@ const actualHash = createHash("sha256")
   .update(JSON.stringify(bundlePayload))
   .digest("hex");
 
+// Every public lazy import must be available in the deployed interpreter.
+const publicSource = await readFile(new URL("./python/noon.py", import.meta.url), "utf8");
+const exportsMatch = publicSource.match(/_PUBLIC_EXPORTS = \{([\s\S]*?)\n\}/);
+assert.ok(exportsMatch, "public lazy module mapping must remain inspectable");
+const lazyModules = [...exportsMatch[1].matchAll(/^\s*"[^"]+":\s*"([^"]+)"/gm)].map(match => match[1]);
+assert.ok(lazyModules.length > 0, "public lazy export inventory must not be empty");
+for (const module of new Set(lazyModules)) {
+  assert.ok(PYTHON_COMPAT_MODULES.some(entry => entry.runtimePath === `/tmp/${module}.py`),
+    `${module}: public lazy import missing from worker compatibility manifest`);
+}
+
 const moduleCount = PYTHON_COMPAT_MODULES.length;
 assert.ok(moduleCount >= 19, "compatibility manifest must retain the supported bootstrap surface");
 assert.equal(new Set(PYTHON_COMPAT_MODULES.map((module) => module.sourcePath)).size, moduleCount);
