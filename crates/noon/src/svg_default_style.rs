@@ -326,8 +326,8 @@ mod tests {
             styles[0].stroke,
             Some(SemanticPaint::Solid(Color::from_hex(0xABCDEF)))
         );
-        assert!((styles[0].fill_opacity - 0.25).abs() < 1e-6);
-        assert!((styles[0].stroke_opacity - 0.5).abs() < 1e-6);
+        assert_eq!(styles[0].fill_opacity, 64.0 / 255.0);
+        assert_eq!(styles[0].stroke_opacity, 128.0 / 255.0);
         assert!((styles[0].stroke_width - 0.03).abs() < 1e-6);
     }
 
@@ -401,7 +401,7 @@ mod tests {
             style.stroke,
             Some(SemanticPaint::Solid(Color::from_hex(0x00FF00)))
         );
-        assert!((style.fill_opacity - 0.3).abs() < 1e-6);
+        assert_eq!(style.fill_opacity, 76.0 / 255.0);
         assert!((style.stroke_opacity - 0.4).abs() < 1e-6);
     }
 

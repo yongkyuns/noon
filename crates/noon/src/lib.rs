@@ -170,6 +170,7 @@ mod source_reconciliation;
 mod state_replacement;
 mod svg_authoring;
 mod svg_default_style;
+mod svg_opacity;
 pub mod synchronized_plot_presentation;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod synchronized_plotting_example;

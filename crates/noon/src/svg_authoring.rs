@@ -518,6 +518,8 @@ fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, S
     reject_source_features(&document)?;
     let normalized_source = with_manim_svg_defaults(source, &document);
     let normalized_document = parse_xml(&normalized_source)?;
+    let normalized_source = crate::svg_opacity::normalize(&normalized_source, &normalized_document);
+    let normalized_document = parse_xml(&normalized_source)?;
 
     let tree = usvg::Tree::from_xmltree(&normalized_document, &usvg::Options::default())
         .map_err(SvgAuthoringError::Parse)?;
@@ -760,7 +762,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
             }
             (
                 Some(SemanticPaint::Solid(solid_paint(fill.paint())?)),
-                f64::from(fill.opacity().get()),
+                crate::svg_opacity::byte_opacity(f64::from(fill.opacity().get())),
             )
         }
         None => (None, 1.0),
@@ -803,7 +805,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
             };
             (
                 Some(SemanticPaint::Solid(solid_paint(stroke.paint())?)),
-                f64::from(stroke.opacity().get()),
+                crate::svg_opacity::byte_opacity(f64::from(stroke.opacity().get())),
                 width,
                 join,
                 cap,
@@ -928,7 +930,9 @@ fn placement_transform(
     let translation = if options.should_center {
         SemanticVec3::new(-center_x * scale, -center_y * scale, 0.0)
     } else {
-        SemanticVec3::new(center_x * (1.0 - scale), center_y * (1.0 - scale), 0.0)
+        // Manim flips around the imported object's own center before fitting.
+        // The points above already have their Y axis inverted around zero.
+        SemanticVec3::new(center_x * (1.0 - scale), -center_y * (1.0 + scale), 0.0)
     };
     SemanticTransform2_5D {
         translation,
@@ -978,6 +982,35 @@ mod tests {
             should_center: false,
             height: None,
             width: None,
+        }
+    }
+
+    #[test]
+    fn uncentered_svg_preserves_original_center_during_height_and_width_fitting() {
+        // Pinned ManimCE 0.21.0 flips around the object's own center. Both
+        // fitting operations also use that center, including after a Y flip.
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>"#;
+        for (height, width, expected_width, expected_height) in [
+            (None, None, 20.0, 10.0),
+            (Some(2.0), None, 4.0, 2.0),
+            (Some(2.0), Some(6.0), 6.0, 3.0),
+        ] {
+            let scene = Scene::new();
+            let family = scene
+                .svg_from_str_with_options(
+                    source,
+                    SvgImportOptions {
+                        should_center: false,
+                        height,
+                        width,
+                    },
+                )
+                .unwrap();
+            let bounds = family.layout_bounds().unwrap().unwrap();
+            assert!(((bounds.min_x + bounds.max_x) * 0.5 - 10.0).abs() < 1e-6);
+            assert!(((bounds.min_y + bounds.max_y) * 0.5 - 5.0).abs() < 1e-6);
+            assert!((bounds.width() - expected_width).abs() < 1e-6);
+            assert!((bounds.height() - expected_height).abs() < 1e-6);
         }
     }
 
@@ -1192,8 +1225,10 @@ mod tests {
         let object =
             crate::Mobject::from_node(Rc::clone(scene.integration_store()), member).unwrap();
         let query = object.path_query().unwrap();
-        assert_eq!(query.start().unwrap(), (4.0, -7.0));
-        assert_eq!(query.end().unwrap(), (7.0, -7.0));
+        // ManimCE 0.21.0 retains y=7 when flipping this horizontal path
+        // around its own center; the transformed x coordinates are unchanged.
+        assert_eq!(query.start().unwrap(), (4.0, 7.0));
+        assert_eq!(query.end().unwrap(), (7.0, 7.0));
     }
 
     #[test]
@@ -1218,8 +1253,8 @@ mod tests {
             state.style.stroke,
             Some(SemanticPaint::Solid(Color::from_hex(0xABCDEF)))
         );
-        assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
-        assert!((state.style.stroke_opacity - 0.5).abs() < 1e-6);
+        assert_eq!(state.style.fill_opacity, 64.0 / 255.0);
+        assert_eq!(state.style.stroke_opacity, 128.0 / 255.0);
         assert!((state.style.stroke_width - 0.02).abs() < 1e-6);
     }
 

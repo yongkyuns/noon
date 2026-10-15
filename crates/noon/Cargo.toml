@@ -43,6 +43,7 @@ noon-typst = { path = "../noon-typst", optional = true, default-features = false
 swash = { version = "=0.2.10", optional = true }
 typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }
 usvg = { version = "=0.48.1", default-features = false }
+simplecss = "=0.2.2"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 
 [dev-dependencies]
