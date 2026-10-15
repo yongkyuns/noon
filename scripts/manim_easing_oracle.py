@@ -47,12 +47,19 @@ def qualify_easings(source_root, names, *, installed_manim=False, module_only=Fa
         function = getattr(public, name)
         if function is not getattr(rates, name) or rates.easing_from_rate_func(function) != name:
             errors.append(f"public easing identity {name} differs")
+        if module_only and (name in noon.__all__ or hasattr(noon, name)):
+            errors.append(f"module-only easing {name} leaked into the public namespace")
     if installed_manim:
+        import manim
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed complete rate module differs from pin")
         if easing_observations(vars(rate_functions), names) != expected:
             errors.append("installed easing observations differ")
+        if module_only:
+            for name in names:
+                if hasattr(manim, name):
+                    errors.append(f"pinned module-only easing {name} unexpectedly became public")
     return {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "functions": len(names), "observations": len(expected),
             "installed_module_checked": installed_manim, "errors": errors}
