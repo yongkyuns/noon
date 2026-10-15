@@ -154,6 +154,21 @@ class ManimSharedConstructorTests(unittest.TestCase):
             assert abs(s.style["opacity"] - 0.8) < 1e-12
             assert l.start.x == -2.0 and l.end.x == 3.0
             assert p.style["stroke"] is None
+
+            from noon import Mobject, VMobject
+            generic = Mobject("#FC6255", name="named", dim=2, target=c, z_index=3)
+            assert generic.name == "named" and generic.dim == 2 and generic.target is c
+            assert generic.geometry == {"vector_path": {"commands": []}}
+            assert generic.style["stroke"]["red"] == RED[0]
+            assert generic.style["stroke"]["alpha"] == 1.0
+            assert generic.style["fill"]["alpha"] == 0.0
+            vector = VMobject(color=BLUE, fill_opacity=.25, stroke_width=7)
+            assert vector.geometry == {"vector_path": {"commands": []}}
+            assert vector.style["fill"]["alpha"] == .25
+            assert vector.style["stroke_width"] == .07
+            class NamedMobject(Mobject):
+                pass
+            assert NamedMobject().name == "NamedMobject"
             """
         )
         completed = subprocess.run(

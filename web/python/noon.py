@@ -258,8 +258,22 @@ def _callback_operations():
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
-    def __init__(self) -> None:
-        raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
+    def __init__(
+        self, color: Color = WHITE, name: str | None = None, dim: int = 3,
+        target: Mobject | None = None, z_index: float = 0,
+    ) -> None:
+        from operator import index
+        if isinstance(dim, bool):
+            raise TypeError("Mobject dimension must be an integer")
+        dimension = index(dim)
+        if dimension < 0:
+            raise ValueError("Mobject dimension must be non-negative")
+        if dimension not in (2, 3):
+            raise NotImplementedError("Mobject currently supports planar dimensions 2 and 3")
+        _semantic_operations()._empty_path_init(self, color=color, kind="Mobject", z_index=z_index)
+        self.name = self.__class__.__name__ if name is None else name
+        self.dim = dim
+        self.target = target
 
     def get_group_class(self):
         from _manim_compat import Group
