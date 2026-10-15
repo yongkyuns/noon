@@ -133,14 +133,40 @@ test("dispose frees decoded and pending resources and cannot be resurrected", as
   f.preview.accept(f.canvas, identity(2)); f.preview.hold(f.canvas);
   assert.equal(f.copies.length, 1);
 });
-test("clearing during image decode revokes the pending URL", async () => {
-  const f = fixture(); const decode = deferred();
-  const create = f.frame.ownerDocument.createElement;
-  f.frame.ownerDocument.createElement = tag => { const element = create(tag); if (tag === "img") element.decode = () => decode.promise; return element; };
-  f.preview.accept(f.canvas, identity()); f.preview.hold(f.canvas); f.encode(); await flush();
-  assert.equal(f.urls.size, 1); f.preview.clear(); assert.equal(f.urls.size, 0);
-  decode.resolve(); await flush(); assert.equal(f.overlay.hidden, true);
-});
+for (const action of ["clear", "accept", "dispose"]) {
+  for (const outcome of ["resolve", "reject"]) {
+    test(`${action} during ${outcome} image decode retains its URL until settlement`, async () => {
+      const f = fixture(); const decode = deferred();
+      const create = f.frame.ownerDocument.createElement;
+      let image;
+      f.frame.ownerDocument.createElement = tag => {
+        const element = create(tag);
+        if (tag === "img") {
+          image = element;
+          element.decode = () => decode.promise;
+        }
+        return element;
+      };
+      f.preview.accept(f.canvas, identity()); f.preview.hold(f.canvas);
+      f.encode(); await flush();
+      const url = image.src;
+      if (action === "accept") f.preview.accept(f.canvas, identity(2));
+      else f.preview[action]();
+      assert.equal(f.overlay.hidden, true);
+      assert.equal(f.urls.has(url), true, "an active decoder still owns the blob URL");
+      assert.equal(image.src, url, "cancellation must not abort the active image request");
+      assert.deepEqual(f.revoked, []);
+      f.preview.clear(); f.preview.clear(); f.preview.hold(f.canvas);
+      assert.equal(f.copies.length, 1, "cancellation must not queue another capture");
+      decode[outcome](new Error("optional decode failure")); await flush();
+      assert.equal(f.overlay.hidden, true, "cancelled pixels must never become visible");
+      assert.equal(f.urls.size, 0);
+      assert.deepEqual(f.revoked, [url], "settlement releases the URL exactly once");
+      assert.equal(image.src, undefined);
+      assert.equal(f.copies[0].copy.width, 1);
+    });
+  }
+}
 
 test("actual edit boundary freezes pixels before hiding or retiring the renderer", async () => {
   const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
