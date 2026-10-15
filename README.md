@@ -264,6 +264,15 @@ and `NativeFontFace.bundled(family)`, accepted by `Text` and `MarkupText` throug
 MarkupText has its own constructor default. These APIs do not discover OS fonts.
 Markup styles require a matching embedded styled face; unavailable styles reject.
 
+An explicit face can select `NativeFontMetricsProfile::CairoCoreText` with
+`with_metrics_profile(...)`; Python uses
+`face.with_metrics_profile("cairo-coretext")`. This opts into fractional Pango
+placement and the Cairo/CoreText outline recipe for static monochrome TrueType
+faces. CFF, variable and intrinsic color fonts are rejected for this profile.
+The default `CairoFreeType` / `"cairo-freetype"` recipe remains portable across
+hosts. Font bytes, resources, vector reveal paths and glyph masks stay in the
+shared Rust pipeline; this is a Noon font configuration API.
+
 Without bundles, family lookup fails with `TextAuthoringError::FontUnavailable`
 and the Typst convenience constructors report `TypstBackendError::FontsUnavailable`.
 There is no provider substitution. Provider-specific APIs are absent when their

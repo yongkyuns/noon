@@ -337,8 +337,8 @@ pub use table_display::{
 pub use text_authoring::TextAuthoringError;
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
-    bundled_native_font_face, MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-    DEFAULT_NATIVE_TEXT_FONT_SIZE,
+    bundled_native_font_face, MarkupText, NativeFontFace, NativeFontMetricsProfile, Text,
+    DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
 };
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};

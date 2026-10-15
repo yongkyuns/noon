@@ -36,6 +36,14 @@ try {
     assert.throws(() => new wasm.WasmNativeFontFace("invalid", new Uint8Array(), index),
       error => error.category === "invalid_input" && error.code === "text.invalid_font_index");
   }
+  const metricsFace = wasm.WasmNativeFontFace.bundled("DejaVu Sans Mono");
+  assert.throws(() => metricsFace.withMetricsProfile("unknown"),
+    error => error.category === "invalid_input" && error.code === "text.invalid_metrics_profile");
+  const cffMetricsFace = wasm.WasmNativeFontFace.bundled("Libertinus Serif");
+  assert.throws(() => cffMetricsFace.withMetricsProfile("cairo-coretext"),
+    error => error.category === "invalid_input" && error.code === "text.unsupported_metrics_profile");
+  cffMetricsFace.free();
+  metricsFace.free();
   const pyodide = await loadPyodide({ indexURL: path.resolve(runtimeRoot) + path.sep });
   assert.equal(pyodide.version, pinnedVersion, "test interpreter must match the worker pin");
   report.pyodideVersion = pyodide.version;
@@ -122,6 +130,24 @@ except NoonMissingResourceError as error:
     assert error.code == "text.font_unavailable"
 else:
     raise AssertionError("unavailable font accepted")
+fractional_face = face.with_metrics_profile("cairo-coretext")
+assert face.metrics_profile == "cairo-freetype" and fractional_face.metrics_profile == "cairo-coretext"
+fractional = Text("Same face", font=fractional_face)
+assert abs(fractional.width - explicit.width) > 1e-5
+assert abs(MarkupText("Same face", font=fractional_face).width - fractional.width) < 1e-9
+Text.set_default(font=fractional_face)
+try:
+    assert abs(Text("Same face").width - fractional.width) < 1e-9
+finally:
+    Text.set_default()
+profile_scene = Scene()
+profile_token = _manim_reactive._enter_authoring_scene(profile_scene)
+try:
+    live_fractional = Text("Same face", font=fractional_face)
+    assert abs(live_fractional.width - fractional.width) < 1e-9
+    profile_scene.add(live_fractional)
+finally:
+    _manim_reactive._leave_authoring_scene(profile_token)
 _font_result_json = json.dumps({"family": face.family, "faceIndex": face.face_index,
     "width": explicit.width, "liveObjectCount": len(font_scene.mobjects)})
 `);

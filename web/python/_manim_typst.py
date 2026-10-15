@@ -66,7 +66,7 @@ class NativeFontFace:
     constructor passes an owned ``cloneFace()`` wrapper to Rust.
     """
 
-    __slots__ = ("_family", "_face_index", "_handle")
+    __slots__ = ("_family", "_face_index", "_handle", "_metrics_profile")
 
     def __init__(self, family: str, data: bytes | bytearray | memoryview, face_index: int = 0):
         if not isinstance(family, str) or family.strip() == "":
@@ -91,10 +91,14 @@ class NativeFontFace:
         )
         self._initialize_handle(handle, family, face_index)
 
-    def _initialize_handle(self, handle: object, family: str, face_index: int) -> None:
+    def _initialize_handle(
+        self, handle: object, family: str, face_index: int,
+        metrics_profile: str = "cairo-freetype",
+    ) -> None:
         object.__setattr__(self, "_family", family)
         object.__setattr__(self, "_face_index", face_index)
         object.__setattr__(self, "_handle", handle)
+        object.__setattr__(self, "_metrics_profile", metrics_profile)
 
     @classmethod
     def bundled(cls, family: str) -> NativeFontFace:
@@ -122,6 +126,26 @@ class NativeFontFace:
     @property
     def face_index(self) -> int:
         return self._face_index
+
+    @property
+    def metrics_profile(self) -> str:
+        return self._metrics_profile
+
+    def with_metrics_profile(self, profile: str) -> NativeFontFace:
+        """Return an immutable font input with an explicit Rust layout recipe.
+
+        ``cairo-freetype`` is the portable default. ``cairo-coretext`` selects
+        fractional Pango placement and Cairo/CoreText paths for static monochrome
+        TrueType faces; Rust rejects unsupported faces before scene admission.
+        """
+        if not isinstance(profile, str):
+            raise TypeError("metrics profile must be a string")
+        if profile not in ("cairo-freetype", "cairo-coretext"):
+            raise ValueError("unknown native font metrics profile")
+        handle = engine_call(self._handle.withMetricsProfile, profile)
+        result = object.__new__(type(self))
+        result._initialize_handle(handle, self.family, self.face_index, profile)
+        return result
 
     def _clone_for_text(self):
         return engine_call(self._handle.cloneFace)

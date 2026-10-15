@@ -332,6 +332,9 @@ pub enum GlyphOutlineProfile {
     /// ManimPango/Cairo's authored-size 26.6 scaling and 24.8 path grid
     /// for static monochrome TrueType/CFF faces.
     Cairo,
+    /// Pango's fractional layout and Cairo/CoreText's unhinted 24.8 path grid.
+    /// This explicit recipe supports static monochrome TrueType faces only.
+    CairoCoreText,
 }
 
 /// One shaped run. `fill == None` means inherit the owning mobject's color;

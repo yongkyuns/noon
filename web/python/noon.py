@@ -931,6 +931,8 @@ _PUBLIC_EXPORTS = {
     "split_bezier": "_manim_user_vectors",
     "subdivide_bezier": "_manim_user_vectors",
     "bezier_remap": "_manim_user_vectors",
+    "point_lies_on_bezier": "_manim_user_vectors",
+    "proportions_along_bezier_curve_for_point": "_manim_user_vectors",
     "is_closed": "_manim_user_vectors",
     "straight_path": "_manim_user_vectors",
     "line_intersection": "_manim_user_vectors",
