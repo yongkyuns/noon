@@ -60,6 +60,9 @@ class NativeFamilyTests(unittest.TestCase):
             context.liveSetFamilyOpacity(local, .5)
 
     def test_family_opacity_before_and_after_barriers_uses_effective_paint(self):
+        # Both classes protect Noon's existing family-paint contract. Pinned
+        # Manim's generic Group uses a deprecated metadata setter instead;
+        # only VGroup is original-behavior qualification for this adapter.
         source = '''from noon import *
 class Paint(Scene):
     def construct(self):
