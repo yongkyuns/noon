@@ -3,7 +3,7 @@ from noon import *
 
 class OrdinaryCanonicalCurveLayout(Scene):
     def construct(self):
-        empty = VMobject().shift(3 * RIGHT - 2 * UP)
+        empty = Mobject().shift(3 * RIGHT - 2 * UP)
         assert empty.get_x() == 0 and empty.get_y() == 0
         self.add(empty)
         circle = Circle(radius=1, color=WHITE).stretch_to_fit_width(4).stretch_to_fit_height(1.5)

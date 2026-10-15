@@ -154,6 +154,33 @@ class ManimSharedConstructorTests(unittest.TestCase):
             assert abs(s.style["opacity"] - 0.8) < 1e-12
             assert l.start.x == -2.0 and l.end.x == 3.0
             assert p.style["stroke"] is None
+
+            from noon import Mobject, VMobject
+            generic = Mobject("#FC6255", name="named", dim=2, target=c, z_index=3)
+            assert generic.name == "named" and generic.dim == 2 and generic.target is c
+            assert generic.geometry == {"vector_path": {"commands": []}}
+            assert generic.style["stroke"]["red"] == RED[0]
+            assert generic.style["stroke"]["alpha"] == 1.0
+            assert generic.style["fill"]["alpha"] == 0.0
+            for cls in (Mobject, VMobject):
+                omitted = cls()
+                explicit_none = cls(color=None)
+                assert [omitted.style["stroke"][channel] for channel in ("red", "green", "blue")] == [1.0, 1.0, 1.0]
+                assert [explicit_none.style["stroke"][channel] for channel in ("red", "green", "blue")] == [0.0, 0.0, 0.0]
+            vector = VMobject(color=BLUE, fill_opacity=.25, stroke_width=7)
+            assert vector.geometry == {"vector_path": {"commands": []}}
+            assert vector.style["fill"]["alpha"] == .25
+            assert vector.style["stroke_width"] == .07
+            for base_color in ({}, {"color": None}, {"color": "#FC6255"}):
+                painted = VMobject(**base_color, fill_color="#00FF00", fill_opacity=1,
+                                   stroke_color="#0000FF", stroke_opacity=.25)
+                assert [painted.style["fill"][c] for c in ("red", "green", "blue")] == [0., 1., 0.]
+                assert [painted.style["stroke"][c] for c in ("red", "green", "blue")] == [0., 0., 1.]
+                assert painted.style["fill"]["alpha"] == 1
+                assert painted.style["stroke"]["alpha"] == .25
+            class NamedMobject(Mobject):
+                pass
+            assert NamedMobject().name == "NamedMobject"
             """
         )
         completed = subprocess.run(

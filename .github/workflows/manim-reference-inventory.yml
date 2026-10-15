@@ -85,6 +85,7 @@ jobs:
           python3 noon/scripts/test_pinned_python_helpers.py
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
           python3 noon/scripts/manim-match-color.py manim-v0.21.0
+          python3 noon/scripts/manim-angle-from-three-points.py manim-v0.21.0
       - name: Qualify NumPy user-data contracts against pinned source
         shell: bash
         run: |

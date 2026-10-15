@@ -10,6 +10,7 @@ import math
 from functools import partialmethod
 from typing import Any, Callable
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 
 from _noon_errors import (
     NoonError,
@@ -252,8 +253,22 @@ def _callback_operations():
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
-    def __init__(self) -> None:
-        raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
+    def __init__(
+        self, color: Color = WHITE, name: str | None = None, dim: int = 3,
+        target: Mobject | None = None, z_index: float = 0,
+    ) -> None:
+        from operator import index
+        if isinstance(dim, bool):
+            raise TypeError("Mobject dimension must be an integer")
+        dimension = index(dim)
+        if dimension < 0:
+            raise ValueError("Mobject dimension must be non-negative")
+        if dimension not in (2, 3):
+            raise NotImplementedError("Mobject currently supports planar dimensions 2 and 3")
+        _semantic_operations()._empty_path_init(self, color=color, kind="Mobject", z_index=z_index)
+        self.name = self.__class__.__name__ if name is None else name
+        self.dim = dim
+        self.target = target
 
     def get_group_class(self):
         from _manim_compat import Group
@@ -900,7 +915,14 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "AS2700": "_manim_color_palettes",
+    "BS381": "_manim_color_palettes",
+    "DVIPSNAMES": "_manim_color_palettes",
+    "SVGNAMES": "_manim_color_palettes",
+    "X11": "_manim_color_palettes",
+    "XKCD": "_manim_color_palettes",
     "rate_functions": "_manim_rate_functions",
+    "unit": "_manim_unit",
 
     "CubicBezier": "_manim_geometry",
     "get_winding_number": "_manim_user_vectors",
@@ -922,6 +944,8 @@ _PUBLIC_EXPORTS = {
     "thick_diagonal": "_manim_user_vectors",
     "rotation_about_z": "_manim_user_vectors",
     "rotation_matrix": "_manim_user_vectors",
+    "rotate_vector": "_manim_user_vectors",
+    "compass_directions": "_manim_user_vectors",
     "cartesian_to_spherical": "_manim_user_vectors",
     "spherical_to_cartesian": "_manim_user_vectors",
     "complex_to_R3": "_manim_user_vectors",
@@ -962,6 +986,9 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "batch_by_property": "_manim_iterables",
+    "uniq_chain": "_manim_iterables",
+    "hash_obj": "_manim_iterables",
     "stretch_array_to_length": "_manim_iterables",
     "DictAsObject": "_manim_config_utils",
     "merge_dicts_recursively": "_manim_config_utils",
@@ -1156,6 +1183,9 @@ def __dir__():
 
 
 __all__ = [
+    "annotations",
+    "PackageNotFoundError",
+    "version",
     "Glow",
     "Pixels",
     "EffectHandle",
