@@ -994,6 +994,27 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_svg(
+        &mut self,
+        source: &str,
+        options: noon::SvgImportOptions,
+        defaults: Option<noon::SvgDefaultStyle>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_svg(source, options, defaults)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_image(
         &mut self,
         options: noon::ImageMobjectOptions,

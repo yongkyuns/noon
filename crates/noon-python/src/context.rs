@@ -483,6 +483,19 @@ impl Context {
         };
         Ok(color.into())
     }
+    #[pyo3(name = "liveCreateSvg", signature = (source, should_center, height, width_or_defaults))]
+    fn create_svg(
+        &mut self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        let (options, style) = crate::svg::request(should_center, height, width_or_defaults)?;
+        self.with_live(|live| live.create_svg(source, options, style))
+            .map(|family| crate::family::FamilyHandle { family })
+    }
     #[pyo3(name = "liveCreateFamily")]
     fn create_family(
         &mut self,

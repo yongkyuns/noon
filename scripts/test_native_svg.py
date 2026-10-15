@@ -103,6 +103,33 @@ class SvgScene(Scene):
                 with self.assertRaises(NoonOwnershipError): scene.svg[0].get_fill_color()
         asyncio.run(check())
 
+    def test_svg_construction_after_wait_recovers_from_invalid_input_on_both_routes(self):
+        source = f'''from noon import *
+class LateSvg(Scene):
+ def construct(self):
+  self.wait(.1)
+  try:
+   SVGMobject.from_string('<svg')
+  except ValueError as error:
+   self.failure=(error.category,error.code)
+  self.svg=SVGMobject.from_string({SVG!r},fill_color='#00ff00',fill_opacity=.25)
+  self.add(self.svg)
+  self.svg.shift(RIGHT)
+  self.wait(.1)
+'''
+        async def check():
+            for portable in (False, True):
+                scene = await run_source(source, portable=portable, sample_hz=10)
+                try:
+                    self.assertEqual(scene.failure, ('invalid_input', 'live.svg'))
+                    self.assertAlmostEqual(scene.svg.get_center()[0], 1)
+                    self.assertEqual(self.rgb(scene.svg[0].get_fill_color()), (0, 1, 0))
+                    self.assertEqual(scene.svg[0].get_fill_opacity(), .25)
+                finally:
+                    close_scene(scene)
+                with self.assertRaises(NoonOwnershipError): scene.svg[0].get_fill_color()
+        asyncio.run(check())
+
     def test_source_failure_retires_the_existing_svg_family_context(self):
         before = (len(_manim_updaters._CANONICAL_SESSIONS), len(_manim_updaters._TRACKED_MOBJECTS))
         source = f'''from noon import *

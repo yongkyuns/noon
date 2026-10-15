@@ -318,12 +318,14 @@ jobs:
         run: |
           python3 scripts/python_native_text_conformance.py --profile svg --python-path build/python-svg \
             --rust-binary target/release/examples/python_svg_contract --output artifacts/python-svg/media
+          python3 scripts/python_native_text_conformance.py --profile svg-live --python-path build/python-svg \
+            --rust-binary target/release/examples/python_svg_contract --output artifacts/python-svg/live-media
       - name: Retain exact SVG source and tool versions including failures
         if: always()
         run: |
           mkdir -p artifacts/python-svg
           git rev-parse HEAD > artifacts/python-svg/source-sha.txt
-          cp parity/python-host/native_svg.py artifacts/python-svg/
+          cp parity/python-host/native_svg.py parity/python-host/native_svg_live.py artifacts/python-svg/
           cp Cargo.lock artifacts/python-svg/
           rustc -Vv > artifacts/python-svg/rust-version.txt
           ffmpeg -version > artifacts/python-svg/ffmpeg-version.txt

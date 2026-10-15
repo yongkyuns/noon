@@ -14,6 +14,7 @@ mod family_layout;
 mod image;
 mod path_editing;
 mod spatial;
+mod svg;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
@@ -415,6 +416,7 @@ pub enum LiveSessionError {
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
     Callback(crate::ExecutionSessionCallbackError),
+    Svg(crate::SvgAuthoringError),
     #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
@@ -435,6 +437,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
+            Self::Svg(error) => error.fmt(formatter),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
@@ -453,6 +456,7 @@ impl std::error::Error for LiveSessionError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Callback(error) => Some(error),
+            Self::Svg(error) => Some(error),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),

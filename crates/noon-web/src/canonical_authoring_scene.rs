@@ -2822,6 +2822,26 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn live_create_svg(
+        &mut self,
+        source: &str,
+        options: noon::SvgImportOptions,
+        defaults: Option<noon::SvgDefaultStyle>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_create_svg(source, options, defaults),
+            PlayerOwnership::Unstarted => {
+                Err("live SVG construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn live_create_image(
         &mut self,
         options: noon::ImageMobjectOptions,
@@ -7865,6 +7885,30 @@ mod wasm {
             self.inner
                 .live_create_manim_arrow(options)
                 .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
+                .map_err(typed_js_error)
+        }
+
+        /// Parse and publish a detached SVG family through the current live session.
+        #[wasm_bindgen(js_name = liveCreateSvg)]
+        pub fn live_create_svg(
+            &mut self,
+            source: &str,
+            should_center: bool,
+            height: Option<f64>,
+            width_or_defaults: JsValue,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            let request = crate::authoring_svg::parse_width_or_defaults(width_or_defaults)?;
+            self.inner
+                .live_create_svg(
+                    source,
+                    noon::SvgImportOptions {
+                        should_center,
+                        height,
+                        width: request.width,
+                    },
+                    request.svg_default,
+                )
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
 

@@ -47,13 +47,11 @@ pub(crate) fn defaults(
     })
 }
 
-pub(crate) fn authored(
-    store: &Store,
-    source: &str,
+pub(crate) fn request(
     should_center: bool,
     height: Option<f64>,
     width_or_defaults: &Bound<'_, PyAny>,
-) -> PyResult<FamilyHandle> {
+) -> PyResult<(noon::SvgImportOptions, Option<noon::SvgDefaultStyle>)> {
     let (width, style) = if let Ok(defaults) = width_or_defaults.extract::<PyRef<'_, SvgDefaults>>()
     {
         (defaults.width, Some(defaults.style))
@@ -65,6 +63,17 @@ pub(crate) fn authored(
         height,
         width,
     };
+    Ok((options, style))
+}
+
+pub(crate) fn authored(
+    store: &Store,
+    source: &str,
+    should_center: bool,
+    height: Option<f64>,
+    width_or_defaults: &Bound<'_, PyAny>,
+) -> PyResult<FamilyHandle> {
+    let (options, style) = request(should_center, height, width_or_defaults)?;
     let family = match style {
         Some(style) => noon::MobjectFamily::from_svg_str_with_options_and_svg_default(
             Rc::clone(&store.semantics),

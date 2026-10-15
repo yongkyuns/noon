@@ -127,7 +127,7 @@ impl Scene {
     }
 }
 
-fn source_with_svg_default(
+pub(crate) fn source_with_svg_default(
     source: &str,
     svg_default: SvgDefaultStyle,
 ) -> Result<String, SvgAuthoringError> {

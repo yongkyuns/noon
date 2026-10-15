@@ -14,7 +14,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--python-path", type=Path, required=True)
 p.add_argument("--rust-binary", type=Path, required=True)
 p.add_argument("--output", type=Path, required=True)
-p.add_argument("--profile", choices=("text", "image", "svg"), default="text",
+p.add_argument("--profile", choices=("text", "image", "svg", "svg-live"), default="text",
                help="Select an existing independent Rust/Python resource source")
 a = p.parse_args()
 sys.path.insert(0, str(a.python_path.resolve()))
@@ -24,6 +24,7 @@ FRAME_COUNT, FRAME_RATE, MAX_FRAMES, SOURCE = {
     "text": (6, 30, 16, "parity/python-host/native_text.py"),
     "image": (16, 4, 32, "web/python/examples/raster_image.py"),
     "svg": (6, 30, 16, "parity/python-host/native_svg.py"),
+    "svg-live": (6, 30, 16, "parity/python-host/native_svg_live.py"),
 }[a.profile]
 
 
@@ -57,7 +58,7 @@ async def main():
     source_file = ROOT / SOURCE
     source = source_file.read_text()
     rust = out / "rust"
-    run([str(a.rust_binary.resolve()), str(rust)])
+    run([str(a.rust_binary.resolve()), str(rust), *(["late"] if a.profile == "svg-live" else [])])
     expected = decode(rust)
     (out / "rust.rgba").write_bytes(expected)
     summaries = []
