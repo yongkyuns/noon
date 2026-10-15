@@ -13,6 +13,70 @@ import _manim_updaters
 
 
 class NativeTextTests(unittest.TestCase):
+    def test_source_part_queries_reuse_utf8_resource_spans_and_immutable_values(self):
+        label = Text("écho écho", font="DejaVu Sans Mono")
+        before = label.source_parts_for("écho")
+        self.assertEqual([(p.source_start, p.source_end) for p in before], [(0, 5), (6, 11)])
+        self.assertTrue(all(p.cluster_count > 0 for p in before))
+        self.assertTrue(all(p.semantic_key for p in before))
+        self.assertEqual(label.source_parts_for("missing"), ())
+        self.assertEqual(label.source_parts_for(""), ())
+        self.assertIsInstance(label.text_parts(), tuple)
+        label.shift((1, 0, 0))
+        self.assertEqual(label.source_parts_for("écho"), before)
+        self.assertEqual(label._semantic_handle.textSource(), "écho écho")
+        with self.assertRaises(TypeError):
+            label.source_parts_for(None)
+
+    def test_raw_source_part_values_have_independent_release_and_checked_bounds(self):
+        store = native.Store()
+        handle = store.text("Noon Noon", "DejaVu Sans Mono", 30, -1)
+        raw = handle.textSourcePartsFor("Noon")
+        self.assertEqual(raw.length, 2)
+        first = raw.item(0)
+        with self.assertRaises(RuntimeError):
+            raw.item(2)
+        raw.free()
+        raw.free()
+        with self.assertRaises(RuntimeError):
+            _ = raw.length
+        self.assertEqual((first.sourceStart, first.sourceEnd), (0, 4))
+        first.free()
+        with self.assertRaises(RuntimeError):
+            _ = first.sourceStart
+        circle = store.geometry(native.GeometryOptions.circle(.5))
+        with self.assertRaises(RuntimeError) as caught:
+            circle.textParts()
+        self.assertEqual(caught.exception.code, "text_parts.not_text")
+        self.assertEqual(circle.centerCoordinates(), (0., 0.))
+
+    def test_part_queries_after_wait_match_before_and_reject_retired_owner(self):
+        source = '''from noon import *
+class TextParts(Scene):
+ def construct(self):
+  self.label=Text("écho écho",font="DejaVu Sans Mono")
+  self.add(self.label)
+  self.before=self.label.source_parts_for("écho")
+  self.wait(.1)
+  self.label.shift(RIGHT)
+  self.after=self.label.source_parts_for("écho")
+  self.late=Text("écho écho",font="DejaVu Sans Mono")
+  self.add(self.late)
+  self.late_parts=self.late.source_parts_for("écho")
+  self.wait(.1)
+'''
+        async def check():
+            for portable in (False, True):
+                scene=await run_source(source,portable=portable,sample_hz=10)
+                try:
+                    self.assertEqual(scene.before,scene.after)
+                    self.assertEqual(scene.after,scene.late_parts)
+                finally:
+                    close_scene(scene)
+                with self.assertRaises(NoonOwnershipError): scene.label.source_parts_for("écho")
+                with self.assertRaises(NoonOwnershipError): scene.late.text_parts()
+        asyncio.run(check())
+
     def test_plain_and_markup_sources_create_after_a_completed_barrier_on_both_routes(self):
         source = (Path(__file__).resolve().parents[1] / "parity/python-host/native_text.py").read_text()
         async def check():

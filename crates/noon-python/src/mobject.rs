@@ -14,6 +14,30 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textParts")]
+    fn text_parts(&self) -> PyResult<crate::text_parts::TextPartList> {
+        self.handle
+            .text_parts()
+            .map(crate::text_parts::TextPartList::new)
+            .map_err(engine_error)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textSource")]
+    fn text_source(&self) -> PyResult<String> {
+        self.handle
+            .text_source()
+            .map(|source| source.to_string())
+            .map_err(engine_error)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textSourcePartsFor")]
+    fn text_source_parts_for(&self, needle: &str) -> PyResult<crate::text_parts::TextPartList> {
+        self.handle
+            .text_source_parts_for(needle)
+            .map(crate::text_parts::TextPartList::new)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "fillColor")]
     fn fill_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
         self.handle

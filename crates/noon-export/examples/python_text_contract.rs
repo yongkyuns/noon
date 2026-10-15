@@ -30,6 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     live.move_to_point(&other, 2.0, 0.0)?;
                     live.add(&other)?;
                     live.shift(&self.label, 1.0, 0.0)?;
+                    assert_eq!(
+                        self.label.text_source_parts_for("text")?[0].source_span,
+                        noon::TextSourceSpan::new(7, 11)
+                    );
                     Ok(ContinuationStep::Await(live.wait_segment(0.1)?))
                 }
                 _ => Ok(ContinuationStep::Finished),
@@ -43,6 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_font("DejaVu Sans Mono")
             .with_font_size(30.0),
     )?;
+    assert_eq!(
+        label.text_source_parts_for("text")?[0].source_span,
+        noon::TextSourceSpan::new(7, 11)
+    );
     scene.add(&label)?;
     let mut program = scene.into_live_program(Source { label, stage: 0 })?;
     let mut capture = CaptureOptions::new(320, 180);

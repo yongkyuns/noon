@@ -179,6 +179,10 @@ admission and post-wait creation use the existing Rust image API. Browser URL
 and Blob loading require the browser host; mutable pixels and other codecs
 remain outside this profile.
 
+Native `Text` source-part and substring observations use the same Rust UTF-8,
+cluster and vector ranges as browser authoring, including after a wait. Copied
+observations remain immutable; queries reject a retired scene owner.
+
 `SVGMobject` imports the existing bounded static vector SVG profile in the
 native host, including local files, `from_string`, inherited paint, `svg_default`,
 and post-import style overrides. Parsing, placement, membership and publication
