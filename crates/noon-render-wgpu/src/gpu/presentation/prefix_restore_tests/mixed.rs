@@ -49,11 +49,8 @@ impl Fixture {
         };
         let original = image(41);
         let replacement = image(219);
-        let artifact = compile_typst_resource(
-            "#set text(font: \"DejaVu Sans Mono\")\nCACHE",
-            TypstMode::Markup,
-        )
-        .unwrap();
+        let markup = "#set text(font: \"DejaVu Sans Mono\")\nCACHE";
+        let artifact = compile_typst_resource(markup, TypstMode::Markup).unwrap();
         let bounds = artifact.resource.bounds;
         assert!(bounds.width().is_finite() && bounds.width() > 0.0);
         assert!(!artifact.resource.runs.is_empty());
@@ -229,7 +226,32 @@ fn run(directory: &std::path::Path) {
                 a: 0.5,
             }
         };
-        let metrics = TextDeviceMetrics::uniform(size[0] as f32 / 4.0).unwrap();
+        // Match physical backing density and the translated camera on both axes.
+        // A uniform density or zero origin would share the same invalid glyph
+        // raster inputs between the retained and fresh-renderer references.
+        let pixels_per_world = Vec2::new(size[0] as f32 / 4.0, size[1] as f32 / 3.0);
+        let origin = Vec2::new(
+            size[0] as f32 * 0.5 - center.x * pixels_per_world.x,
+            size[1] as f32 * 0.5 + center.y * pixels_per_world.y,
+        );
+        let metrics = TextDeviceMetrics::new(pixels_per_world)
+            .unwrap()
+            .with_world_origin_pixels(origin)
+            .unwrap();
+        let metrics_bytes: Vec<u8> = [
+            metrics.pixels_per_world.x,
+            metrics.pixels_per_world.y,
+            metrics.world_origin_pixels.x,
+            metrics.world_origin_pixels.y,
+        ]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect();
+        std::fs::write(
+            directory.join(format!("p{profile}-text-metrics.f32")),
+            metrics_bytes,
+        )
+        .unwrap();
         let mut fixture = Fixture::new(sampling);
         let mut gpu = renderer(&probe, size, center);
         let mut text = gpu.create_retained_text_state(&probe.device, &probe.queue);

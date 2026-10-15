@@ -5,6 +5,7 @@ inventory, exact comparisons, seeded defects and cross-state relationships; it
 is not a rasterizer or an oracle for image filtering and glyph coverage.
 """
 from pathlib import Path
+import struct
 
 MIXED_TEXT_TEST = (
     "gpu::presentation::prefix_restore_tests::mixed::mixed_image_glyph_prefix_sample_restore"
@@ -30,8 +31,21 @@ def evidence_error(directory: Path) -> str | None:
         if not (directory / "PASS.txt").read_text().startswith(MARKER):
             return "missing mixed-probe completion marker"
         profile_text = (directory / "profile.txt").read_text()
-        if "samples=4" not in profile_text or PROFILE not in profile_text:
-            return "missing mixed-probe sampling profile"
+        if ("format=Rgba8Unorm samples=4 transfer=Direct" not in profile_text
+                or PROFILE not in profile_text):
+            return "missing mixed-probe format/sampling/transfer profile"
+        for profile, (width, height) in enumerate(((96, 64), (127, 81), (127, 81))):
+            # Independently map the frozen camera to physical backing pixels,
+            # rounding each scalar operation to f32 as the renderer does. These
+            # are input-metadata checks, not pixel-difference tolerances.
+            def f32(value):
+                return struct.unpack("<f", struct.pack("<f", value))[0]
+            dx, dy = f32(width / 4), f32(height / 3)
+            ox = f32(width / 2 - f32(f32(0.013) * dx))
+            oy = f32(height / 2 + f32(f32(-0.027) * dy))
+            expected_metrics = struct.pack("<4f", dx, dy, ox, oy)
+            if (directory / f"p{profile}-text-metrics.f32").read_bytes() != expected_metrics:
+                return f"p{profile}: glyph raster metrics do not match camera/backing"
         readbacks = {}
         for name, size, equal in cases():
             expected = (directory / f"{name}-expected.rgba").read_bytes()

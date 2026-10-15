@@ -4,10 +4,20 @@ import tempfile
 import unittest
 import contextlib
 import io
+import struct
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from mixed_cache_evidence import cases, evidence_error, MARKER, PROFILE
+
+
+# Fixed binary32 camera/backing witnesses, not values returned by the checker.
+METRICS = (
+    bytes.fromhex("0000c041abaaaa4183c03e425a64fb41"),
+    bytes.fromhex("0000fe410000d84158597c4281151f42"),
+    bytes.fromhex("0000fe410000d84158597c4281151f42"),
+)
+FORMAT_PROFILE = "synthetic format=Rgba8Unorm samples=4 transfer=Direct\n" + PROFILE
 
 
 class MixedCacheEvidenceTests(unittest.TestCase):
@@ -16,7 +26,9 @@ class MixedCacheEvidenceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "PASS.txt").write_text(MARKER + " synthetic checker test")
-        (self.root / "profile.txt").write_text("synthetic samples=4\n" + PROFILE)
+        (self.root / "profile.txt").write_text(FORMAT_PROFILE)
+        for profile, data in enumerate(METRICS):
+            (self.root / f"p{profile}-text-metrics.f32").write_bytes(data)
         for name, size, equal in cases():
             step = int(name.split("-s")[1][0]) if "-s" in name and "-stale" not in name else 3
             if name.endswith("stale-image"):
@@ -116,8 +128,50 @@ class MixedCacheEvidenceTests(unittest.TestCase):
         (self.root / "PASS.txt").unlink()
         self.assertIsNotNone(evidence_error(self.root))
         (self.root / "PASS.txt").write_text(MARKER)
-        (self.root / "profile.txt").write_text("samples=4")
-        self.assertIsNotNone(evidence_error(self.root))
+        for profile_text in (
+            "samples=4",
+            "synthetic samples=4\n" + PROFILE,
+            FORMAT_PROFILE.replace("Rgba8Unorm", "Rgba8UnormSrgb"),
+            FORMAT_PROFILE.replace("transfer=Direct", "transfer=LinearToSrgb"),
+            FORMAT_PROFILE.replace("samples=4", "samples=1"),
+        ):
+            with self.subTest(profile=profile_text):
+                (self.root / "profile.txt").write_text(profile_text)
+                self.assertIsNotNone(evidence_error(self.root))
+        (self.root / "profile.txt").write_text(FORMAT_PROFILE)
+        for profile, correct in enumerate(METRICS):
+            path = self.root / f"p{profile}-text-metrics.f32"
+            dx, dy, ox, oy = struct.unpack("<4f", correct)
+            width, height = (96, 64) if profile == 0 else (127, 81)
+            mutations = {
+                "missing": None,
+                "truncated": correct[:-1],
+                "trailing-byte": correct + b"\0",
+                "legacy-uniform-zero-origin": struct.pack("<4f", dx, dx, 0, 0),
+                "uniform-density": struct.pack("<4f", dx, dx, ox, oy),
+                "zero-origin": struct.pack("<4f", dx, dy, 0, 0),
+                "swapped-density": struct.pack("<4f", dy, dx, ox, oy),
+                "camera-ignored": struct.pack("<4f", dx, dy, width / 2, height / 2),
+                "wrong-y-direction": struct.pack("<4f", dx, dy, ox, height - oy),
+                "big-endian": struct.pack(">4f", dx, dy, ox, oy),
+                "one-bit-different": bytes((correct[0] ^ 1,)) + correct[1:],
+            }
+            for index in range(4):
+                for special in (float("nan"), float("inf"), float("-inf")):
+                    values = [dx, dy, ox, oy]
+                    values[index] = special
+                    mutations[f"component-{index}-{special}"] = struct.pack("<4f", *values)
+            for name, corrupted in mutations.items():
+                with self.subTest(profile=profile, metrics=name):
+                    if corrupted is None:
+                        path.unlink()
+                    else:
+                        path.write_bytes(corrupted)
+                    try:
+                        self.assertIsNotNone(evidence_error(self.root))
+                    finally:
+                        path.write_bytes(correct)
+        self.assertIsNone(evidence_error(self.root))
 
     def test_runner_rejects_failed_execution_despite_complete_files(self):
         self.assertFalse(self.stage(True, returncode=101)["accepted"])
