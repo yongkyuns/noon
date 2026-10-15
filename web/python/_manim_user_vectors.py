@@ -149,6 +149,45 @@ def rotation_about_z(angle: float) -> np.ndarray:
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
+def rotation_matrix(
+    angle: float,
+    axis: Vector3DLike,
+    homogeneous: bool = False,
+) -> np.ndarray:
+    """Rotate explicit user vectors with the pinned SciPy conversion."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+    matrix = Rotation.from_rotvec(angle * normalize(axis)).as_matrix()
+    if not homogeneous:
+        return matrix
+    result = np.eye(4)
+    result[:3, :3] = matrix
+    return result
+
+
+def rotate_vector(
+    vector: Vector3DLike, angle: float, axis: Vector3DLike = (0.0, 0.0, 1.0),
+) -> Vector3D:
+    """Rotate explicit user vectors using the existing SciPy matrix helper.
+
+    Default direction values are planar-compatible; mutable Manim constant and
+    default-object identities remain outside this bounded user-data profile.
+    """
+    import numpy as np
+    if len(vector) > 3:
+        raise ValueError("Vector must have the correct dimensions.")
+    if len(vector) == 2:
+        vector = np.append(vector, 0)
+    return rotation_matrix(angle, axis) @ vector
+
+
+def compass_directions(n: int = 4, start_vect: np.ndarray = (1.0, 0.0, 0.0)) -> np.ndarray:
+    """Return explicit user direction arrays through the same vector helper."""
+    import numpy as np
+    angle = math.tau / n
+    return np.array([rotate_vector(start_vect, k * angle) for k in range(n)])
+
+
 def cartesian_to_spherical(vec: Vector3DLike) -> np.ndarray:
     import numpy as np
     norm = np.linalg.norm(vec)

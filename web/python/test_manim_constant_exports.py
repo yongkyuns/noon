@@ -41,6 +41,13 @@ class ManimConstantExportTests(unittest.TestCase):
 
         source = textwrap.dedent(
             """
+            import builtins
+            original_import = builtins.__import__
+            def without_numpy(name, *args, **kwargs):
+                if name == "numpy" or name.startswith("numpy."):
+                    raise AssertionError("facade import eagerly loaded NumPy")
+                return original_import(name, *args, **kwargs)
+            builtins.__import__ = without_numpy
             from noon import Mobject, Scene, Vec2
             assert Vec2(1, 2) + [3, 4, 0] == Vec2(4, 6)
             import _manim_compat
@@ -78,7 +85,8 @@ class ManimConstantExportTests(unittest.TestCase):
             update = namespace["UpdateFromFunc"](target, callback, run_time=0.75)
             assert update.mobject is target and update.update_function is callback
             assert update.anim_args["run_time"] == 0.75
-            assert namespace["smooth"](0.5) == 0.5
+            from _manim_rate_functions import easing_from_rate_func
+            assert easing_from_rate_func(namespace["smooth"]) == "smooth"
             assert tuple(3 * namespace["IN"]) == (0.0, 0.0, -3.0)
             assert len(namespace["OUT"]) == 3
             """

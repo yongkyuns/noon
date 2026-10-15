@@ -299,6 +299,21 @@ pub struct SemanticPresentation {
     pub insertion_order: u64,
 }
 
+/// Authored state on a non-rendered family root, independent of its leaves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticFamilyState {
+    pub presentation: SemanticPresentation,
+    pub own_color: crate::Color,
+}
+impl Default for SemanticFamilyState {
+    fn default() -> Self {
+        Self {
+            presentation: SemanticPresentation::default(),
+            own_color: crate::Color::WHITE,
+        }
+    }
+}
+
 impl SemanticPresentation {
     pub const fn order_key(self) -> (f64, u64) {
         (self.z_index, self.insertion_order)

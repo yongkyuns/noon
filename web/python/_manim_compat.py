@@ -101,15 +101,9 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
-    def __init__(self, *, color=None, **kwargs):
-        from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
-        from _noon_errors import engine_call
-        if _geometry_options is None:
-            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-        options = engine_call(_geometry_options.emptyPath)
-        _apply_shared_constructor_options(options, kwargs)
-        _apply_constructor_color(options, color)
-        _attach_geometry_options(self, options, "VMobject")
+    def __init__(self, *, color=_base.WHITE, **kwargs):
+        from _manim_semantic_handles import _empty_path_init
+        _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
@@ -430,9 +424,9 @@ class Group(Mobject):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
 
-    def __init__(self, *mobjects: object, z_index: float = 0) -> None:
+    def __init__(self, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
         from _manim_semantic_handles import _group_init
-        _group_init(self, *mobjects, z_index=z_index)
+        _group_init(self, *mobjects, z_index=z_index, color=color)
 
     @property
     def submobjects(self) -> list[object]:
@@ -533,11 +527,11 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_rotate
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
-    def set_color(self, color: object) -> Group:
+    def set_color(self, color: object, family: bool = True) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_color(self, color)
         from _manim_semantic_handles import _group_set_color
-        return _group_set_color(self, color)
+        return _group_set_color(self, color, family=family)
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
@@ -552,11 +546,18 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 
-    def set_opacity(self, opacity: float) -> Group:
-        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
-            return _base.Mobject.set_opacity(self, opacity)
-        from _manim_semantic_handles import _group_set_opacity
-        return _group_set_opacity(self, opacity)
+    def set_opacity(self, value: Any) -> Group:
+        # Manim's non-vector Group inherits the deprecated generic setter.
+        # This arbitrary attribute has no paint or runtime meaning.
+        import warnings
+        warnings.warn(
+            "This method is not guaranteed to stay around. Please prefer "
+            "setting the attribute normally or with Mobject.set().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.opacity = value
+        return self
 
     def fade(self, darkness: float = 0.5, family: bool = True) -> Group:
         return _base.Mobject.fade(self, darkness, family)
@@ -640,6 +641,12 @@ class VGroup(Group):
     # The family wrapper reuses vector-class queries without duplicating them.
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+
+    def set_opacity(self, opacity: float) -> VGroup:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_opacity(self, opacity)
+        from _manim_semantic_handles import _group_set_opacity
+        return _group_set_opacity(self, opacity)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")

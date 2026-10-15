@@ -3,6 +3,9 @@ from noon import *
 
 class OrdinaryCanonicalCurveLayout(Scene):
     def construct(self):
+        empty = Mobject().shift(3 * RIGHT - 2 * UP)
+        assert empty.get_x() == 0 and empty.get_y() == 0
+        self.add(empty)
         circle = Circle(radius=1, color=WHITE).stretch_to_fit_width(4).stretch_to_fit_height(1.5)
         ellipse = Ellipse(width=4, height=1.5, color="#58c4dd")
         for shape, x in ((circle, -2.4), (ellipse, 2.4)):
@@ -11,3 +14,4 @@ class OrdinaryCanonicalCurveLayout(Scene):
             marker.move_to(shape.get_right())
             self.add(shape, marker)
         self.wait(0.2)
+        assert empty.get_x() == 0 and empty.get_y() == 0

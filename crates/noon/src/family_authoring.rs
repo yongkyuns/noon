@@ -234,11 +234,29 @@ pub(crate) fn family_creation_transaction(
     ),
     AuthoringError,
 > {
+    family_creation_color_transaction(store, members, z_index, crate::Color::WHITE)
+}
+
+pub(crate) fn family_creation_color_transaction(
+    store: &Rc<RefCell<SemanticStore>>,
+    members: &[MobjectTarget<'_>],
+    z_index: f64,
+    color: crate::Color,
+) -> Result<
+    (
+        SemanticMutationTransaction,
+        noon_core::SemanticLocalNodeToken,
+    ),
+    AuthoringError,
+> {
     for member in members {
         member.require_store(store)?;
     }
     let mut transaction = SemanticMutationTransaction::new();
     let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+    if color != crate::Color::WHITE {
+        transaction.set_family_color(family, color);
+    }
     if z_index != 0.0 {
         transaction.set_z_index(family, z_index);
     }
@@ -296,7 +314,18 @@ impl MobjectFamily {
         members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<Self, AuthoringError> {
-        let (transaction, family) = family_creation_transaction(&store, members, z_index)?;
+        Self::create_with_own_color(store, members, z_index, crate::Color::WHITE)
+    }
+
+    /// Construct root metadata in the membership transaction without recoloring children.
+    pub fn create_with_own_color(
+        store: Rc<RefCell<SemanticStore>>,
+        members: &[MobjectTarget<'_>],
+        z_index: f64,
+        color: crate::Color,
+    ) -> Result<Self, AuthoringError> {
+        let (transaction, family) =
+            family_creation_color_transaction(&store, members, z_index, color)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;
@@ -370,6 +399,18 @@ impl MobjectFamily {
             .semantic_family_checked(self.node)
             .map(|_| ())
             .map_err(Into::into)
+    }
+
+    /// The non-rendered root's authored color, independent of member paint.
+    pub fn own_color(&self) -> Result<crate::Color, AuthoringError> {
+        self.validate()?;
+        Ok(self
+            .store
+            .borrow()
+            .node(self.node)
+            .expect("validated family")
+            .family_color()
+            .expect("family state"))
     }
 
     /// Authored aggregate world-space bounds center for this family's leaves.

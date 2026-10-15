@@ -30,12 +30,20 @@ class SceneBoundaryTests(unittest.TestCase):
         for constructor in (Mobject, VMobject):
             with self.assertRaises(TypeError):
                 constructor(object())
-        with self.assertRaisesRegex(TypeError, "base type"):
+        with self.assertRaisesRegex(RuntimeError, "shared.*Rust"):
             Mobject()
         with self.assertRaisesRegex(RuntimeError, "shared.*Rust"):
             VMobject()
         for name in ("_make_mobject", "Circle", "Rectangle", "Line", "Path"):
             self.assertFalse(hasattr(_noon_ir, name), name)
+
+    def test_generic_dimension_validation_does_not_allocate_frontend_geometry(self):
+        from noon import Mobject
+        for dimension, error in ((-1, ValueError), (2.0, TypeError), (True, TypeError),
+                                 ("three", TypeError), (4, NotImplementedError)):
+            with self.subTest(dimension=dimension):
+                with self.assertRaises(error):
+                    Mobject(dim=dimension)
 
     def test_non_finite_color_is_rejected(self):
         with self.assertRaises(ValueError):
