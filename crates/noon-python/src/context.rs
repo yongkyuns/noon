@@ -601,6 +601,12 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.shift(&target.handle, x, y).map(|_| ()))
     }
+    #[pyo3(name = "liveScale")]
+    fn scale_mobject(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.manim_scale(&target.handle, x, y).map(|_| ()))
+    }
     #[pyo3(name = "liveSetFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;

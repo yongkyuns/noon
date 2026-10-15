@@ -171,6 +171,36 @@ class Priority(Scene):
                 finally:
                     close_scene(scene)
 
+    def test_live_mobject_scaling_preserves_center_and_binding_guards(self):
+        left, right = native.Store(), native.Store()
+        local = left.geometry(native.GeometryOptions.square(2))
+        foreign = right.geometry(native.GeometryOptions.square(2))
+        context = left.context()
+        with self.assertRaisesRegex(RuntimeError, 'another scene store'):
+            context.liveScale(foreign, 2, 2)
+        context.retire()
+        with self.assertRaisesRegex(RuntimeError, 'retired'):
+            context.liveScale(local, 2, 2)
+        source = """from noon import *
+class LiveScale(Scene):
+    def construct(self):
+        value=Square().shift(2*RIGHT)
+        self.add(value)
+        self.wait(.125)
+        self.observations=[[list(value.get_center()),value.width,value.height]]
+        value.scale(2)
+        self.observations.append([list(value.get_center()),value.width,value.height])
+        self.wait(.125)
+"""
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
+                try:
+                    self.assertEqual(scene.observations, [[[2, 0], 2, 2], [[2, 0], 4, 4]])
+                    self.assertEqual(scene.time, .25)
+                finally:
+                    close_scene(scene)
+
     def test_root_metadata_and_copy_independence_use_real_shared_handles(self):
         store = native.Store()
         root = self.family(store)
