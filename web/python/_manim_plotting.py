@@ -239,6 +239,8 @@ def _three_d_axis_label_object(label):
 
 class NumberLine(_compat.Group):
     """Tipless linear number line with Rust-owned defaults, ticks and range."""
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
@@ -351,6 +353,8 @@ class UnitInterval(NumberLine):
 
 class Axes(_compat.Group):
     """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, color=None, **kwargs):
@@ -631,6 +635,8 @@ class ThreeDAxes(_compat.Group):
     retained Text or MathTex families. The axis config accepts bounded stroke,
     tick, and filled-tip options.
     """
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),
                  z_range=(-4, 4, 1), x_length=10.5, y_length=10.5,
