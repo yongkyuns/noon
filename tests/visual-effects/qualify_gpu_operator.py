@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import time
+import unittest
 from pathlib import Path
+
+from mixed_image_evidence import MIXED_IMAGE_TEST, MIXED_IMAGE_MARKER, mixed_image_evidence_error
 
 TEST = "gpu::glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
 PAINTER_TEST = "gpu::glow_filter::tests::analytic_scene::retained_painter_glow_pixels"
@@ -48,6 +52,8 @@ def qualified(code: int, log: str, *, negative: bool = False, test: str = TEST) 
         accepted = accepted and re.search(r"(?m)^CACHE_MSAA_OPERATOR_PASS\r?$", log) is not None
     if test == GEOMETRY_TEST:
         accepted = accepted and re.search(r"(?m)^CACHE_GEOMETRY_PROBE_PASS\r?$", log) is not None
+    if test == MIXED_IMAGE_TEST:
+        accepted = accepted and re.search(r"(?m)^" + MIXED_IMAGE_MARKER + r"\r?$", log) is not None
     return accepted
 
 
@@ -233,10 +239,11 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
     ]
     env = os.environ.copy()
     artifacts = None
-    if test in (CACHE_TEST, GEOMETRY_TEST):
+    if test in (CACHE_TEST, GEOMETRY_TEST, MIXED_IMAGE_TEST):
         # A fresh attempt directory prevents stale success or readbacks from a
         # previous attempt being reported as evidence for this invocation.
-        prefix = "cache-geometry" if test == GEOMETRY_TEST else "cache-msaa"
+        prefix = {CACHE_TEST: "cache-msaa", GEOMETRY_TEST: "cache-geometry",
+                  MIXED_IMAGE_TEST: "cache-mixed-image"}[test]
         artifacts = output / f"{prefix}-{time.time_ns()}"
         artifacts.mkdir()
         env["NOON_CACHE_PROBE_ARTIFACTS"] = str(artifacts)
@@ -274,7 +281,8 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
             str(path.relative_to(artifacts)): sha256(path.read_bytes())
             for path in sorted(artifacts.rglob("*")) if path.is_file()
         }
-        validator = geometry_evidence_error if test == GEOMETRY_TEST else cache_evidence_error
+        validator = {CACHE_TEST: cache_evidence_error, GEOMETRY_TEST: geometry_evidence_error,
+                     MIXED_IMAGE_TEST: mixed_image_evidence_error}[test]
         record["evidence_error"] = validator(artifacts)
         record["accepted"] = record["accepted"] and record["evidence_error"] is None
     (output / f"{name}.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -303,9 +311,19 @@ def main() -> None:
         "stages": records,
         "cache_probe": {"scope": "#2094 synthetic 4x sample-storage operator only", "accepted": False},
         "geometry_probe": {"scope": "#2094 production geometry draw experiment only", "accepted": False},
+        "mixed_image_probe": {"scope": "#2094 image/vector experiment only", "accepted": False},
         "passed": False,
     }
     try:
+        checker_log = io.StringIO()
+        suite = unittest.defaultTestLoader.discover(
+            str(root / "tests/visual-effects"), pattern="test_mixed_image_evidence.py")
+        checked = unittest.TextTestRunner(stream=checker_log, verbosity=2).run(suite)
+        (output / "mixed-image-checker-tests.log").write_text(checker_log.getvalue())
+        report["mixed_image_checker_tests"] = {"count": checked.testsRun,
+                                              "accepted": checked.testsRun == 8 and checked.wasSuccessful()}
+        if not report["mixed_image_checker_tests"]["accepted"]:
+            raise RuntimeError("mixed-image checker regressions did not execute and pass")
         baseline = run_stage(root, output, "published-source", False)
         records.append(baseline)
         if not baseline["accepted"]:
@@ -375,9 +393,34 @@ def main() -> None:
         if lock.is_file():
             (output / "cache-geometry-Cargo.lock").write_bytes(lock.read_bytes())
         report["geometry_probe"] = geometry
-        report["passed"] = geometry["accepted"] and geometry["source_unchanged"]
-        if not report["passed"]:
+        report["geometry_passed"] = geometry["accepted"] and geometry["source_unchanged"]
+        if not report["geometry_passed"]:
             raise RuntimeError("#2094 production geometry prefix probe failed; not a passing skip")
+        image_sources = (
+            "crates/noon-render-wgpu/src/gpu/presentation/prefix_restore_tests/mixed_images.rs",
+            "crates/noon-render-wgpu/src/gpu/retained_text.rs",
+            "crates/noon-render-wgpu/src/gpu/raster_image_gpu.rs",
+            "crates/noon-render-wgpu/src/gpu/raster_image_prepare.rs",
+            "tests/visual-effects/mixed_image_evidence.py",
+            "tests/visual-effects/test_mixed_image_evidence.py",
+        )
+        image_hashes = dict(geometry_hashes)
+        for source in image_sources:
+            content = (root / source).read_bytes()
+            (output / Path(source).name).write_bytes(content)
+            image_hashes[source] = sha256(content)
+        mixed = run_stage(root, output, "cache-mixed-image", False, test=MIXED_IMAGE_TEST)
+        mixed["scope"] = "#2094 image/vector draw experiment; not glyph/text or automatic caching"
+        mixed["source_sha256"] = image_hashes
+        mixed["source_unchanged"] = all(sha256((root / path).read_bytes()) == digest
+                                        for path, digest in image_hashes.items())
+        mixed["cargo_lock_sha256"] = sha256(lock.read_bytes()) if lock.is_file() else None
+        if lock.is_file():
+            (output / "cache-mixed-image-Cargo.lock").write_bytes(lock.read_bytes())
+        report["mixed_image_probe"] = mixed
+        report["passed"] = mixed["accepted"] and mixed["source_unchanged"]
+        if not report["passed"]:
+            raise RuntimeError("#2094 mixed image prefix probe failed; not a passing skip")
     finally:
         report["source_restored"] = shader.read_bytes() == original
         (output / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")

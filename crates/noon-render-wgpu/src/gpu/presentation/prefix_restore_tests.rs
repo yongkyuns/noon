@@ -661,3 +661,5 @@ fn ordered_prefix_sample_restore() {
     .unwrap();
     eprintln!("CACHE_GEOMETRY_PROBE_PASS");
 }
+
+mod mixed_images;
