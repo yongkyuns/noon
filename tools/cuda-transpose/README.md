@@ -35,7 +35,7 @@ store follows completion of all read batches.
 
 Numbered packets are pairs of independent rectangle/text objects. They animate
 in parallel without submitting multiple family Transforms in one activation.
-The active code-line background is a muted blue-gray with 7% fill and no outline;
+The active code-line background is a muted blue-gray with 20% fill and no outline;
 syntax colors and data colors are independent of that emphasis.
 
 [`syntax_highlighting_smoke.py`](syntax_highlighting_smoke.py) isolates the
