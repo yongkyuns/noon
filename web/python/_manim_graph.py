@@ -93,6 +93,9 @@ def _graph_style_options(vertex_config, edge_config):
 
 
 class _GraphBase(_compat.Group):
+    # This typed vector wrapper retains the shared family-paint contract.
+    set_opacity = _compat.VGroup.set_opacity
+
     _directed = False
 
     def __init__(self, vertices, edges, layout="circular", *, layout_scale=2.0,

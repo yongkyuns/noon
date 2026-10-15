@@ -10,6 +10,23 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_generic_group_opacity_is_deprecated_metadata_without_paint_dispatch(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        value = object()
+        with self.assertWarnsRegex(DeprecationWarning, 'Mobject.set'):
+            self.assertIs(group.set_opacity(value=value), group)
+        self.assertIs(group.opacity, value)
+        group._semantic_family_handle.setOpacity.assert_not_called()
+        with self.assertRaises(TypeError):
+            group.set_opacity(opacity=.5)
+
+    def test_unbacked_generic_group_metadata_does_not_require_a_rust_handle(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        with self.assertWarns(DeprecationWarning):
+            group.set_opacity(None)
+        self.assertIsNone(group.opacity)
+
     def test_constructor_color_is_passed_in_the_single_family_creation(self):
         handle = Mock()
         for context in (None, Mock()):

@@ -546,11 +546,18 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 
-    def set_opacity(self, opacity: float) -> Group:
-        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
-            return _base.Mobject.set_opacity(self, opacity)
-        from _manim_semantic_handles import _group_set_opacity
-        return _group_set_opacity(self, opacity)
+    def set_opacity(self, value: Any) -> Group:
+        # Manim's non-vector Group inherits the deprecated generic setter.
+        # This arbitrary attribute has no paint or runtime meaning.
+        import warnings
+        warnings.warn(
+            "This method is not guaranteed to stay around. Please prefer "
+            "setting the attribute normally or with Mobject.set().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.opacity = value
+        return self
 
     def fade(self, darkness: float = 0.5, family: bool = True) -> Group:
         return _base.Mobject.fade(self, darkness, family)
@@ -634,6 +641,12 @@ class VGroup(Group):
     # The family wrapper reuses vector-class queries without duplicating them.
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+
+    def set_opacity(self, opacity: float) -> VGroup:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_opacity(self, opacity)
+        from _manim_semantic_handles import _group_set_opacity
+        return _group_set_opacity(self, opacity)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")

@@ -1,13 +1,40 @@
-"""Compare base Mobject class queries with unchanged pinned class methods."""
+"""Compare base class queries and generic Group metadata with pinned methods."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import sys
+import types
+import warnings
 
 from pinned_python_helpers import load_helpers
 
 NAMES = {"get_group_class", "get_mobject_type_class"}
+
+
+def metadata_observations(group_class):
+    """Only arbitrary Python metadata: no geometry, scene or paint observation."""
+    result = []
+    for value in (None, True, -1, 2, float("nan"), float("inf"), "text", [], {}, object()):
+        for keyword in (None, "value", "opacity"):
+            group = object.__new__(group_class)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                try:
+                    returned = (group.set_opacity(value) if keyword is None
+                                else group.set_opacity(**{keyword: value}))
+                    outcome = ["value", returned is group, group.opacity is value]
+                except Exception as error:
+                    outcome = ["error", type(error).__name__]
+            result.append([type(value).__name__, keyword, outcome,
+                           [[type(w.message).__name__, str(w.message)] for w in caught]])
+    return result
+
+
+def reference_metadata_group(root):
+    methods = load_helpers(root / "manim/mobject/mobject.py", {"__getattr__"},
+                           {"warnings": warnings, "types": types}, class_name="Mobject")
+    return type("Group", (), {"__getattr__": methods["__getattr__"]})
 
 
 def observations(classes):
@@ -49,6 +76,9 @@ def qualify(manim_source, *, installed_manim=False):
     import noon
     actual = observations(vars(noon) | {name: getattr(noon, name) for name in ["Mobject", "Group", "VMobject", "VGroup", "Circle", "Square"]})
     errors = [] if actual == expected else ["class-query observations differ from pinned methods"]
+    metadata_expected = metadata_observations(reference_metadata_group(manim_source))
+    if metadata_observations(noon.Group) != metadata_expected:
+        errors.append("generic Group metadata/warning/call-boundary observations differ")
     files = ["manim/mobject/mobject.py", "manim/mobject/types/vectorized_mobject.py"]
     if installed_manim:
         import manim
@@ -59,8 +89,11 @@ def qualify(manim_source, *, installed_manim=False):
                 raise ValueError("installed class module differs from pin")
         if observations(vars(manim)) != expected:
             errors.append("installed class-query observations differ")
+        if metadata_observations(manim.Group) != metadata_expected:
+            errors.append("installed generic Group metadata observations differ")
     return {"source_sha256": {relative: hashlib.sha256((manim_source / relative).read_bytes()).hexdigest() for relative in files},
                       "observations": len(expected), "installed_module_checked": installed_manim,
+                      "generic_group_metadata_observations": len(metadata_expected),
                       "errors": errors}
 
 

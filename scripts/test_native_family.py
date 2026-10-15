@@ -60,15 +60,14 @@ class NativeFamilyTests(unittest.TestCase):
             context.liveSetFamilyOpacity(local, .5)
 
     def test_family_opacity_before_and_after_barriers_uses_effective_paint(self):
-        # Both classes protect Noon's existing family-paint contract. Pinned
-        # Manim's generic Group uses a deprecated metadata setter instead;
-        # only VGroup is original-behavior qualification for this adapter.
+        # Generic Group stores metadata; only VGroup recursively edits paint.
+        # Binary-exact initial alpha isolates dispatch from render-wire rounding.
         source = '''from noon import *
 class Paint(Scene):
     def construct(self):
         self.observations=[]
         for cls in (Group,VGroup):
-            leaf=Square(fill_opacity=.8,stroke_opacity=.6)
+            leaf=Square(fill_opacity=.75,stroke_opacity=.625)
             group=cls(leaf,leaf)
             group.set_opacity(.25)
             self.observations.append([leaf.get_fill_opacity(),leaf.get_stroke_opacity()])
@@ -83,7 +82,8 @@ class Paint(Scene):
             with self.subTest(portable=portable):
                 scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
                 try:
-                    self.assertEqual(scene.observations, [[.25,.25],[.5,.5]] * 2)
+                    self.assertEqual(scene.observations,
+                                     [[.75,.625],[.75,.625],[.25,.25],[.5,.5]])
                     self.assertEqual(scene.time, .5)
                 finally:
                     close_scene(scene)

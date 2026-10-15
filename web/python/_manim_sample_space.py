@@ -81,6 +81,8 @@ class SampleSpace(_compat.Group):
     partition geometry, family order, and semantic identities. Python retains
     only Manim's public call shape and wrapper objects.
     """
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(
         self,

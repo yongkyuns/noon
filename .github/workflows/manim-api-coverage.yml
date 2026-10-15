@@ -11,6 +11,9 @@ on:
       - '.github/workflows/manim-api-coverage.yml'
       - 'compat/manim-v0.21.0.json'
       - 'scripts/manim-api-coverage.py'
+      - 'scripts/manim-class-queries.py'
+      - 'web/python/_manim_compat.py'
+      - 'web/python/test_manim_shared_family_paint.py'
       - 'scripts/manim-polynomial-easings.py'
       - 'scripts/manim-nonstandard-rate-data.py'
       - 'scripts/manim-user-rotation-matrices.py'
@@ -77,6 +80,7 @@ jobs:
           python -m unittest discover -s web/python -p test_manim_rate_intervals.py -v
           python -m unittest discover -s web/python -p test_manim_nonstandard_rate_data.py -v
           python -m unittest discover -s web/python -p test_manim_user_rotation_matrices.py -v
+          python -m unittest discover -s web/python -p test_manim_shared_family_paint.py -v
 
       - name: Qualify module-only polynomial easing callables
         run: python scripts/manim-polynomial-easings.py .pinned-manim-reference --installed-manim
@@ -86,6 +90,9 @@ jobs:
 
       - name: Qualify explicit user-data rotation matrices
         run: python scripts/manim-user-rotation-matrices.py .pinned-manim-reference --installed-manim
+
+      - name: Qualify class queries and generic Group metadata
+        run: python scripts/manim-class-queries.py .pinned-manim-reference --installed-manim
 
       - name: Validate and report public API coverage
         run: |
