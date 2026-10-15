@@ -1,13 +1,14 @@
 """Native CPython entry point for Noon's finite, sampled authoring profile.
 
-The scene source is shared with Pyodide. This host is renderer-free and uses
-explicit logical samples, not a native realtime window. Optional text/resources,
+The scene source is shared with Pyodide. The default host uses explicit logical
+samples. Optional export uses native windowless capture and the shared output
+policy. Optional text/resources,
 spatial construction, full family animation/style and callback structural/content
 producers remain outside this binding's qualified profile; they are not silently replaced or emulated.
 """
 from __future__ import annotations
 
-from _noon_native_host import run_scene, run_source, close_scene
+from _noon_native_host import run_scene, run_source, close_scene, export_scene, export_source
 
 
 def main():
