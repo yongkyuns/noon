@@ -12,6 +12,7 @@ import dis
 import inspect
 import sys
 from typing import Callable
+from types import FunctionType
 from functools import wraps
 
 # Preserve the public module alias and callable identities without a second registry.
@@ -222,9 +223,8 @@ _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
 def easing_from_rate_func(rate_func: object) -> str:
     """Map a known Manim callable to the language-neutral core semantic ID."""
 
-    name = getattr(rate_func, "__name__", None)
     for semantic_id, function in _KNOWN_RATE_FUNCTIONS.items():
-        if rate_func is function or rate_func == function or name == semantic_id:
+        if rate_func is function:
             return semantic_id
     raise NotImplementedError(
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
@@ -242,12 +242,13 @@ def is_reverse_smooth_rate_func(rate_func: object) -> bool:
     deliberately narrow so arbitrary Python easing callables stay unsupported.
     """
 
-    code = getattr(rate_func, "__code__", None)
-    global_smooth = getattr(rate_func, "__globals__", {}).get("smooth")
+    if type(rate_func) is not FunctionType:
+        return False
+
+    code = rate_func.__code__
+    global_smooth = rate_func.__globals__.get("smooth")
     if (
-        not inspect.isfunction(rate_func)
-        or code is None
-        or global_smooth is not smooth
+        global_smooth is not smooth
         or getattr(rate_func, "__defaults__", None) is not None
         or getattr(rate_func, "__kwdefaults__", None) is not None
         or getattr(rate_func, "__closure__", None) is not None
