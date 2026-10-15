@@ -11,6 +11,7 @@ from functools import partialmethod
 from functools import cache as _cache
 from typing import Any, Callable
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 
 from _noon_errors import (
     NoonError,
@@ -925,6 +926,7 @@ _PUBLIC_EXPORTS = {
     "resolve_render_options": "_noon_render_options",
     "lingering": "_manim_rate_functions",
     "rate_functions": "_manim_rate_functions",
+    "unit": "_manim_unit",
 
     "CubicBezier": "_manim_geometry",
     "get_winding_number": "_manim_user_vectors",
@@ -946,6 +948,8 @@ _PUBLIC_EXPORTS = {
     "thick_diagonal": "_manim_user_vectors",
     "rotation_about_z": "_manim_user_vectors",
     "rotation_matrix": "_manim_user_vectors",
+    "rotate_vector": "_manim_user_vectors",
+    "compass_directions": "_manim_user_vectors",
     "cartesian_to_spherical": "_manim_user_vectors",
     "spherical_to_cartesian": "_manim_user_vectors",
     "complex_to_R3": "_manim_user_vectors",
@@ -986,6 +990,9 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "batch_by_property": "_manim_iterables",
+    "uniq_chain": "_manim_iterables",
+    "hash_obj": "_manim_iterables",
     "stretch_array_to_length": "_manim_iterables",
     "DictAsObject": "_manim_config_utils",
     "merge_dicts_recursively": "_manim_config_utils",
@@ -1182,6 +1189,9 @@ def __dir__():
 
 
 __all__ = [
+    "annotations",
+    "PackageNotFoundError",
+    "version",
     "Glow",
     "Pixels",
     "EffectHandle",

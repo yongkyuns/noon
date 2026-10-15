@@ -3,16 +3,19 @@ import argparse
 from collections.abc import Iterable
 import hashlib
 import itertools
+import inspect
 import json
 from pathlib import Path
 import sys
 from typing import overload
+from types import GeneratorType
 
 from pinned_python_helpers import load_helpers
 
 NAMES = {"adjacent_n_tuples", "adjacent_pairs", "all_elements_are_instances", "concatenate_lists",
          "list_difference_update", "list_update", "listify", "tuplify", "make_even",
-         "make_even_by_cycling", "remove_list_redundancies", "remove_nones"}
+         "make_even_by_cycling", "remove_list_redundancies", "remove_nones",
+         "batch_by_property", "uniq_chain", "hash_obj"}
 
 
 def observations(namespace):
@@ -20,7 +23,7 @@ def observations(namespace):
     def record(name, *args):
         try:
             value = namespace[name](*args)
-            if isinstance(value, zip): value = list(value)
+            if isinstance(value, (zip, GeneratorType)): value = list(value)
             output.append([name, value])
         except (IndexError, StopIteration, TypeError, ValueError) as error:
             output.append([name, type(error).__name__])
@@ -47,6 +50,61 @@ def observations(namespace):
     marker = object()
     first, second = namespace["make_even"]([marker], [1, 2, 3])
     output.append(["repeated_identity", all(value is marker for value in first), second])
+    for name in ("batch_by_property", "uniq_chain", "hash_obj"):
+        output.append(["signature", name, str(inspect.signature(namespace[name]))])
+    for values in ([], [None], [1, 1, 2, 1], ["a", "ab", "cd", "e"]):
+        calls = []
+        def property_func(value):
+            calls.append(value)
+            return len(value) if isinstance(value, str) else value
+        record("batch_by_property", iter(values), property_func)
+        output.append(["batch_callback_order", calls])
+    record("uniq_chain", [], [1, 2, 1], iter([2, 3, 3]), (4,))
+    events = []
+    def stream():
+        for value in [1, 1, 2]:
+            events.append(value)
+            yield value
+    unique = namespace["uniq_chain"](stream())
+    output.append(["unique_lazy_creation", events.copy()])
+    output.append(["unique_first", next(unique), events.copy()])
+    output.append(["unique_second", next(unique), events.copy()])
+    output.append(["unique_exhausted", list(unique), events.copy()])
+    events.clear()
+    class Collision:
+        def __init__(self, name): self.name = name
+        def __hash__(self): events.append(["hash", self.name]); return 19
+        def __eq__(self, other):
+            events.append(["equal", self.name, other.name]); return self.name == other.name
+    first, equal, other = Collision("a"), Collision("a"), Collision("b")
+    result = list(namespace["uniq_chain"]([first, equal, other]))
+    output.append(["unique_collisions", [v.name for v in result],
+                   result[0] is first, events.copy()])
+    def fail(value): raise ValueError("user callback")
+    record("batch_by_property", [1], fail)
+    for value in (None, True, 7, -7, 1.25, "text", (), [], {}, set(),
+                  [1, [2, 3]], (1, (2, 3)), {"b": [2], "a": {3, 4}},
+                  {1, 2, 3}, frozenset({1, 2})):
+        record("hash_obj", value)
+    output.append(["hash_order_relations",
+                   namespace["hash_obj"]({"a": 1, "b": 2}) == namespace["hash_obj"]({"b": 2, "a": 1}),
+                   namespace["hash_obj"]([1, 2]) == namespace["hash_obj"]((1, 2)),
+                   namespace["hash_obj"]([1, 2]) != namespace["hash_obj"]([2, 1])])
+    events.clear()
+    class UserHash:
+        def __hash__(self): events.append("hash"); return 17
+    value = UserHash()
+    record("hash_obj", [value, {value: value}])
+    output.append(["custom_hash_dispatch", events.copy()])
+    class BrokenHash:
+        def __hash__(self): raise ValueError("user hash")
+    record("hash_obj", [BrokenHash()])
+    record("hash_obj", bytearray(b"x"))
+    record("uniq_chain", [[1]])
+    cyclic = []; cyclic.append(cyclic)
+    try: namespace["hash_obj"](cyclic)
+    except RecursionError: output.append(["cyclic_hash", "RecursionError"])
+    else: output.append(["cyclic_hash", "missing error"])
     return output
 
 
