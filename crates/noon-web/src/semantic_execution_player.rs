@@ -1129,14 +1129,14 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_fill_color(target))
+        self.with_live_session(|live| live.effective_manim_fill_color(target))
     }
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_stroke_color(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_color(target))
+        self.with_live_session(|live| live.effective_manim_stroke_color(target))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_stroke_width(

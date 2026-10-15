@@ -1671,7 +1671,7 @@ mod wasm {
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
-                .fill_color()
+                .manim_fill_color()
                 .map(|color| color.map(WasmManimColor::from_color))
                 .map_err(js_error)
         }
@@ -1679,7 +1679,7 @@ mod wasm {
         #[wasm_bindgen(js_name = strokeColor)]
         pub fn stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
-                .stroke_color()
+                .manim_stroke_color()
                 .map(|color| color.map(WasmManimColor::from_color))
                 .map_err(js_error)
         }

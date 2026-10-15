@@ -1492,6 +1492,29 @@ impl<'a> LiveSession<'a> {
             .map(crate::semantic_mobject::opaque_paint_color))
     }
 
+    /// Manim paint queries observe current published alpha without rewriting paint.
+    pub fn effective_manim_fill_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject.manim_fill_color().map_err(LiveSessionError::from)?;
+        Ok(self.effective(mobject)?.style.fill.and_then(|color| {
+            crate::semantic_mobject::manim_paint_rgb(color, f64::from(color.alpha))
+        }))
+    }
+
+    pub fn effective_manim_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject
+            .manim_stroke_color()
+            .map_err(LiveSessionError::from)?;
+        Ok(self.effective(mobject)?.style.stroke.and_then(|color| {
+            crate::semantic_mobject::manim_paint_rgb(color, f64::from(color.alpha))
+        }))
+    }
+
     pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {
         Ok(f64::from(self.effective(mobject)?.style.stroke_width))
     }

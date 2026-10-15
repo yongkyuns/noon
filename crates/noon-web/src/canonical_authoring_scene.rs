@@ -923,7 +923,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
         self.mobject_observation(
             target,
-            noon::Mobject::fill_color,
+            noon::Mobject::manim_fill_color,
             crate::SemanticExecutionPlayer::live_effective_fill_color,
         )
     }
@@ -934,7 +934,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
         self.mobject_observation(
             target,
-            noon::Mobject::stroke_color,
+            noon::Mobject::manim_stroke_color,
             crate::SemanticExecutionPlayer::live_effective_stroke_color,
         )
     }

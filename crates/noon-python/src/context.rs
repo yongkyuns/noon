@@ -1194,9 +1194,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.execution.is_some() {
-            self.with_live(|live| live.effective_fill_color(&target.handle))?
+            self.with_live(|live| live.effective_manim_fill_color(&target.handle))?
         } else {
-            target.handle.fill_color().map_err(engine_error)?
+            target.handle.manim_fill_color().map_err(engine_error)?
         };
         Ok(color.map(Into::into))
     }
@@ -1211,9 +1211,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.execution.is_some() {
-            self.with_live(|live| live.effective_stroke_color(&target.handle))?
+            self.with_live(|live| live.effective_manim_stroke_color(&target.handle))?
         } else {
-            target.handle.stroke_color().map_err(engine_error)?
+            target.handle.manim_stroke_color().map_err(engine_error)?
         };
         Ok(color.map(Into::into))
     }

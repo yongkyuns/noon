@@ -41,14 +41,14 @@ impl MobjectHandle {
     #[pyo3(name = "fillColor")]
     fn fill_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
         self.handle
-            .fill_color()
+            .manim_fill_color()
             .map(|color| color.map(Into::into))
             .map_err(engine_error)
     }
     #[pyo3(name = "strokeColor")]
     fn stroke_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
         self.handle
-            .stroke_color()
+            .manim_stroke_color()
             .map(|color| color.map(Into::into))
             .map_err(engine_error)
     }

@@ -8,6 +8,32 @@ from noon_native import close_scene, run_source
 
 
 class NativeFamilyTests(unittest.TestCase):
+    def test_zero_rgba_paint_queries_follow_shared_manim_policy_on_both_routes(self):
+        source = '''from noon import *
+class ZeroPaint(Scene):
+ def construct(self):
+  self.object=VMobject(color=BLACK)
+  self.object.set_fill(BLACK,opacity=0).set_stroke(BLACK,width=1,opacity=0)
+  self.add(self.object)
+  assert self.object.get_fill_color() is None
+  assert self.object.get_stroke_color() is None
+  self.wait(.1)
+  assert self.object.get_fill_color() is None
+  self.object.set_fill(BLUE,opacity=0)
+  self.object.set_stroke(BLACK,opacity=.25)
+  assert self.object.get_fill_color() is not None
+  assert self.object.get_stroke_color().red==0
+  self.wait(.1)
+'''
+        async def check():
+            for portable in (False,True):
+                scene=await run_source(source,portable=portable,sample_hz=10)
+                try:
+                    self.assertIsNotNone(scene.object.get_fill_color())
+                    self.assertEqual(scene.object.get_stroke_color().red,0)
+                finally: close_scene(scene)
+        asyncio.run(check())
+
     @staticmethod
     def family(store, *members):
         batch = native.MembershipBatch('add')
