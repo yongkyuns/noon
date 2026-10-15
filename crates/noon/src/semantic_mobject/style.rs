@@ -44,9 +44,18 @@ fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f6
 /// Manim returns no color only when every component of its paint RGBA is zero.
 /// Transparent colored paint still has an RGB observation. Composite opacity
 /// belongs to a separate domain and does not change this source paint query.
-pub(crate) fn manim_paint_rgb(color: Color, opacity: f64) -> Option<Color> {
+fn manim_paint_rgb(color: Color, opacity: f64) -> Option<Color> {
     (color.red != 0.0 || color.green != 0.0 || color.blue != 0.0 || opacity != 0.0)
         .then(|| opaque_paint_color(color))
+}
+
+pub(crate) fn manim_paint_color(
+    paint: Option<&SemanticPaint>,
+    opacity: f64,
+) -> Result<Option<Color>, AuthoringError> {
+    let color = paint_color(paint)?;
+    let opacity = manim_paint_opacity(paint, opacity)?;
+    Ok(color.and_then(|color| manim_paint_rgb(color, opacity)))
 }
 
 pub(crate) fn opaque_paint_color(color: Color) -> Color {
@@ -417,17 +426,13 @@ impl Mobject {
     /// Manim's first fill RGB observation, including its all-zero RGBA sentinel.
     pub fn manim_fill_color(&self) -> Result<Option<Color>, AuthoringError> {
         let style = self.state()?.style;
-        let color = paint_color(style.fill.as_ref())?;
-        let opacity = manim_paint_opacity(style.fill.as_ref(), style.fill_opacity)?;
-        Ok(color.and_then(|color| manim_paint_rgb(color, opacity)))
+        manim_paint_color(style.fill.as_ref(), style.fill_opacity)
     }
 
     /// Manim's first stroke RGB observation, including its all-zero RGBA sentinel.
     pub fn manim_stroke_color(&self) -> Result<Option<Color>, AuthoringError> {
         let style = self.state()?.style;
-        let color = paint_color(style.stroke.as_ref())?;
-        let opacity = manim_paint_opacity(style.stroke.as_ref(), style.stroke_opacity)?;
-        Ok(color.and_then(|color| manim_paint_rgb(color, opacity)))
+        manim_paint_color(style.stroke.as_ref(), style.stroke_opacity)
     }
 
     /// Stored stroke width in scene units, independent of object scale.

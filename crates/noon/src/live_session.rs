@@ -1492,27 +1492,42 @@ impl<'a> LiveSession<'a> {
             .map(crate::semantic_mobject::opaque_paint_color))
     }
 
-    /// Manim paint queries observe current published alpha without rewriting paint.
+    /// Observe current paint while preserving authored precision when lowering agrees.
     pub fn effective_manim_fill_color(
         &self,
         mobject: &Mobject,
     ) -> Result<Option<Color>, LiveSessionError> {
-        mobject.manim_fill_color().map_err(LiveSessionError::from)?;
-        Ok(self.effective(mobject)?.style.fill.and_then(|color| {
-            crate::semantic_mobject::manim_paint_rgb(color, f64::from(color.alpha))
-        }))
+        let authored = self.authored(mobject)?.style;
+        crate::semantic_mobject::manim_paint_color(authored.fill.as_ref(), authored.fill_opacity)
+            .map_err(LiveSessionError::from)?;
+        let effective = self.effective(mobject)?;
+        let (paint, opacity) = crate::effective_capture::paint_from_effective(
+            authored.fill.as_ref(),
+            authored.fill_opacity,
+            effective.style.fill,
+        );
+        crate::semantic_mobject::manim_paint_color(paint.as_ref(), opacity)
+            .map_err(LiveSessionError::from)
     }
 
     pub fn effective_manim_stroke_color(
         &self,
         mobject: &Mobject,
     ) -> Result<Option<Color>, LiveSessionError> {
-        mobject
-            .manim_stroke_color()
-            .map_err(LiveSessionError::from)?;
-        Ok(self.effective(mobject)?.style.stroke.and_then(|color| {
-            crate::semantic_mobject::manim_paint_rgb(color, f64::from(color.alpha))
-        }))
+        let authored = self.authored(mobject)?.style;
+        crate::semantic_mobject::manim_paint_color(
+            authored.stroke.as_ref(),
+            authored.stroke_opacity,
+        )
+        .map_err(LiveSessionError::from)?;
+        let effective = self.effective(mobject)?;
+        let (paint, opacity) = crate::effective_capture::paint_from_effective(
+            authored.stroke.as_ref(),
+            authored.stroke_opacity,
+            effective.style.stroke,
+        );
+        crate::semantic_mobject::manim_paint_color(paint.as_ref(), opacity)
+            .map_err(LiveSessionError::from)
     }
 
     pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {

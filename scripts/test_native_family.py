@@ -34,6 +34,30 @@ class ZeroPaint(Scene):
                 finally: close_scene(scene)
         asyncio.run(check())
 
+    def test_tiny_positive_paint_survives_wait_and_animation_zero_transitions(self):
+        source = '''from noon import *
+class TinyPaint(Scene):
+ def construct(self):
+  value=Circle().set_fill(BLACK,opacity=1e-50).set_stroke(BLACK,opacity=1e-50)
+  self.add(value)
+  self.wait(.1)
+  self.values=[[value.get_fill_color() is None,value.get_stroke_color() is None]]
+  self.play(value.animate.set_fill(opacity=0),run_time=.1)
+  value.set_stroke(BLACK,opacity=0)
+  self.values.append([value.get_fill_color() is None,value.get_stroke_color() is None])
+  self.play(value.animate.set_fill(opacity=1e-50),run_time=.1)
+  value.set_stroke(BLACK,opacity=1e-50)
+  self.values.append([value.get_fill_color() is None,value.get_stroke_color() is None])
+'''
+        async def check():
+            for portable in (False, True):
+                scene = await run_source(source, portable=portable, sample_hz=10)
+                try:
+                    self.assertEqual(scene.values, [[False, False], [True, True], [False, False]])
+                finally:
+                    close_scene(scene)
+        asyncio.run(check())
+
     @staticmethod
     def family(store, *members):
         batch = native.MembershipBatch('add')

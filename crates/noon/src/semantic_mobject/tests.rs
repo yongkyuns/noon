@@ -884,3 +884,35 @@ fn content_validation_retains_missing_resource_identity_without_mutation() {
     assert!(store.geometry_resources().is_empty());
     assert!(store.text_resources().is_empty());
 }
+
+#[test]
+fn manim_paint_queries_preserve_tiny_positive_opacity_across_live_publication() {
+    let mut scene = Scene::new();
+    let mut object = scene.circle(1.0).unwrap();
+    object.set_fill(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_fill_opacity(1e-50).unwrap();
+    object.set_stroke_color(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_stroke_opacity(1e-50).unwrap();
+    scene.add(&object).unwrap();
+    let authored = object.state().unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let segment = live.wait_segment(0.1).unwrap();
+    live.advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    live.complete_segment(segment).unwrap();
+    assert_eq!(live.effective(&object).unwrap().fill_opacity(), 0.0);
+    assert_eq!(
+        live.effective_manim_fill_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    assert_eq!(
+        live.effective_manim_stroke_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    assert_eq!(object.state().unwrap(), authored);
+    live.set_fill_opacity(&object, 0.0).unwrap();
+    live.set_stroke_opacity(&object, 0.0).unwrap();
+    assert_eq!(live.effective_manim_fill_color(&object).unwrap(), None);
+    assert_eq!(live.effective_manim_stroke_color(&object).unwrap(), None);
+}
