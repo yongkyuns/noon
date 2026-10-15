@@ -643,6 +643,9 @@ quaternion = [1, 2, 3, 4]
 assert quaternion_mult(quaternion) is quaternion
 assert quaternion_conjugate(quaternion).tolist() == [1, -2, -3, -4]
 assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
+from noon import get_unit_normal
+assert get_unit_normal([1, 0, 0], [0, 1, 0]).tolist() == [0, 0, 1]
+assert get_unit_normal([0, 0, 0], [0, 0, 0]).tolist() == [0, -1, 0]
 assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 from noon import line_intersection, find_intersection
 np = __import__("numpy")

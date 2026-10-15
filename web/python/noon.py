@@ -916,10 +916,13 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 _PUBLIC_EXPORTS = {
     "typing": "_manim_typing",
+    "get_unit_normal": "_manim_user_vector_bases",
+    "z_to_vector": "_manim_user_vector_bases",
     "rate_functions": "_manim_rate_functions",
     "unit": "_manim_unit",
 
     "CubicBezier": "_manim_geometry",
+
     "get_winding_number": "_manim_user_vectors",
     "bezier": "_manim_user_vectors",
     "partial_bezier_points": "_manim_user_vectors",
