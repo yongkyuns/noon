@@ -94,6 +94,10 @@ jobs:
           # Pages' one-day artifact expired; the engine identity stays unchanged.
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/11827693078/zip" > "$RUNNER_TEMP/triangle-original-baseline.zip"
           git fetch --no-tags origin "$NOON_TRIANGLE_PROFILE_ENGINE_SHA"
+          # The optimized archive contains generated runtime files, not the
+          # complete browser host. Restore static assets from that exact source
+          # first, then overlay and verify the original release artifact.
+          git archive "$NOON_TRIANGLE_PROFILE_ENGINE_SHA" web | tar -x -C "$NOON_TRIANGLE_PROFILE_RUNTIME"
           python3 - <<'PYCODE'
           import hashlib, os, pathlib, runpy, subprocess, zipfile
           archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'triangle-original-baseline.zip'
