@@ -439,16 +439,16 @@ class HighlightTests(unittest.TestCase):
         return SimpleNamespace(active_keys=active,
                                highlights={key: leaf_spy(key) for key in keys}, play_for=Mock())
 
-    def test_active_highlight_is_seven_percent_fill_no_outline(self):
-        self.assertEqual(self.ns['CODE_HIGHLIGHT_FILL'], 0.07)
+    def test_active_highlight_is_twenty_percent_fill_no_outline(self):
+        self.assertEqual(self.ns['CODE_HIGHLIGHT_FILL'], 0.20)
         self.assertEqual(self.ns['CODE_HIGHLIGHT_STROKE'], 0)
-        self.assertIn('CODE_HIGHLIGHT_COLOR = color_from_hex("#536678")', SOURCE)
+        self.assertIn('CODE_HIGHLIGHT_COLOR = color_from_hex("#68839B")', SOURCE)
         self.assertNotIn('.set_opacity(', SOURCE)
         s = self.scene_spy(('load_dst', 'load_src'))
         self.ns['focus'](s, 'read')
         for key in ('load_dst', 'load_src'):
             s.highlights[key].animate.set_fill.assert_called_once_with(opacity=0.0)
-        s.highlights['read_src'].animate.set_fill.assert_called_once_with(opacity=0.07)
+        s.highlights['read_src'].animate.set_fill.assert_called_once_with(opacity=0.20)
         self.assertEqual(s.active_keys, ('read_src',))
         self.assertEqual(len(s.play_for.call_args.args), 3)
         self.assertEqual(s.play_for.call_args.kwargs, {'seconds': 0.16})
@@ -458,7 +458,7 @@ class HighlightTests(unittest.TestCase):
         self.ns['focus'](s, 'copy')
         self.assertEqual(s.active_keys, ('load_dst', 'load_src'))
         for key in s.active_keys:
-            s.highlights[key].animate.set_fill.assert_called_once_with(opacity=0.07)
+            s.highlights[key].animate.set_fill.assert_called_once_with(opacity=0.20)
         self.assertEqual(len(s.play_for.call_args.args), 2)
 
     def test_repeated_focus_does_not_restart_animation(self):
