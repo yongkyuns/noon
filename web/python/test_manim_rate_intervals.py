@@ -38,6 +38,33 @@ class KnownRateIdentityTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             rates.easing_from_rate_func(Callable())
 
+    def test_reverse_admission_does_not_consult_a_spoofed_class(self):
+        class Callable:
+            @property
+            def __class__(self):
+                raise AssertionError("read arbitrary callable class property")
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+
+    def test_reverse_expression_admission_does_not_read_unknown_callable_properties(self):
+        reads = []
+
+        class Callable:
+            def __getattribute__(self, name):
+                if name in {"__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
+                    reads.append(name)
+                    raise AssertionError("read arbitrary callable metadata")
+                return object.__getattribute__(self, name)
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+        self.assertEqual(reads, [])
+
 
 class RateIntervals(unittest.TestCase):
     def test_public_rate_module_preserves_callable_identity_and_shared_recognition(self):
@@ -161,7 +188,11 @@ class RateIntervals(unittest.TestCase):
             self.assertIs(raised.exception, failure)
         reversed_interval = noon.squish_rate_func(noon.linear, a=0.8, b=0.2)
         self.assertEqual([reversed_interval(t) for t in [0.0, 0.5, 1.0]], [0.0, 0.0, 1.0])
+
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
+    def test_default_proportion_wrapper_evaluates_pinned_numpy_smooth(self):
         self.assertEqual(noon.not_quite_there()(0.5), 0.35)
+        self.assertIs(type(noon.not_quite_there()(0.5)), np.float64)
 
 
 if __name__ == "__main__": unittest.main()
