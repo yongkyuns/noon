@@ -2,6 +2,7 @@
 //! bounds, lazy animation paths and atlas masks; projection never changes it.
 
 use noon_core::{GlyphOutlineProfile, Vec2, VectorPath};
+use skrifa::raw::TableProvider;
 use skrifa::{
     instance::{Location, Size},
     outline::{
@@ -38,6 +39,43 @@ pub struct GlyphOutlineContext {
 }
 
 impl GlyphOutlineContext {
+    fn coretext_scaler<'a>(
+        &'a mut self,
+        font: swash::FontRef<'a>,
+        face_index: u32,
+        size: f32,
+        variations: &[([u8; 4], f32)],
+    ) -> Result<GlyphOutlineScaler<'a>, GlyphOutlineError> {
+        if !size.is_finite()
+            || size <= 0.0
+            || variations.iter().any(|(_, value)| !value.is_finite())
+            || native_outline_profile(font.data, face_index)? != GlyphOutlineProfile::Cairo
+        {
+            return Err(GlyphOutlineError);
+        }
+        let font = FontRef::from_index(font.data, face_index).map_err(|_| GlyphOutlineError)?;
+        if font.table_data(Tag::new(b"glyf")).is_none() {
+            return Err(GlyphOutlineError);
+        }
+        let svg_size = coretext_layout_size(size)?;
+        let units_per_em = font.head().map_err(|_| GlyphOutlineError)?.units_per_em();
+        if units_per_em == 0 {
+            return Err(GlyphOutlineError);
+        }
+        Ok(GlyphOutlineScaler(ScalerKind::CoreText(
+            CoreTextGlyphScaler {
+                outlines: OutlineGlyphCollection::new(&font),
+                location: font.axes().location(
+                    variations
+                        .iter()
+                        .map(|(tag, value)| (Tag::new(tag), *value)),
+                ),
+                scale: svg_size / f64::from(units_per_em),
+                memory: &mut self.memory,
+            },
+        )))
+    }
+
     pub fn font_scaler<'a>(
         &'a mut self,
         font: swash::FontRef<'a>,
@@ -64,6 +102,9 @@ impl GlyphOutlineContext {
             return Err(GlyphOutlineError);
         }
         match profile {
+            GlyphOutlineProfile::CairoCoreText => {
+                self.coretext_scaler(font, face_index, size, variations)
+            }
             GlyphOutlineProfile::Font => Ok(GlyphOutlineScaler(ScalerKind::Font(
                 self.font_scaler(font, size, variations),
             ))),
@@ -99,6 +140,26 @@ impl GlyphOutlineContext {
     }
 }
 
+/// Manim supplies Pango point sizes. Pango quantizes those before resolving the
+/// 96-DPI Cairo size on its own 1024-unit grid; combining the two steps loses
+/// a layout unit at some authored sizes.
+pub(crate) fn coretext_layout_size(size: f32) -> Result<f64, GlyphOutlineError> {
+    let point_units = (f64::from(size) / 4.8 * 1024.0).round();
+    let size = (point_units * (4.0 / 3.0)).round() / 1024.0;
+    if !size.is_finite() || size > f64::from(i32::MAX) / 256.0 {
+        return Err(GlyphOutlineError);
+    }
+    Ok(size)
+}
+
+pub(crate) fn supports_coretext_metrics(data: &[u8], face_index: u32) -> bool {
+    let Ok(font) = FontRef::from_index(data, face_index) else {
+        return false;
+    };
+    font.table_data(Tag::new(b"glyf")).is_some()
+        && native_outline_profile(data, face_index) == Ok(GlyphOutlineProfile::Cairo)
+}
+
 /// Intrinsic color/bitmap and variable fonts keep their natural resource recipe.
 /// The Cairo profile currently covers static monochrome TrueType/CFF faces.
 pub fn native_outline_profile(
@@ -121,6 +182,7 @@ pub struct GlyphOutlineScaler<'a>(ScalerKind<'a>);
 enum ScalerKind<'a> {
     Font(Scaler<'a>),
     Cairo(CairoGlyphScaler<'a>),
+    CoreText(CoreTextGlyphScaler<'a>),
 }
 
 impl GlyphOutlineScaler<'_> {
@@ -131,7 +193,39 @@ impl GlyphOutlineScaler<'_> {
                 .map(|outline| outline_commands_to_path(outline.path().commands()))
                 .unwrap_or_default()),
             ScalerKind::Cairo(scaler) => scaler.outline(glyph_id),
+            ScalerKind::CoreText(scaler) => scaler.outline(glyph_id),
         }
+    }
+}
+
+struct CoreTextGlyphScaler<'a> {
+    outlines: OutlineGlyphCollection<'a>,
+    location: Location,
+    scale: f64,
+    memory: &'a mut Vec<u8>,
+}
+impl CoreTextGlyphScaler<'_> {
+    fn outline(&mut self, glyph_id: u16) -> Result<VectorPath, GlyphOutlineError> {
+        let Some(outline) = self.outlines.get(GlyphId::new(u32::from(glyph_id))) else {
+            return Ok(VectorPath::new());
+        };
+        self.memory
+            .resize(outline.draw_memory_size(Hinting::None), 0);
+        let mut pen = Collector::default();
+        outline
+            .draw(
+                DrawSettings::unhinted(Size::unscaled(), &self.location)
+                    .with_memory(Some(self.memory.as_mut_slice()))
+                    .with_path_style(PathStyle::FreeType),
+                &mut pen,
+            )
+            .map_err(|_| GlyphOutlineError)?;
+        if pen.0.iter().any(|command| {
+            !transformed_fixed_coordinates_fit(*command, [256.0 * self.scale, -256.0 * self.scale])
+        }) {
+            return Err(GlyphOutlineError);
+        }
+        Ok(cairo_path::coretext_path(&pen.0, self.scale))
     }
 }
 
@@ -297,11 +391,14 @@ pub fn path_commands(path: &VectorPath) -> impl Iterator<Item = swash::zeno::Com
 // Reject before fixed conversion rather than saturating coordinates into another
 // shape. The 24.8 Cairo path representation has a finite coordinate domain.
 fn fixed_coordinates_fit(command: PathElement, units: f64) -> bool {
+    transformed_fixed_coordinates_fit(command, [units; 2])
+}
+
+fn transformed_fixed_coordinates_fit(command: PathElement, units: [f64; 2]) -> bool {
     let xy = |x: f32, y: f32| {
-        [x, y].iter().all(|v| {
-            v.is_finite()
-                && (f64::from(*v) * units).round() >= f64::from(i32::MIN)
-                && (f64::from(*v) * units).round() <= f64::from(i32::MAX)
+        [x, y].into_iter().zip(units).all(|(value, scale)| {
+            let fixed = (f64::from(value) * scale).round();
+            value.is_finite() && fixed >= f64::from(i32::MIN) && fixed <= f64::from(i32::MAX)
         })
     };
     match command {
@@ -344,6 +441,55 @@ pub fn outline_commands_to_path(commands: impl Iterator<Item = ZenoCommand>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coretext_settings_are_bounded_before_outline_preparation() {
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        let font = swash::FontRef::from_index(bytes, 0).unwrap();
+        let mut context = GlyphOutlineContext::default();
+        for size in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::MAX] {
+            assert!(context
+                .scaler(font, 0, size, &[], GlyphOutlineProfile::CairoCoreText)
+                .is_err());
+        }
+        assert!(context
+            .scaler(
+                font,
+                u32::MAX,
+                42.0,
+                &[],
+                GlyphOutlineProfile::CairoCoreText
+            )
+            .is_err());
+        assert!(context
+            .scaler(
+                font,
+                0,
+                42.0,
+                &[(*b"wght", f32::NAN)],
+                GlyphOutlineProfile::CairoCoreText
+            )
+            .is_err());
+        assert_eq!(coretext_layout_size(48.0).unwrap(), 13653.0 / 1024.0);
+        // Independent Pango/Cairo observations at Manim's 67-point text size.
+        assert_eq!(coretext_layout_size(67.0).unwrap(), 19057.0 / 1024.0);
+        assert!(!transformed_fixed_coordinates_fit(
+            PathElement::MoveTo {
+                x: 0.0,
+                y: -8_388_608.0
+            },
+            [256.0, -256.0]
+        ));
+        assert!(transformed_fixed_coordinates_fit(
+            PathElement::MoveTo {
+                x: -8_388_608.0,
+                y: 0.0
+            },
+            [256.0, -256.0]
+        ));
+    }
+
     #[test]
     fn fixed_coordinate_overflow_and_invalid_settings_reject() {
         let bytes = typst_assets::fonts().next().unwrap();

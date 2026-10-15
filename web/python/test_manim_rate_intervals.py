@@ -38,6 +38,33 @@ class KnownRateIdentityTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             rates.easing_from_rate_func(Callable())
 
+    def test_reverse_admission_does_not_consult_a_spoofed_class(self):
+        class Callable:
+            @property
+            def __class__(self):
+                raise AssertionError("read arbitrary callable class property")
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+
+    def test_reverse_expression_admission_does_not_read_unknown_callable_properties(self):
+        reads = []
+
+        class Callable:
+            def __getattribute__(self, name):
+                if name in {"__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
+                    reads.append(name)
+                    raise AssertionError("read arbitrary callable metadata")
+                return object.__getattribute__(self, name)
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+        self.assertEqual(reads, [])
+
 
 class RateIntervals(unittest.TestCase):
     def test_public_rate_module_preserves_callable_identity_and_shared_recognition(self):

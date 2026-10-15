@@ -30,6 +30,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "split_bezier": "numpy",
     "subdivide_bezier": "numpy",
     "bezier_remap": "numpy",
+    "point_lies_on_bezier": "numpy",
+    "proportions_along_bezier_curve_for_point": "numpy",
     "line_intersection": "numpy",
     "find_intersection": "numpy",
     "quaternion_from_angle_axis": "numpy",
