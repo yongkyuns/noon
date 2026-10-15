@@ -12,6 +12,7 @@ mod context;
 mod export;
 mod family;
 mod geometry;
+mod image;
 mod mobject;
 mod options;
 mod path_query;
@@ -50,6 +51,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<image::ImageOptions>()?;
     #[cfg(feature = "native-text")]
     text::register(m)?;
     m.add_class::<geometry::GeometryOptions>()?;

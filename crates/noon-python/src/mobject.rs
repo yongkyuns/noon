@@ -14,6 +14,28 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "imagePixelWidth")]
+    fn image_pixel_width(&self) -> PyResult<u32> {
+        self.handle
+            .image_dimensions()
+            .map(|(width, _)| width)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "imagePixelHeight")]
+    fn image_pixel_height(&self) -> PyResult<u32> {
+        self.handle
+            .image_dimensions()
+            .map(|(_, height)| height)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setImageSampling")]
+    fn set_image_sampling(&mut self, value: &str) -> PyResult<()> {
+        let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
+        self.handle
+            .set_image_sampling(sampling)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "manimColor")]
     fn manim_color(&self) -> PyResult<crate::family::ColorObservation> {
         self.handle

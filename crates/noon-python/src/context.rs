@@ -90,6 +90,14 @@ impl Store {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
     }
+    fn image(
+        &self,
+        mut options: PyRefMut<'_, crate::image::ImageOptions>,
+    ) -> PyResult<MobjectHandle> {
+        Mobject::from_image(Rc::clone(&self.semantics), options.take()?)
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
+    }
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct MembershipBatch {
@@ -693,6 +701,20 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.create_manim_geometry(options.options.clone()))
             .map(MobjectHandle::from_semantic_mobject)
+    }
+    #[pyo3(name = "liveCreateImage")]
+    fn image(
+        &mut self,
+        mut options: PyRefMut<'_, crate::image::ImageOptions>,
+    ) -> PyResult<MobjectHandle> {
+        crate::image::live(self, &mut options)
+    }
+    #[pyo3(name = "liveSetImageSampling")]
+    fn set_image_sampling(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
+        self.with_live(|live| live.set_image_sampling(&target.handle, sampling))
     }
     #[pyo3(name = "liveStartNewPath")]
     fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {

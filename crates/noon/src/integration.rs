@@ -24,6 +24,8 @@
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
+mod image_options;
+pub use image_options::image_sampling;
 mod path_edits;
 mod pixel_readback;
 mod render_options;

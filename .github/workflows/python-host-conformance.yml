@@ -19,6 +19,7 @@ on:
       - "scripts/python_export_conformance.py"
       - "scripts/test_python_export_facade.py"
       - "scripts/test_native_text.py"
+      - "scripts/test_native_images.py"
       - "scripts/python_native_text_conformance.py"
       - "scripts/build-native-python.py"
       - "parity/python-host/**"
@@ -230,5 +231,55 @@ jobs:
         with:
           name: native-python-text-${{ github.sha }}
           path: artifacts/python-text/
+          retention-days: 3
+          if-no-files-found: error
+
+  images:
+    name: Native Python immutable image resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      PYO3_PYTHON: python3
+      WGPU_BACKEND: vulkan
+      NOON_EXPORT_FORCE_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install repository-pinned Rust
+        run: source scripts/ci-setup-rust.sh
+      - name: Install independent decoder and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+      - name: Build image decoder and native output binding
+        run: python3 scripts/build-native-python.py --profile release --image-decode --export-video --output build/python-images
+      - name: Qualify image inputs, admission, ownership and cleanup
+        run: PYTHONPATH=build/python-images python3 scripts/test_native_images.py -v
+      - name: Build existing independent Rust image source
+        run: cargo build -p noon-export --no-default-features --release --example python_image_contract
+      - name: Decode and compare every image frame on both source routes
+        run: |
+          python3 scripts/python_native_text_conformance.py --profile image --python-path build/python-images \
+            --rust-binary target/release/examples/python_image_contract --output artifacts/python-images/media
+      - name: Retain exact image source and tool versions including failures
+        if: always()
+        run: |
+          mkdir -p artifacts/python-images
+          git rev-parse HEAD > artifacts/python-images/source-sha.txt
+          cp web/python/examples/raster_image.py artifacts/python-images/
+          cp Cargo.lock artifacts/python-images/
+          rustc -Vv > artifacts/python-images/rust-version.txt
+          ffmpeg -version > artifacts/python-images/ffmpeg-version.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-python-images-${{ github.sha }}
+          path: artifacts/python-images/
           retention-days: 3
           if-no-files-found: error

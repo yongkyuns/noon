@@ -18,11 +18,14 @@ try:
     from _noon_host import (
         noonAuthoringImageOptions as _image_options,
         noonCreateAuthoringImageHandle as _create_image,
-        noonLoadImageUrl as _load_url,
-        Uint8Array,
     )
 except ImportError:
-    _image_options = _create_image = _load_url = Uint8Array = None
+    _image_options = _create_image = None
+
+try:
+    from _noon_host import noonLoadImageUrl as _load_url, Uint8Array
+except ImportError:
+    _load_url = Uint8Array = None
 
 # Pillow's documented integer constants; unsupported filters fail explicitly.
 RESAMPLING_ALGORITHMS = {
@@ -112,6 +115,9 @@ def _validate_shape(width, height, channels):
 
 def _js_bytes(data):
     # One bulk byte transfer into WASM at construction, never a JSON pixel list.
+    import sys
+    if sys.platform != "emscripten":
+        return bytes(data)
     from pyodide.ffi import to_js
     return to_js(memoryview(data))
 
@@ -168,6 +174,8 @@ class ImageMobject(_base.Mobject):
     @classmethod
     async def from_blob(cls, blob, **kwargs):
         """Read one browser Blob before ordinary bounded PNG/JPEG preparation."""
+        if Uint8Array is None:
+            raise RuntimeError("Blob loading requires the browser image host")
         if int(blob.size) > _MAX_ENCODED_BYTES:
             raise ValueError("encoded image exceeds 32 MiB")
         data = Uint8Array.new(await blob.arrayBuffer())

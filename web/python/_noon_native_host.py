@@ -47,6 +47,13 @@ def _arena():
 
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
+noonAuthoringImageOptions = _native.ImageOptions
+
+
+def noonCreateAuthoringImageHandle(options):
+    return _arena().image(options)
+
+
 noonResolveRenderOptions = _native.resolve_render_options
 noonResolveAnimationOptions = _native.resolve_animation_options
 noonResolveCreateAnimationOptions = _native.resolve_create_options

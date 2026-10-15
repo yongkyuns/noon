@@ -139,6 +139,13 @@ a source barrier uses `LiveSession::create_text`, so resource import and runtime
 publication stay atomic and existing ownership/retirement guards apply. The
 native adapter adds no shaping, layout, callback scheduling or resource cache.
 
+Native image inputs are consumable inert Rust options. Nested arrays adapt to
+one immutable byte input; the optional `image-decode` feature enables the shared
+bounded PNG/JPEG decoder. Cold admission uses `Mobject::from_image`, while live
+creation and sampling changes use `LiveSession`. Both hosts share sampling-value
+validation. No native URL loader, Python decoder, resource cache or frame path
+is introduced.
+
 ### Direct Rust execution invariant
 
 Native Rust and Rust compiled to WASM use the same typed engine path; only the platform shell changes:

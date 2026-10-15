@@ -25,6 +25,8 @@ def main() -> None:
                         help="Build optional windowless native MP4/PNG output")
     parser.add_argument("--native-text", action="store_true",
                         help="Include native shaping and bundled font resources")
+    parser.add_argument("--image-decode", action="store_true",
+                        help="Include the shared bounded PNG/JPEG decoder")
     args = parser.parse_args()
     output = args.output.resolve()
     command = ["cargo", "build", "-p", "noon-python"]
@@ -33,6 +35,8 @@ def main() -> None:
         features.append("export")
     if args.native_text:
         features.append("bundled-fonts")
+    if args.image_decode:
+        features.append("image-decode")
     if features:
         command.extend(("--features", ",".join(features)))
     if args.profile == "release":

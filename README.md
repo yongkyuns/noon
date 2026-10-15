@@ -171,6 +171,14 @@ share resource admission with the browser host; no host font discovery occurs.
 Text part indexing, content-producing callbacks, Typst/LaTeX and broader text
 options still require their own native bindings and qualification.
 
+`ImageMobject` also accepts immutable nested grayscale/RGB/RGBA arrays in the
+native host. Add `--image-decode` to enable the same bounded PNG/JPEG decoder as
+the browser, including bytes, local paths and readable files. This flag combines
+with `--export-video` and `--native-text`. Pixel sizing, sampling, resource
+admission and post-wait creation use the existing Rust image API. Browser URL
+and Blob loading require the browser host; mutable pixels and other codecs
+remain outside this profile.
+
 `noon_native.export_scene` and `export_source` expose the same options. Quality,
 resolution, FPS, and format values are resolved by the shared Rust integration.
 The source loader selects one Scene or `result`; named/multiple scene selection,

@@ -9,16 +9,7 @@ pub struct WasmImageMobjectOptions {
 }
 
 pub(crate) fn sampling(value: &str) -> Result<noon::RasterImageSampling, JsValue> {
-    match value {
-        "nearest" => Ok(noon::RasterImageSampling::Nearest),
-        "linear" | "bilinear" => Ok(noon::RasterImageSampling::Linear),
-        "bicubic" => Ok(noon::RasterImageSampling::Bicubic),
-        _ => Err(js_error(crate::AuthoringFailure::new(
-            "unsupported_operation",
-            "image.sampling",
-            "image sampling must be nearest, bilinear, or bicubic",
-        ))),
-    }
+    noon::integration::image_sampling(value).map_err(js_error)
 }
 
 #[wasm_bindgen]
