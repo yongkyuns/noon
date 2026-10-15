@@ -178,6 +178,35 @@ class ManimTransformPathArcOptionsTests(unittest.TestCase):
             namespace["smooth"].__name__ = "smooth"
             impostor = eval("lambda t: smooth(1 - t)", namespace)
             assert not rates.is_reverse_smooth_rate_func(impostor)
+
+            class MetadataCallable:
+                def __getattribute__(self, name):
+                    if name in {"__class__", "__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
+                        raise AssertionError("read unsupported callable metadata")
+                    return object.__getattribute__(self, name)
+
+                def __call__(self, t):
+                    raise AssertionError("sampled unsupported callable")
+
+            unsupported_options = [
+                ({"rate_func": MetadataCallable()}, None),
+                ({}, MetadataCallable()),
+            ]
+            for builder_args, play_rate_func in unsupported_options:
+                try:
+                    options.resolve_transform(
+                        builder_args=builder_args,
+                        default_lag_ratio=0.0,
+                        play_run_time=None,
+                        play_easing=None,
+                        play_rate_func=play_rate_func,
+                        play_lag_ratio=None,
+                        play_path_arc=None,
+                    )
+                except NotImplementedError:
+                    pass
+                else:
+                    raise AssertionError("unsupported callable was admitted")
             """
         )
         completed = subprocess.run(

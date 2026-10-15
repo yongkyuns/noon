@@ -557,6 +557,11 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+import __future__
+import importlib.metadata as metadata
+assert annotations is __future__.annotations
+assert PackageNotFoundError is metadata.PackageNotFoundError
+assert version is metadata.version
 for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
                          (VMobject, VGroup, VMobject), (VGroup, VGroup, VMobject),
                          (Circle, VGroup, VMobject), (Square, VGroup, VMobject)]:
@@ -572,6 +577,17 @@ path = Path("movie.mp4")
 assert add_extension_if_not_present(path, ".mp4") is path
 assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
 with tempfile.TemporaryDirectory() as directory:
+    info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\\nName: noon-namespace-fixture\\nVersion: 1.2.3\\n")
+    with patch.object(sys, "path", [directory, *sys.path]):
+        assert version("noon-namespace-fixture") == "1.2.3"
+        try:
+            version("noon-namespace-absent")
+        except PackageNotFoundError as error:
+            assert error.name == "noon-namespace-absent"
+        else:
+            raise AssertionError("missing distribution must raise PackageNotFoundError")
     target = Path(directory) / "nested" / "target"
     assert guarantee_existence(target) == target.resolve(strict=True)
     (target / "old.txt").write_text("remove")
@@ -592,9 +608,20 @@ assert interpolate(0, 8, 0.25) == 2
 assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
 assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
+assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
+assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
+assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
+assert SVGNAMES.ALICEBLUE == color_from_hex(0xEFF7FF)
+assert X11.ALICEBLUE == color_from_hex(0xF0F8FF)
+assert DVIPSNAMES.RED == color_from_hex(0xED1B23)
+assert AS2700.B11_RICH_BLUE == color_from_hex(0x2B3770)
+assert BS381.BS381_101 == color_from_hex(0x94BFAC)
+assert XKCD.AMBER == color_from_hex(0xFEB308)
+assert XKCD.AMBER is XKCD.AMBER
+assert "numpy" not in sys.modules
 result = Scene()
 `);
       const arrayNamespace = await client.run(`

@@ -271,6 +271,9 @@ def _validate_straight_arrow_options(
 
 class Arrow(_compat.Group):
     """Straight Manim Arrow backed by one shared Rust semantic family."""
+    # This typed vector wrapper retains the shared family-paint contract.
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(
         self,
@@ -379,6 +382,10 @@ class Arrow(_compat.Group):
     def get_stroke_width(self) -> float:
         """Read the retained shaft width in Manim's public stroke units."""
         return float(self._shaft.get_stroke_width())
+
+    def get_color(self) -> _base.Color:
+        """Observe current shaft paint through its shared semantic owner."""
+        return self._shaft.get_color()
 
     def has_tip(self) -> bool:
         return self.tip is not None

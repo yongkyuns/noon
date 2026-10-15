@@ -9,6 +9,63 @@ import noon
 import _manim_rate_functions as rates
 
 
+class KnownRateIdentityTests(unittest.TestCase):
+    def test_canonical_aliases_keep_the_same_shared_ids(self):
+        for semantic_id, function in rates._KNOWN_RATE_FUNCTIONS.items():
+            alias = function
+            self.assertEqual(rates.easing_from_rate_func(alias), semantic_id)
+
+    def test_shadowed_builtin_name_cannot_select_different_rust_math(self):
+        def linear(t):
+            return 1 - t
+
+        self.assertEqual(linear(0.25), 0.75)
+        with self.assertRaises(NotImplementedError):
+            rates.easing_from_rate_func(linear)
+
+    def test_unknown_callable_admission_never_invokes_user_metadata_or_equality(self):
+        class Callable:
+            @property
+            def __name__(self):
+                raise AssertionError("read arbitrary callable metadata")
+
+            def __eq__(self, other):
+                raise AssertionError("invoked user equality")
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        with self.assertRaises(NotImplementedError):
+            rates.easing_from_rate_func(Callable())
+
+    def test_reverse_admission_does_not_consult_a_spoofed_class(self):
+        class Callable:
+            @property
+            def __class__(self):
+                raise AssertionError("read arbitrary callable class property")
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+
+    def test_reverse_expression_admission_does_not_read_unknown_callable_properties(self):
+        reads = []
+
+        class Callable:
+            def __getattribute__(self, name):
+                if name in {"__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
+                    reads.append(name)
+                    raise AssertionError("read arbitrary callable metadata")
+                return object.__getattribute__(self, name)
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        self.assertFalse(rates.is_reverse_smooth_rate_func(Callable()))
+        self.assertEqual(reads, [])
+
+
 class RateIntervals(unittest.TestCase):
     def test_public_rate_module_preserves_callable_identity_and_shared_recognition(self):
         from types import ModuleType
@@ -23,6 +80,7 @@ class RateIntervals(unittest.TestCase):
                 self.assertFalse(hasattr(noon, name))
                 self.assertEqual(rates.easing_from_rate_func(function), name)
 
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
     def test_public_evaluation_uses_pinned_boundary_rules(self):
         for function in [noon.linear, noon.smooth, noon.rush_into, noon.rush_from]:
             for value in [-math.inf, -0.01]: self.assertEqual(function(value), 0)
@@ -36,8 +94,8 @@ class RateIntervals(unittest.TestCase):
         self.assertIs(noon.linear(value), value)
         self.assertIs(noon.linear(True), True)
         self.assertAlmostEqual(noon.smooth(0.5), 0.5)
-        for value in [0.0, 0.25, 1.0]:
-            self.assertIs(type(noon.smooth(value)), float)
+        for value, expected_type in [(0.0, np.float64), (0.25, np.float64), (1.0, int)]:
+            self.assertIs(type(noon.smooth(value)), expected_type)
         self.assertAlmostEqual(noon.there_and_back(0.5), 1)
 
     def test_wrapping_preserves_shared_rate_identity_and_reverse_expression(self):
@@ -47,6 +105,17 @@ class RateIntervals(unittest.TestCase):
             self.assertEqual(rates.easing_from_rate_func(function), name)
         expression = eval("lambda t: smooth(1 - t)", {"smooth": noon.smooth})
         self.assertTrue(rates.is_reverse_smooth_rate_func(expression))
+
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
+    def test_logistic_user_evaluation_preserves_numpy_types_and_decimal_errors(self):
+        from decimal import Decimal
+        for function in (noon.smooth, noon.rush_into, noon.rush_from, noon.there_and_back):
+            with self.subTest(function=function.__name__):
+                self.assertIs(type(function(np.float32(0.25))), np.float64)
+                with self.assertRaises(TypeError):
+                    function(Decimal('0.25'))
+                rates.easing_from_rate_func(function)
+        self.assertIsInstance(noon.smooth(np.array([0.25])), np.ndarray)
 
     def test_polynomial_rates_preserve_numeric_types_and_shared_ids(self):
         from fractions import Fraction
@@ -119,7 +188,11 @@ class RateIntervals(unittest.TestCase):
             self.assertIs(raised.exception, failure)
         reversed_interval = noon.squish_rate_func(noon.linear, a=0.8, b=0.2)
         self.assertEqual([reversed_interval(t) for t in [0.0, 0.5, 1.0]], [0.0, 0.0, 1.0])
+
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
+    def test_default_proportion_wrapper_evaluates_pinned_numpy_smooth(self):
         self.assertEqual(noon.not_quite_there()(0.5), 0.35)
+        self.assertIs(type(noon.not_quite_there()(0.5)), np.float64)
 
 
 if __name__ == "__main__": unittest.main()

@@ -2506,17 +2506,28 @@ impl SemanticExecutionPlayer {
         members: &[noon::MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.live_family_with_color(members, z_index, noon::Color::WHITE)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_family_with_color(
+        &mut self,
+        members: &[noon::MobjectTarget<'_>],
+        z_index: f64,
+        color: noon::Color,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::integration::publish_family_creation(
+        noon::integration::publish_family_creation_with_color(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
             members,
             z_index,
+            color,
         )
         .map_err(AuthoringFailure::from)
     }

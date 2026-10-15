@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  browserArgs,
   compareEffectiveFrames,
   compareEffective3DCamera,
   compareEffectiveInsetCameras,
@@ -14,6 +15,16 @@ import {
 } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("hardware WebGL disables Chromium WebGPU services without forcing software rendering", () => {
+  const args = browserArgs("webgl", { gpuMode: "hardware" });
+  const disabled = new Set(args.filter(arg => arg.startsWith("--disable-features="))
+    .flatMap(arg => arg.slice("--disable-features=".length).split(",")));
+  for (const feature of ["WebGPU", "WebGPUService", "WebGPUBlobCache"]) {
+    assert.ok(disabled.has(feature), `${feature} must be disabled to select WebGL`);
+  }
+  assert.ok(args.every(arg => !arg.includes("swiftshader")));
+});
 
 test("automatic paired qualification records either actual supported backend", () => {
   assert.equal(resolveQualifiedBackend("automatic", "WebGPU"), "WebGPU");

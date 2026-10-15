@@ -4,6 +4,11 @@ use crate::{ExecutionSession, ManimGeometryOptions, Scene};
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
+        let mut empty =
+            scene.geometry(ManimGeometryOptions::path(noon_core::VectorPath::new())?)?;
+        empty.shift(3., -2.)?;
+        assert_eq!(empty.center()?, (0., 0.));
+        scene.add(&empty)?;
         let mut circle = scene.geometry(ManimGeometryOptions::circle(1.)?)?;
         circle.scale(2., 0.75)?;
         circle.set_color(1., 1., 1., 1.)?;
@@ -26,6 +31,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         }
         let mut session = scene.execution_session()?;
         let mut live = scene.live(&mut session);
+        assert_eq!(live.effective_layout(&empty)?.center, (0., 0.));
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

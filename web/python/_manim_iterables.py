@@ -1,6 +1,12 @@
 """ManimCE v0.21 Python iterable ergonomics for user data."""
-from collections.abc import Iterable
+from __future__ import annotations
+
+from collections.abc import Callable, Generator, Iterable
 from itertools import chain, cycle
+from typing import TypeVar
+
+T = TypeVar("T")
+U = TypeVar("U")
 
 
 def adjacent_n_tuples(objects, n):
@@ -67,7 +73,10 @@ def remove_nones(sequence):
     return [value for value in sequence if value]
 
 
-def batch_by_property(items, property_func):
+def batch_by_property(
+    items: Iterable[T], property_func: Callable[[T], U]
+) -> list[tuple[list[T], U | None]]:
+    """Group adjacent user values by their callback result, retaining order."""
     result, batch, current = [], [], None
     for item in items:
         value = property_func(item)
@@ -82,7 +91,8 @@ def batch_by_property(items, property_func):
     return result
 
 
-def uniq_chain(*args):
+def uniq_chain(*args: Iterable[T]) -> Generator[T, None, None]:
+    """Lazily yield each hashable user value once in first-seen order."""
     seen = set()
     for value in chain(*args):
         if value not in seen:
@@ -90,7 +100,8 @@ def uniq_chain(*args):
             yield value
 
 
-def hash_obj(obj):
+def hash_obj(obj: object) -> int:
+    """Hash nested user containers through their own hash protocols."""
     if isinstance(obj, dict):
         return hash(tuple(sorted((hash_obj(key), hash_obj(value)) for key, value in obj.items())))
     if isinstance(obj, set):

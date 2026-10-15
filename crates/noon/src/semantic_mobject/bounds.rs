@@ -1,5 +1,17 @@
 //! Geometry layout bounds read directly from immutable semantic resources.
 use super::*;
+
+/// Empty geometry has no layout anchor, even when its authored pose is nonzero.
+/// Preserve the precision-sensitive translation offset only for actual bounds.
+pub(crate) fn boundary_center(bounds: Option<Bounds2D64>, offset: (f64, f64)) -> (f64, f64) {
+    bounds.map_or((0.0, 0.0), |bounds| {
+        (
+            (bounds.min_x + bounds.max_x) * 0.5 + offset.0,
+            (bounds.min_y + bounds.max_y) * 0.5 + offset.1,
+        )
+    })
+}
+
 fn include_layout_point(bounds: &mut Option<Bounds2D64>, point: (f64, f64)) {
     if let Some(bounds) = bounds {
         bounds.include(point.0, point.1);

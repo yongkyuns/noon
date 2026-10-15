@@ -149,6 +149,45 @@ def rotation_about_z(angle: float) -> np.ndarray:
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
+def rotation_matrix(
+    angle: float,
+    axis: Vector3DLike,
+    homogeneous: bool = False,
+) -> np.ndarray:
+    """Rotate explicit user vectors with the pinned SciPy conversion."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+    matrix = Rotation.from_rotvec(angle * normalize(axis)).as_matrix()
+    if not homogeneous:
+        return matrix
+    result = np.eye(4)
+    result[:3, :3] = matrix
+    return result
+
+
+def rotate_vector(
+    vector: Vector3DLike, angle: float, axis: Vector3DLike = (0.0, 0.0, 1.0),
+) -> Vector3D:
+    """Rotate explicit user vectors using the existing SciPy matrix helper.
+
+    Default direction values are planar-compatible; mutable Manim constant and
+    default-object identities remain outside this bounded user-data profile.
+    """
+    import numpy as np
+    if len(vector) > 3:
+        raise ValueError("Vector must have the correct dimensions.")
+    if len(vector) == 2:
+        vector = np.append(vector, 0)
+    return rotation_matrix(angle, axis) @ vector
+
+
+def compass_directions(n: int = 4, start_vect: np.ndarray = (1.0, 0.0, 0.0)) -> np.ndarray:
+    """Return explicit user direction arrays through the same vector helper."""
+    import numpy as np
+    angle = math.tau / n
+    return np.array([rotate_vector(start_vect, k * angle) for k in range(n)])
+
+
 def cartesian_to_spherical(vec: Vector3DLike) -> np.ndarray:
     import numpy as np
     norm = np.linalg.norm(vec)
@@ -429,3 +468,45 @@ def bezier_remap(bezier_tuples: BezierPointsLike_Array, new_number_of_curves: in
         new_tuples[index:index + sf] = subdivide_bezier(curve, sf).reshape(sf, nppc, dim)
         index += sf
     return new_tuples
+
+
+def proportions_along_bezier_curve_for_point(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> MatrixMN:
+    import numpy as np
+    from functools import reduce
+    from _manim_simple_functions import choose
+    if not all((np.shape(point) == np.shape(c_p) for c_p in control_points)):
+        raise ValueError(f'Point {point} and Control Points {control_points} have different shapes.')
+    control_points = np.array(control_points)
+    n = len(control_points) - 1
+    roots = []
+    for dim, coord in enumerate(point):
+        control_coords = control_points[:, dim]
+        terms = []
+        for term_power in range(n, -1, -1):
+            outercoeff = choose(n, term_power)
+            term = []
+            sign = 1
+            for subterm_num in range(term_power, -1, -1):
+                innercoeff = choose(term_power, subterm_num) * sign
+                subterm = innercoeff * control_coords[subterm_num]
+                if term_power == 0:
+                    subterm -= coord
+                term.append(subterm)
+                sign *= -1
+            terms.append(outercoeff * sum(np.array(term)))
+        if all((term == 0 for term in terms)):
+            continue
+        bezier_polynom = np.polynomial.Polynomial(terms[::-1])
+        polynom_roots = bezier_polynom.roots()
+        if len(polynom_roots) > 0:
+            polynom_roots = np.around(polynom_roots, int(np.log10(1 / round_to)))
+        roots.append(polynom_roots)
+    roots = [[root for root in rootlist if root.imag == 0] for rootlist in roots]
+    roots = reduce(np.intersect1d, roots)
+    result = np.asarray([r.real for r in roots if 0 <= r.real <= 1])
+    return result
+
+
+def point_lies_on_bezier(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> bool:
+    roots = proportions_along_bezier_curve_for_point(point, control_points, round_to)
+    return len(roots) > 0

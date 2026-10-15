@@ -30,6 +30,31 @@ class ManimNamespaceTests(unittest.TestCase):
             (),
         )
 
+    def test_standard_library_exports_preserve_identity_and_metadata_errors(self) -> None:
+        import __future__
+        import importlib.metadata as metadata
+        import sys
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        for name, expected in [("annotations", __future__.annotations),
+                               ("PackageNotFoundError", metadata.PackageNotFoundError),
+                               ("version", metadata.version)]:
+            self.assertIn(name, _base.__all__)
+            self.assertIs(getattr(_base, name), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text(
+                "Metadata-Version: 2.1\nName: noon-namespace-fixture\nVersion: 1.2.3\n"
+            )
+            with patch.object(sys, "path", [directory, *sys.path]):
+                self.assertEqual(_base.version("noon-namespace-fixture"), "1.2.3")
+                with self.assertRaises(_base.PackageNotFoundError) as caught:
+                    _base.version("noon-namespace-absent")
+                self.assertEqual(caught.exception.name, "noon-namespace-absent")
+
     def test_install_exposes_pending_alias_without_importing_numpy(self) -> None:
         self.assertIn("np", _base.__all__)
         pending = _base.np
@@ -50,6 +75,23 @@ class ManimNamespaceTests(unittest.TestCase):
                        "import noon\nnoon.slow_into(0.5)"]:
             self.assertEqual(namespace.required_packages(source), ("numpy",))
         self.assertEqual(namespace.required_packages("double_smooth(0.5)"), ("numpy",))
+
+    def test_nonstandard_rate_data_loads_numpy_before_direct_or_aliased_calls(self):
+        for name in ('smooth', 'rush_into', 'rush_from', 'there_and_back',
+                     'there_and_back_with_pause', 'wiggle', 'exponential_decay'):
+            for source in (f'{name}(0.5)',
+                           f'from manim import {name} as helper\nhelper(0.5)',
+                           f'import noon\nnoon.{name}(0.5)'):
+                with self.subTest(source=source):
+                    self.assertEqual(namespace.required_packages(source), ('numpy',))
+        self.assertEqual(namespace.required_packages('running_start(0.5)'), ())
+        self.assertEqual(namespace.required_packages("message = 'wiggle(0.5)'"), ())
+
+    def test_default_proportion_wrapper_prepares_its_numpy_smooth_dependency(self):
+        for source in ('not_quite_there()(0.5)',
+                       'from manim import not_quite_there as helper\nhelper()(0.5)',
+                       'import noon\nnoon.not_quite_there()(0.5)'):
+            self.assertEqual(namespace.required_packages(source), ('numpy',))
 
     def test_interpolation_requires_numpy_only_for_division_helpers(self):
         for name in ["inverse_interpolate", "match_interpolate"]:
