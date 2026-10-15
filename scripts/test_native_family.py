@@ -34,6 +34,57 @@ class NativeFamilyTests(unittest.TestCase):
         self.assertEqual((layout.centerX, layout.centerY, layout.width, layout.height),
                          (0, 0, 2, 2))
 
+    def test_family_opacity_edits_paint_and_rejects_invalid_values_atomically(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        child.setFillOpacity(.8)
+        child.setStrokeOpacity(.6)
+        child.setObjectOpacity(.4)
+        family = self.family(store, child, child)
+        family.setOpacity(.25)
+        self.assertEqual((child.fillOpacity, child.strokeOpacity), (.25, .25))
+        for opacity in (float('nan'), float('inf'), -1, 2):
+            with self.subTest(opacity=opacity):
+                with self.assertRaises(RuntimeError):
+                    family.setOpacity(opacity)
+                self.assertEqual((child.fillOpacity, child.strokeOpacity), (.25, .25))
+
+    def test_live_family_opacity_rejects_foreign_and_retired_contexts(self):
+        left, right = native.Store(), native.Store()
+        local, foreign = self.family(left), self.family(right)
+        context = left.context()
+        with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+            context.liveSetFamilyOpacity(foreign, .5)
+        context.retire()
+        with self.assertRaisesRegex(RuntimeError, 'retired'):
+            context.liveSetFamilyOpacity(local, .5)
+
+    def test_family_opacity_before_and_after_barriers_uses_effective_paint(self):
+        source = '''from noon import *
+class Paint(Scene):
+    def construct(self):
+        self.observations=[]
+        for cls in (Group,VGroup):
+            leaf=Square(fill_opacity=.8,stroke_opacity=.6)
+            group=cls(leaf,leaf)
+            group.set_opacity(.25)
+            self.observations.append([leaf.get_fill_opacity(),leaf.get_stroke_opacity()])
+            self.add(group)
+            self.wait(.125)
+            group.set_opacity(.5)
+            self.observations.append([leaf.get_fill_opacity(),leaf.get_stroke_opacity()])
+            self.wait(.125)
+            self.remove(group)
+'''
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
+                try:
+                    self.assertEqual(scene.observations, [[.25,.25],[.5,.5]] * 2)
+                    self.assertEqual(scene.time, .5)
+                finally:
+                    close_scene(scene)
+
     def test_family_scale_and_shift_visit_shared_leaves_once_and_reject_invalid_values(self):
         store = native.Store()
         child = store.geometry(native.GeometryOptions.square(2))

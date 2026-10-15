@@ -56,6 +56,10 @@ impl FamilyHandle {
     fn scale(&self, x: f64, y: f64) -> PyResult<()> {
         self.family.scale(x, y).map_err(engine_error)
     }
+    #[pyo3(name = "setOpacity")]
+    fn set_opacity(&self, opacity: f64) -> PyResult<()> {
+        self.family.set_opacity(opacity).map_err(engine_error)
+    }
     #[pyo3(name = "memberKeys")]
     fn member_keys(&self) -> PyResult<Vec<String>> {
         let store = self.family.integration_store().borrow();

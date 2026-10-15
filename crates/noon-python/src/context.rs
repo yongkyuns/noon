@@ -491,6 +491,16 @@ impl Context {
         self.same_family_store(target)?;
         self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
     }
+    #[pyo3(name = "liveSetFamilyOpacity")]
+    fn family_opacity(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.set_family_opacity(&target.family, opacity).map(|_| ()))
+    }
     #[pyo3(name = "liveSetFamilyColor")]
     fn family_color(
         &mut self,
