@@ -666,6 +666,19 @@ assert calls == [0, 0.5, 1]
 assert logistic(np.array([0, 1], dtype=np.float32)).dtype == np.float32
 result = Scene()
 `);
+      const angleNamespace = await client.run(`
+from noon import Angle, Scene
+angle = Angle.from_three_points((1, 0, 0), (0, 0, 0), (0, 1, 0))
+assert isinstance(angle, Angle)
+assert angle.lines[0].get_start().x == 0
+assert angle.lines[0].get_start().y == 0
+assert angle.lines[0].get_end().x == 1
+assert angle.lines[0].get_end().y == 0
+assert angle.lines[1].get_end().x == 0
+assert angle.lines[1].get_end().y == 1
+assert abs(angle.get_value(degrees=True) - 90) < 1e-9
+result = Scene()
+`);
       const numpyNamespace = await client.run(`
 from noon import *
 import sys
@@ -683,6 +696,7 @@ result = Scene()
         coldNamespace: Boolean(coldNamespace.semanticExecution),
         arrayNamespace: Boolean(arrayNamespace.semanticExecution),
         numericalNamespace: Boolean(numericalNamespace.semanticExecution),
+        angleNamespace: Boolean(angleNamespace.semanticExecution),
         numpyNamespace: Boolean(numpyNamespace.semanticExecution),
         sharedScene: Boolean(result.semanticExecution),
         terminated: client.terminated,
@@ -695,6 +709,7 @@ result = Scene()
   assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
   assert.equal(sceneOnlyAuthoring.arrayNamespace, true, "aliased array helper loads NumPy before the real Python worker call");
   assert.equal(sceneOnlyAuthoring.numericalNamespace, true, "user numerical helpers execute in the actual worker");
+  assert.equal(sceneOnlyAuthoring.angleNamespace, true, "Angle.from_three_points executes through shared geometry");
   assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
@@ -1019,7 +1034,7 @@ result = Scene()
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, Angle.from_three_points, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
