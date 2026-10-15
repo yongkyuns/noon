@@ -199,6 +199,43 @@ test("leaving the gallery retires a pending Python run without publishing a Pyth
   }
 });
 
+test("edited Run retires pre-continuation warmup before admitting its replacement", async () => {
+  const f = navigationFixture();
+  const start = main.indexOf("async function supersedeActiveSourceContinuation()");
+  const end = main.indexOf("function sameSemanticContinuation(", start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInNewContext(main.slice(start, end), f.context);
+  const original = f.context.runScene();
+  await flush();
+  assert.equal(f.clients.length, 1);
+  f.context.sceneSourceEditor.value = "edited source";
+  let current = true;
+  const router = createRunRequestRouter({
+    currentSource: () => f.context.sceneSourceEditor.value,
+    currentRun: () => f.context.sceneRunPromise,
+    activeSourceContinuation: () => f.context.activeSourceContinuation,
+    activeRunRequest: () => f.context.activeRunRequest,
+    isActiveRunCurrent: token => token !== undefined && f.context.isCurrentRun(token),
+    run: () => f.context.runScene(),
+    supersede: () => f.context.supersedeActiveSourceContinuation(),
+    onQueued() {},
+  });
+  const replacement = router.request(() => current);
+  try {
+    await flush();
+    assert.equal(f.clients.length, 2, "edited source must not wait for old warmup to publish");
+    assert.equal(f.clients[0].terminated, true);
+    assert.equal((await original).stale, true);
+    assert.equal(f.diagnosticBegins.at(-1).source, "edited source");
+    assert.deepEqual(f.errors, []);
+  } finally {
+    current = false;
+    f.dispatch("pagehide", false);
+    await replacement;
+    await original;
+  }
+});
+
 test("Safari cached return keeps explicit Run, edits and subsequent navigation teardown functional", async () => {
   const f = navigationFixture();
   for (let cycle = 0; cycle < 3; cycle += 1) {

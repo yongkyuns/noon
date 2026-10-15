@@ -423,8 +423,8 @@ function setPlaybackRuntimeStatus(playbackState, detail = "") {
 }
 
 function setBusy(busy) {
-  // The router joins an unchanged build or queues edited source while the
-  // automatic warmup is still preparing its first continuation.
+  // Unchanged warmup joins its current build. Edited source retires that
+  // build before starting its replacement.
   const canRequestRun = activeRunRequest !== null && isCurrentRun(activeRunRequest.token);
   sceneButton.disabled = busy && !canRequestRun;
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
@@ -850,7 +850,11 @@ function discardEarlyContinuationRuntime(attachedPlayer) {
 
 async function supersedeActiveSourceContinuation() {
   const continuation = activeSourceContinuation;
-  if (continuation === null) return false;
+  if (continuation === null) {
+    if (sceneRunPromise === null) return false;
+    await stopForSourceEdit();
+    return true;
+  }
 
   previousPreview.hold(canvas);
   playbackControls?.setControllable(false);
