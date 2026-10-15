@@ -8,6 +8,7 @@ on:
       - "web/python-compat-modules.js"
       - "web/python-worker.source.js"
       - "crates/noon-python/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-runtime/**"
@@ -15,6 +16,8 @@ on:
       - "crates/noon-web/**"
       - "scripts/python-host-*.mjs"
       - "scripts/python_host_*.py"
+      - "scripts/python_export_conformance.py"
+      - "scripts/test_python_export_facade.py"
       - "scripts/build-native-python.py"
       - "parity/python-host/**"
       - "Cargo.toml"
@@ -124,5 +127,55 @@ jobs:
         with:
           name: python-host-browser-${{ github.sha }}
           path: artifacts/python-host/
+          retention-days: 3
+          if-no-files-found: error
+
+  export:
+    name: Native Python PNG and MP4 output
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      PYO3_PYTHON: python3
+      WGPU_BACKEND: vulkan
+      NOON_EXPORT_FORCE_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install repository-pinned Rust
+        run: source scripts/ci-setup-rust.sh
+      - name: Install encoder and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+      - name: Check output facade lifecycle
+        run: |
+          python3 scripts/test_python_export_facade.py
+          python3 web/python/test_noon_native_cli.py
+      - name: Build optional native output binding and independent Rust counterpart
+        run: |
+          python3 scripts/build-native-python.py --profile release --export-video --output build/python-export
+          cargo build -p noon-export --no-default-features --release --example python_export_contract
+      - name: Decode and compare every output frame and source boundary
+        run: |
+          python3 scripts/python_export_conformance.py --python-path build/python-export
+      - name: Retain exact output evidence including failures
+        if: always()
+        run: |
+          mkdir -p artifacts/python-export
+          git rev-parse HEAD > artifacts/python-export/source-sha.txt
+          rustc -Vv > artifacts/python-export/rust-version.txt
+          ffmpeg -version > artifacts/python-export/ffmpeg-version.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-python-export-${{ github.sha }}
+          path: artifacts/python-export/
           retention-days: 3
           if-no-files-found: error

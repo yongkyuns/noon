@@ -153,6 +153,27 @@ interpreter call counts versus runtime samples, idle evaluations, and Python
 retention. The paired browser Product Gate remains the regression/performance
 oracle for actual rendering; native sampled timings are not GPU or window FPS.
 
+The optional file-output adapter uses Rust frame scheduling, GPU capture, and the
+same staged file sink as the Rust exporter. Build it explicitly:
+
+```bash
+python3 scripts/build-native-python.py --profile release --export-video
+PYTHONPATH=build/python python3 -m noon_native scene.py --output movie.mp4 --quality l
+PYTHONPATH=build/python python3 -m noon_native scene.py --output frames --format png --resolution 960,540 --fps 30000/1001
+```
+
+`noon_native.export_scene` and `export_source` expose the same options. Quality,
+resolution, FPS, and format values are resolved by the shared Rust integration.
+The source loader selects one Scene or `result`; named/multiple scene selection,
+configuration-file loading, and realtime playback are not provided here.
+`--max-frames` fails if the finite source exceeds the cap. `--start-frame` crops
+output without changing callback history, and `--final-hold` repeats the terminal
+frame without running callbacks again. Existing output requires `--overwrite`;
+failed exports preserve the prior file. This adapter retains the native binding's
+qualified geometry and resource limits. Its conformance gate independently
+decodes every output frame and compares the Rust/Python PNG sequences, callback
+history, fractional MP4 timestamps, and failure cleanup.
+
 ## Browser playground
 
 The browser demo combines:
