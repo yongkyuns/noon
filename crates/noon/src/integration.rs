@@ -98,6 +98,31 @@ pub use noon_runtime::{
     RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
 
+/// Decode optional normalized family paint consistently across host bindings.
+pub fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<crate::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(crate::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
+}
+
 /// Construct one detached family through an explicitly supplied live execution
 /// authority. This is for platform integrations that intentionally own a
 /// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust

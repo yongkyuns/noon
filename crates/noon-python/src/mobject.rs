@@ -226,6 +226,10 @@ impl MobjectHandle {
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), PyErr> {
         self.handle.set_stroke_width(width).map_err(engine_error)
     }
+    #[getter(strokeWidth)]
+    fn stroke_width(&self) -> PyResult<f64> {
+        self.handle.stroke_width().map_err(engine_error)
+    }
     #[pyo3(name = "setStrokeOpacity")]
     pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), PyErr> {
         self.handle

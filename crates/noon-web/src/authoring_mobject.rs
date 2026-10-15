@@ -73,21 +73,7 @@ pub(crate) fn family_color(
     blue: f64,
     alpha: f64,
 ) -> Result<Option<noon::Color>, String> {
-    if !enabled {
-        return Ok(None);
-    }
-    if ![red, green, blue, alpha]
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err("family color components must be finite and between zero and one".into());
-    }
-    Ok(Some(noon::Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    )))
+    noon::integration::family_color(enabled, red, green, blue, alpha)
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -418,3 +418,17 @@ fn initial_family_color_and_membership_publish_atomically_without_leaf_recolor()
     );
     assert_eq!(leaf.state().unwrap(), before);
 }
+
+#[test]
+fn host_family_color_decoder_preserves_omission_and_normalized_boundaries() {
+    use noon::integration::family_color;
+    assert_eq!(family_color(false, f64::NAN, 0.0, 0.0, 1.0).unwrap(), None);
+    assert_eq!(
+        family_color(true, 0.0, 1.0, 0.0, 1.0).unwrap(),
+        Some(Color::rgba(0.0, 1.0, 0.0, 1.0))
+    );
+    for value in [f64::NAN, f64::INFINITY, -0.01, 1.01] {
+        assert!(family_color(true, value, 0.0, 0.0, 1.0).is_err());
+        assert!(family_color(true, 0.0, 0.0, 0.0, value).is_err());
+    }
+}

@@ -60,6 +60,38 @@ impl FamilyHandle {
     fn set_opacity(&self, opacity: f64) -> PyResult<()> {
         self.family.set_opacity(opacity).map_err(engine_error)
     }
+    #[pyo3(name = "setFill", signature = (has_color, red, green, blue, alpha, opacity=None))]
+    fn set_fill(
+        &self,
+        has_color: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let color = noon::integration::family_color(has_color, red, green, blue, alpha)
+            .map_err(engine_error)?;
+        self.family.set_fill(color, opacity).map_err(engine_error)
+    }
+    #[pyo3(name = "setStroke", signature = (has_color, red, green, blue, alpha, width=None, opacity=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_stroke(
+        &self,
+        has_color: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let color = noon::integration::family_color(has_color, red, green, blue, alpha)
+            .map_err(engine_error)?;
+        self.family
+            .set_stroke(color, width, opacity)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "memberKeys")]
     fn member_keys(&self) -> PyResult<Vec<String>> {
         let store = self.family.integration_store().borrow();
