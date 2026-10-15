@@ -901,6 +901,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 _PUBLIC_EXPORTS = {
     "rate_functions": "_manim_rate_functions",
+    "unit": "_manim_unit",
 
     "CubicBezier": "_manim_geometry",
     "get_winding_number": "_manim_user_vectors",
