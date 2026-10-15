@@ -142,8 +142,9 @@ native realtime playback. Async `construct` and ordinary synchronous helpers
 use the shared Rust operation/completion contract. The binding supports the
 analytic 2D geometry, transform/create/fade/composition, membership, effective
 query, and property-callback slice exercised in `parity/python-host`. Native
-text/LaTeX, spatial/family construction and callback content/membership producers
-are not yet qualified. No JavaScript shim or second Python scene is used.
+Text is opt in as described below. Typst/LaTeX, spatial construction and callback
+content/membership producers remain unqualified. No JavaScript shim or second
+Python scene is used.
 
 The real-host gate runs `scripts/python_host_conformance.py` and then
 `scripts/python-host-browser.mjs` against WebGPU and WebGL2. It compares the same

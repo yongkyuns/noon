@@ -100,9 +100,9 @@ when a browser player is leased to its execution endpoint.
 CPython extension. `noon_native` provides a finite, explicitly sampled,
 renderer-free execution host. Its first conformance profile covers analytic 2D
 geometry, ordinary transform/create/fade/composition, membership, effective
-queries, and property callbacks. Native realtime window integration, text/LaTeX,
-family/spatial construction, and callback structural/content producers are not
-claimed by that profile. Unsupported bindings must fail explicitly rather than
+queries, and property callbacks. Native realtime window integration,
+Typst/LaTeX, spatial construction, and callback structural/content producers
+remain unqualified. The bounded family and optional Text profiles follow below. Unsupported bindings must fail explicitly rather than
 emulate browser objects or approximate semantic behavior. The existing browser
 renderer and native Rust window host remain separate platform integrations.
 
