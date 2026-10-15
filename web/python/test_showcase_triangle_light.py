@@ -182,7 +182,8 @@ class TriangleLightTests(unittest.TestCase):
         self.assertTrue(55 < left_angle < 59)
 
     def test_storyboard_is_measured_from_actual_source_timing(self):
-        entry = json.loads(SOURCE.with_suffix(".candidate.json").read_text())
+        manifest = json.loads(SOURCE.with_name("noon_showcase_manifest.json").read_text())
+        entry = next(row for row in manifest["entries"] if row["id"] == "showcase-triangle-light")
         duration, holds, timed_calls = recorded_storyboard()
         self.assertAlmostEqual(duration, entry["duration"], places=12)
         self.assertEqual(len(holds), len(entry["still_intervals"]))

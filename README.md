@@ -4,6 +4,11 @@ Noon is a **Rust-native 2D animation and interactive graphics engine** with Mani
 
 Rust and Python expose the same observable scene semantics through shared Rust operations. Python supplies Manim-compatible syntax and arbitrary host callbacks where they are genuinely required; it does not implement a second scene, scheduler, runtime, or renderer.
 
+The [demo gallery](https://yongkyuns.github.io/noon/) includes **Light in a
+triangle**, which precomputes mirror reflections and uses ordinary shared Rust
+animations to draw and move the light. Edit its triangle, launch angle and bounce
+counts in Python to explore the geometry. Posters show actual Noon-rendered frames.
+
 ## Architecture
 
 The main data path is intentionally small. Focused diagrams carry the detailed publication, locality, callback, deployment, and ownership contracts instead of crowding them into one picture.
@@ -258,9 +263,3 @@ Cargo features are additive: another dependency enabling `noon` defaults can
 re-enable providers. The [external consumer and qualification commands](fixtures/provider-consumer/README.md)
 inspect the resolved active graph independently of Noon's workspace and record
 native/WASM build and footprint evidence.
-
-## Triangle-light release diagnostic capture
-
-The paired release diagnostic uses the same current `scene-perf.js` measurement harness for both immutable engines. `captureBeforeTerminate=1` retains the renderer after all timing samples and the final metrics query have completed; the browser releases it after taking the screenshot. Ordinary profiling still terminates immediately. Each screenshot must contain foreground pixels before it can enter the pixel comparison, so matching blank backgrounds cannot qualify the scene. This diagnostic does not replace ordinary gallery, physical-device, or user visual approval gates.
-
-The existing Triangle light pre-merge review workflow also supports manual dispatch when normal PR checks have not started. It retains the same exact source/runtime verification, actual candidate playback and replay, photon-motion gate, external dependency archive, video capture, and unapproved runnable bundle. This review does not repeat the release timing experiment.

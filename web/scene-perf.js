@@ -302,24 +302,15 @@ try {
   };
   window.__NOON_SCENE_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
-  // Capture only after every measurement has finished. The renderer owns the
-  // canvas pixels and termination clears them, so diagnostic screenshots must
-  // acknowledge capture before the normal cleanup below.
-  let releaseCapture;
-  const captured = parameters.get("captureBeforeTerminate") === "1"
-    ? new Promise(resolve => { releaseCapture = resolve; }) : null;
-  if (captured !== null) window.__NOON_SCENE_PERF_RELEASE_CAPTURE__ = releaseCapture;
   status.value = `Complete · ${sourcePath} · ${format(report.cadence.effective?.effectiveFps)} FPS · ` +
     `p95 ${format(report.pipeline.advanceRoundTripMs?.p95)} ms advance round trip`;
   status.dataset.state = "complete";
   console.log("NOON_SCENE_PERF", report);
-  if (captured !== null) await captured;
 } catch (error) {
   console.error(error);
   status.value = `Scene profile failed: ${error}`;
   status.dataset.state = "error";
 } finally {
-  delete window.__NOON_SCENE_PERF_RELEASE_CAPTURE__;
   jank?.stop();
   execution?.terminate();
   client?.terminate();

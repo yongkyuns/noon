@@ -9,7 +9,6 @@ on:
       - 'web/playground-playback-controls*'
       - 'web/authoring-execution-client.js'
       - 'web/python/examples/showcase_*.py'
-      - 'web/python/examples/showcase_triangle_light.candidate.json'
       - 'web/python/examples/noon_showcase_manifest.json'
       - 'web/python/test_showcase*.py'
       - 'scripts/showcase-*'
@@ -96,24 +95,14 @@ jobs:
       - name: Record ordinary playback and qualify replay endpoints
         if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
         run: node scripts/showcase-live-review.mjs
-      # Temporary publication gate: #2056 owns removal after the real poster,
-      # capture evidence, and reviewed entry are promoted together.
-      - name: Qualify the triangle-light candidate without publishing it
-        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') && hashFiles('web/python/examples/showcase_triangle_light.candidate.json') != '' }}
-        run: node scripts/showcase-triangle-light-candidate.mjs
+      - name: Check visible motion inside the first triangle-light flight
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-triangle-light-motion.mjs browser-smoke-artifacts/showcase/${{ matrix.backend }}
       - name: Retain the review evidence even on failure
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: showcase-review-${{ matrix.backend }}
           path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Retain the triangle-light candidate evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: triangle-light-review-${{ matrix.backend }}
-          path: browser-smoke-artifacts/triangle-light/${{ matrix.backend }}
           if-no-files-found: warn
           retention-days: 3

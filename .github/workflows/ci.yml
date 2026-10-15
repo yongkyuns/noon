@@ -36,6 +36,10 @@ on:
       - "scripts/special-camera-qualification.mjs"
       - "web/python/examples/noon_spatial_surface_lighting.py"
       - "crates/noon-render-wgpu/src/gpu/**"
+      - "crates/noon-render-wgpu/src/polygon_coverage.wgsl"
+      - "crates/noon-render-wgpu/tests/polygon_fill_coverage.rs"
+      - "crates/noon-render-wgpu/tests/polygon_perimeter_coverage.rs"
+      - "crates/noon-render-wgpu/tests/path_shader_uniformity.rs"
       - "crates/noon-render-wgpu/src/gpu/glow_filter*"
       - "crates/noon-render-wgpu/src/gpu/glow_filter/**"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
@@ -170,11 +174,15 @@ jobs:
       - name: Prepare software Vulkan raster adapter
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
       - name: Test qualification admission
         run: python3 -m unittest discover -s tests/visual-effects -p test_gpu_qualification.py -v
+      - name: Qualify shared polygon coverage against independent numerical oracles
+        env:
+          NOON_REQUIRE_GPU_TESTS: '1'
+        run: cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity
       - name: Test glow resource and kernel contracts
         run: |
           cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests

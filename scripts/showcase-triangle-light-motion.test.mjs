@@ -15,6 +15,19 @@ test("requires three different actual frames inside one bounce", () => {
   assert.equal(result.hashes.length, 3);
 });
 
+test("selects the triangle from the complete public showcase capture", () => {
+  const all = report();
+  all.results.unshift({ id: "another-showcase-scene", outcome: "pass" });
+  assert.equal(assertVisibleFirstFlight(all).hashes.length, 3);
+});
+
+test("missing or duplicate triangle scenes cannot borrow another scene's motion", () => {
+  const all = report();
+  assert.throws(() => assertVisibleFirstFlight({ results: [] }), /exactly one/);
+  all.results.push(all.results[0]);
+  assert.throws(() => assertVisibleFirstFlight(all), /exactly one/);
+});
+
 test("rejects instantaneous full-line reveal despite three successful captures", () => {
   const all = report(); all.results[0].samples[1].pixelSha256 = all.results[0].samples[0].pixelSha256;
   assert.throws(() => assertVisibleFirstFlight(all), /did not visibly progress/);
