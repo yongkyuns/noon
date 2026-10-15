@@ -251,19 +251,23 @@ impl MobjectHandle {
     }
     #[pyo3(name = "layoutAnchor")]
     fn layout_anchor(&self, index: Option<isize>) -> LayoutAnchor {
-        let anchor = noon::LayoutAnchor::from(&self.handle);
-        LayoutAnchor {
-            anchor: match index {
-                Some(i) => anchor.member(i),
-                None => anchor,
-            },
-        }
+        LayoutAnchor::from_anchor(noon::LayoutAnchor::from(&self.handle), index)
     }
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 #[derive(Clone)]
 pub struct LayoutAnchor {
     pub(crate) anchor: noon::LayoutAnchor,
+}
+impl LayoutAnchor {
+    pub(crate) fn from_anchor(anchor: noon::LayoutAnchor, index: Option<isize>) -> Self {
+        Self {
+            anchor: match index {
+                Some(index) => anchor.member(index),
+                None => anchor,
+            },
+        }
+    }
 }
 #[pymethods]
 impl LayoutAnchor {

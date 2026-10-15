@@ -638,6 +638,37 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.set_object_opacity(&target.handle, a).map(|_| ()))
     }
+    #[pyo3(name = "liveZIndex")]
+    fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
+        self.require_active()?;
+        let execution = self
+            .execution
+            .as_ref()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        noon::integration::effective_z_index(
+            self.scene.integration_store(),
+            execution,
+            &target.anchor,
+        )
+        .map_err(engine_error)
+    }
+    #[pyo3(name = "liveSetZIndex")]
+    fn set_z_index(&mut self, target: &LayoutAnchor, value: f64, family: bool) -> PyResult<()> {
+        self.available()?;
+        let execution = self
+            .execution
+            .as_mut()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        noon::integration::publish_z_index(
+            self.scene.integration_store(),
+            self.scene.root(),
+            execution,
+            &target.anchor,
+            value,
+            family,
+        )
+        .map_err(engine_error)
+    }
     #[pyo3(name = "liveScaleLayout")]
     fn scale(
         &mut self,

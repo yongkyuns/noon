@@ -37,6 +37,14 @@ impl FamilyHandle {
             .map(|layout| FamilyLayoutObservation { layout })
             .map_err(engine_error)
     }
+    #[pyo3(name = "layoutAnchor")]
+    fn layout_anchor(&self, index: Option<isize>) -> PyResult<crate::mobject::LayoutAnchor> {
+        self.family.validate().map_err(engine_error)?;
+        Ok(crate::mobject::LayoutAnchor::from_anchor(
+            noon::LayoutAnchor::from(&self.family),
+            index,
+        ))
+    }
     #[getter(semanticSlot)]
     fn semantic_slot(&self) -> u32 {
         self.family.node_id().slot()

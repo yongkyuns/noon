@@ -101,6 +101,76 @@ class LiveFamilyLayout(Scene):
                 finally:
                     close_scene(scene)
 
+    def test_family_priority_anchors_preserve_root_only_and_recursive_edits(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        family = self.family(store, child, child)
+        root, leaf = family.layoutAnchor(None), family.layoutAnchor(-1)
+        root.setZIndex(3, False)
+        self.assertEqual((root.zIndex(), leaf.zIndex()), (3, 0))
+        root.setZIndex(7, True)
+        self.assertEqual((root.zIndex(), leaf.zIndex()), (7, 7))
+        with self.assertRaises(RuntimeError):
+            root.setZIndex(float('nan'), True)
+        self.assertEqual((root.zIndex(), leaf.zIndex()), (7, 7))
+
+    def test_retired_context_rejects_live_priority_reads_and_writes(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        anchor = child.layoutAnchor(None)
+        context = store.context()
+        context.retire()
+        for operation, arguments in (('liveZIndex', (anchor,)),
+                                     ('liveSetZIndex', (anchor, 3, True))):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(RuntimeError, 'retired'):
+                    getattr(context, operation)(*arguments)
+        self.assertEqual(anchor.zIndex(), 0)
+
+    def test_live_priority_publishes_unique_family_members_and_rejects_foreign_anchors(self):
+        source = """from noon import *
+import _noon_native as native
+class Priority(Scene):
+    def construct(self):
+        first,second=Square(),Square()
+        group=Group(first,second,first)
+        self.add(group)
+        self.wait(.125)
+        self.observations=[]
+        self.observations.append([group.z_index,first.z_index,second.z_index])
+        group.set_z_index(3,family=False)
+        self.observations.append([group.z_index,first.z_index,second.z_index])
+        first.set_z_index(5)
+        self.observations.append([group.z_index,first.z_index,second.z_index])
+        group.set_z_index(7)
+        self.observations.append([group.z_index,first.z_index,second.z_index])
+        try:group.set_z_index(float('nan'))
+        except NoonError as error:assert 'non-finite z-index' in str(error)
+        else:raise AssertionError('nonfinite priority admitted')
+        foreign_store=native.Store()
+        foreign=foreign_store.geometry(native.GeometryOptions.square(2)).layoutAnchor(None)
+        context=self._canonical_authoring_context
+        self.foreign_rejections=0
+        for method,args in (('liveZIndex',(foreign,)),('liveSetZIndex',(foreign,9,True))):
+            try:getattr(context,method)(*args)
+            except RuntimeError as error:
+                assert 'another scene store' in str(error).lower(),str(error)
+                self.foreign_rejections+=1
+            else:raise AssertionError('foreign priority anchor admitted')
+        assert [group.z_index,first.z_index,second.z_index]==[7,7,7]
+        self.wait(.125)
+"""
+        expected = [[0, 0, 0], [3, 0, 0], [3, 5, 0], [7, 7, 7]]
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
+                try:
+                    self.assertEqual(scene.observations, expected)
+                    self.assertEqual(scene.foreign_rejections, 2)
+                    self.assertEqual(scene.time, .25)
+                finally:
+                    close_scene(scene)
+
     def test_root_metadata_and_copy_independence_use_real_shared_handles(self):
         store = native.Store()
         root = self.family(store)
