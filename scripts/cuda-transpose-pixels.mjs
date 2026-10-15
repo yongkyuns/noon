@@ -81,7 +81,25 @@ export function checkSample(image, event, alpha) {
       `CUDA_PIXELS[packet]: ${event.kind} lane ${pose.lane} missing/wrong color at ${pose.center} (${coverage})`);
     ++checked;
     if (pose.has_label && pose.width >= 0.24 && pose.height >= 0.12) {
-      const dark = fraction(image, {...region, width: pose.width * 0.68}, (r,g,b) => Math.max(r,g,b) < 70);
+      // Project the label's ink bounds through the same uniform packet scale.
+      // A tiny antialiased digit can cover only a few dark pixels: dividing by
+      // the much larger packet area incorrectly rejects visibly rendered text.
+      const source = event.expected_source[pose.lane];
+      const label = event.observed_source[pose.lane].label;
+      assert.ok(label && label.width > 0 && label.height > 0,
+        `CUDA_PIXELS[label]: packet ${pose.lane} has no source glyph bounds`);
+      const glyph = {center: pose.center,
+        width: label.width * pose.width / source.width,
+        height: label.height * pose.height / source.height};
+      // Glyph edges blend the authored dark ink with the bright packet. Check
+      // at least half of that color contrast instead of requiring a fully dark
+      // pixel, which a subpixel stem need never contain.
+      const ink = [12,18,32];
+      const contrast = pose.rgb.map((value, i) => value - ink[i]);
+      const squaredContrast = contrast.reduce((sum, value) => sum + value * value, 0);
+      const dark = fraction(image, glyph, (r,g,b) =>
+        [r,g,b].reduce((sum, value, i) => sum + (pose.rgb[i] - value) * contrast[i], 0)
+          >= squaredContrast * 0.5);
       assert.ok(dark >= 0.012, `CUDA_PIXELS[label]: packet ${pose.lane} has no rendered lane text`);
       ++labels;
     }

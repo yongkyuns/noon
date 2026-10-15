@@ -27,7 +27,9 @@ function packets(im) {
     paint(im,p.center,p.width,p.height,p.rgb);
     paint(im,p.center,0.07,0.12,[12,18,32]);
   }
-  return {kind:'bank',expected_source:expected,expected_target:expected,highlights:highlight(im)};
+  return {kind:'bank',expected_source:expected,expected_target:expected,
+    observed_source:expected.map(p => ({label:{center:p.center,width:0.07,height:0.12}})),
+    highlights:highlight(im)};
 }
 test('20% active-line contrast and glyph coverage pass the pixel predicate',()=>{
   const im=image(); assert.equal(checkHighlight(im,highlight(im)).length,1);
@@ -51,6 +53,31 @@ test('a missing packet fails even if all metadata still describes the correct sc
 test('a detached invisible label is rejected independently of body color',()=>{
   const im=image(),event=packets(im);const p=event.expected_target[9];paint(im,p.center,p.width,p.height,p.rgb);
   assert.throws(()=>checkSample(im,event,1),/CUDA_PIXELS\[label\]/);
+});
+test('small glyph coverage is measured inside the projected label, not its packet',()=>{
+  const im=image(),event=packets(im);
+  const p=event.expected_target[0];
+  paint(im,p.center,p.width,p.height,p.rgb);
+  // A sparse antialiased glyph has two dark pixels in a much larger packet.
+  // Its ink bounds, like the real captured 0 digit, are about four by seven pixels.
+  event.observed_source[0].label.width=4/90;
+  event.observed_source[0].label.height=7/90;
+  const x=Math.round(im.width/2+p.center[0]*90);
+  const y=Math.round(im.height/2-p.center[1]*90);
+  for(const dy of [0,1]) im.data.set([26,49,64,255],((y+dy)*im.width+x)*4);
+  assert.equal(checkSample(im,event,1).labels,32);
+  paint(im,p.center,p.width,p.height,p.rgb);
+  assert.throws(()=>checkSample(im,event,1),/CUDA_PIXELS\[label\]/);
+});
+test('antialiased glyphs retain visible contrast while faint ink is rejected',()=>{
+  const im=image(),event=packets(im),p=event.expected_target[0];
+  const ink=[12,18,32];
+  for(const [coverage,visible] of [[0.7,true],[0.3,false]]) {
+    paint(im,p.center,p.width,p.height,p.rgb);
+    paint(im,p.center,0.07,0.12,p.rgb.map((v,i)=>Math.round(v+(ink[i]-v)*coverage)));
+    if(visible) assert.equal(checkSample(im,event,1).labels,32);
+    else assert.throws(()=>checkSample(im,event,1),/CUDA_PIXELS\[label\]/);
+  }
 });
 test('endpoint overlap cannot be excused as a transient crossing',()=>{
   const im=image(),event=packets(im);event.expected_target[9].center=event.expected_target[8].center;
