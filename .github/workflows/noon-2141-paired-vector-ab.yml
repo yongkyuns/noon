@@ -65,9 +65,12 @@ jobs:
           # All THREE construction points must use the old policy. Preload
           # and compaction replace the initial preparer during scene playback.
           old="FramePreparer::for_mixed_retained_path_draws()"
+          prior_oracle_calls=source.count("FramePreparer::for_individual_path_draws()")
           assert source.count(old)==3, "baseline must cover default/preload/compaction"
+          assert prior_oracle_calls==1, "existing test-only oracle must remain intact"
           path.write_text(source.replace(old,"FramePreparer::for_individual_path_draws()"))
-          assert path.read_text().count("FramePreparer::for_individual_path_draws()")==3
+          assert path.read_text().count("FramePreparer::for_individual_path_draws()")==prior_oracle_calls+3
+          assert "FramePreparer::for_mixed_retained_path_draws()" not in path.read_text()
           PY
           git -C baseline diff --check
           git -C baseline diff --name-only > evidence/baseline-files-changed.txt
