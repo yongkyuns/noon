@@ -123,6 +123,8 @@ def _initialize_translucent_prism_family(
 class Cube(_WorldMobject, _compat.Group):
     """Six retained face meshes with Manim's Cairo shading defaults."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, side_length=2, fill_opacity=0.75, fill_color=_base.BLUE,
@@ -138,6 +140,8 @@ class Cube(_WorldMobject, _compat.Group):
 class Prism(_WorldMobject, _compat.Group):
     """Six retained face meshes with Manim's Cairo shading defaults."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, dimensions=(3, 2, 1), fill_opacity=0.75, fill_color=_base.BLUE,
