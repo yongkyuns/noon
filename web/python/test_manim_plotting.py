@@ -2,7 +2,7 @@
 import unittest
 
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 try:
     import numpy as np
@@ -84,6 +84,101 @@ class PlottingAdapterTests(unittest.TestCase):
         np.testing.assert_array_equal(values + 1, [-1.0, 0.0, 2.0])
         frame.tickValues.assert_called_once_with(False, True)
         frame.free.assert_called_once_with()
+
+    def test_number_line_get_tick_uses_current_frame_and_matches_shaft_style(self):
+        frame = SimpleNamespace(tickSegment=Mock(return_value=[1.0, 2.0, 3.0, 4.0]),
+                                free=Mock())
+        shaft = object()
+        tick = Mock()
+        line = object.__new__(plotting.NumberLine)
+        line.tick_size = 0.15
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame), \
+             patch.object(plotting.NumberLine, "shaft", new_callable=PropertyMock,
+                          return_value=shaft), \
+             patch.object(plotting._compat, "Line", return_value=tick) as create:
+            result = line.get_tick(2.5)
+        self.assertIs(result, tick)
+        start, end = create.call_args.args
+        self.assertEqual((start.x, start.y), (1.0, 2.0))
+        self.assertEqual((end.x, end.y), (3.0, 4.0))
+        frame.tickSegment.assert_called_once_with(2.5, 0.15)
+        frame.free.assert_called_once_with()
+        tick.match_style.assert_called_once_with(shaft)
+
+    def test_number_line_get_tick_accepts_explicit_size_and_tick_marks_alias(self):
+        frame = SimpleNamespace(tickSegment=Mock(return_value=[0.0, -0.5, 0.0, 0.5]),
+                                free=Mock())
+        ticks = object()
+        line = object.__new__(plotting.NumberLine)
+        line.tick_size = 0.1
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame), \
+             patch.object(plotting.NumberLine, "shaft", new_callable=PropertyMock,
+                          return_value=object()), \
+             patch.object(plotting.NumberLine, "ticks", new_callable=PropertyMock,
+                          return_value=ticks), \
+             patch.object(plotting._compat, "Line", return_value=Mock()):
+            line.get_tick(-1, size=0.5)
+            self.assertIs(line.get_tick_marks(), ticks)
+        frame.tickSegment.assert_called_once_with(-1.0, 0.5)
+
+    def test_number_line_get_tick_rejects_boolean_and_nonfinite_arguments(self):
+        line = object.__new__(plotting.NumberLine)
+        line.tick_size = 0.1
+        with patch.object(plotting.NumberLine, "_coordinate_frame") as frame:
+            for args in ((True,), (1, float("nan"))):
+                with self.subTest(args=args), self.assertRaises((TypeError, ValueError)):
+                    line.get_tick(*args)
+            frame.assert_not_called()
+
+    def test_number_line_single_and_group_label_accessors_keep_zero_semantics(self):
+        line = object.__new__(plotting.NumberLine)
+        expected = object()
+        family = SimpleNamespace(submobjects=[expected])
+        with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
+            self.assertIs(line.get_number_mobject(0), expected)
+        build.assert_called_once_with(line, (0.0,), attach=False,
+                                      config={"exclude_zero": False})
+
+        family = object()
+        with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
+            self.assertIs(line.get_number_mobjects(0, 1), family)
+            build.assert_called_once_with(line, (0, 1), attach=False,
+                                         config={"exclude_zero": False})
+
+        with patch.object(plotting.NumberLine, "get_number_mobjects", return_value=family) as get:
+            self.assertIs(line.get_labels(), family)
+        get.assert_called_once_with()
+
+    def test_number_line_number_labels_preserve_zero_unless_explicitly_excluded(self):
+        line = object.__new__(plotting.NumberLine)
+        with patch("_manim_number_labels.number_mobjects") as build:
+            self.assertIs(line.add_numbers((0, 1)), line)
+            build.assert_called_once_with(line, (0, 1), attach=True,
+                                         config={"exclude_zero": False}, excluding=())
+        with patch("_manim_number_labels.number_mobjects") as build:
+            line.numbers_to_exclude = (0,)
+            self.assertIs(line.add_numbers(), line)
+            build.assert_called_once_with(line, None, attach=True,
+                                         config={"exclude_zero": False}, excluding=(0,))
+        with patch("_manim_number_labels.number_mobjects") as build:
+            self.assertIs(line.add_numbers((0, 1), excluding=(), exclude_zero=True), line)
+            build.assert_called_once_with(line, (0, 1), attach=True,
+                                         config={"exclude_zero": True}, excluding=())
+
+    def test_number_line_add_labels_uses_native_text_subset_and_returns_self(self):
+        line = object.__new__(plotting.NumberLine)
+        labels = {2: "Tuesday"}
+        with patch("_manim_number_labels.custom_labels") as build:
+            self.assertIs(line.add_labels(labels), line)
+        build.assert_called_once_with(line, labels, config={
+            "direction": plotting._base.DOWN,
+            "buff": 0.12,
+            "font_size": 18,
+        })
+        with patch("_manim_number_labels.custom_labels") as build:
+            with self.assertRaises(NotImplementedError):
+                line.add_labels(labels, label_constructor=object)
+            build.assert_not_called()
 
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (

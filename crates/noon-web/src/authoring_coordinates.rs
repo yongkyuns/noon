@@ -426,6 +426,15 @@ impl WasmNumberLineFrame {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = tickSegment)]
+    pub fn tick_segment(&self, number: f64, half_length: f64) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .tick_segment(number, half_length)
+            .map(|points| points.into_iter().flatten().collect())
+            .map_err(coordinate_math_failure)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = unitSize)]
     pub fn unit_size(&self) -> f64 {
         self.frame.unit_size()

@@ -60,9 +60,32 @@ pub fn number_labels(
     decimal_places: u32,
     exclude_zero: bool,
 ) -> Result<Vec<NumberLabel>, PlotPresentationError> {
+    number_labels_excluding(frame, numbers, decimal_places, exclude_zero, &[])
+}
+
+/// Prepare labels while omitting exact values from an explicit exclusion list.
+/// ManimCE's `NumberLine.add_numbers` uses equality membership for this filter;
+/// keep the rule here so generated and explicit values follow one Rust path.
+pub fn number_labels_excluding(
+    frame: NumberLineFrame,
+    numbers: Option<&[f64]>,
+    decimal_places: u32,
+    exclude_zero: bool,
+    excluded_numbers: &[f64],
+) -> Result<Vec<NumberLabel>, PlotPresentationError> {
     if decimal_places > 12 {
         return Err(PlotPresentationError::InvalidInput(
             "number-label decimal_places must be between 0 and 12",
+        ));
+    }
+    if excluded_numbers.len() > MAX_PLOT_LABELS {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label exclusion limit exceeded",
+        ));
+    }
+    if excluded_numbers.iter().any(|value| !value.is_finite()) {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label exclusions must be finite",
         ));
     }
     let generated;
@@ -88,10 +111,12 @@ pub fn number_labels(
         .try_reserve_exact(numbers.len())
         .map_err(|_| PlotPresentationError::AllocationFailed)?;
     for &number in numbers {
-        let point = frame.number_to_point(number)?;
-        if exclude_zero && number == 0.0 {
+        if (exclude_zero && number == 0.0)
+            || excluded_numbers.iter().any(|excluded| *excluded == number)
+        {
             continue;
         }
+        let point = frame.number_to_point(number)?;
         let mut text = format!("{:.*}", decimal_places as usize, number);
         // Round first, then remove a negative sign only when all digits are zero.
         if text.starts_with('-') && text[1..].chars().all(|c| c == '0' || c == '.') {
@@ -104,6 +129,32 @@ pub fn number_labels(
         });
     }
     Ok(labels)
+}
+
+/// Prepare caller-provided text at explicit scalar positions without changing
+/// text content or order. Geometry and label admission remain shared Rust work.
+pub fn positioned_text_labels(
+    frame: NumberLineFrame,
+    labels: &[(f64, String)],
+) -> Result<Vec<NumberLabel>, PlotPresentationError> {
+    if labels.len() > MAX_PLOT_LABELS {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label limit exceeded",
+        ));
+    }
+    let mut prepared = Vec::new();
+    prepared
+        .try_reserve_exact(labels.len())
+        .map_err(|_| PlotPresentationError::AllocationFailed)?;
+    for (number, text) in labels {
+        let point = frame.number_to_point(*number)?;
+        prepared.push(NumberLabel {
+            number: *number,
+            text: text.clone(),
+            point,
+        });
+    }
+    Ok(prepared)
 }
 
 /// A finite (data timestamp, scalar measurement). Timestamps must increase
