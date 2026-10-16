@@ -77,6 +77,38 @@ class RasterManifestTests(unittest.TestCase):
                 for edge in edges:
                     self.assertIn(edge, scene_source)
 
+    def test_seeded_random_graph_fixtures_use_seeded_networkx_layout(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source = (ROOT / "parity/manim-v0.21/core-examples/graph.py").read_text(
+            encoding="utf-8"
+        )
+        for fixture_id, scene, constructor, edges in (
+            (
+                "graph-seeded-random-layout", "GraphSeededRandomLayout", "Graph",
+                '[("a", "b"), ("b", "c"), ("c", "a")]'
+            ),
+            (
+                "digraph-seeded-random-layout", "DiGraphSeededRandomLayout", "DiGraph",
+                '[("a", "b"), ("c", "b")]'
+            ),
+        ):
+            with self.subTest(fixture=fixture_id):
+                fixture = next(
+                    fixture for fixture in manifest["fixtures"]
+                    if fixture["id"] == fixture_id
+                )
+                self.assertEqual(fixture["scene"], scene)
+                self.assertEqual(
+                    fixture["source"],
+                    "parity/manim-v0.21/core-examples/graph.py",
+                )
+                self.assertEqual(fixture["expected_duration"], 0.2)
+                scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
+                self.assertIn(f"graph = {constructor}(", scene_source)
+                self.assertIn('layout="random"', scene_source)
+                self.assertIn('{"seed": 42}', scene_source)
+                self.assertIn(edges, scene_source)
+
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         fixture = next(fixture for fixture in manifest["fixtures"] if fixture["id"] == "polynomial-easings")

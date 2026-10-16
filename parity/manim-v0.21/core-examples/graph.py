@@ -83,3 +83,27 @@ class DiGraphWeightedSpringLayout(Scene):
         )
         self.add(graph)
         self.wait(0.2)
+
+
+class GraphSeededRandomLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c"],
+            [("a", "b"), ("b", "c"), ("c", "a")],
+            layout="random",
+            layout_config={"seed": 42},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphSeededRandomLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c"],
+            [("a", "b"), ("c", "b")],
+            layout="random",
+            layout_config={"seed": 42},
+        )
+        self.add(graph)
+        self.wait(0.2)

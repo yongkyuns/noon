@@ -10,6 +10,8 @@ The initial scenes correspond to the Manim Community v0.21.0 quickstart tutorial
 
 `graph-weighted-spring` and `digraph-weighted-spring` use NetworkX-style edge attribute triples and select the non-default `strength` field through `layout_config["weight"]`, comparing the weighted default spring placements against pinned ManimCE Cairo.
 
+`graph-seeded-random-layout` and `digraph-seeded-random-layout` compare NumPy-seeded NetworkX random placements against pinned ManimCE Cairo, including an asymmetric directed graph.
+
 Do not use this directory for pedagogical Noon-specific adaptations. Those belong in the demo/tutorial corpus. A parity fixture is a compatibility oracle, not a showcase scene.
 
 The full pinned directive inventory is extracted by `scripts/manim-reference-inventory.mjs` and locked under `compat/`. Public tutorial/reference enrollment remains in `web/python/examples/manim_tutorial_manifest.json`; the remaining directives have internal provenance/ownership records in `compat/manim-v0.21.0-reference-dispositions.json`. The coverage join rejects duplicate or stale identities and requires every directive to be represented. Pending `unqualified`, `blocked` and `deferred` records are not executable or parity-qualified claims. New exports require stale namespace blockers to be reconciled without automatically promoting behavior. Existing exact-camera qualification is retained separately in recorded case evidence until its canonical enrollment is reconciled.
