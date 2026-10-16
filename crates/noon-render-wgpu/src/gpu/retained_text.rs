@@ -4289,7 +4289,10 @@ mod tests {
                         content: ObjectContentRef::Image(image_content),
                         text_bounds: None,
                         transform: Transform2D::IDENTITY,
-                        style: Style { opacity: 0.8, ..Style::default() },
+                        style: Style {
+                            opacity: 0.8,
+                            ..Style::default()
+                        },
                         appearance: 1.0,
                     });
                 }
@@ -4300,8 +4303,14 @@ mod tests {
                 }
                 let x = index as f32;
                 let path = VectorPath::new()
-                    .move_to(Vec2::new(-1.9 + (index % 12) as f32 * 0.13, -0.75 + x * 0.006))
-                    .line_to(Vec2::new(1.45 - (index % 10) as f32 * 0.09, 0.65 - x * 0.005));
+                    .move_to(Vec2::new(
+                        -1.9 + (index % 12) as f32 * 0.13,
+                        -0.75 + x * 0.006,
+                    ))
+                    .line_to(Vec2::new(
+                        1.45 - (index % 10) as f32 * 0.09,
+                        0.65 - x * 0.005,
+                    ));
                 objects.push(FrameObjectState {
                     glow: None,
                     spatial: None,
@@ -4312,7 +4321,12 @@ mod tests {
                     transform: Transform2D::IDENTITY,
                     style: Style {
                         fill: None,
-                        stroke: Some(Color::rgba(0.2 + (index % 5) as f32 * 0.13, 0.35, 0.9, 0.55)),
+                        stroke: Some(Color::rgba(
+                            0.2 + (index % 5) as f32 * 0.13,
+                            0.35,
+                            0.9,
+                            0.55,
+                        )),
                         stroke_width: 0.045,
                         opacity: 0.85,
                         ..Style::default()
@@ -4356,7 +4370,9 @@ mod tests {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mixed mega native exact comparison"),
                 size: wgpu::Extent3d {
-                    width: WIDTH, height: HEIGHT, depth_or_array_layers: 1,
+                    width: WIDTH,
+                    height: HEIGHT,
+                    depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
@@ -4373,8 +4389,8 @@ mod tests {
                 mapped_at_creation: false,
             });
             let render = |renderer: &mut GpuRenderer,
-                              state: &mut RetainedTextGpuState,
-                              prepared: &PreparedRetainedGpuFrame<'_>| {
+                          state: &mut RetainedTextGpuState,
+                          prepared: &PreparedRetainedGpuFrame<'_>| {
                 renderer.upload_retained(&device, &queue, prepared, state);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 let draws = renderer
@@ -4405,9 +4421,11 @@ mod tests {
                 );
                 queue.submit([encoder.finish()]);
                 let (sender, receiver) = std::sync::mpsc::channel();
-                readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-                    sender.send(result).unwrap();
-                });
+                readback
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        sender.send(result).unwrap();
+                    });
                 device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
                 receiver.recv().unwrap().unwrap();
                 let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
@@ -4432,25 +4450,46 @@ mod tests {
                 };
                 let old = old_preparer
                     .prepare_with_image_resources(
-                        &device, &frame, &changes, &texts, &fonts, &geometries, &images, metrics,
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
                     )
                     .unwrap();
                 let (reference_pixels, reference_draws) =
                     render(&mut old_renderer, &mut old_text, &old);
                 let packed = packed_preparer
                     .prepare_with_image_resources(
-                        &device, &frame, &changes, &texts, &fonts, &geometries, &images, metrics,
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
                     )
                     .unwrap();
                 let (packed_pixels, packed_draws) =
                     render(&mut packed_renderer, &mut packed_text, &packed);
-                assert_eq!(reference_draws.images, 1, "the original mixed scene must show its image");
-                assert_eq!(packed_draws.images, 1, "the packed mixed scene must show its image");
+                assert_eq!(
+                    reference_draws.images, 1,
+                    "the original mixed scene must show its image"
+                );
+                assert_eq!(
+                    packed_draws.images, 1,
+                    "the packed mixed scene must show its image"
+                );
                 assert!(reference_draws.text.draw_calls > 0 && packed_draws.text.draw_calls > 0);
                 assert!(
                     reference_draws.geometry.draw_calls > packed_draws.geometry.draw_calls + 32,
                     "step {step}: packing failed to reduce draw submissions: {} -> {}",
-                    reference_draws.geometry.draw_calls, packed_draws.geometry.draw_calls,
+                    reference_draws.geometry.draw_calls,
+                    packed_draws.geometry.draw_calls,
                 );
                 if reference_pixels != packed_pixels {
                     let mismatch = reference_pixels
