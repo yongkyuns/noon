@@ -98,6 +98,44 @@ class LogBaseNumberLineLabels(Scene):
     assert.equal(logLabels.presented, true);
     assert.ok(Math.abs(logLabels.authoredDuration - 0.05) < 1e-6);
     console.log(`[PASS] ${expectedBackend}: LogBase NumberLine exponent labels`);
+    const axesLogLabelsSource = `from noon import *
+
+class AxesLogBaseLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_length=4, y_length=2, tips=False,
+            x_axis_config={"scaling": LogBase(base=2), "include_numbers": True},
+            y_axis_config={"include_numbers": True, "numbers_to_exclude": []},
+        )
+        x_labels = axes.x_axis.numbers
+        assert tuple(label._source for label in x_labels) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        assert all(isinstance(label, Integer) for label in x_labels)
+        assert tuple(label.get_value() for label in x_labels) == (2, 2, 2, 2, 2)
+        for label, coordinate in zip(x_labels, (0.25, 0.5, 1, 2, 4)):
+            assert abs(label.get_center().x - axes.x_axis.number_to_point(coordinate).x) < 1e-6
+        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 0, 1)
+        coordinate_axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_axis_config={"scaling": LogBase(base=2)}, tips=False,
+        )
+        coordinate_axes.add_coordinates()
+        assert tuple(label._source for label in coordinate_axes.x_axis.numbers) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        self.add(axes, coordinate_axes)
+        await self.wait(0.05)
+`;
+    const axesLogLabels = await qualifyPythonPlayback(
+      context, baseUrl, axesLogLabelsSource, [0, 0.05],
+    );
+    assert.equal(axesLogLabels.rendererBackend, expectedBackend);
+    assert.equal(axesLogLabels.presented, true);
+    assert.ok(Math.abs(axesLogLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: per-axis LogBase exponent labels`);
     const page = await context.newPage();
     try {
       page.setDefaultTimeout(90_000);

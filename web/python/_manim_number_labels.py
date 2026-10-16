@@ -198,10 +198,17 @@ def add_coordinates(axes, *axes_numbers, x_config=None, y_config=None, config):
         for axis, settings in zip((x_axis, y_axis), axis_configs, strict=True)
     ]
 
-    # Keep same-profile two-axis construction atomic in Rust. A font explicitly
-    # selects Noon’s native-Text extension; ManimCE numeric defaults use retained
-    # DecimalNumber resources from the prepared TeX backend.
-    if len(values) == 2 and not any(isinstance(value, Mapping) for value in values):
+    # Keep same-profile two-axis construction atomic in Rust. LogBase exponent
+    # labels use each axis's tick frame and retained Integer wrapper instead.
+    custom_log_labels = any(
+        _plot._number_line_scale(getattr(axis, "scaling", None))[2]
+        for axis in (x_axis, y_axis)
+    )
+    if (
+        len(values) == 2
+        and not any(isinstance(value, Mapping) for value in values)
+        and not custom_log_labels
+    ):
         native_profiles = ["font" in settings for settings in axis_configs]
         if all(native_profiles):
             result = _add_coordinate_labels(

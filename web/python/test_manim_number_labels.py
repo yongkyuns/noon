@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import _manim_number_labels as labels
+import _manim_plotting as plotting
 
 
 class Owned:
@@ -171,6 +172,24 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(call.args[0:2], ([2.0, 0.0], ["Tuesday", "1"]))
         self.assertIs(self.axis.labels, family)
         self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
+
+    def test_log_axes_coordinate_labels_use_per_axis_number_line_addition(self):
+        axes = self.axes()
+        axes.x_axis.scaling = plotting.LogBase(base=2)
+        axes.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
+            axes.x_axis, "numbers", "log-labels"
+        ))
+        axes.y_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
+            axes.y_axis, "numbers", "linear-labels"
+        ))
+
+        result = labels.add_coordinates(axes, config={})
+
+        self.assertIs(result, axes)
+        axes.x_axis.add_numbers.assert_called_once()
+        axes.y_axis.add_numbers.assert_called_once()
+        self.assertEqual(axes.coordinate_labels, ("log-labels", "linear-labels"))
+        self.assertEqual(self.calls, [])
 
     def test_custom_labels_reject_unsupported_objects_before_allocating(self):
         with self.assertRaises(NotImplementedError):

@@ -632,12 +632,53 @@ class PlottingAdapterTests(unittest.TestCase):
                 plotting.Axes(axis_config={"unrecognized_axis_option": True})
             with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
                 plotting.Axes(x_axis_config={"scaling": object()})
-            with self.assertRaisesRegex(NotImplementedError, "TeX label profile"):
+            with self.assertRaisesRegex(TypeError, "supply the exponent unit"):
                 plotting.Axes(
-                    x_axis_config={"scaling": plotting.LogBase(), "include_numbers": True}
+                    x_axis_config={
+                        "scaling": plotting.LogBase(), "include_numbers": True,
+                        "decimal_number_config": {"unit": "m"},
+                    }
                 )
             context.assert_not_called()
             factory.axes.assert_not_called()
+
+    def test_axes_log_custom_labels_use_retained_integers_and_shared_formatter(self):
+        from _manim_numbers import Integer
+
+        labels = object()
+        x_axis = object.__new__(plotting.NumberLine)
+        y_axis = object.__new__(plotting.NumberLine)
+        handle = SimpleNamespace(coordinateAxis=Mock(side_effect=["x-axis", "y-axis"]))
+
+        def build_labels(line, values, **options):
+            line.numbers = labels
+            return labels
+
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=handle), \
+             patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
+             patch.object(plotting._compat, "VGroup", return_value=object()), \
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(number_labels, "number_mobjects", side_effect=build_labels) as build:
+            axes = plotting.Axes(
+                x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+                x_axis_config={
+                    "scaling": plotting.LogBase(base=2), "include_numbers": True,
+                    "decimal_number_config": {"num_decimal_places": 1},
+                },
+                tips=False,
+            )
+
+        factory.axes.return_value.setAxesScale.assert_any_call(0, "log", 2.0)
+        self.assertIs(x_axis.numbers, labels)
+        self.assertIs(x_axis.labels, labels)
+        self.assertEqual(build.call_args.args[:2], (x_axis, None))
+        self.assertEqual(build.call_args.kwargs["log_base"], 2.0)
+        self.assertIs(build.call_args.kwargs["number_class"], Integer)
+        self.assertEqual(build.call_args.kwargs["config"]["decimal_places"], 1)
+        self.assertEqual(build.call_args.kwargs["excluding"], ())
 
     def test_axes_attach_configured_numeric_labels_with_axis_overrides(self):
         x_axis = SimpleNamespace(add_numbers=Mock())
