@@ -1,0 +1,107 @@
+"""Lazy Manim-compatible type namespace for explicit user annotations."""
+from importlib import import_module
+import sys
+
+# The public module alias is exported by noon, matching Manim's namespace.
+typing = sys.modules[__name__]
+
+__all__ = [
+    'ManimFloat',
+    'ManimInt',
+    'ManimColorDType',
+    'FloatRGB',
+    'FloatRGBLike',
+    'FloatRGB_Array',
+    'FloatRGBLike_Array',
+    'IntRGB',
+    'IntRGBLike',
+    'FloatRGBA',
+    'FloatRGBALike',
+    'FloatRGBA_Array',
+    'FloatRGBALike_Array',
+    'IntRGBA',
+    'IntRGBALike',
+    'FloatHSV',
+    'FloatHSVLike',
+    'FloatHSL',
+    'FloatHSLLike',
+    'FloatHSVA',
+    'FloatHSVALike',
+    'ManimColorInternal',
+    'PointDType',
+    'Point2D',
+    'Point2DLike',
+    'Point2D_Array',
+    'Point2DLike_Array',
+    'Point3D',
+    'Point3DLike',
+    'Point3D_Array',
+    'Point3DLike_Array',
+    'PointND',
+    'PointNDLike',
+    'PointND_Array',
+    'PointNDLike_Array',
+    'Vector2D',
+    'Vector2DLike',
+    'Vector2D_Array',
+    'Vector2DLike_Array',
+    'Vector3D',
+    'Vector3DLike',
+    'Vector3D_Array',
+    'Vector3DLike_Array',
+    'VectorND',
+    'VectorNDLike',
+    'VectorND_Array',
+    'VectorNDLike_Array',
+    'RowVector',
+    'ColVector',
+    'MatrixMN',
+    'Zeros',
+    'QuadraticBezierPoints',
+    'QuadraticBezierPointsLike',
+    'QuadraticBezierPoints_Array',
+    'QuadraticBezierPointsLike_Array',
+    'QuadraticBezierPath',
+    'QuadraticBezierPathLike',
+    'QuadraticSpline',
+    'QuadraticSplineLike',
+    'CubicBezierPoints',
+    'CubicBezierPointsLike',
+    'CubicBezierPoints_Array',
+    'CubicBezierPointsLike_Array',
+    'CubicBezierPath',
+    'CubicBezierPathLike',
+    'CubicSpline',
+    'CubicSplineLike',
+    'BezierPoints',
+    'BezierPointsLike',
+    'BezierPoints_Array',
+    'BezierPointsLike_Array',
+    'BezierPath',
+    'BezierPathLike',
+    'Spline',
+    'SplineLike',
+    'FlatBezierPoints',
+    'FunctionOverride',
+    'PathFuncType',
+    'MappingFunction',
+    'MultiMappingFunction',
+    'ManimTextLabel',
+    'PixelArray',
+    'GrayscalePixelArray',
+    'RGBPixelArray',
+    'RGBAPixelArray',
+    'StrPath',
+    'StrOrBytesPath',
+]
+
+def __getattr__(name):
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module("_manim_typing_values"), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
