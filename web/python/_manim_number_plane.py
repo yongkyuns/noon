@@ -57,15 +57,13 @@ def _parallel_grid_lines(lines, axis):
 
 
 def _coordinate_decimal_places(axis_range):
-    """Mirror NumberLine's formatting inference after its range becomes floats."""
+    """Mirror NumberLine formatting without normalizing the authored step type."""
     try:
-        step = 1.0 if axis_range is None or len(axis_range) < 3 else float(axis_range[2])
-    except (TypeError, ValueError, IndexError):
-        return 1
-    if not math.isfinite(step):
-        return 1
+        step = 1 if axis_range is None or len(axis_range) < 3 else axis_range[2]
+    except (TypeError, IndexError):
+        return 0
     spelling = str(step)
-    return len(spelling.partition(".")[2]) if "." in spelling else 0
+    return len(spelling.split(".")[-1]) if "." in spelling else 0
 
 
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}

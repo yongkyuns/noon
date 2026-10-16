@@ -29,7 +29,7 @@ await qualifyPairedAuthoring({
 class NumberPlaneNumericLabels(Scene):
     async def construct(self):
         plane = NumberPlane(
-            x_range=(-2, 2, 0.5), y_range=(-1, 1, 0.5),
+            x_range=(-2, 2, 1), y_range=(-1, 1, 0.5),
             axis_config={"include_numbers": True, "numbers_to_exclude": [0],
                          "font_size": 20, "line_to_number_buff": 0.12},
             x_axis_config={"numbers_to_include": [-1, 1]},
@@ -39,7 +39,8 @@ class NumberPlaneNumericLabels(Scene):
         )
         assert len(plane.x_axis.numbers.submobjects) == 2
         assert len(plane.y_axis.numbers.submobjects) == 2
-        assert plane.x_axis.number_label_decimal_places == 1
+        assert tuple(label.source for label in plane.x_axis.numbers) == ("-1", "1")
+        assert plane.x_axis.number_label_decimal_places == 0
         assert plane.y_axis.number_label_decimal_places == 1
         self.add(plane)
         await self.wait(0.05)

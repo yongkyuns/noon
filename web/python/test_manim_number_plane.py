@@ -8,13 +8,14 @@ import _manim_number_plane as number_plane
 
 
 class NumberPlaneAdapterTests(TestCase):
-    def test_format_precision_tracks_manims_float_range_step(self):
+    def test_format_precision_preserves_manims_authored_range_step(self):
         precision = number_plane._coordinate_decimal_places
-        self.assertEqual(precision((-2, 2, 1)), 1)
+        self.assertEqual(precision((-2, 2, 1)), 0)
         self.assertEqual(precision((-2.0, 2.0, 1.0)), 1)
         self.assertEqual(precision((-2, 2, 0.25)), 2)
         self.assertEqual(precision((-2, 2, 0.125)), 3)
-        self.assertEqual(precision(None), 1)
+        self.assertEqual(precision((-2, 2)), 0)
+        self.assertEqual(precision(None), 0)
 
     def setUp(self):
         self.addCleanup(patch.stopall)
@@ -161,6 +162,26 @@ class NumberPlaneAdapterTests(TestCase):
         self.assertEqual(y_axis.number_label_decimal_places, 3)
         self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
         self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
+
+    def test_constructor_preserves_integer_and_float_step_label_precision(self):
+        for axis_range, expected in (
+            ((-2, 2, 1), 0),
+            ((-2, 2, 1.0), 1),
+            (None, 0),
+        ):
+            with self.subTest(axis_range=axis_range):
+                plane = number_plane.NumberPlane(
+                    axis_range, axis_range,
+                    axis_config={"include_numbers": True},
+                )
+                self.assertEqual(plane.x_axis.number_label_decimal_places, expected)
+                self.assertEqual(plane.y_axis.number_label_decimal_places, expected)
+                self.assertEqual(
+                    plane.x_axis.add_numbers.call_args.kwargs["decimal_places"], expected
+                )
+                self.assertEqual(
+                    plane.y_axis.add_numbers.call_args.kwargs["decimal_places"], expected
+                )
 
     def test_unqualified_axis_config_fails_before_host_admission(self):
         for kwargs, message in (
