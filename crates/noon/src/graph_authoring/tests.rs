@@ -976,6 +976,8 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         align_horizontal: false,
         spring_k: None,
         spring_positions: None,
+        kamada_kawai_distances: None,
+        kamada_kawai_positions: None,
         spring_fixed: None,
         spring_rescale: true,
         directed: false,
@@ -1132,6 +1134,94 @@ fn spectral_layout_preserves_networkx_zero_through_two_vertex_special_cases() {
         options.positions(2, &[(0, 1)]).unwrap(),
         vec![(0.0, 0.0), (4.0, -2.0)]
     );
+}
+
+#[test]
+fn kamada_kawai_layout_uses_shortest_paths_custom_inputs_and_final_rescaling() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        scale: 2.0,
+        center: (1.0, -0.5),
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    assert_eq!(positions.len(), 3);
+    // Pinned NetworkX 3.4.2 `kamada_kawai_layout` (SciPy 1.18.1, L-BFGS-B)
+    // path-graph reference; the tolerance accommodates optimizer termination.
+    let networkx_reference = [
+        (3.0, 0.646_456_73),
+        (0.992_701_04, -0.487_358_32),
+        (-0.992_701_04, -1.659_098_41),
+    ];
+    for (actual, expected) in positions.iter().zip(networkx_reference) {
+        assert!((actual.0 - expected.0).abs() < 0.02);
+        assert!((actual.1 - expected.1).abs() < 0.02);
+    }
+    assert!((positions.iter().map(|point| point.0).sum::<f64>() / 3.0 - 1.0).abs() < 1e-8);
+    assert!((positions.iter().map(|point| point.1).sum::<f64>() / 3.0 + 0.5).abs() < 1e-8);
+    let adjacent = (positions[0].0 - positions[1].0).hypot(positions[0].1 - positions[1].1);
+    let next_adjacent = (positions[1].0 - positions[2].0).hypot(positions[1].1 - positions[2].1);
+    let endpoints = (positions[0].0 - positions[2].0).hypot(positions[0].1 - positions[2].1);
+    assert!((adjacent - next_adjacent).abs() < 1e-4);
+    assert!((endpoints - adjacent * 2.0).abs() < 1e-3);
+
+    let custom = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0, 1.0, 5.0, 1.0, 0.0, 1.0, 5.0, 1.0, 0.0]),
+        kamada_kawai_positions: Some(vec![(-2.0, 0.0), (0.0, 2.0), (3.0, -1.0)]),
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert!(custom.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
+    let baseline = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert_ne!(custom, baseline);
+    let directed = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        directed: true,
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    assert_ne!(directed, baseline);
+}
+
+#[test]
+fn kamada_kawai_layout_rejects_malformed_custom_inputs() {
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_positions: Some(vec![(f64::NAN, 0.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0, 0.0, 1.0, 0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_positions: Some(vec![(1.0, 2.0), (1.0, 2.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
 }
 
 #[test]

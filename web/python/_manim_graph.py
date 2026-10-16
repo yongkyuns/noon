@@ -201,7 +201,9 @@ class _GraphBase(_compat.Group):
     configuration. NumPy prepares NetworkX-compatible initial positions while
     Rust owns force integration. Circular layouts accept ``center`` and ``dim=2``
     through ``layout_config``; random layouts accept ``seed``, ``center``, and
-    ``dim=2``. Shell layouts accept ``nlist``, ``rotate``,
+    ``dim=2``. Kamada-Kawai layouts accept ``dist``, ``pos``, ``weight``,
+    ``center``, and ``dim=2``; Rust owns path-distance preparation and cost
+    minimization. Shell layouts accept ``nlist``, ``rotate``,
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
     ``partitions``, ``align``, and ``center``; tree layouts accept
@@ -210,7 +212,7 @@ class _GraphBase(_compat.Group):
     computes the Laplacian eigenvectors and retains the resulting positions.
     Other options remain unsupported until their semantics are qualified. Two-axis
     ``layout_scale`` tuples are supported for spring, random, circular, spiral,
-    partite, spectral, and tree layouts; shell layout follows NetworkX's scalar-only
+    partite, spectral, Kamada-Kawai, and tree layouts; shell follows NetworkX's scalar-only
     scale contract. Partite layouts accept ``partitions`` directly or in
     ``layout_config``; the latter takes precedence. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
@@ -252,13 +254,14 @@ class _GraphBase(_compat.Group):
         spiral = isinstance(layout, str) and layout == "spiral"
         partite = isinstance(layout, str) and layout == "partite"
         spectral = isinstance(layout, str) and layout == "spectral"
+        kamada_kawai = isinstance(layout, str) and layout == "kamada_kawai"
         if root_vertex is not None and not tree:
             raise NotImplementedError("root_vertex is supported only by the tree layout")
         if partitions is not None and not partite:
             raise NotImplementedError("partitions are supported only by the partite layout")
         if (explicit is None and not spring and not random_layout and not tree
                 and not circular and not shell and not spiral and not partite
-                and not spectral):
+                and not spectral and not kamada_kawai):
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -297,6 +300,7 @@ class _GraphBase(_compat.Group):
         spring_positions, fixed_indices, spring_k = ([], [], None)
         random_positions = []
         tree_root, tree_orientation_up, tree_spacing = (None, False, None)
+        kamada_kawai_distances, kamada_kawai_positions = ([], [])
         scale_y = None
         spring_iterations, spring_threshold, spring_rescale = (50, 1e-4, True)
         spring_fixed_is_set = False
@@ -331,6 +335,10 @@ class _GraphBase(_compat.Group):
         elif spectral:
             center, scale, scale_y = _spectral_layout_config(
                 layout_config, layout_center, layout_scale,
+            )
+        elif kamada_kawai:
+            center, kamada_kawai_distances, kamada_kawai_positions = _kamada_kawai_layout_config(
+                layout_config, layout_center, self._graph_key_ids,
             )
         if not spring and not random_layout and not tree:
             if shell:
@@ -416,6 +424,14 @@ class _GraphBase(_compat.Group):
                 self._graph_handle = create_graph(
                     context.liveCreateSpectralGraph, bool(self._directed), ids,
                     _array(edge_ids), scale, scale_y, *center,
+                )
+            elif kamada_kawai:
+                self._graph_handle = create_graph(
+                    context.liveCreateKamadaKawaiGraph,
+                    bool(self._directed), ids, _array(edge_ids),
+                    _array(kamada_kawai_distances),
+                    _array(value for point in kamada_kawai_positions for value in point),
+                    scale, scale_y, *center,
                 )
             else:
                 self._graph_handle = create_graph(
@@ -958,6 +974,20 @@ class _GraphBase(_compat.Group):
                 scale_x, scale_y, *center,
                 operation="Graph.spectral_layout",
             )
+        elif layout == "kamada_kawai":
+            vertex_order = {key: index for index, key in enumerate(self._graph_key_ids)}
+            center, distances, initial_positions = _kamada_kawai_layout_config(
+                layout_config, center, vertex_order,
+            )
+            scale_x, scale_y = _layout_scale_pair(scale)
+            engine_call(
+                self._context().liveGraphKamadaKawaiLayout,
+                self._graph_handle,
+                _array(distances),
+                _array(value for point in initial_positions for value in point),
+                scale_x, scale_y, *center,
+                operation="Graph.kamada_kawai_layout",
+            )
         elif layout == "explicit":
             if not isinstance(positions, Mapping):
                 raise TypeError("explicit Graph layout requires a key-to-position mapping")
@@ -972,7 +1002,7 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, spectral, and explicit layouts"
+                "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, spectral, kamada_kawai, and explicit layouts"
             )
         return self
 
@@ -1112,6 +1142,67 @@ def _spectral_layout_config(layout_config, fallback_center, layout_scale):
     center = _point((0.0, 0.0) if raw_center is None else raw_center)
     scale_x, scale_y = _layout_scale_pair(layout_scale)
     return center, scale_x, scale_y
+
+
+def _kamada_kawai_layout_config(layout_config, fallback_center, vertex_ids):
+    """Flatten the supported 2D NetworkX Kamada-Kawai inputs for Rust."""
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    supported = {"center", "dim", "dist", "pos", "weight"}
+    unknown = [key for key in options if key not in supported]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported Kamada-Kawai layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, Integral):
+        raise TypeError("Kamada-Kawai layout_config dim must be an integer")
+    if dimension != 2:
+        raise NotImplementedError("Graph currently supports only two-dimensional Kamada-Kawai layouts")
+    weight = options.get("weight", "weight")
+    if weight is not None and not isinstance(weight, str):
+        raise TypeError("Kamada-Kawai layout_config weight must be a string or None")
+
+    raw_center = options.get("center", fallback_center)
+    center = _point((0.0, 0.0) if raw_center is None else raw_center)
+    distances = []
+    if "dist" in options and options["dist"] is not None:
+        raw_distances = options["dist"]
+        if not isinstance(raw_distances, Mapping):
+            raise TypeError("Kamada-Kawai layout_config dist must be a nested mapping")
+        count = len(vertex_ids)
+        matrix = [1e6] * (count * count)
+        for source, row in raw_distances.items():
+            if source not in vertex_ids:
+                continue
+            if not isinstance(row, Mapping):
+                raise TypeError("Kamada-Kawai layout_config dist rows must be mappings")
+            source_index = vertex_ids[source]
+            for destination, distance in row.items():
+                if destination not in vertex_ids:
+                    continue
+                distance = _shared._ir._finite_number("layout_config.dist", distance)
+                if distance < 0 or (source != destination and distance == 0):
+                    raise ValueError("Kamada-Kawai distances must be non-negative and positive between distinct vertices")
+                matrix[source_index * count + vertex_ids[destination]] = distance
+        distances = matrix
+
+    positions = []
+    if "pos" in options and options["pos"] is not None:
+        raw_positions = options["pos"]
+        if not isinstance(raw_positions, Mapping):
+            raise TypeError("Kamada-Kawai layout_config pos must be a mapping")
+        try:
+            positions = [_point(raw_positions[key]) for key in vertex_ids]
+        except KeyError as error:
+            raise ValueError("Kamada-Kawai pos must provide every graph vertex") from error
+    return center, distances, positions
 
 
 def _random_layout_config(layout_config, fallback_center, vertex_ids, layout_scale):

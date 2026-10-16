@@ -1,5 +1,5 @@
 // Exact-pixel paired Graph qualification: native direct-WASM and Python use
-// the same retained graph leaves, with spring, random, tree, circular, shell, spiral, partite, spectral, and explicit layouts.
+// the same retained graph leaves, with spring, random, tree, circular, shell, spiral, partite, spectral, Kamada-Kawai, and explicit layouts.
 import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 
 await qualifyPairedAuthoring({
@@ -9,7 +9,7 @@ await qualifyPairedAuthoring({
     file: "ordinary_graph.py",
     scene: "OrdinaryGraph",
     factory: "createDirectGraphSmokeRenderer",
-    objectCount: 70,
+    objectCount: 79,
     duration: 0.21,
     sampleTime: 0.21,
   }],

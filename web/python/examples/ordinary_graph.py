@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite/spectral layouts."""
+"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite/spectral/Kamada-Kawai layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -184,8 +184,29 @@ class OrdinaryGraph(Scene):
             "spectral", scale=(0.35, 0.22),
             layout_config={"center": (-5.5, 3.2)},
         )
+        kamada_kawai_graph = Graph(
+            ["k0", "k1", "k2"], [("k0", "k1"), ("k1", "k2")],
+            layout="kamada_kawai", layout_scale=(0.35, 0.22),
+            layout_config={"center": (-5.5, -2.6)},
+            **styles,
+        )
+        kamada_kawai_graph.change_layout(
+            "kamada_kawai", scale=(0.35, 0.22),
+            layout_config={"center": (-5.5, -2.6)},
+        )
+        kamada_kawai_digraph = DiGraph(
+            ["du", "dv"], [("du", "dv")],
+            layout="kamada_kawai", layout_scale=0.3,
+            layout_config={"center": (5.5, -2.6)},
+            **styles,
+        )
+        kamada_kawai_digraph.change_layout(
+            "kamada_kawai", scale=0.3,
+            layout_config={"center": (5.5, -2.6)},
+        )
         self.add(
             graph, directed, centered, shell_graph, spiral_graph, partite_graph,
             spring_graph, spring_digraph, random_graph, tree_graph, spectral_graph,
+            kamada_kawai_graph, kamada_kawai_digraph,
         )
         self.wait(0.2)

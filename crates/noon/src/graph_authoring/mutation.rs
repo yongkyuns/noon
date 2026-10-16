@@ -31,7 +31,8 @@ use std::{
 /// `Random` uses Noon's seeded stream unless prepared NetworkX positions are
 /// supplied. `Spring` accepts prepared initial positions and performs
 /// NetworkX-compatible force integration here; `Tree` ports Manim's ordered
-/// depth-first placement. Layouts are author-time, not playback operations.
+/// depth-first placement. `KamadaKawai` ports NetworkX's path-distance cost
+/// and minimizes it in Rust. Layouts are author-time, not playback operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
@@ -40,6 +41,7 @@ pub enum GraphLayout {
     Spiral,
     Random,
     Spring,
+    KamadaKawai,
     Spectral,
     Tree,
 }
@@ -72,6 +74,10 @@ pub struct GraphLayoutOptions {
     pub spring_k: Option<f64>,
     /// Prepared NumPy-compatible initial positions for NetworkX spring layout.
     pub spring_positions: Option<Vec<(f64, f64)>>,
+    /// Optional ordered all-pairs distances for Kamada-Kawai layout.
+    pub kamada_kawai_distances: Option<Vec<f64>>,
+    /// Optional initial positions for Kamada-Kawai layout.
+    pub kamada_kawai_positions: Option<Vec<(f64, f64)>>,
     /// Fixed spring vertices; `Some([])` still disables final rescaling.
     pub spring_fixed: Option<Vec<usize>>,
     /// Whether spring positions are rescaled and shifted after integration.
@@ -106,6 +112,8 @@ impl Default for GraphLayoutOptions {
             align_horizontal: false,
             spring_k: None,
             spring_positions: None,
+            kamada_kawai_distances: None,
+            kamada_kawai_positions: None,
             spring_fixed: None,
             spring_rescale: true,
             directed: false,
@@ -977,7 +985,7 @@ where
     let vertices = declaration.vertices().collect::<Vec<_>>();
     let edges = if matches!(
         options.layout,
-        GraphLayout::Spring | GraphLayout::Spectral | GraphLayout::Tree
+        GraphLayout::Spring | GraphLayout::KamadaKawai | GraphLayout::Spectral | GraphLayout::Tree
     ) {
         let indices = declaration
             .topology()
@@ -1074,6 +1082,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Spectral {
         return spectral_layout(count, edges, options);
     }
+    if options.layout == GraphLayout::KamadaKawai {
+        return kamada_kawai_layout(count, edges, options);
+    }
     if options.layout == GraphLayout::Random && options.random_positions.is_some() {
         return networkx_random_layout(count, options);
     }
@@ -1099,6 +1110,7 @@ fn graph_layout(
         GraphLayout::Spiral => unreachable!("spiral layout returned above"),
         GraphLayout::Spring => unreachable!("spring layout returned above"),
         GraphLayout::Spectral => unreachable!("spectral layout returned above"),
+        GraphLayout::KamadaKawai => unreachable!("Kamada-Kawai layout returned above"),
         GraphLayout::Random => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
@@ -1301,6 +1313,271 @@ fn symmetric_eigenvectors(
         .map(|column| vectors.iter().map(|row| row[column]).collect())
         .collect();
     Ok((eigenvalues, eigenvectors))
+}
+
+fn kamada_kawai_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+
+    let distances = if let Some(distances) = &options.kamada_kawai_distances {
+        if distances.len() != count * count
+            || distances
+                .iter()
+                .any(|distance| !distance.is_finite() || *distance < 0.0)
+        {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai distances must be a finite non-negative square matrix",
+            ));
+        }
+        if (0..count).any(|row| {
+            (0..count).any(|column| row != column && distances[row * count + column] == 0.0)
+        }) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai distances between distinct vertices must be positive",
+            ));
+        }
+        distances.clone()
+    } else {
+        let mut distances = vec![1e6; count * count];
+        for index in 0..count {
+            distances[index * count + index] = 0.0;
+        }
+        for &(start, end) in edges {
+            distances[start * count + end] = 1.0;
+            if !options.directed {
+                distances[end * count + start] = 1.0;
+            }
+        }
+        for via in 0..count {
+            for start in 0..count {
+                let start_via = distances[start * count + via];
+                for end in 0..count {
+                    let candidate = start_via + distances[via * count + end];
+                    let current = &mut distances[start * count + end];
+                    if candidate < *current {
+                        *current = candidate;
+                    }
+                }
+            }
+        }
+        distances
+    };
+
+    let mut positions = if let Some(positions) = &options.kamada_kawai_positions {
+        if positions.len() != count
+            || positions
+                .iter()
+                .any(|(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai positions must provide one finite 2D point per vertex",
+            ));
+        }
+        if (0..count).any(|left| {
+            (left + 1..count).any(|right| {
+                positions[left].0 == positions[right].0 && positions[left].1 == positions[right].1
+            })
+        }) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai initial positions must be distinct",
+            ));
+        }
+        positions.clone()
+    } else {
+        let mut positions = (0..count)
+            .map(|index| {
+                let angle = ((std::f64::consts::TAU * index as f64 / count as f64) as f32) as f64;
+                (angle.cos(), angle.sin())
+            })
+            .collect::<Vec<_>>();
+        rescale(&mut positions, (1.0, 1.0), (0.0, 0.0));
+        positions
+    };
+
+    let optimized = minimize_kamada_kawai(&positions, &distances, count);
+    positions = optimized
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|point| (point[0], point[1]))
+        .collect();
+    rescale(&mut positions, layout_scales(options), options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed Kamada-Kawai coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn minimize_kamada_kawai(initial: &[(f64, f64)], distances: &[f64], count: usize) -> Vec<f64> {
+    let mut position = initial
+        .iter()
+        .flat_map(|&(x, y)| [x, y])
+        .collect::<Vec<_>>();
+    let mut evaluation = kamada_kawai_cost_gradient(&position, distances, count);
+    let mut history: Vec<(Vec<f64>, Vec<f64>, f64)> = Vec::new();
+
+    for _ in 0..15_000 {
+        if evaluation
+            .1
+            .iter()
+            .fold(0.0_f64, |norm, value| norm.max(value.abs()))
+            <= 1e-9
+        {
+            break;
+        }
+        let mut direction = lbfgs_direction(&evaluation.1, &history);
+        if dot(&evaluation.1, &direction) >= 0.0 {
+            direction = evaluation.1.iter().map(|value| -value).collect();
+        }
+        let slope = dot(&evaluation.1, &direction);
+        let mut step = 1.0;
+        let mut next = None;
+        for _ in 0..40 {
+            let candidate = position
+                .iter()
+                .zip(&direction)
+                .map(|(point, delta)| point + step * delta)
+                .collect::<Vec<_>>();
+            let candidate_evaluation = kamada_kawai_cost_gradient(&candidate, distances, count);
+            if candidate_evaluation.0.is_finite()
+                && candidate_evaluation.1.iter().all(|value| value.is_finite())
+                && candidate_evaluation.0 <= evaluation.0 + 1e-4 * step * slope
+            {
+                next = Some((candidate, candidate_evaluation));
+                break;
+            }
+            step *= 0.5;
+        }
+        let Some((candidate, candidate_evaluation)) = next else {
+            break;
+        };
+        let s = candidate
+            .iter()
+            .zip(&position)
+            .map(|(next, previous)| next - previous)
+            .collect::<Vec<_>>();
+        let y = candidate_evaluation
+            .1
+            .iter()
+            .zip(&evaluation.1)
+            .map(|(next, previous)| next - previous)
+            .collect::<Vec<_>>();
+        let curvature = dot(&s, &y);
+        if curvature > 1e-12 {
+            if history.len() == 10 {
+                history.remove(0);
+            }
+            history.push((s, y, 1.0 / curvature));
+        }
+        let converged_function = (evaluation.0 - candidate_evaluation.0).abs()
+            <= 2.22e-14
+                * evaluation
+                    .0
+                    .abs()
+                    .max(candidate_evaluation.0.abs())
+                    .max(1.0);
+        position = candidate;
+        evaluation = candidate_evaluation;
+        if converged_function {
+            break;
+        }
+    }
+    position
+}
+
+fn kamada_kawai_cost_gradient(
+    position: &[f64],
+    distances: &[f64],
+    count: usize,
+) -> (f64, Vec<f64>) {
+    let mut cost = 0.0;
+    let mut gradient = vec![0.0; count * 2];
+    let mut inverse_distances = vec![0.0; count * count];
+    let mut mean = [0.0, 0.0];
+    for index in 0..count {
+        mean[0] += position[index * 2];
+        mean[1] += position[index * 2 + 1];
+        for other in 0..count {
+            let diagonal_epsilon = if index == other { 1e-3 } else { 0.0 };
+            inverse_distances[index * count + other] =
+                1.0 / (distances[index * count + other] + diagonal_epsilon);
+        }
+    }
+
+    for index in 0..count {
+        for other in 0..count {
+            if index == other {
+                continue;
+            }
+            let dx = position[index * 2] - position[other * 2];
+            let dy = position[index * 2 + 1] - position[other * 2 + 1];
+            let separation = dx.hypot(dy);
+            let inverse_distance = inverse_distances[index * count + other];
+            let offset = separation * inverse_distance - 1.0;
+            cost += 0.5 * offset * offset;
+            let factor = inverse_distance * offset / separation;
+            gradient[index * 2] += factor * dx;
+            gradient[index * 2 + 1] += factor * dy;
+            gradient[other * 2] -= factor * dx;
+            gradient[other * 2 + 1] -= factor * dy;
+        }
+    }
+    cost += 0.5e-3 * (mean[0] * mean[0] + mean[1] * mean[1]);
+    for index in 0..count {
+        gradient[index * 2] += 1e-3 * mean[0];
+        gradient[index * 2 + 1] += 1e-3 * mean[1];
+    }
+    (cost, gradient)
+}
+
+fn lbfgs_direction(gradient: &[f64], history: &[(Vec<f64>, Vec<f64>, f64)]) -> Vec<f64> {
+    let mut direction = gradient.to_vec();
+    let mut alpha = vec![0.0; history.len()];
+    for (index, (s, y, inverse_curvature)) in history.iter().enumerate().rev() {
+        alpha[index] = inverse_curvature * dot(s, &direction);
+        axpy(&mut direction, y, -alpha[index]);
+    }
+    let scale = history.last().map_or(1.0, |(s, y, _)| {
+        let yy = dot(y, y);
+        if yy > 0.0 {
+            dot(s, y) / yy
+        } else {
+            1.0
+        }
+    });
+    direction.iter_mut().for_each(|value| *value *= scale);
+    for (index, (s, y, inverse_curvature)) in history.iter().enumerate() {
+        let beta = inverse_curvature * dot(y, &direction);
+        axpy(&mut direction, s, alpha[index] - beta);
+    }
+    direction.iter_mut().for_each(|value| *value = -*value);
+    direction
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| left * right)
+        .sum()
+}
+
+fn axpy(target: &mut [f64], source: &[f64], factor: f64) {
+    for (target, source) in target.iter_mut().zip(source) {
+        *target += factor * source;
+    }
 }
 
 fn partite_layout(

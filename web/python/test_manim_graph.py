@@ -65,6 +65,7 @@ class _Context:
         self.partite_layout_calls = []
         self.explicit_layout_calls = []
         self.spring_layout_calls = []
+        self.kamada_kawai_layout_calls = []
         self.spectral_layout_calls = []
         self.random_layout_calls = []
         self.tree_layout_calls = []
@@ -99,6 +100,7 @@ class _Context:
     liveCreatePartiteGraph = liveCreateGraph
     liveCreateSpringGraph = liveCreateGraph
     liveCreateSpectralGraph = liveCreateGraph
+    liveCreateKamadaKawaiGraph = liveCreateGraph
     liveCreateRandomGraph = liveCreateGraph
     liveCreateTreeGraph = liveCreateGraph
 
@@ -144,6 +146,9 @@ class _Context:
     def liveGraphSpectralLayout(self, *args):
         self._call("spectral")
         self.spectral_layout_calls.append(args)
+    def liveGraphKamadaKawaiLayout(self, *args):
+        self._call("kamada_kawai")
+        self.kamada_kawai_layout_calls.append(args)
     def liveGraphRandomLayout(self, *args):
         self._call("random")
         self.random_layout_calls.append(args)
@@ -268,6 +273,79 @@ class GraphFacadeTests(unittest.TestCase):
         ):
             with self.subTest(config=config), self.assertRaisesRegex(error, message):
                 graph.Graph(["a", "b", "c"], [], layout="spectral", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
+
+    def test_kamada_kawai_constructor_flattens_networkx_distances_and_initial_positions(self):
+        graph.Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c")],
+            layout="kamada_kawai", layout_scale=(1.4, 0.8),
+            layout_config={
+                "center": (1.25, -0.75), "dim": 2, "weight": None,
+                "dist": {"a": {"b": 2.0}, "b": {"c": 1.0}},
+                "pos": {"a": (0, 0), "b": (1, 2), "c": (3, 1)},
+            },
+        )
+        self.assertEqual(
+            self.context.creation_calls[-1][:-1],
+            (
+                False, [0, 1, 2], [0, 1, 1, 2],
+                [1e6, 2.0, 1e6, 1e6, 1e6, 1.0, 1e6, 1e6, 1e6],
+                [0.0, 0.0, 1.0, 2.0, 3.0, 1.0],
+                1.4, 0.8, 1.25, -0.75,
+            ),
+        )
+
+        graph.DiGraph(
+            ["u", "v"], [("u", "v")], layout="kamada_kawai",
+            layout_config={"center": (2.0, -1.0)},
+        )
+        self.assertEqual(
+            self.context.creation_calls[-1][:-1],
+            (True, [0, 1], [0, 1], [], [], 2.0, None, 2.0, -1.0),
+        )
+
+    def test_kamada_kawai_change_layout_routes_optional_inputs_to_rust(self):
+        value = graph.Graph(
+            ["a", "b"], [("a", "b")],
+            layout={"a": (0, 0), "b": (1, 1)},
+        )
+        value.change_layout(
+            "kamada_kawai", scale=(1.5, 0.7),
+            layout_config={"center": (0.5, -1.0), "pos": {"a": (2, 3), "b": (-1, 4)}},
+        )
+        self.assertEqual(
+            self.context.kamada_kawai_layout_calls[-1][1:],
+            ([], [2.0, 3.0, -1.0, 4.0], 1.5, 0.7, 0.5, -1.0),
+        )
+
+        sparse_ids = graph.Graph(
+            ["a", "b", "c"], [],
+            layout={"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+        )
+        sparse_ids.remove_vertices("b")
+        sparse_ids.change_layout(
+            "kamada_kawai",
+            layout_config={
+                "dist": {"a": {"c": 1.0}, "c": {"a": 1.0}},
+                "pos": {"a": (0, 0), "c": (2, 0)},
+            },
+        )
+        self.assertEqual(
+            self.context.kamada_kawai_layout_calls[-1][1:3],
+            ([1e6, 1.0, 1.0, 1e6], [0.0, 0.0, 2.0, 0.0]),
+        )
+
+    def test_kamada_kawai_rejects_unqualified_or_incomplete_configuration(self):
+        for config, error, message in (
+            ({"dim": 3}, NotImplementedError, "two-dimensional"),
+            ({"weight": 1}, TypeError, "weight must be a string or None"),
+            ({"dist": []}, TypeError, "dist must be a nested mapping"),
+            ({"dist": {"a": {"b": 0}}}, ValueError, "positive between distinct vertices"),
+            ({"pos": {"a": (0, 0)}}, ValueError, "provide every graph vertex"),
+            ({"seed": 1}, NotImplementedError, "unsupported Kamada-Kawai"),
+        ):
+            with self.subTest(config=config), self.assertRaisesRegex(error, message):
+                graph.Graph(["a", "b"], [], layout="kamada_kawai", layout_config=config)
         self.assertEqual(self.context.creation_calls, [])
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")

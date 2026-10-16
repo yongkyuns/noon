@@ -281,6 +281,44 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     )?;
     spectral_graph.change_layout(&mut scene, spectral_options)?;
 
+    let kamada_kawai_edges = [(0, 1), (1, 2)];
+    let kamada_kawai_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::KamadaKawai,
+        scale: 0.35,
+        scale_y: Some(0.22),
+        center: (-5.5, -2.6),
+        ..Default::default()
+    };
+    let kamada_kawai_positions = kamada_kawai_options.positions(3, &kamada_kawai_edges)?;
+    let mut kamada_kawai_graph = scene.graph_with_options(
+        [
+            ("k0", kamada_kawai_positions[0]),
+            ("k1", kamada_kawai_positions[1]),
+            ("k2", kamada_kawai_positions[2]),
+        ],
+        [("k0", "k1"), ("k1", "k2")],
+        options.clone(),
+    )?;
+    kamada_kawai_graph.change_layout(&mut scene, kamada_kawai_options)?;
+
+    let kamada_kawai_digraph_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::KamadaKawai,
+        scale: 0.3,
+        center: (5.5, -2.6),
+        directed: true,
+        ..Default::default()
+    };
+    let kamada_kawai_digraph_positions = kamada_kawai_digraph_options.positions(2, &[(0, 1)])?;
+    let mut kamada_kawai_digraph = scene.digraph_with_options(
+        [
+            ("du", kamada_kawai_digraph_positions[0]),
+            ("dv", kamada_kawai_digraph_positions[1]),
+        ],
+        [("du", "dv")],
+        options.clone(),
+    )?;
+    kamada_kawai_digraph.change_layout(&mut scene, kamada_kawai_digraph_options)?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -309,6 +347,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(random_graph.family()),
         MobjectTarget::Family(tree_graph.family()),
         MobjectTarget::Family(spectral_graph.family()),
+        MobjectTarget::Family(kamada_kawai_graph.family()),
+        MobjectTarget::Family(kamada_kawai_digraph.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -335,7 +375,9 @@ mod tests {
         // Tree Graph adds four Lines + five vertices.
         // Spring DiGraph: one Arrow shaft + tip + two vertices.
         // Spectral Graph: three Lines + four vertices.
-        assert_eq!(leaves.len(), 70);
+        // Kamada-Kawai Graph: two Lines + three vertices.
+        // Kamada-Kawai DiGraph: one Arrow, its tip, and two vertices.
+        assert_eq!(leaves.len(), 79);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)
