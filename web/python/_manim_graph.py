@@ -45,10 +45,11 @@ def _layout_scale_pair(value):
     return _shared._ir._finite_number("layout_scale", value), None
 
 
-_VERTEX_CONFIG_KEYS = frozenset(
-    {"color", "fill_color", "stroke_color", "stroke_width", "radius", "fill_opacity"}
-)
-_EDGE_CONFIG_KEYS = frozenset({"color", "stroke_color", "stroke_width"})
+_VERTEX_CONFIG_KEYS = frozenset({
+    "color", "fill_color", "stroke_color", "stroke_width", "stroke_opacity",
+    "radius", "fill_opacity",
+})
+_EDGE_CONFIG_KEYS = frozenset({"color", "stroke_color", "stroke_width", "stroke_opacity"})
 
 
 def _split_style_config(name, value, supported, entity_keys, per_key_supported=None):
@@ -75,7 +76,10 @@ def _split_style_config(name, value, supported, entity_keys, per_key_supported=N
 
 def _validated_key_style(name, value, supported=None):
     if supported is None:
-        supported = {"color", "fill_color", "stroke_color", "fill_opacity", "stroke_width"}
+        supported = {
+            "color", "fill_color", "stroke_color", "fill_opacity", "stroke_width",
+            "stroke_opacity",
+        }
     unknown = [key for key in value if key not in supported]
     if unknown:
         raise NotImplementedError(
@@ -87,7 +91,13 @@ def _validated_key_style(name, value, supported=None):
         if key in result:
             result[key] = _compat._as_color(f"{name}.{key}", result[key])
     if "fill_opacity" in result:
-        result["fill_opacity"] = _compat._opacity(f"{name}.fill_opacity", result["fill_opacity"])
+        result["fill_opacity"] = _compat._opacity(
+            f"{name}.fill_opacity", result["fill_opacity"]
+        )
+    if "stroke_opacity" in result:
+        result["stroke_opacity"] = _compat._opacity(
+            f"{name}.stroke_opacity", result["stroke_opacity"]
+        )
     if "stroke_width" in result:
         _compat._manim_stroke_width(result["stroke_width"])
     if "radius" in result:
@@ -102,13 +112,21 @@ def _apply_key_style(target, values):
     stroke_color = values.get("stroke_color", values.get("color"))
     fill_opacity = values.get("fill_opacity")
     stroke_width = values.get("stroke_width")
-    if fill_color is None and stroke_color is None and fill_opacity is None and stroke_width is None:
+    stroke_opacity = values.get("stroke_opacity")
+    if (
+        fill_color is None
+        and stroke_color is None
+        and fill_opacity is None
+        and stroke_width is None
+        and stroke_opacity is None
+    ):
         return
     target.set_style(
         fill_color=fill_color,
         fill_opacity=fill_opacity,
         stroke_color=stroke_color,
         stroke_width=stroke_width,
+        stroke_opacity=stroke_opacity,
     )
 
 
@@ -143,11 +161,23 @@ def _graph_style_options(vertex_config, edge_config):
             engine_call(options.setVertexFillOpacity, float(vertices["fill_opacity"]), operation="Graph.style")
         if "stroke_width" in vertices:
             engine_call(options.setVertexStrokeWidth, float(vertices["stroke_width"]), operation="Graph.style")
+        if "stroke_opacity" in vertices:
+            engine_call(
+                options.setVertexStrokeOpacity,
+                float(vertices["stroke_opacity"]),
+                operation="Graph.style",
+            )
         color = edges.get("stroke_color", edges.get("color"))
         if color is not None:
             _set_color(options.setEdgeColor, "edge_config.color", color)
         if "stroke_width" in edges:
             engine_call(options.setEdgeStrokeWidth, float(edges["stroke_width"]), operation="Graph.style")
+        if "stroke_opacity" in edges:
+            engine_call(
+                options.setEdgeStrokeOpacity,
+                float(edges["stroke_opacity"]),
+                operation="Graph.style",
+            )
     except BaseException:
         options.free()
         raise
@@ -175,6 +205,7 @@ def _vertex_style_override_rows(vertices, keyed_config):
             style.get("fill_opacity", missing),
             *stroke_components,
             style.get("stroke_width", missing),
+            style.get("stroke_opacity", missing),
         ))
     return rows
 
@@ -189,7 +220,11 @@ def _edge_style_override_rows(edges, keyed_config):
             _color_components("edge_config.color", color)
             if color is not None else (missing,) * 4
         )
-        rows.extend((*color_components, style.get("stroke_width", missing)))
+        rows.extend((
+            *color_components,
+            style.get("stroke_width", missing),
+            style.get("stroke_opacity", missing),
+        ))
     return rows
 
 
@@ -240,12 +275,13 @@ class _GraphBase(_compat.Group):
     scale contract. Partite layouts accept ``partitions`` directly or in
     ``layout_config``; the latter takes precedence. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
-    fill-opacity, and stroke-width overrides for vertices and edges present at
-    construction time. ``add_vertices`` inherits constructor-wide vertex
-    styles and accepts the same per-key style subset plus radius in its atomic
-    mutation. ``add_edges`` inherits constructor-wide edge styles and accepts
-    per-edge color, stroke-color, and stroke-width overrides. Constructor
-    ``vertex_config`` also accepts per-key radius. Custom mobject types remain
+    fill-opacity, stroke-width, and stroke-opacity overrides for vertices and
+    edges present at construction time. ``add_vertices`` inherits
+    constructor-wide vertex styles and accepts the same per-key style subset
+    plus radius in its atomic mutation. ``add_edges`` inherits constructor-wide
+    edge styles and accepts per-edge color, stroke-color, stroke-width, and
+    stroke-opacity overrides. Constructor ``vertex_config`` also accepts
+    per-key radius. Custom mobject types remain
     unsupported.
     """
 
@@ -592,7 +628,8 @@ class _GraphBase(_compat.Group):
         """Append vertices, optionally supplying positions and per-key styles.
 
         ``vertex_config`` uses the constructor's global style keys and accepts
-        per-key radius, color, fill-opacity, and stroke-width overrides. Global
+        per-key radius, color, fill-opacity, stroke-width, and stroke-opacity
+        overrides. Global
         values extend constructor defaults; per-key values override those
         globals in the same graph publication. A mapping passed as the sole
         positional argument remains a shorthand for ``positions``.
@@ -624,7 +661,8 @@ class _GraphBase(_compat.Group):
         global_config, keyed_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, pending_keys,
             per_key_supported={
-                "color", "fill_color", "stroke_color", "fill_opacity", "stroke_width", "radius",
+                "color", "fill_color", "stroke_color", "fill_opacity",
+                "stroke_width", "stroke_opacity", "radius",
             },
         )
         base_config = {**self._default_vertex_config, **global_config}
@@ -718,7 +756,8 @@ class _GraphBase(_compat.Group):
         global_vertex_config, keyed_vertex_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(new_vertices),
             per_key_supported={
-                "color", "fill_color", "stroke_color", "fill_opacity", "stroke_width", "radius",
+                "color", "fill_color", "stroke_color", "fill_opacity",
+                "stroke_width", "stroke_opacity", "radius",
             },
         )
         base_vertex_config = {**self._default_vertex_config, **global_vertex_config}

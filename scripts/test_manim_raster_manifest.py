@@ -17,6 +17,21 @@ ORACLE = ROOT / "scripts/manim-raster-semantic-reference.py"
 
 
 class RasterManifestTests(unittest.TestCase):
+    def test_graph_style_fixture_enrolls_global_and_keyed_stroke_opacity(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "graph-style"
+        )
+        self.assertEqual(fixture["scene"], "GraphStyleExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        scene_source = source.split("class GraphStyleExample(Scene):", maxsplit=1)[1]
+        self.assertIn('"stroke_opacity": 0.45', scene_source)
+        self.assertIn('"b": {"stroke_opacity": 0.2}', scene_source)
+        self.assertIn('"stroke_opacity": 0.55', scene_source)
+        self.assertIn('("a", "b"): {"stroke_opacity": 0.3}', scene_source)
+
     def test_graph_and_digraph_default_spring_fixtures_use_seeded_constructor_defaults(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source = None

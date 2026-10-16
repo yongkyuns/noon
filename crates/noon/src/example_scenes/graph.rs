@@ -14,8 +14,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         vertex_fill_opacity: 0.35,
         vertex_stroke: BLUE,
         vertex_stroke_width: 0.03,
+        vertex_stroke_opacity: 0.45,
         edge_color: GREEN,
         edge_stroke_width: 0.06,
+        edge_stroke_opacity: 0.55,
         ..GraphOptions::default()
     };
     let mut graph_options = options.clone();
@@ -31,9 +33,11 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     added_vertex_options.vertex_radius = 0.16;
     added_vertex_options.vertex_fill = YELLOW;
     added_vertex_options.vertex_stroke_width = 0.05;
+    added_vertex_options.vertex_stroke_opacity = 0.2;
     let mut added_edge_options = options.clone();
     added_edge_options.edge_color = PURPLE;
     added_edge_options.edge_stroke_width = 0.03;
+    added_edge_options.edge_stroke_opacity = 0.3;
     graph.add_vertices_and_edges_with_options(
         &mut scene,
         [("d", (-3.5, -2.4), added_vertex_options)],
@@ -43,6 +47,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     standalone_vertex_options.vertex_radius = 0.16;
     standalone_vertex_options.vertex_fill = YELLOW;
     standalone_vertex_options.vertex_stroke_width = 0.05;
+    standalone_vertex_options.vertex_stroke_opacity = 0.2;
     graph
         .add_vertices_with_options(&mut scene, [("e", (-5.5, -2.4), standalone_vertex_options)])?;
     graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
@@ -56,8 +61,13 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         .set_style(StyleUpdate {
             fill_color: Some(PURPLE),
             stroke_color: Some(PURPLE),
+            stroke_opacity: Some(0.3),
             ..Default::default()
         })?;
+    graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
+        stroke_opacity: Some(0.2),
+        ..Default::default()
+    })?;
 
     let mut digraph_options = options.clone();
     digraph_options.vertex_radius_overrides.insert(1, 0.28);
@@ -81,6 +91,15 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         .set_style(StyleUpdate {
             fill_color: Some(PURPLE),
             stroke_color: Some(PURPLE),
+            stroke_opacity: Some(0.3),
+            ..Default::default()
+        })?;
+    digraph
+        .vertex(&"v")
+        .unwrap()
+        .clone()
+        .set_style(StyleUpdate {
+            stroke_opacity: Some(0.2),
             ..Default::default()
         })?;
 

@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite/spectral/Kamada-Kawai layouts."""
+"""Graph/DiGraph layouts, topology edits, weighted styling, and stroke-opacity options."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -22,16 +22,20 @@ class OrdinaryGraph(Scene):
 
         styles = dict(
             vertex_config={"radius": 0.21, "fill_color": RED, "fill_opacity": 0.35,
-                           "stroke_color": BLUE, "stroke_width": 3},
-            edge_config={"color": GREEN, "stroke_width": 6},
+                           "stroke_color": BLUE, "stroke_width": 3, "stroke_opacity": 0.45},
+            edge_config={"color": GREEN, "stroke_width": 6, "stroke_opacity": 0.55},
         )
         graph_styles = dict(
-            vertex_config={**styles["vertex_config"], "b": {"fill_color": YELLOW, "radius": 0.28}},
-            edge_config={**styles["edge_config"], ("a", "b"): {"color": PURPLE}},
+            vertex_config={**styles["vertex_config"], "b": {"fill_color": YELLOW, "radius": 0.28,
+                                                                  "stroke_opacity": 0.2}},
+            edge_config={**styles["edge_config"], ("a", "b"): {"color": PURPLE,
+                                                                   "stroke_opacity": 0.3}},
         )
         directed_styles = dict(
-            vertex_config={**styles["vertex_config"], "v": {"fill_color": YELLOW, "radius": 0.28}},
-            edge_config={**styles["edge_config"], ("v", "w"): {"color": PURPLE}},
+            vertex_config={**styles["vertex_config"], "v": {"fill_color": YELLOW, "radius": 0.28,
+                                                                  "stroke_opacity": 0.2}},
+            edge_config={**styles["edge_config"], ("v", "w"): {"color": PURPLE,
+                                                                   "stroke_opacity": 0.3}},
         )
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
@@ -44,20 +48,24 @@ class OrdinaryGraph(Scene):
         added_edges = graph.add_edges(
             ("a", "d"),
             positions={"d": (-3.5, -2.4)},
-            vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
-            edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
+            vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5,
+                                  "stroke_opacity": 0.2}},
+            edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3,
+                                         "stroke_opacity": 0.3}},
         )
         assert len(added_edges) == 2
         assert ("a", "d") in graph.edges
         removed_edge = graph.remove_edges(("a", "d"))
         assert len(removed_edge) == 1
         restored_edge = graph.add_edges(
-            ("a", "d"), edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}}
+            ("a", "d"), edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3,
+                                                      "stroke_opacity": 0.3}}
         )
         assert len(restored_edge) == 1
         added_vertices = graph.add_vertices(
             "e", positions={"e": (-5.5, -2.4)},
-            vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
+            vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5,
+                                  "stroke_opacity": 0.2}},
         )
         assert len(added_vertices) == 1 and added_vertices[0] is graph["e"]
         copied = graph.copy()
@@ -76,7 +84,8 @@ class OrdinaryGraph(Scene):
             ("w", "x"),
             positions={"x": (5, -2.3)},
             vertex_config={"x": {"color": YELLOW}},
-            edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
+            edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3,
+                                         "stroke_opacity": 0.3}},
         )
         assert len(added_edges) == 2
         assert ("w", "x") in directed.edges

@@ -152,7 +152,7 @@
       "scene": "GraphStyleExample",
       "source": "parity/manim-v0.21/core-examples/graph.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+      "notes": "Pinned ManimCE raster fixture now covers global and per-key vertex/edge stroke opacity. The exact-head upstream raster result is pending; existing tolerances are unchanged."
     },
     {
       "id": "graph-default-spring",

@@ -269,7 +269,15 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
             ..GraphOptions::default()
         },
         GraphOptions {
+            vertex_stroke_opacity: f64::NAN,
+            ..GraphOptions::default()
+        },
+        GraphOptions {
             edge_stroke_width: f64::NAN,
+            ..GraphOptions::default()
+        },
+        GraphOptions {
+            edge_stroke_opacity: 1.1,
             ..GraphOptions::default()
         },
         GraphOptions {
@@ -362,8 +370,10 @@ fn styled_graph_options() -> GraphOptions {
         vertex_fill_opacity: 0.35,
         vertex_stroke: BLUE,
         vertex_stroke_width: 0.07,
+        vertex_stroke_opacity: 0.4,
         edge_color: GREEN,
         edge_stroke_width: 0.09,
+        edge_stroke_opacity: 0.6,
         ..GraphOptions::default()
     }
 }
@@ -378,11 +388,13 @@ fn assert_vertex_style(vertex: &Mobject) {
     assert_eq!(state.style.fill_opacity, 0.35);
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(BLUE)));
     assert_eq!(state.style.stroke_width, 0.07);
+    assert_eq!(state.style.stroke_opacity, 0.4);
 }
 
 fn assert_edge_style(edge: &GraphEdgeMobject) {
     let state = edge.line().state().unwrap();
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(GREEN)));
+    assert_eq!(state.style.stroke_opacity, 0.6);
     if let Some(arrow) = edge.arrow() {
         // Directed edges retain Arrow's length cap, including after graph copy
         // and topology edits. The requested width stays in its semantic policy.
@@ -454,6 +466,7 @@ fn per_vertex_add_options_publish_styled_geometry_with_topology_once() {
         vertex_fill_opacity: 0.6,
         vertex_stroke: RED,
         vertex_stroke_width: 0.12,
+        vertex_stroke_opacity: 0.25,
         ..GraphOptions::default()
     };
 
@@ -472,6 +485,7 @@ fn per_vertex_add_options_publish_styled_geometry_with_topology_once() {
     assert_eq!(state.style.fill_opacity, 0.6);
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(RED)));
     assert_eq!(state.style.stroke_width, 0.12);
+    assert_eq!(state.style.stroke_opacity, 0.25);
 }
 
 #[test]
@@ -488,6 +502,7 @@ fn per_edge_add_options_publish_styled_geometry_with_topology_once() {
     let options = GraphOptions {
         edge_color: YELLOW,
         edge_stroke_width: 0.12,
+        edge_stroke_opacity: 0.35,
         ..GraphOptions::default()
     };
 
@@ -501,6 +516,7 @@ fn per_edge_add_options_publish_styled_geometry_with_topology_once() {
     let state = edge.line().state().unwrap();
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(YELLOW)));
     assert_eq!(state.style.stroke_width, 0.12);
+    assert_eq!(state.style.stroke_opacity, 0.35);
     assert!(graph.edge(&"b", &"c").is_none());
 }
 

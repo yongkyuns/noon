@@ -693,7 +693,7 @@ fn manim_stroke_width(name: &str, width: f64) -> Result<f64, JsValue> {
 }
 
 /// Decode sparse per-vertex overrides. Each row contains radius, fill RGBA,
-/// fill opacity, stroke RGBA, and Manim stroke width; NaN means inherit the
+/// fill opacity, stroke RGBA, Manim stroke width and stroke opacity; NaN means inherit the
 /// batch's global GraphOptions value. A color is either wholly omitted or has
 /// four finite components.
 #[cfg(target_arch = "wasm32")]
@@ -702,7 +702,7 @@ fn vertex_options_with_overrides(
     overrides: &[f64],
     vertex_count: usize,
 ) -> Result<Vec<noon::GraphOptions>, JsValue> {
-    const ROW_WIDTH: usize = 11;
+    const ROW_WIDTH: usize = 12;
     if overrides.len() != vertex_count * ROW_WIDTH {
         return Err(js_error(
             "Graph vertex style overrides have an invalid length",
@@ -728,20 +728,23 @@ fn vertex_options_with_overrides(
             if !row[10].is_nan() {
                 options.vertex_stroke_width = manim_stroke_width("vertex stroke width", row[10])?;
             }
+            if !row[11].is_nan() {
+                options.vertex_stroke_opacity = row[11];
+            }
             Ok(options)
         })
         .collect()
 }
 
-/// Decode sparse per-edge overrides. Each row contains edge RGBA and Manim
-/// stroke width; NaN means inherit the batch's global GraphOptions value.
+/// Decode sparse per-edge overrides. Each row contains edge RGBA, Manim
+/// stroke width and stroke opacity; NaN means inherit the batch's global GraphOptions value.
 #[cfg(target_arch = "wasm32")]
 fn edge_options_with_overrides(
     base: &noon::GraphOptions,
     overrides: &[f64],
     edge_count: usize,
 ) -> Result<Vec<noon::GraphOptions>, JsValue> {
-    const ROW_WIDTH: usize = 5;
+    const ROW_WIDTH: usize = 6;
     if overrides.len() != edge_count * ROW_WIDTH {
         return Err(js_error(
             "Graph edge style overrides have an invalid length",
@@ -757,6 +760,9 @@ fn edge_options_with_overrides(
             }
             if !row[4].is_nan() {
                 options.edge_stroke_width = manim_stroke_width("edge stroke width", row[4])?;
+            }
+            if !row[5].is_nan() {
+                options.edge_stroke_opacity = row[5];
             }
             Ok(options)
         })
@@ -833,6 +839,11 @@ impl WasmGraphOptions {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setVertexStrokeOpacity)]
+    pub fn set_vertex_stroke_opacity(&mut self, opacity: f64) {
+        self.options.vertex_stroke_opacity = opacity;
+    }
+
     #[wasm_bindgen(js_name = setEdgeColor)]
     pub fn set_edge_color(
         &mut self,
@@ -849,6 +860,11 @@ impl WasmGraphOptions {
     pub fn set_edge_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
         self.options.edge_stroke_width = manim_stroke_width("edge stroke width", width)?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setEdgeStrokeOpacity)]
+    pub fn set_edge_stroke_opacity(&mut self, opacity: f64) {
+        self.options.edge_stroke_opacity = opacity;
     }
 }
 

@@ -405,6 +405,7 @@ pub(super) fn vertex_options_with_radius(
         f64::from(stroke.alpha),
     )?;
     vertex.set_stroke_width(options.vertex_stroke_width)?;
+    vertex.set_stroke_opacity(options.vertex_stroke_opacity)?;
     Ok(vertex)
 }
 
@@ -423,6 +424,7 @@ pub(super) fn line_options(
         f64::from(color.alpha),
     )?;
     line.set_stroke_width(options.edge_stroke_width)?;
+    line.set_stroke_opacity(options.edge_stroke_opacity)?;
     Ok(line)
 }
 
@@ -441,5 +443,6 @@ pub(super) fn arrow_options(
         f64::from(color.alpha),
     )?;
     arrow.set_stroke_width(options.edge_stroke_width)?;
+    arrow.set_stroke_opacity(options.edge_stroke_opacity)?;
     Ok(arrow)
 }

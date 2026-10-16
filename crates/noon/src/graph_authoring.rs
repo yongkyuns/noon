@@ -41,8 +41,10 @@ pub struct GraphOptions {
     pub vertex_fill_opacity: f64,
     pub vertex_stroke: Color,
     pub vertex_stroke_width: f64,
+    pub vertex_stroke_opacity: f64,
     pub edge_color: Color,
     pub edge_stroke_width: f64,
+    pub edge_stroke_opacity: f64,
     pub directed_edge_buff: Option<f64>,
 }
 
@@ -55,8 +57,10 @@ impl Default for GraphOptions {
             vertex_fill_opacity: 1.0,
             vertex_stroke: WHITE,
             vertex_stroke_width: DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+            vertex_stroke_opacity: 1.0,
             edge_color: WHITE,
             edge_stroke_width: DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+            edge_stroke_opacity: 1.0,
             directed_edge_buff: None,
         }
     }
