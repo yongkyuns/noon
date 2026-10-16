@@ -283,6 +283,42 @@ class NumberPlaneAxisTicks(Scene):
       assert.ok(numberPlaneTicks.objectCount > 0);
       assert.ok(Math.abs(numberPlaneTicks.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: NumberPlane per-axis ticks and Axes origin exclusion`);
+      const numberPlaneStylesSource = `from noon import *
+
+class NumberPlaneAxisStyles(Scene):
+    async def construct(self):
+        plane = NumberPlane(
+            (-2, 2, 1), (-1, 1, 1),
+            axis_config={"stroke_width": 2, "stroke_opacity": 0.8, "opacity": 0.9},
+            x_axis_config={
+                "color": GREEN, "stroke_width": 4,
+                "stroke_opacity": 0.4, "opacity": 0.6,
+            },
+            y_axis_config={"stroke_color": BLUE},
+        )
+        x_shaft, y_shaft = plane.x_axis.shaft, plane.y_axis.shaft
+        def color_matches(actual, expected):
+            return all(abs(a - e) < 1e-6 for a, e in zip(
+                (actual.red, actual.green, actual.blue),
+                (expected.red, expected.green, expected.blue),
+            ))
+        assert color_matches(x_shaft.get_stroke_color(), GREEN)
+        assert color_matches(y_shaft.get_stroke_color(), BLUE)
+        assert abs(x_shaft.get_stroke_width() - 4) < 1e-6
+        assert abs(y_shaft.get_stroke_width() - 2) < 1e-6
+        assert abs(x_shaft.get_stroke_opacity() - 0.4) < 1e-6
+        assert abs(y_shaft.get_stroke_opacity() - 0.8) < 1e-6
+        self.add(plane)
+        await self.wait(0.05)
+`;
+      const numberPlaneStyles = await qualifyPythonPlayback(
+        context, baseUrl, numberPlaneStylesSource, [0, 0.05],
+      );
+      assert.equal(numberPlaneStyles.rendererBackend, expectedBackend);
+      assert.equal(numberPlaneStyles.presented, true);
+      assert.ok(numberPlaneStyles.objectCount > 0);
+      assert.ok(Math.abs(numberPlaneStyles.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane independent axis stroke styles`);
       const gridLinesSource = `from noon import *
 
 class NumberPlaneGridLineAliases(Scene):

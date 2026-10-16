@@ -186,6 +186,43 @@ class NumberPlaneAdapterTests(TestCase):
             "tick_size": 0.3, "include_ticks": True, "exclude_origin_tick": True,
         })
 
+    def test_constructor_forwards_independent_axis_stroke_styles(self):
+        plane = self.construct(
+            axis_config={"stroke_width": 2, "stroke_opacity": 0.8, "opacity": 0.9},
+            x_axis_config={
+                "color": number_plane._plot._base.GREEN,
+                "stroke_width": 4,
+                "stroke_opacity": 0.4,
+                "opacity": 0.6,
+            },
+            y_axis_config={"stroke_color": number_plane._plot._base.BLUE},
+        )
+
+        green = number_plane._plot._compat._as_color("color", number_plane._plot._base.GREEN)
+        blue = number_plane._plot._compat._as_color("color", number_plane._plot._base.BLUE)
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisStyle.call_args_list],
+            [
+                (0, [green.red, green.green, green.blue, green.alpha], 0.04, 0.4, 0.6),
+                (1, [blue.red, blue.green, blue.blue, blue.alpha], None, None, None),
+            ],
+        )
+        self.assertIs(plane.x_axis, self.wrapped_parts[2])
+
+    def test_invalid_axis_stroke_styles_fail_before_host_admission(self):
+        for kwargs in (
+            {"x_axis_config": {"stroke_width": -1}},
+            {"x_axis_config": {"stroke_opacity": 1.1}},
+            {"y_axis_config": {"opacity": -0.1}},
+            {"y_axis_config": {"color": "not-a-color"}},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
+
     def test_tick_configuration_is_validated_before_host_admission(self):
         for kwargs in (
             {"axis_config": {"include_ticks": 1}},
@@ -223,7 +260,6 @@ class NumberPlaneAdapterTests(TestCase):
     def test_unqualified_axis_config_fails_before_host_admission(self):
         for kwargs, message in (
             ({"axis_config": {"unknown": True}}, "unsupported axis_config"),
-            ({"x_axis_config": {"stroke_width": 3}}, "per-axis stroke_width"),
             ({"y_axis_config": {"scaling": number_plane._plot.LogBase()}}, "nonlinear"),
         ):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(NotImplementedError, message):

@@ -100,6 +100,44 @@ impl WasmCoordinateOptions {
         };
         Ok(())
     }
+
+    #[wasm_bindgen(js_name = setPlaneAxisStyle)]
+    pub fn set_plane_axis_style(
+        &mut self,
+        axis_index: u32,
+        color: &[f64],
+        width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis style requires NumberPlane options"));
+        };
+        let inherited_style = options.axis_style.clone();
+        let style = match axis_index {
+            0 => options.x_axis_style.get_or_insert(inherited_style.clone()),
+            1 => options.y_axis_style.get_or_insert(inherited_style),
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        if !color.is_empty() {
+            let [r, g, b, a] = color else {
+                return Err(js_error("axis stroke color requires RGBA"));
+            };
+            style.stroke = crate::authoring_mobject::family_color(true, *r, *g, *b, *a)
+                .map_err(js_error)?
+                .map(SemanticPaint::Solid);
+        }
+        if let Some(value) = width {
+            style.stroke_width = value;
+        }
+        if let Some(value) = stroke_opacity {
+            style.stroke_opacity = value;
+        }
+        if let Some(value) = opacity {
+            style.object_opacity = value;
+        }
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]

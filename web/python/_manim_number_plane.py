@@ -88,6 +88,28 @@ def _config_mapping(config, name):
     return dict(config)
 
 
+def _axis_style_override(config, common):
+    """Normalize style differences from the shared axis style for Rust."""
+    override = {}
+    common_color = common.get("color", common.get("stroke_color"))
+    color = config.get("color", config.get("stroke_color"))
+    parsed = None if color is None else _plot._compat._as_color("color", color)
+    if parsed is not None and color != common_color:
+        override["color"] = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+    for key in ("stroke_width", "stroke_opacity", "opacity"):
+        value = config.get(key)
+        if key not in config or value is None:
+            continue
+        if key == "stroke_width":
+            normalized = _plot._compat._manim_stroke_width(value)
+        else:
+            normalized = _plot._compat._opacity(key, value)
+        if value != common.get(key):
+            override[key] = normalized
+    return override
+
+
 def _axis_configurations(axis_config, x_axis_config, y_axis_config):
     common = {
         "stroke_width": 2,
@@ -132,22 +154,14 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         )
         axis_options.append((label_options, config))
 
-    # NumberPlane currently sends one shared style to Rust. Reject conflicting
-    # per-axis styles instead of silently applying the wrong axis's values.
-    for key in _AXIS_STYLE_KEYS:
-        common_value = common.get(key)
-        for name, config in (("x_axis_config", x_config), ("y_axis_config", y_config)):
-            if key in config and config[key] != common_value:
-                raise NotImplementedError(
-                    f"NumberPlane per-axis {key} is not yet supported ({name})"
-                )
-
     style = {key: common[key] for key in ("stroke_width", "stroke_opacity", "opacity")
              if key in common}
     color = common.get("color", common.get("stroke_color"))
+    x_style = _axis_style_override(x_config, common)
+    y_style = _axis_style_override(y_config, common)
     return (
         axis_options[0][0], axis_options[1][0], color, style,
-        axis_options[0][1], axis_options[1][1],
+        axis_options[0][1], axis_options[1][1], x_style, y_style,
     )
 
 
@@ -155,9 +169,9 @@ class NumberPlane(_plot.Axes):
     """Linear 2D axes with bounded retained major/faded grid lines.
 
     Supports ranges, lengths, grid stroke styles, common axis stroke style,
-    native Text constructor labels with per-axis formatting, retained per-axis
-    ticks, and major x/y grid-line aliases. Axis-specific stroke styles, tips,
-    and nonlinear deformation remain unsupported.
+    native Text constructor labels with per-axis formatting, independent ticks
+    and axis stroke styling, and major x/y grid-line aliases. Tips and nonlinear
+    deformation remain unsupported.
     Coordinates and plots use the same shared Rust AxesFrame.
     """
 
@@ -170,7 +184,8 @@ class NumberPlane(_plot.Axes):
         if isinstance(faded_line_ratio, bool):
             raise TypeError("faded_line_ratio must be an integer, not bool")
         ratio = index(faded_line_ratio)
-        x_options, y_options, color, style, x_axis_options, y_axis_options = _axis_configurations(
+        (x_options, y_options, color, style, x_axis_options, y_axis_options,
+         x_axis_style, y_axis_style) = _axis_configurations(
             axis_config, x_axis_config, y_axis_config
         )
         x_range_values = () if x_range is None else tuple(x_range)
@@ -185,6 +200,16 @@ class NumberPlane(_plot.Axes):
         )
         try:
             _plot._coordinate_style(options, color, style)
+            for axis_index, axis_style in enumerate((x_axis_style, y_axis_style)):
+                if axis_style:
+                    engine_call(
+                        options.setPlaneAxisStyle,
+                        axis_index,
+                        _plot._array(axis_style.get("color", ())),
+                        axis_style.get("stroke_width"),
+                        axis_style.get("stroke_opacity"),
+                        axis_style.get("opacity"),
+                    )
             if background_line_style is not None:
                 _line_style(options, background_line_style, faded=False)
             if faded_line_style is not None:

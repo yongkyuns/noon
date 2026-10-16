@@ -11,6 +11,10 @@ pub struct ManimNumberPlaneOptions {
     pub x_length: Option<f64>,
     pub y_length: Option<f64>,
     pub axis_style: SemanticStyle,
+    /// Optional style replacement for the x axis; omitted inherits `axis_style`.
+    pub x_axis_style: Option<SemanticStyle>,
+    /// Optional style replacement for the y axis; omitted inherits `axis_style`.
+    pub y_axis_style: Option<SemanticStyle>,
     pub x_ticks: CoordinateTicks,
     pub y_ticks: CoordinateTicks,
     pub background_line_style: SemanticStyle,
@@ -63,6 +67,8 @@ impl Default for ManimNumberPlaneOptions {
             x_length: None,
             y_length: None,
             axis_style: number_plane_axis_style(),
+            x_axis_style: None,
+            y_axis_style: None,
             x_ticks: CoordinateTicks {
                 enabled: false,
                 exclude_origin: true,
@@ -230,6 +236,12 @@ pub(crate) fn prepare_number_plane(
         .unwrap_or(options.y_range[1] - options.y_range[0]);
     let frame = AxesFrame::centered(options.x_range, options.y_range, x_length, y_length)?;
     validate_plane_style(&options.axis_style, "invalid axis style")?;
+    if let Some(style) = options.x_axis_style.as_ref() {
+        validate_plane_style(style, "invalid x-axis style")?;
+    }
+    if let Some(style) = options.y_axis_style.as_ref() {
+        validate_plane_style(style, "invalid y-axis style")?;
+    }
     validate_plane_style(
         &options.background_line_style,
         "invalid background line style",
@@ -250,13 +262,15 @@ pub(crate) fn prepare_number_plane(
     let root = transaction.create_node(SemanticNodeCreation::family());
     let faded = transaction.create_node(SemanticNodeCreation::family());
     let background = transaction.create_node(SemanticNodeCreation::family());
+    let x_style = options.x_axis_style.as_ref().unwrap_or(&options.axis_style);
+    let y_style = options.y_axis_style.as_ref().unwrap_or(&options.axis_style);
     let x_axis = stage_line(
         &mut transaction,
-        prepare_line(frame.x(), options.x_ticks, &options.axis_style)?,
+        prepare_line(frame.x(), options.x_ticks, x_style)?,
     );
     let y_axis = stage_line(
         &mut transaction,
-        prepare_line(frame.y(), options.y_ticks, &options.axis_style)?,
+        prepare_line(frame.y(), options.y_ticks, y_style)?,
     );
     stage_grid_lines(
         &mut transaction,
