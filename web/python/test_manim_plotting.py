@@ -276,6 +276,35 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.pointToNumber.assert_called_once_with(3.0, 4.0)
         self.assertEqual(frame.free.call_count, 2)
 
+    def test_number_line_line_observations_use_one_shared_frame_query_each(self):
+        line = object.__new__(plotting.NumberLine)
+        frame = SimpleNamespace(
+            start=Mock(return_value=[1.0, 2.0]),
+            end=Mock(return_value=[5.0, 2.0]),
+            vector=Mock(return_value=[4.0, 0.0]),
+            length=Mock(return_value=4.0),
+            angle=Mock(return_value=0.0),
+            projectPoint=Mock(return_value=[3.0, 2.0]),
+            free=Mock(),
+        )
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame), \
+             patch.object(plotting, "engine_call", side_effect=lambda fn, *args: fn(*args)):
+            start, end = line.get_start_and_end()
+            self.assertEqual((start, end), (plotting._base.Vec2(1.0, 2.0),
+                                            plotting._base.Vec2(5.0, 2.0)))
+            self.assertEqual(line.get_vector(), plotting._base.Vec2(4.0, 0.0))
+            self.assertEqual(line.get_length(), 4.0)
+            self.assertEqual(line.get_angle(), 0.0)
+            self.assertEqual(line.get_projection((3.0, 8.0)), plotting._base.Vec2(3.0, 2.0))
+
+        frame.start.assert_called_once_with()
+        frame.end.assert_called_once_with()
+        frame.vector.assert_called_once_with()
+        frame.length.assert_called_once_with()
+        frame.angle.assert_called_once_with()
+        frame.projectPoint.assert_called_once_with(3.0, 8.0)
+        self.assertEqual(frame.free.call_count, 5)
+
     def test_number_line_rotation_helpers_use_the_requested_data_anchor(self):
         line = object.__new__(plotting.NumberLine)
         point = plotting._base.Vec2(2.0, 0.0)
@@ -619,8 +648,7 @@ class PlottingAdapterTests(unittest.TestCase):
         line_func = Mock(return_value=line)
         axes = object.__new__(plotting.Axes)
         axis = Mock()
-        axis.point_to_number.return_value = 1.5
-        axis.number_to_point.return_value = projected
+        axis.get_projection.return_value = projected
         axes.get_axis = Mock(return_value=axis)
         line_config = {"dashed_ratio": 0.75, "stroke_width": 99}
 
@@ -632,8 +660,7 @@ class PlottingAdapterTests(unittest.TestCase):
 
         self.assertIs(result, line)
         axes.get_axis.assert_called_once_with(0)
-        axis.point_to_number.assert_called_once_with(point)
-        axis.number_to_point.assert_called_once_with(1.5)
+        axis.get_projection.assert_called_once_with(point)
         parse_color.assert_called_once_with("line color", plotting._base.RED)
         line_func.assert_called_once_with(
             projected, point, dashed_ratio=0.75, color=label_color, stroke_width=2,
