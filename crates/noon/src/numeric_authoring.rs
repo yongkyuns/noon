@@ -1456,6 +1456,60 @@ mod tests {
     }
 
     #[test]
+    fn decimal_number_coordinate_labels_keep_common_manim_formatting() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([0.0, 2_000.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 0,
+            include_sign: true,
+            group_with_commas: true,
+            show_ellipsis: true,
+            unit: Some("m".into()),
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers_excluding(&mut backend, Some(&[1_234.0, -0.001]), &[], &options)
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["+1,234...m", "+0...m"]
+        );
+        assert!(numbers.iter().all(|number| {
+            number.format().unwrap()
+                == crate::DecimalFormat {
+                    decimal_places: 0,
+                    include_sign: true,
+                    group_with_commas: true,
+                    show_ellipsis: true,
+                    unit: Some("m".into()),
+                }
+        }));
+    }
+
+    #[test]
     fn callback_numeric_reentry_reads_the_prepared_signal_value() {
         use noon_core::{SemanticMutationTransaction, TextResourceLookup};
         let mut backend = RuleBackend;

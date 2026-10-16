@@ -91,6 +91,22 @@ impl WasmNumberLabelOptions {
     pub fn set_exclude_zero(&mut self, exclude: bool) {
         self.options.exclude_zero = exclude;
     }
+    #[wasm_bindgen(js_name = setIncludeSign)]
+    pub fn set_include_sign(&mut self, include: bool) {
+        self.options.include_sign = include;
+    }
+    #[wasm_bindgen(js_name = setGroupWithCommas)]
+    pub fn set_group_with_commas(&mut self, group: bool) {
+        self.options.group_with_commas = group;
+    }
+    #[wasm_bindgen(js_name = setShowEllipsis)]
+    pub fn set_show_ellipsis(&mut self, show: bool) {
+        self.options.show_ellipsis = show;
+    }
+    #[wasm_bindgen(js_name = setUnit)]
+    pub fn set_unit(&mut self, unit: Option<String>) {
+        self.options.unit = unit;
+    }
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(
         &mut self,

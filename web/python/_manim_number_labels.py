@@ -41,6 +41,12 @@ def _options(config, *, excluding=()):
     direction = _base._as_vec2(config.pop("direction", _base.DOWN))
     buff = float(config.pop("buff", 0.12))
     exclude = bool(config.pop("exclude_zero", True))
+    include_sign = bool(config.pop("include_sign", False))
+    group_with_commas = bool(config.pop("group_with_commas", True))
+    show_ellipsis = bool(config.pop("show_ellipsis", False))
+    unit = config.pop("unit", None)
+    if unit is not None and not isinstance(unit, str):
+        raise TypeError("unit must be a string or None")
     color = _shared._constructor_color("label color", config.pop("color", _base.WHITE))
     if config:
         raise TypeError("unsupported native numeric-label option(s): " + ", ".join(sorted(config)))
@@ -52,6 +58,10 @@ def _options(config, *, excluding=()):
     try:
         engine_call(options.setDirection, direction.x, direction.y)
         engine_call(options.setExcludeZero, exclude)
+        engine_call(options.setIncludeSign, include_sign)
+        engine_call(options.setGroupWithCommas, group_with_commas)
+        engine_call(options.setShowEllipsis, show_ellipsis)
+        engine_call(options.setUnit, unit)
         engine_call(options.setExcludedNumbers, _plot._array(excluding))
         engine_call(options.setColor, color.red, color.green, color.blue, color.alpha)
     except BaseException:
@@ -165,8 +175,9 @@ def add_coordinates(axes, *axes_numbers, x_config=None, y_config=None, config):
     values = (None, None) if not axes_numbers else axes_numbers[:2]
 
     axis_configs = []
-    for axis_config in (x_config, y_config):
-        settings = dict(config)
+    for axis, axis_config in zip((x_axis, y_axis), (x_config, y_config), strict=True):
+        settings = dict(getattr(axis, "decimal_number_config", {}))
+        settings.update(config)
         settings.update({} if axis_config is None else axis_config)
         axis_configs.append(settings)
     axis_exclusions = [
@@ -182,13 +193,13 @@ def add_coordinates(axes, *axes_numbers, x_config=None, y_config=None, config):
         if all(native_profiles):
             result = _add_coordinate_labels(
                 axes, "coordinateLabelFamilies", values[0], values[1],
-                x_config=x_config, y_config=y_config, config=config,
+                axis_settings=axis_configs,
                 excluded_numbers=axis_exclusions,
             )
         elif not any(native_profiles):
             result = _add_axes_decimal_coordinate_labels(
                 axes, values[0], values[1],
-                x_config=x_config, y_config=y_config, config=config,
+                axis_settings=axis_configs,
                 excluded_numbers=axis_exclusions,
             )
         else:
@@ -260,17 +271,15 @@ def _add_mixed_coordinate_labels(axes, values, axis_configs, axis_exclusions):
 
 
 def _add_axes_decimal_coordinate_labels(
-    axes, x_values, y_values, *, x_config, y_config, config, excluded_numbers,
+    axes, x_values, y_values, *, axis_settings, excluded_numbers,
 ):
     _cold_labels()
     if _axes_decimal_labels is None:
         raise RuntimeError("Axes DecimalNumber labels require await prepare_latex()")
-    x_settings = dict(config)
-    y_settings = dict(config)
+    x_settings = dict(axis_settings[0])
+    y_settings = dict(axis_settings[1])
     x_settings.setdefault("direction", _base.DOWN)
     y_settings.setdefault("direction", _base.LEFT)
-    x_settings.update({} if x_config is None else x_config)
-    y_settings.update({} if y_config is None else y_config)
     for settings in (x_settings, y_settings):
         settings.pop("excluding", None)
         settings.setdefault("exclude_zero", False)
@@ -309,7 +318,12 @@ def add_number_plane_coordinates(plane, *axes_numbers, x_config=None, y_config=N
         "font" in config
         or all("font" in axis for axis in axis_configs)
     )
-    axis_configs = [dict(config), dict(config)]
+    axis_configs = [
+        dict(getattr(plane.x_axis, "decimal_number_config", {})),
+        dict(getattr(plane.y_axis, "decimal_number_config", {})),
+    ]
+    axis_configs[0].update(config)
+    axis_configs[1].update(config)
     axis_configs[0].update(x_config)
     axis_configs[1].update(y_config)
     axis_exclusions = [
@@ -324,13 +338,12 @@ def add_number_plane_coordinates(plane, *axes_numbers, x_config=None, y_config=N
         if atomic_native_profile:
             result = _add_coordinate_labels(
                 plane, "numberPlaneCoordinateLabelFamilies", values[0], values[1],
-                x_config=x_config, y_config=y_config, config=config,
+                axis_settings=axis_configs,
                 excluded_numbers=axis_exclusions,
             )
         else:
             result = add_number_plane_decimal_coordinates(
-                plane, values[0], values[1], x_config=x_config,
-                y_config=y_config, config=config,
+                plane, values[0], values[1], axis_settings=axis_configs,
                 excluded_numbers=axis_exclusions,
             )
         plane.coordinate_labels = _compat.VGroup(plane.x_axis.numbers, plane.y_axis.numbers)
@@ -357,19 +370,17 @@ def add_number_plane_coordinates(plane, *axes_numbers, x_config=None, y_config=N
 
 
 def add_number_plane_decimal_coordinates(
-    plane, x_values, y_values, *, x_config, y_config, config, excluded_numbers,
+    plane, x_values, y_values, *, axis_settings, excluded_numbers,
 ):
     _cold_labels()
     if _plane_decimal_labels is None:
         raise RuntimeError("NumberPlane DecimalNumber labels require await prepare_latex()")
     x_values_js = _plot._array(() if x_values is None else x_values)
     y_values_js = _plot._array(() if y_values is None else y_values)
-    x_settings = dict(config)
-    y_settings = dict(config)
+    x_settings = dict(axis_settings[0])
+    y_settings = dict(axis_settings[1])
     x_settings.setdefault("direction", _base.DR)
     y_settings.setdefault("direction", _base.DR)
-    x_settings.update({} if x_config is None else x_config)
-    y_settings.update({} if y_config is None else y_config)
     for settings in (x_settings, y_settings):
         settings.pop("excluding", None)
         settings.setdefault("exclude_zero", False)
@@ -430,19 +441,17 @@ def _add_number_plane_decimal_coordinate_axis(
 
 
 def _add_coordinate_labels(
-    owner, method_name, x_values, y_values, *, x_config, y_config, config,
+    owner, method_name, x_values, y_values, *, axis_settings,
     excluded_numbers,
 ):
     _cold_labels()
     x_axis, y_axis = owner.x_axis, owner.y_axis
     x_values_js = _plot._array(() if x_values is None else x_values)
     y_values_js = _plot._array(() if y_values is None else y_values)
-    x_settings = dict(config)
-    y_settings = dict(config)
+    x_settings = dict(axis_settings[0])
+    y_settings = dict(axis_settings[1])
     x_settings.setdefault("direction", _base.DOWN)
     y_settings.setdefault("direction", _base.LEFT)
-    x_settings.update({} if x_config is None else x_config)
-    y_settings.update({} if y_config is None else y_config)
     for settings in (x_settings, y_settings):
         settings.pop("excluding", None)
         settings.setdefault("exclude_zero", False)

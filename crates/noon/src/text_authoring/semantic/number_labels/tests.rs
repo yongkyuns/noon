@@ -130,6 +130,30 @@ fn number_line_exclusions_apply_before_native_text_allocation() {
 }
 
 #[test]
+fn native_text_labels_share_decimal_sign_grouping_ellipsis_and_unit_formatting() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2_000.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions {
+        decimal_places: 0,
+        include_sign: true,
+        group_with_commas: true,
+        show_ellipsis: true,
+        unit: Some("m".into()),
+        exclude_zero: false,
+        ..Default::default()
+    };
+    let labels = line
+        .add_numbers(Some(&[1_234.0, -0.001]), &options)
+        .unwrap();
+    assert_eq!(
+        leaves(&labels).iter().map(text).collect::<Vec<_>>(),
+        ["+1,234...m", "+0...m"]
+    );
+}
+
+#[test]
 fn custom_number_line_labels_keep_text_and_order_in_the_attached_family() {
     let mut scene = Scene::new();
     let line = scene

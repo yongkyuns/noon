@@ -201,7 +201,7 @@ class PlottingAdapterTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 plotting.NumberLine(label_constructor=object)
             with self.assertRaises(NotImplementedError):
-                plotting.NumberLine(decimal_number_config={"group_with_commas": True})
+                plotting.NumberLine(decimal_number_config={"mob_class": object})
             with self.assertRaises(TypeError):
                 plotting.NumberLine(decimal_number_config=1)
             context.assert_not_called()
@@ -234,6 +234,31 @@ class PlottingAdapterTests(unittest.TestCase):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": True})
         with self.assertRaises(ValueError):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": 13})
+
+    def test_number_line_decimal_format_options_are_retained_and_used_for_labels(self):
+        format_config = {
+            "num_decimal_places": 1,
+            "include_sign": True,
+            "group_with_commas": False,
+            "show_ellipsis": True,
+            "unit": r"\text{m}",
+        }
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options"), \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line"), \
+             patch("_manim_number_labels.number_mobjects") as build:
+            line = plotting.NumberLine(
+                [-2, 2, 0.5], include_numbers=True,
+                decimal_number_config=format_config,
+            )
+            self.assertEqual(line.decimal_number_config, format_config)
+            self.assertEqual(build.call_args.kwargs["config"]["decimal_places"], 1)
+            self.assertTrue(build.call_args.kwargs["config"]["include_sign"])
+            self.assertFalse(build.call_args.kwargs["config"]["group_with_commas"])
+            self.assertTrue(build.call_args.kwargs["config"]["show_ellipsis"])
+            self.assertEqual(build.call_args.kwargs["config"]["unit"], r"\text{m}")
 
     def test_axes_label_decimal_precision_preserves_authored_step_type(self):
         for step, expected in ((1, 0), (1.0, 1)):
@@ -574,7 +599,11 @@ class PlottingAdapterTests(unittest.TestCase):
                                "label_direction": plotting._base.UP},
                 y_axis_config={"numbers_to_include": [0.5], "include_numbers": False,
                                "font_size": 24,
-                               "decimal_number_config": {"num_decimal_places": 2}},
+                               "decimal_number_config": {
+                                   "num_decimal_places": 2, "include_sign": True,
+                                   "group_with_commas": False, "show_ellipsis": True,
+                                   "unit": r"\text{m}",
+                               }},
             )
 
         x_axis.add_numbers.assert_called_once_with(
@@ -587,6 +616,11 @@ class PlottingAdapterTests(unittest.TestCase):
             direction=plotting._base._as_vec2(plotting._base.LEFT), buff=0.25,
             decimal_places=2,
         )
+        self.assertEqual(y_axis.decimal_number_config, {
+            "num_decimal_places": 2, "include_sign": True,
+            "group_with_commas": False, "show_ellipsis": True,
+            "unit": r"\text{m}",
+        })
         self.assertTrue(x_axis.include_numbers)
         self.assertFalse(y_axis.include_numbers)
         self.assertEqual(x_axis.number_label_decimal_places, 1)

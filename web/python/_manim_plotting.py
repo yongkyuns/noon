@@ -266,6 +266,10 @@ _AXES_CONFIG_KEYS = {
     "font_size", "label_direction", "line_to_number_buff", "decimal_number_config",
 }
 
+_DECIMAL_NUMBER_FORMAT_KEYS = frozenset((
+    "num_decimal_places", "include_sign", "group_with_commas", "show_ellipsis", "unit",
+))
+
 
 def _axes_scale_config(config, name):
     if config is None:
@@ -322,25 +326,10 @@ def _axes_label_options(config, scale, name, default_direction):
         config.get("line_to_number_buff", _base.MED_SMALL_BUFF),
         f"{name}.line_to_number_buff",
     )
-    decimal_config = config.get("decimal_number_config")
-    if decimal_config is None:
-        decimal_config = {}
-    if not isinstance(decimal_config, Mapping):
-        raise TypeError(f"{name}.decimal_number_config must be a mapping")
-    if any(not isinstance(key, str) for key in decimal_config):
-        raise TypeError(f"{name}.decimal_number_config keys must be strings")
-    unknown_decimal = sorted(set(decimal_config) - {"num_decimal_places"})
-    if unknown_decimal:
-        raise NotImplementedError(
-            f"unsupported {name}.decimal_number_config option(s): "
-            + ", ".join(unknown_decimal)
-        )
+    decimal_config = _decimal_number_options(
+        config.get("decimal_number_config"), f"{name}.decimal_number_config",
+    )
     decimal_places = decimal_config.get("num_decimal_places")
-    if decimal_places is not None:
-        if not isinstance(decimal_places, int) or isinstance(decimal_places, bool):
-            raise TypeError(f"{name}.num_decimal_places must be an integer")
-        if not 0 <= decimal_places <= 12:
-            raise ValueError(f"{name}.num_decimal_places must be between 0 and 12")
 
     return {
         "scaling": config.get("scaling"),
@@ -351,7 +340,36 @@ def _axes_label_options(config, scale, name, default_direction):
         "label_direction": direction,
         "line_to_number_buff": buff,
         "decimal_places": decimal_places,
+        "decimal_number_config": decimal_config,
     }
+
+
+def _decimal_number_options(value, name):
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise TypeError(f"{name} keys must be strings")
+    unknown = sorted(set(value) - _DECIMAL_NUMBER_FORMAT_KEYS)
+    if unknown:
+        raise NotImplementedError(
+            f"unsupported {name} option(s): " + ", ".join(unknown)
+        )
+    normalized = dict(value)
+    if "num_decimal_places" in normalized:
+        places = normalized["num_decimal_places"]
+        if not isinstance(places, int) or isinstance(places, bool):
+            raise TypeError(f"{name}.num_decimal_places must be an integer")
+        if not 0 <= places <= 12:
+            raise ValueError(f"{name}.num_decimal_places must be between 0 and 12")
+    for key in ("include_sign", "group_with_commas", "show_ellipsis"):
+        if key in normalized and not isinstance(normalized[key], bool):
+            raise TypeError(f"{name}.{key} must be a boolean")
+    unit = normalized.get("unit")
+    if unit is not None and not isinstance(unit, str):
+        raise TypeError(f"{name}.unit must be a string or None")
+    return normalized
 
 
 def _axes_number_values(values, name, default):
@@ -380,7 +398,9 @@ def _configure_axes_numeric_labels(axis, config, range_values):
     axis.label_direction = config["label_direction"]
     axis.line_to_number_buff = config["line_to_number_buff"]
     axis.number_label_decimal_places = places
-    axis.decimal_number_config = {"num_decimal_places": places}
+    decimal_config = dict(config.get("decimal_number_config", {}))
+    decimal_config.setdefault("num_decimal_places", places)
+    axis.decimal_number_config = decimal_config
     if axis.include_numbers or axis.numbers_to_include is not None:
         axis.add_numbers(
             x_values=axis.numbers_to_include,
@@ -553,29 +573,10 @@ class NumberLine(_compat.Group):
             raise NotImplementedError(
                 "NumberLine constructor label_constructor requires the TeX label profile"
             )
-        decimal_number_config = (
-            {} if decimal_number_config is None else decimal_number_config
+        decimal_number_config = _decimal_number_options(
+            decimal_number_config, "NumberLine.decimal_number_config",
         )
-        if not isinstance(decimal_number_config, Mapping):
-            raise TypeError("decimal_number_config must be a mapping")
-        if any(not isinstance(key, str) for key in decimal_number_config):
-            raise TypeError("decimal_number_config keys must be strings")
-        unknown_decimal_options = sorted(
-            set(decimal_number_config) - {"num_decimal_places"}
-        )
-        if unknown_decimal_options:
-            raise NotImplementedError(
-                "unsupported NumberLine decimal_number_config option(s): "
-                + ", ".join(unknown_decimal_options)
-            )
-        if "num_decimal_places" in decimal_number_config:
-            decimal_places = decimal_number_config["num_decimal_places"]
-            if not isinstance(decimal_places, int) or isinstance(decimal_places, bool):
-                raise TypeError("num_decimal_places must be an integer")
-            if not 0 <= decimal_places <= 12:
-                raise ValueError("num_decimal_places must be between 0 and 12")
-        else:
-            decimal_places = None
+        decimal_places = decimal_number_config.get("num_decimal_places")
         numbers_to_include = (
             None if numbers_to_include is None else list(numbers_to_include)
         )
@@ -621,7 +622,8 @@ class NumberLine(_compat.Group):
             # range to the numeric Rust boundary. Integer 1 means zero places.
             step = values[2] if len(values) == 3 else 1
             decimal_places = _decimal_places_from_step(step)
-        self.decimal_number_config = {"num_decimal_places": decimal_places}
+        decimal_number_config.setdefault("num_decimal_places", decimal_places)
+        self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
         if self.include_numbers or numbers_to_include is not None:
             self.add_numbers(
@@ -794,15 +796,21 @@ class NumberLine(_compat.Group):
         return self.get_number_mobjects()
 
     def _number_label_config(self, values):
-        config = dict(values)
+        config = dict(getattr(self, "decimal_number_config", {}))
+        config.update(values)
+        if "decimal_places" in values:
+            config.pop("num_decimal_places", None)
+        elif "num_decimal_places" in values:
+            config.pop("decimal_places", None)
+        elif "num_decimal_places" in config:
+            config["decimal_places"] = config.pop("num_decimal_places")
         config.setdefault("direction", getattr(self, "label_direction", _base.DOWN))
         config.setdefault(
             "buff", getattr(self, "line_to_number_buff", _base.MED_SMALL_BUFF)
         )
         config.setdefault("font_size", getattr(self, "font_size", 36))
-        config.setdefault(
-            "decimal_places", getattr(self, "number_label_decimal_places", 0)
-        )
+        if "decimal_places" not in config:
+            config["decimal_places"] = getattr(self, "number_label_decimal_places", 0)
         return config
 
     def add_labels(self, dict_values, direction=None, buff=None, font_size=None,

@@ -156,7 +156,11 @@ class NumberPlaneAdapterTests(TestCase):
                 "include_numbers": False,
                 "numbers_to_include": [2],
                 "label_direction": number_plane._plot._base.LEFT,
-                "decimal_number_config": {"num_decimal_places": 3},
+                "decimal_number_config": {
+                    "num_decimal_places": 3, "include_sign": True,
+                    "group_with_commas": False, "show_ellipsis": True,
+                    "unit": r"\text{s}",
+                },
             },
         )
 
@@ -173,6 +177,11 @@ class NumberPlaneAdapterTests(TestCase):
         )
         self.assertEqual(x_axis.number_label_decimal_places, 2)
         self.assertEqual(y_axis.number_label_decimal_places, 3)
+        self.assertEqual(y_axis.decimal_number_config, {
+            "num_decimal_places": 3, "include_sign": True,
+            "group_with_commas": False, "show_ellipsis": True,
+            "unit": r"\text{s}",
+        })
         self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
         self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
 

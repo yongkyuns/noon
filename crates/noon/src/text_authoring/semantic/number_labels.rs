@@ -6,8 +6,8 @@ use crate::plot_presentation::{
     NumberLabelOptions, PlotPresentationError,
 };
 use crate::{
-    AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
-    MobjectFamily, NumberLineFrame,
+    format_decimal, AuthoringError, Bounds2D64, DecimalFormat, ManimAxes, ManimNextToArgs,
+    ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame,
 };
 use noon_core::{
     FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
@@ -29,13 +29,24 @@ fn prepare(
     excluded_numbers: &[f64],
     options: &NumberLabelOptions,
 ) -> Result<Vec<PreparedLabel>, Error> {
-    let labels = number_labels_excluding(
+    let mut labels = number_labels_excluding(
         frame,
         numbers,
         options.decimal_places,
         options.exclude_zero,
         excluded_numbers,
     )?;
+    let format = DecimalFormat {
+        decimal_places: options.decimal_places,
+        include_sign: options.include_sign,
+        group_with_commas: options.group_with_commas,
+        show_ellipsis: options.show_ellipsis,
+        unit: options.unit.clone(),
+    };
+    for label in &mut labels {
+        label.text = format_decimal(label.number, &format)
+            .map_err(|_| PlotPresentationError::InvalidInput("invalid numeric label format"))?;
+    }
     prepare_display_labels(labels, options)
 }
 

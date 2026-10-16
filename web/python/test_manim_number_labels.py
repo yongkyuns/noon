@@ -15,6 +15,14 @@ class Owned:
         self.direction = value
     def setExcludeZero(self, value):
         self.exclude = value
+    def setIncludeSign(self, value):
+        self.include_sign = value
+    def setGroupWithCommas(self, value):
+        self.group_with_commas = value
+    def setShowEllipsis(self, value):
+        self.show_ellipsis = value
+    def setUnit(self, value):
+        self.unit = value
     def setExcludedNumbers(self, value):
         self.excluded = value
     def setColor(self, *value):
@@ -128,6 +136,17 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
         self.invoke(iter((0, 1, 2)), font="Fixture Sans", excluding=iter((1,)))
         self.assertEqual(self.options[0].excluded, [1.0])
+
+    def test_decimal_number_formatting_options_reach_the_shared_rust_adapter(self):
+        self.invoke(
+            (1234,), font="Fixture Sans", include_sign=True, group_with_commas=False,
+            show_ellipsis=True, unit=r"\text{m}",
+        )
+        options = self.options[0]
+        self.assertTrue(options.include_sign)
+        self.assertFalse(options.group_with_commas)
+        self.assertTrue(options.show_ellipsis)
+        self.assertEqual(options.unit, r"\text{m}")
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
         family = Owned()
@@ -255,6 +274,48 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(axes.x_axis.numbers, x_family)
         self.assertIs(axes.y_axis.numbers, y_family)
 
+    def test_axes_constructor_decimal_formatting_is_preserved_per_axis(self):
+        axes = self.axes()
+        axes.x_axis.decimal_number_config = {
+            "num_decimal_places": 2,
+            "include_sign": True,
+            "group_with_commas": False,
+            "unit": "m",
+        }
+        axes.y_axis.decimal_number_config = {
+            "num_decimal_places": 1,
+            "show_ellipsis": True,
+            "unit": "s",
+        }
+        families = (Owned(), Owned())
+        bridge = Mock(return_value=families)
+        patch.object(labels, "_axes_decimal_labels", bridge).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+
+        labels.add_coordinates(axes, (1234,), (2,), config={})
+
+        self.assertEqual(self.created, [
+            ("DejaVu Sans Mono", 18.0, 2, 0.12),
+            ("DejaVu Sans Mono", 18.0, 1, 0.12),
+        ])
+        self.assertTrue(self.options[0].include_sign)
+        self.assertFalse(self.options[0].group_with_commas)
+        self.assertFalse(self.options[0].show_ellipsis)
+        self.assertEqual(self.options[0].unit, "m")
+        self.assertFalse(self.options[1].include_sign)
+        self.assertTrue(self.options[1].group_with_commas)
+        self.assertTrue(self.options[1].show_ellipsis)
+        self.assertEqual(self.options[1].unit, "s")
+
+        labels.add_coordinates(
+            axes, (1234,), (2,), config={"include_sign": False},
+            x_config={"include_sign": True, "unit": "km"},
+        )
+        self.assertTrue(self.options[2].include_sign)
+        self.assertEqual(self.options[2].unit, "km")
+        self.assertFalse(self.options[3].include_sign)
+        self.assertEqual(self.options[3].unit, "s")
+
     def test_axes_exact_exclusions_follow_axis_config_and_global_override(self):
         axes = self.axes()
         axes.x_axis.numbers_to_exclude = (0.0, 2.0)
@@ -307,8 +368,14 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertFalse(hasattr(axes.y_axis, 'numbers'))
 
     def test_number_plane_defaults_to_decimal_glyph_families_and_one_decimal(self):
-        x_axis = SimpleNamespace(_semantic_member_wrappers={})
-        y_axis = SimpleNamespace(_semantic_member_wrappers={})
+        x_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            decimal_number_config={"include_sign": True, "unit": "m"},
+        )
+        y_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            decimal_number_config={"show_ellipsis": True, "unit": "s"},
+        )
         class FamilyHandle:
             def decimalNumberLabelMembers(self):
                 return ()
@@ -336,6 +403,10 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual([option.exclude for option in self.options], [False, False])
         self.assertEqual([option.excluded for option in self.options], [[0.0], [0.0]])
         self.assertEqual([entry[2] for entry in self.created], [2, 3])
+        self.assertTrue(self.options[0].include_sign)
+        self.assertFalse(self.options[1].include_sign)
+        self.assertTrue(self.options[1].show_ellipsis)
+        self.assertEqual([option.unit for option in self.options], ["m", "s"])
         self.assertEqual(len(x_axis.numbers), 2)
         self.assertEqual(len(y_axis.numbers), 2)
 

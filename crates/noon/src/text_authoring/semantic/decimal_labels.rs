@@ -54,6 +54,10 @@ impl PreparedDecimalLabels {
                 label.number,
                 DecimalFormat {
                     decimal_places: options.decimal_places,
+                    include_sign: options.include_sign,
+                    group_with_commas: options.group_with_commas,
+                    show_ellipsis: options.show_ellipsis,
+                    unit: options.unit.clone(),
                     ..Default::default()
                 },
                 options.font_size,
