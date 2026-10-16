@@ -670,6 +670,9 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         spring_rescale: true,
         directed: false,
         random_positions: None,
+        tree_root: None,
+        tree_orientation_up: false,
+        tree_vertex_spacing: None,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -783,6 +786,106 @@ fn networkx_random_layout_rejects_invalid_prepared_positions() {
         .positions(2, &[])
         .is_err());
     }
+}
+
+#[test]
+fn manim_tree_layout_matches_depth_first_spacing_and_orientation() {
+    let edges = [(0, 1), (0, 2), (1, 3), (1, 4)];
+    let down = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        scale: 0.5,
+        tree_root: Some(0),
+        ..Default::default()
+    }
+    .positions(5, &edges)
+    .unwrap();
+    assert_eq!(
+        down,
+        vec![
+            (-0.125, 0.5),
+            (0.125, 0.0),
+            (-0.375, 0.0),
+            (0.375, -0.5),
+            (-0.125, -0.5)
+        ]
+    );
+
+    let up = GraphLayoutOptions {
+        tree_orientation_up: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Tree,
+            scale: 0.5,
+            tree_root: Some(0),
+            ..Default::default()
+        }
+    }
+    .positions(5, &edges)
+    .unwrap();
+    for ((down_x, down_y), (up_x, up_y)) in down.iter().zip(up) {
+        assert_eq!(*down_x, up_x);
+        assert_eq!(-*down_y, up_y);
+    }
+
+    let spaced = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        tree_root: Some(0),
+        tree_vertex_spacing: Some((1.0, 2.0)),
+        ..Default::default()
+    }
+    .positions(5, &edges)
+    .unwrap();
+    let x_bounds = (
+        spaced.iter().map(|&(x, _)| x).fold(f64::INFINITY, f64::min),
+        spaced
+            .iter()
+            .map(|&(x, _)| x)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    let y_bounds = (
+        spaced.iter().map(|&(_, y)| y).fold(f64::INFINITY, f64::min),
+        spaced
+            .iter()
+            .map(|&(_, y)| y)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    assert!((x_bounds.0 + 0.75).abs() < 1e-12 && (x_bounds.1 - 0.75).abs() < 1e-12);
+    assert!((y_bounds.0 + 2.0).abs() < 1e-12 && (y_bounds.1 - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn manim_tree_layout_rejects_non_trees_and_invalid_options() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        tree_root: Some(0),
+        ..Default::default()
+    };
+    assert!(options.positions(3, &[(0, 1)]).is_err());
+    assert!(options.positions(3, &[(0, 1), (1, 2), (2, 0)]).is_err());
+    assert!(GraphLayoutOptions {
+        tree_root: None,
+        ..options.clone()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        tree_root: Some(3),
+        ..options.clone()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        tree_vertex_spacing: Some((1.0, f64::NAN)),
+        ..options
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        directed: true,
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .is_err());
 }
 
 #[test]

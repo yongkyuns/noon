@@ -27,9 +27,10 @@ use std::{
 /// A deterministic author-time layout. Layout calculations never run on the
 /// playback path; the resulting positions are persistent object translations.
 ///
-/// `Random` uses Noon's seeded stream. `Spring` accepts prepared initial
-/// positions from the language adapter and performs NetworkX-compatible force
-/// integration here. Both are author-time layouts, not playback operations.
+/// `Random` uses Noon's seeded stream unless prepared NetworkX positions are
+/// supplied. `Spring` accepts prepared initial positions and performs
+/// NetworkX-compatible force integration here; `Tree` ports Manim's ordered
+/// depth-first placement. Layouts are author-time, not playback operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
@@ -38,6 +39,7 @@ pub enum GraphLayout {
     Spiral,
     Random,
     Spring,
+    Tree,
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +75,12 @@ pub struct GraphLayoutOptions {
     pub directed: bool,
     /// Prepared NetworkX random-layout positions, including its center offset.
     pub random_positions: Option<Vec<(f64, f64)>>,
+    /// Root vertex index for Manim's deterministic tree layout.
+    pub tree_root: Option<usize>,
+    /// Place deeper tree levels above the root instead of below it.
+    pub tree_orientation_up: bool,
+    /// Optional horizontal and vertical spacing for the tree layout.
+    pub tree_vertex_spacing: Option<(f64, f64)>,
 }
 
 impl Default for GraphLayoutOptions {
@@ -96,6 +104,9 @@ impl Default for GraphLayoutOptions {
             spring_rescale: true,
             directed: false,
             random_positions: None,
+            tree_root: None,
+            tree_orientation_up: false,
+            tree_vertex_spacing: None,
         }
     }
 }
@@ -654,7 +665,7 @@ where
     options.directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
-    let edges = if options.layout == GraphLayout::Spring {
+    let edges = if matches!(options.layout, GraphLayout::Spring | GraphLayout::Tree) {
         let indices = declaration
             .topology()
             .vertices()
@@ -749,6 +760,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Random && options.random_positions.is_some() {
         return networkx_random_layout(count, options);
     }
+    if options.layout == GraphLayout::Tree {
+        return tree_layout(count, edges, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -770,6 +784,7 @@ fn graph_layout(
         GraphLayout::Random => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
+        GraphLayout::Tree => unreachable!("tree layout returned above"),
     };
     rescale(&mut positions, options.scale, options.center);
     if positions
@@ -1138,6 +1153,188 @@ fn networkx_random_layout(
             )
         })
         .collect::<Vec<_>>();
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn tree_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if options.directed {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires an undirected graph",
+        ));
+    }
+    if count == 0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a non-empty graph",
+        ));
+    }
+    let root = options.tree_root.ok_or(GraphAuthoringError::InvalidLayout(
+        "tree layout requires a root vertex",
+    ))?;
+    if root >= count {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree root references an unknown vertex",
+        ));
+    }
+    if edges.len() != count - 1 || edges.iter().any(|&(start, end)| start == end) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a connected acyclic graph",
+        ));
+    }
+
+    let mut neighbors = vec![Vec::new(); count];
+    for &(start, end) in edges {
+        neighbors[start].push(end);
+        neighbors[end].push(start);
+    }
+    let mut visited = vec![false; count];
+    let mut pending = vec![root];
+    visited[root] = true;
+    while let Some(vertex) = pending.pop() {
+        for &neighbor in &neighbors[vertex] {
+            if !visited[neighbor] {
+                visited[neighbor] = true;
+                pending.push(neighbor);
+            }
+        }
+    }
+    if visited.iter().any(|&is_visited| !is_visited) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "tree layout requires a connected acyclic graph",
+        ));
+    }
+
+    let mut children = HashMap::<usize, Vec<usize>>::with_capacity(count);
+    children.insert(root, neighbors[root].clone());
+    let mut levels = vec![neighbors[root].clone()];
+    let mut path = vec![root];
+    let mut positions: Vec<Option<(f64, f64)>> = vec![None; count];
+    let mut obstruction = vec![0.0_f64; count];
+    let orientation = if options.tree_orientation_up {
+        1_isize
+    } else {
+        -1
+    };
+
+    while !levels.is_empty() {
+        let next_vertex = levels.last_mut().and_then(Vec::pop);
+        if let Some(vertex) = next_vertex {
+            let parent = *path.last().expect("tree traversal always has a root");
+            let descendants = neighbors[vertex]
+                .iter()
+                .copied()
+                .filter(|&neighbor| neighbor != parent)
+                .collect::<Vec<_>>();
+            children.insert(vertex, descendants.clone());
+            levels.push(descendants);
+            path.push(vertex);
+            continue;
+        }
+
+        levels.pop();
+        let vertex = path.pop().expect("tree traversal always has a root");
+        let depth = levels.len() as isize;
+        let y = orientation * depth;
+        // The pinned Manim implementation uses Python list indexing with
+        // negative y coordinates, so map them from the end of the buffer.
+        let row = if y < 0 {
+            (count as isize + y) as usize
+        } else {
+            y as usize
+        };
+        let descendants = children.entry(vertex).or_default();
+        let x = if descendants.is_empty() {
+            obstruction[row]
+        } else {
+            descendants
+                .iter()
+                .map(|&child| {
+                    positions[child]
+                        .expect("tree children are laid out first")
+                        .0
+                })
+                .sum::<f64>()
+                / descendants.len() as f64
+        };
+        positions[vertex] = Some((x, y as f64));
+        let mut x = x;
+        let occupied = obstruction[row];
+        if x < occupied {
+            let shift = occupied - x;
+            let mut subtree = vec![vertex];
+            while let Some(current) = subtree.pop() {
+                let (current_x, current_y) =
+                    positions[current].expect("tree node position was prepared");
+                let shifted_x = current_x + shift;
+                positions[current] = Some((shifted_x, current_y));
+                let current_row = if current_y < 0.0 {
+                    (count as isize + current_y as isize) as usize
+                } else {
+                    current_y as usize
+                };
+                obstruction[current_row] = obstruction[current_row].max(shifted_x + 1.0);
+                subtree.extend(children[&current].iter().copied());
+            }
+            x = occupied;
+        }
+        obstruction[row] = x + 1.0;
+    }
+
+    let mut positions = positions
+        .into_iter()
+        .map(|position| position.expect("tree traversal lays out every vertex"))
+        .collect::<Vec<_>>();
+    let x_min = positions
+        .iter()
+        .map(|&(x, _)| x)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = positions
+        .iter()
+        .map(|&(x, _)| x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let y_min = positions
+        .iter()
+        .map(|&(_, y)| y)
+        .fold(f64::INFINITY, f64::min);
+    let y_max = positions
+        .iter()
+        .map(|&(_, y)| y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x_max - x_min;
+    let height = y_max - y_min;
+    let center = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0);
+    let (scale_x, scale_y) = match options.tree_vertex_spacing {
+        Some((spacing_x, spacing_y)) => {
+            if !spacing_x.is_finite() || !spacing_y.is_finite() {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "tree vertex spacing must be finite",
+                ));
+            }
+            // Manim's vertex_spacing is a direct per-axis scale, not a target
+            // half-extent. It also overrides layout_scale entirely.
+            (spacing_x, spacing_y)
+        }
+        None if width > 0.0 || height > 0.0 => {
+            let scale = 2.0 * options.scale / width.max(height);
+            (scale, scale)
+        }
+        None => (1.0, 1.0),
+    };
+    for (x, y) in &mut positions {
+        *x = (*x - center.0) * scale_x;
+        *y = (*y - center.1) * scale_y;
+    }
     if positions
         .iter()
         .any(|(x, y)| !x.is_finite() || !y.is_finite())

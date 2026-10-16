@@ -47,6 +47,7 @@ pub(crate) enum GraphOperation {
     },
     Random(noon::GraphLayoutOptions),
     Spring(noon::GraphLayoutOptions),
+    Tree(noon::GraphLayoutOptions),
     Explicit(Vec<(f64, f64)>),
 }
 
@@ -249,6 +250,13 @@ impl NativeGraph {
             (Self::Directed(graph), GraphOperation::Random(options)) => {
                 graph.change_layout(scene, options)?;
             }
+            (Self::Undirected(graph), GraphOperation::Tree(options)) => {
+                graph.change_layout(scene, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Tree(mut options)) => {
+                options.directed = true;
+                graph.change_layout(scene, options)?;
+            }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions(scene, &positions)?;
             }
@@ -447,6 +455,13 @@ impl NativeGraph {
                 graph.change_layout_live(live, options)?;
             }
             (Self::Directed(graph), GraphOperation::Random(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Undirected(graph), GraphOperation::Tree(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Tree(mut options)) => {
+                options.directed = true;
                 graph.change_layout_live(live, options)?;
             }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
@@ -870,6 +885,67 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    /// Compute Manim's deterministic tree placement before publishing graph nodes.
+    #[wasm_bindgen(js_name = liveCreateTreeGraph)]
+    pub fn live_create_tree_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        root_index: u32,
+        orientation_up: bool,
+        spacing_x: Option<f64>,
+        spacing_y: Option<f64>,
+        scale: f64,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let vertex_indices = vertex_ids
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index))
+            .collect::<HashMap<_, _>>();
+        let edge_indices = edges
+            .iter()
+            .map(|&(start, end)| {
+                let start = vertex_indices
+                    .get(&start)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                let end = vertex_indices
+                    .get(&end)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                Ok((start, end))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        let vertex_spacing = match (spacing_x, spacing_y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            (None, None) => None,
+            _ => return Err(js_error("tree vertex spacing requires both x and y values")),
+        };
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Tree,
+            scale,
+            tree_root: Some(root_index as usize),
+            tree_orientation_up: orientation_up,
+            tree_vertex_spacing: vertex_spacing,
+            directed,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &edge_indices)
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.tree_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
     /// Prepare NumPy-seeded initial positions in Python, then let shared Rust
     /// run the NetworkX Fruchterman-Reingold integration.
     #[wasm_bindgen(js_name = liveCreateSpringGraph)]
@@ -1167,6 +1243,35 @@ impl CanonicalAuthoringSceneContext {
                 layout: noon::GraphLayout::Random,
                 scale,
                 random_positions: Some(random_positions),
+                ..Default::default()
+            }),
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphTreeLayout)]
+    pub fn live_graph_tree_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        root_index: u32,
+        orientation_up: bool,
+        spacing_x: Option<f64>,
+        spacing_y: Option<f64>,
+        scale: f64,
+    ) -> Result<(), JsValue> {
+        let vertex_spacing = match (spacing_x, spacing_y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            (None, None) => None,
+            _ => return Err(js_error("tree vertex spacing requires both x and y values")),
+        };
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Tree(noon::GraphLayoutOptions {
+                layout: noon::GraphLayout::Tree,
+                scale,
+                tree_root: Some(root_index as usize),
+                tree_orientation_up: orientation_up,
+                tree_vertex_spacing: vertex_spacing,
                 ..Default::default()
             }),
         )

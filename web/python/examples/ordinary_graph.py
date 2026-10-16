@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared spring/random/circular/shell/spiral/partite layouts."""
+"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -101,8 +101,19 @@ class OrdinaryGraph(Scene):
             "random", scale=1.0,
             layout_config={"seed": 17, "center": (2.0, -1.3)},
         )
+        tree_graph = Graph(
+            ["z0", "z1", "z2", "z3", "z4"],
+            [("z0", "z1"), ("z0", "z2"), ("z1", "z3"), ("z1", "z4")],
+            layout="tree", layout_scale=0.65,
+            layout_config={"root_vertex": "z0"},
+            **styles,
+        )
+        tree_graph.change_layout(
+            "tree", scale=0.65,
+            layout_config={"root_vertex": "z0"},
+        )
         self.add(
             graph, directed, centered, shell_graph, spiral_graph, partite_graph,
-            spring_graph, spring_digraph, random_graph,
+            spring_graph, spring_digraph, random_graph, tree_graph,
         )
         self.wait(0.2)

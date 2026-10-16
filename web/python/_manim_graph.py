@@ -139,8 +139,9 @@ class _GraphBase(_compat.Group):
     ``dim=2``. Shell layouts accept ``nlist``, ``rotate``,
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
-    ``partitions``, ``align``, and ``center``. Other options remain unsupported
-    until their Rust semantics are qualified. Constructor
+    ``partitions``, ``align``, and ``center``; tree layouts accept
+    ``root_vertex``, ``orientation``, and ``vertex_spacing``. Other options
+    remain unsupported until their Rust semantics are qualified. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time; other per-key constructor options remain unsupported.
@@ -157,6 +158,7 @@ class _GraphBase(_compat.Group):
                  layout_center=(0.0, 0.0), layout_config=None, **kwargs):
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
+        root_vertex = kwargs.pop("root_vertex", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
         vertex_mapping = vertices if isinstance(vertices, Mapping) else None
@@ -167,12 +169,15 @@ class _GraphBase(_compat.Group):
         )
         spring = isinstance(layout, str) and layout == "spring"
         random_layout = isinstance(layout, str) and layout == "random"
+        tree = isinstance(layout, str) and layout == "tree"
         circular = isinstance(layout, str) and layout == "circular"
         shell = isinstance(layout, str) and layout == "shell"
         spiral = isinstance(layout, str) and layout == "spiral"
         partite = isinstance(layout, str) and layout == "partite"
-        if (explicit is None and not spring and not random_layout and not circular
-                and not shell and not spiral and not partite):
+        if root_vertex is not None and not tree:
+            raise NotImplementedError("root_vertex is supported only by the tree layout")
+        if (explicit is None and not spring and not random_layout and not tree
+                and not circular and not shell and not spiral and not partite):
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -206,6 +211,7 @@ class _GraphBase(_compat.Group):
         partitions, align_horizontal = ([], False)
         spring_positions, fixed_indices, spring_k = ([], [], None)
         random_positions = []
+        tree_root, tree_orientation_up, tree_spacing = (None, False, None)
         spring_iterations, spring_threshold, spring_rescale = (50, 1e-4, True)
         spring_fixed_is_set = False
         if spring:
@@ -217,6 +223,11 @@ class _GraphBase(_compat.Group):
         elif random_layout:
             center, random_positions, scale = _random_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
+            )
+        elif tree:
+            tree_root, tree_orientation_up, tree_spacing, scale = _tree_layout_config(
+                layout_config, self._graph_key_ids, layout_scale, self._directed,
+                root_vertex=root_vertex,
             )
         elif shell:
             center, shell_groups, rotate = _shell_layout_config(
@@ -230,7 +241,7 @@ class _GraphBase(_compat.Group):
             center, partitions, align_horizontal = _partite_layout_config(
                 layout_config, layout_center, self._graph_key_ids
             )
-        if not spring and not random_layout:
+        if not spring and not random_layout and not tree:
             scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
@@ -253,6 +264,14 @@ class _GraphBase(_compat.Group):
                     bool(self._directed), ids, _array(edge_ids),
                     _array(value for point in random_positions for value in point),
                     scale, options, operation="Graph.create",
+                )
+            elif tree:
+                spacing_x, spacing_y = (None, None) if tree_spacing is None else tree_spacing
+                self._graph_handle = engine_call(
+                    context.liveCreateTreeGraph,
+                    bool(self._directed), ids, _array(edge_ids), tree_root,
+                    tree_orientation_up, spacing_x, spacing_y, scale, options,
+                    operation="Graph.create",
                 )
             elif circular:
                 self._graph_handle = engine_call(
@@ -410,9 +429,11 @@ class _GraphBase(_compat.Group):
         return clone
 
     def change_layout(self, layout="spring", *, scale=2.0, center=(0.0, 0.0),
-                      positions=None, layout_config=None):
+                      positions=None, layout_config=None, root_vertex=None):
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
+        if root_vertex is not None and layout != "tree":
+            raise NotImplementedError("root_vertex is supported only by the tree layout")
         if layout == "spring":
             (center, initial_positions, fixed_indices, spring_k,
              iterations, threshold, rescale, scale, fixed_is_set) = _spring_layout_config(
@@ -436,6 +457,19 @@ class _GraphBase(_compat.Group):
                 _array(value for point in random_positions for value in point),
                 scale,
                 operation="Graph.random_layout",
+            )
+        elif layout == "tree":
+            vertex_order = {key: index for index, key in enumerate(self._graph_key_ids)}
+            root_index, orientation_up, spacing, scale = _tree_layout_config(
+                layout_config, vertex_order, scale, self._directed,
+                root_vertex=root_vertex,
+            )
+            spacing_x, spacing_y = (None, None) if spacing is None else spacing
+            engine_call(
+                self._context().liveGraphTreeLayout,
+                self._graph_handle,
+                root_index, orientation_up, spacing_x, spacing_y, scale,
+                operation="Graph.tree_layout",
             )
         elif layout == "circular":
             center = _circular_layout_center(layout_config, center)
@@ -492,7 +526,7 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only spring, random, circular, shell, spiral, partite, and explicit layouts"
+                "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, and explicit layouts"
             )
         return self
 
@@ -633,6 +667,49 @@ def _random_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
     positions = (_numpy_random_array(rng, (len(vertex_ids), 2)) + np.asarray(center)).astype(np.float32)
     prepared = [tuple(map(float, point)) for point in positions]
     return center, prepared, scale
+
+
+def _tree_layout_config(layout_config, vertex_ids, layout_scale, directed, *, root_vertex=None):
+    """Resolve Manim's tree-layout root, direction, and spacing options."""
+    if directed:
+        raise NotImplementedError("ManimCE tree layout requires an undirected Graph")
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    supported = {"root_vertex", "orientation", "vertex_spacing"}
+    unknown = [key for key in options if key not in supported]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported tree layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    if root_vertex is not None and "root_vertex" not in options:
+        options["root_vertex"] = root_vertex
+    root = options.get("root_vertex")
+    if root is None:
+        raise ValueError("tree layout requires root_vertex")
+    try:
+        root_index = vertex_ids[root]
+    except (KeyError, TypeError) as error:
+        raise ValueError("tree root_vertex must be an existing graph vertex") from error
+    orientation = options.get("orientation", "down")
+    if not isinstance(orientation, str):
+        raise TypeError("tree layout_config orientation must be 'down' or 'up'")
+    if orientation not in {"down", "up"}:
+        raise ValueError("tree layout_config orientation must be 'down' or 'up'")
+    spacing = options.get("vertex_spacing")
+    if spacing is not None:
+        if isinstance(spacing, (str, bytes)) or not isinstance(spacing, Sequence) or len(spacing) != 2:
+            raise TypeError("tree layout_config vertex_spacing must contain x and y values")
+        spacing = (
+            _shared._ir._finite_number("layout_config.vertex_spacing[0]", spacing[0]),
+            _shared._ir._finite_number("layout_config.vertex_spacing[1]", spacing[1]),
+        )
+    scale = _shared._ir._finite_number("layout_scale", layout_scale)
+    return root_index, orientation == "up", spacing, scale
 
 
 def _numpy_random_source(seed, layout_name):
@@ -824,7 +901,7 @@ def _partite_layout_config(layout_config, fallback_center, vertex_ids):
 
 
 class Graph(_GraphBase):
-    """Undirected retained Graph with qualified spring, random, circular, shell, spiral, partite, and explicit layouts."""
+    """Undirected retained Graph with qualified spring, random, tree, circular, shell, spiral, partite, and explicit layouts."""
 
 
 class DiGraph(_GraphBase):

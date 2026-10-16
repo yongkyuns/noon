@@ -196,6 +196,28 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut random_graph = random_graph;
     random_graph.change_layout(&mut scene, random_options)?;
 
+    let tree_edges = [(0, 1), (0, 2), (1, 3), (1, 4)];
+    let tree_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::Tree,
+        scale: 0.65,
+        tree_root: Some(0),
+        ..Default::default()
+    };
+    let tree_positions = tree_options.positions(5, &tree_edges)?;
+    let tree_graph = scene.graph_with_options(
+        [
+            ("z0", tree_positions[0]),
+            ("z1", tree_positions[1]),
+            ("z2", tree_positions[2]),
+            ("z3", tree_positions[3]),
+            ("z4", tree_positions[4]),
+        ],
+        [("z0", "z1"), ("z0", "z2"), ("z1", "z3"), ("z1", "z4")],
+        options.clone(),
+    )?;
+    let mut tree_graph = tree_graph;
+    tree_graph.change_layout(&mut scene, tree_options)?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -222,6 +244,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(spring.family()),
         MobjectTarget::Family(spring_digraph.family()),
         MobjectTarget::Family(random_graph.family()),
+        MobjectTarget::Family(tree_graph.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -245,8 +268,9 @@ mod tests {
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
         // Spring and random Graphs each add two Lines + three vertices.
+        // Tree Graph adds four Lines + five vertices.
         // Spring DiGraph: one Arrow shaft + tip + two vertices.
-        assert_eq!(leaves.len(), 52);
+        assert_eq!(leaves.len(), 61);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

@@ -58,6 +58,7 @@ class _Context:
         self.partite_layout_calls = []
         self.spring_layout_calls = []
         self.random_layout_calls = []
+        self.tree_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -78,6 +79,7 @@ class _Context:
     liveCreatePartiteGraph = liveCreateGraph
     liveCreateSpringGraph = liveCreateGraph
     liveCreateRandomGraph = liveCreateGraph
+    liveCreateTreeGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -107,6 +109,9 @@ class _Context:
     def liveGraphRandomLayout(self, *args):
         self._call("random")
         self.random_layout_calls.append(args)
+    def liveGraphTreeLayout(self, *args):
+        self._call("tree")
+        self.tree_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -228,6 +233,69 @@ class GraphFacadeTests(unittest.TestCase):
             with self.subTest(config=config):
                 with self.assertRaisesRegex(error, message):
                     graph.Graph(["a"], [], layout="random", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
+
+    def test_tree_constructor_and_retained_change_route_layout_options(self):
+        graph.Graph(
+            ["root", "left", "right"], [("root", "left"), ("root", "right")],
+            layout="tree", layout_scale=0.75,
+            layout_config={
+                "root_vertex": "root", "orientation": "up", "vertex_spacing": (2, 3),
+            },
+        )
+        create_call = self.context.creation_calls[0]
+        self.assertEqual(create_call[:7], (False, [0, 1, 2], [0, 1, 0, 2], 0, True, 2.0, 3.0))
+        self.assertEqual(create_call[7], 0.75)
+        value = graph.Graph({"root": (0, 0), "left": (-1, -1)}, [("root", "left")])
+        value.change_layout(
+            "tree", scale=0.5,
+            layout_config={"root_vertex": "left", "vertex_spacing": (1.0, 2.0)},
+        )
+        layout_call = self.context.tree_layout_calls[0]
+        self.assertIs(layout_call[0], value._graph_handle)
+        self.assertEqual(layout_call[1:], (1, False, 1.0, 2.0, 0.5))
+
+    def test_tree_root_vertex_constructor_and_change_layout_arguments(self):
+        graph.Graph(
+            ["root", "child"], [("root", "child")],
+            layout="tree", root_vertex="child",
+        )
+        self.assertEqual(self.context.creation_calls[0][3], 1)
+        value = graph.Graph({"root": (0, 0), "child": (1, 0)}, [("root", "child")])
+        value.change_layout("tree", root_vertex="child")
+        self.assertEqual(self.context.tree_layout_calls[0][1], 1)
+
+    def test_tree_layout_config_root_takes_precedence_over_root_argument(self):
+        graph.Graph(
+            ["root", "child"], [("root", "child")],
+            layout="tree", root_vertex="child",
+            layout_config={"root_vertex": "root"},
+        )
+        self.assertEqual(self.context.creation_calls[0][3], 0)
+
+    def test_tree_layout_maps_root_after_vertex_removal(self):
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0), "d": (3, 0)},
+            [("a", "b"), ("b", "c"), ("c", "d")],
+        )
+        value.remove_vertices(["a"])
+        value.change_layout("tree", layout_config={"root_vertex": "d"})
+        self.assertEqual(self.context.tree_layout_calls[0][1], 2)
+
+    def test_tree_layout_rejects_bad_configuration_and_directed_graphs(self):
+        invalid = [
+            ({}, ValueError, "requires root_vertex"),
+            ({"root_vertex": "missing"}, ValueError, "existing graph vertex"),
+            ({"root_vertex": "a", "orientation": "sideways"}, ValueError, "orientation"),
+            ({"root_vertex": "a", "vertex_spacing": (1,)}, TypeError, "contain x and y"),
+            ({"root_vertex": "a", "extra": 1}, NotImplementedError, "unsupported tree"),
+        ]
+        for config, error, message in invalid:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [("a", "b")], layout="tree", layout_config=config)
+        with self.assertRaisesRegex(NotImplementedError, "undirected"):
+            graph.DiGraph(["a", "b"], [("a", "b")], layout="tree", layout_config={"root_vertex": "a"})
         self.assertEqual(self.context.creation_calls, [])
 
     def test_worker_loads_numpy_before_graph_layout(self):
