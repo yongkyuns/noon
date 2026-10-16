@@ -396,6 +396,22 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return _base.Vec2(*engine_call(frame.unitVector))
 
+    def rotate_about_zero(self, angle, axis=_base.OUT, **kwargs):
+        return self.rotate(
+            angle,
+            axis=axis,
+            about_point=self.number_to_point(0),
+            **kwargs,
+        )
+
+    def rotate_about_number(self, number, angle, axis=_base.OUT, **kwargs):
+        return self.rotate(
+            angle,
+            axis=axis,
+            about_point=self.number_to_point(number),
+            **kwargs,
+        )
+
     def get_tick_range(self):
         """Return Manim's linear tick values through the shared Rust query."""
         import numpy as np

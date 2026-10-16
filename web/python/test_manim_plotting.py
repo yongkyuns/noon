@@ -178,6 +178,36 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.pointToNumber.assert_called_once_with(3.0, 4.0)
         self.assertEqual(frame.free.call_count, 2)
 
+    def test_number_line_rotation_helpers_use_the_requested_data_anchor(self):
+        line = object.__new__(plotting.NumberLine)
+        point = plotting._base.Vec2(2.0, 0.0)
+        result = object()
+        rate_function = object()
+        with patch.object(plotting.NumberLine, "number_to_point", return_value=point) as n2p, \
+             patch.object(plotting.NumberLine, "rotate", return_value=result) as rotate:
+            self.assertIs(
+                line.rotate_about_zero(1.5, rate_func=rate_function), result
+            )
+            n2p.assert_called_once_with(0)
+            rotate.assert_called_once_with(
+                1.5,
+                axis=plotting._base.OUT,
+                about_point=point,
+                rate_func=rate_function,
+            )
+
+        with patch.object(plotting.NumberLine, "number_to_point", return_value=point) as n2p, \
+             patch.object(plotting.NumberLine, "rotate", return_value=result) as rotate:
+            self.assertIs(
+                line.rotate_about_number(-2, 0.5, axis=plotting._base.UP), result
+            )
+            n2p.assert_called_once_with(-2)
+            rotate.assert_called_once_with(
+                0.5,
+                axis=plotting._base.UP,
+                about_point=point,
+            )
+
     def test_number_line_get_tick_uses_current_frame_and_matches_shaft_style(self):
         frame = SimpleNamespace(tickSegment=Mock(return_value=[1.0, 2.0, 3.0, 4.0]),
                                 free=Mock())
