@@ -101,6 +101,41 @@ impl WasmCoordinateOptions {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setPlaneAxisTips)]
+    pub fn set_plane_axis_tips(
+        &mut self,
+        axis_index: u32,
+        enabled: bool,
+        width: f64,
+        height: f64,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis tip options require NumberPlane options"));
+        };
+        let (include_tip, tip_width, tip_height) = match axis_index {
+            0 => (
+                &mut options.x_include_tip,
+                &mut options.x_tip_width,
+                &mut options.x_tip_height,
+            ),
+            1 => (
+                &mut options.y_include_tip,
+                &mut options.y_tip_width,
+                &mut options.y_tip_height,
+            ),
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 {
+            return Err(js_error(
+                "NumberPlane tip width and height must be positive",
+            ));
+        }
+        *include_tip = enabled;
+        *tip_width = width;
+        *tip_height = height;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setPlaneAxisStyle)]
     pub fn set_plane_axis_style(
         &mut self,

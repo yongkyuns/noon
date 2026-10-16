@@ -69,7 +69,8 @@ def _coordinate_decimal_places(axis_range):
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}
 _AXIS_LABEL_KEYS = _plot._AXES_CONFIG_KEYS - {"scaling"}
 _NUMBER_PLANE_AXIS_KEYS = _AXIS_STYLE_KEYS | _AXIS_LABEL_KEYS | {
-    "include_ticks", "include_tip", "tick_size", "exclude_origin_tick", "scaling",
+    "include_ticks", "include_tip", "tick_size", "tip_width", "tip_height",
+    "exclude_origin_tick", "scaling",
 }
 
 
@@ -115,6 +116,8 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         "stroke_width": 2,
         "include_ticks": False,
         "include_tip": False,
+        "tip_width": _plot._DEFAULT_NUMBER_LINE_TIP_SIZE,
+        "tip_height": _plot._DEFAULT_NUMBER_LINE_TIP_SIZE,
         "tick_size": 0.1,
         "exclude_origin_tick": True,
         "line_to_number_buff": _plot._base.SMALL_BUFF,
@@ -137,11 +140,13 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         for key in ("include_ticks", "include_tip", "exclude_origin_tick"):
             if not isinstance(config[key], bool):
                 raise TypeError(f"{name}.{key} must be a boolean")
-        if config["include_tip"]:
-            raise NotImplementedError("NumberPlane tips are not yet supported")
         config["tick_size"] = _plot._finite_axis_option(
             config["tick_size"], f"{name}.tick_size", nonnegative=True
         )
+        for key in ("tip_width", "tip_height"):
+            config[key] = _plot._finite_axis_option(config[key], f"{name}.{key}")
+            if config[key] <= 0:
+                raise ValueError(f"{name}.{key} must be positive")
         if config.get("scaling") is not None:
             raise NotImplementedError("NumberPlane nonlinear axis scaling is not yet supported")
         # Axes normalizes every linear axis to omit its origin tick after
@@ -170,8 +175,8 @@ class NumberPlane(_plot.Axes):
 
     Supports ranges, lengths, grid stroke styles, common axis stroke style,
     native Text constructor labels with per-axis formatting, independent ticks
-    and axis stroke styling, and major x/y grid-line aliases. Tips and nonlinear
-    deformation remain unsupported.
+    and axis styling, filled axis tips, and major x/y grid-line aliases.
+    Nonlinear deformation remains unsupported.
     Coordinates and plots use the same shared Rust AxesFrame.
     """
 
@@ -222,6 +227,13 @@ class NumberPlane(_plot.Axes):
                     config["tick_size"],
                     config["exclude_origin_tick"],
                 )
+                engine_call(
+                    options.setPlaneAxisTips,
+                    axis_index,
+                    config["include_tip"],
+                    config["tip_width"],
+                    config["tip_height"],
+                )
         except BaseException:
             options.free()
             raise
@@ -235,14 +247,20 @@ class NumberPlane(_plot.Axes):
             object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 2),
             tick_size=x_axis_options["tick_size"],
             include_ticks=x_axis_options["include_ticks"],
+            include_tip=x_axis_options["include_tip"],
             exclude_origin_tick=x_axis_options["exclude_origin_tick"],
         )
+        x_axis.tip_width = x_axis_options["tip_width"]
+        x_axis.tip_height = x_axis_options["tip_height"]
         y_axis = _plot._attach_number_line(
             object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3),
             tick_size=y_axis_options["tick_size"],
             include_ticks=y_axis_options["include_ticks"],
+            include_tip=y_axis_options["include_tip"],
             exclude_origin_tick=y_axis_options["exclude_origin_tick"],
         )
+        y_axis.tip_width = y_axis_options["tip_width"]
+        y_axis.tip_height = y_axis_options["tip_height"]
         x_axis.scaling = y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)

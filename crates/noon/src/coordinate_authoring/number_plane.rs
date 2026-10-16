@@ -2,6 +2,8 @@
 use super::*;
 use noon_core::{StrokeCap, StrokeJoin, BLUE_D};
 
+const DEFAULT_NUMBER_PLANE_TIP_SIZE: f64 = 0.35;
+
 /// Inert Manim-compatible cartesian plane request.  The result contains only
 /// ordinary line objects and families; it does not introduce a grid primitive.
 #[derive(Clone, Debug)]
@@ -15,6 +17,13 @@ pub struct ManimNumberPlaneOptions {
     pub x_axis_style: Option<SemanticStyle>,
     /// Optional style replacement for the y axis; omitted inherits `axis_style`.
     pub y_axis_style: Option<SemanticStyle>,
+    /// Manim's NumberPlane defaults to no tip on either axis.
+    pub x_include_tip: bool,
+    pub y_include_tip: bool,
+    pub x_tip_width: f64,
+    pub x_tip_height: f64,
+    pub y_tip_width: f64,
+    pub y_tip_height: f64,
     pub x_ticks: CoordinateTicks,
     pub y_ticks: CoordinateTicks,
     pub background_line_style: SemanticStyle,
@@ -69,6 +78,12 @@ impl Default for ManimNumberPlaneOptions {
             axis_style: number_plane_axis_style(),
             x_axis_style: None,
             y_axis_style: None,
+            x_include_tip: false,
+            y_include_tip: false,
+            x_tip_width: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            x_tip_height: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            y_tip_width: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            y_tip_height: DEFAULT_NUMBER_PLANE_TIP_SIZE,
             x_ticks: CoordinateTicks {
                 enabled: false,
                 exclude_origin: true,
@@ -106,11 +121,13 @@ impl ManimNumberPlane {
         store: Rc<RefCell<SemanticStore>>,
         options: &ManimNumberPlaneOptions,
     ) -> Result<Self, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_plane(options)?;
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        Self::from_family(resolve_family(store, &result, root)?)
+        let prepared = prepare_number_plane(options)?;
+        let root = publish_prepared_number_plane(
+            prepared,
+            &mut store.borrow_mut(),
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_family(MobjectFamily::from_node(store, root)?)
     }
 
     pub fn from_family(family: MobjectFamily) -> Result<Self, CoordinateAuthoringError> {
@@ -180,11 +197,12 @@ impl Scene {
         &mut self,
         options: &ManimNumberPlaneOptions,
     ) -> Result<ManimNumberPlane, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_plane(options)?;
-        let result = self.apply_semantic_transaction(transaction)?;
-        ManimNumberPlane::from_family(resolve_family(
+        let prepared = prepare_number_plane(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_number_plane(prepared, store, publish)
+        })?;
+        ManimNumberPlane::from_family(MobjectFamily::from_node(
             Rc::clone(self.integration_store()),
-            &result,
             root,
         )?)
     }
@@ -225,9 +243,49 @@ fn plane_members(family: &MobjectFamily) -> Result<[SemanticNodeId; 4], Coordina
     ])
 }
 
+struct PreparedPlaneTip {
+    axis: SemanticLocalNodeToken,
+    path: VectorPath,
+    style: SemanticStyle,
+}
+
+pub(crate) struct PreparedNumberPlane {
+    transaction: SemanticMutationTransaction,
+    root: SemanticLocalNodeToken,
+    tips: Vec<PreparedPlaneTip>,
+}
+
+pub(crate) fn publish_prepared_number_plane(
+    prepared: PreparedNumberPlane,
+    store: &mut SemanticStore,
+    mut publish: impl FnMut(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    let PreparedNumberPlane {
+        mut transaction,
+        root,
+        tips,
+    } = prepared;
+    let paths = tips.iter().map(|tip| tip.path.clone()).collect::<Vec<_>>();
+    store.with_geometry_paths(paths, |store, handles| {
+        for (tip, handle) in tips.iter().zip(handles.iter().copied()) {
+            let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            state.style = tip.style.clone();
+            let token = transaction.create_node(SemanticNodeCreation::object(state));
+            transaction.add_member(tip.axis, token);
+        }
+        let result = publish(store, transaction)?;
+        result
+            .resolve(root)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(root))
+    })
+}
+
 pub(crate) fn prepare_number_plane(
     options: &ManimNumberPlaneOptions,
-) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
+) -> Result<PreparedNumberPlane, CoordinateAuthoringError> {
     let x_length = options
         .x_length
         .unwrap_or(options.x_range[1] - options.x_range[0]);
@@ -266,12 +324,63 @@ pub(crate) fn prepare_number_plane(
     let y_style = options.y_axis_style.as_ref().unwrap_or(&options.axis_style);
     let x_axis = stage_line(
         &mut transaction,
-        prepare_line(frame.x(), options.x_ticks, x_style)?,
+        prepare_line_with_elongated_ticks(
+            frame.x(),
+            options.x_ticks,
+            x_style,
+            &[],
+            2.0,
+            options.x_include_tip,
+        )?,
     );
     let y_axis = stage_line(
         &mut transaction,
-        prepare_line(frame.y(), options.y_ticks, y_style)?,
+        prepare_line_with_elongated_ticks(
+            frame.y(),
+            options.y_ticks,
+            y_style,
+            &[],
+            2.0,
+            options.y_include_tip,
+        )?,
     );
+    let mut tips = Vec::new();
+    for (axis, include, width, height, axis_frame, style) in [
+        (
+            x_axis,
+            options.x_include_tip,
+            options.x_tip_width,
+            options.x_tip_height,
+            frame.x(),
+            x_style,
+        ),
+        (
+            y_axis,
+            options.y_include_tip,
+            options.y_tip_width,
+            options.y_tip_height,
+            frame.y(),
+            y_style,
+        ),
+    ] {
+        if include {
+            if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 {
+                return Err(CoordinateAuthoringError::InvalidOptions(
+                    "invalid NumberPlane tip dimensions",
+                ));
+            }
+            let start = axis_frame.start();
+            let end = axis_frame.end();
+            let dx = end[0] - start[0];
+            let dy = end[1] - start[1];
+            let length = dx.hypot(dy);
+            tips.push(PreparedPlaneTip {
+                axis,
+                path: filled_tip_path_with_width(end, (dx / length, dy / length), height, width)?,
+                style: filled_tip_style(style)?,
+            });
+        }
+    }
     stage_grid_lines(
         &mut transaction,
         faded,
@@ -296,7 +405,11 @@ pub(crate) fn prepare_number_plane(
     for child in [faded, background, x_axis, y_axis] {
         transaction.add_member(root, child);
     }
-    Ok((transaction, root))
+    Ok(PreparedNumberPlane {
+        transaction,
+        root,
+        tips,
+    })
 }
 
 fn validate_plane_style(

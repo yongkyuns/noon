@@ -14,6 +14,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         faded_line_ratio: 2,
         ..Default::default()
     };
+    options.x_include_tip = true;
+    options.y_include_tip = true;
+    options.y_tip_width = 0.45;
+    options.y_tip_height = 0.3;
     options.background_line_style.stroke = Some(SemanticPaint::Solid(GREEN));
     options.background_line_style.stroke_width = 0.01;
     let plane = scene.number_plane(&options)?;
@@ -107,7 +111,7 @@ mod tests {
             );
             for axis in &plane[2..] {
                 let members = store.semantic_family_members_checked(*axis).unwrap();
-                assert_eq!(members.len(), 2, "shaft and empty tick family");
+                assert_eq!(members.len(), 3, "shaft, empty ticks, and retained tip");
                 assert!(store
                     .semantic_family_members_checked(members[1])
                     .unwrap()
@@ -126,8 +130,8 @@ mod tests {
                 })
                 .count();
             assert_eq!(
-                geometry_count, 22,
-                "18 grid lines, two axes, curve and marker"
+                geometry_count, 24,
+                "18 grid lines, two axes and tips, curve and marker"
             );
             assert_eq!(leaves.len(), geometry_count + text_count);
             (leaves, store.geometry_resources().stats())

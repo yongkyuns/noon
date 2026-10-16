@@ -178,6 +178,65 @@ fn number_plane_retains_independent_axis_stroke_styles() {
 }
 
 #[test]
+fn number_plane_retains_independent_tips_and_excludes_tip_endpoint_ticks() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberPlaneOptions {
+        x_range: [-2.0, 2.0, 1.0],
+        y_range: [-1.0, 1.0, 1.0],
+        ..ManimNumberPlaneOptions::default()
+    };
+    options.x_include_tip = true;
+    options.x_tip_width = 0.6;
+    options.x_tip_height = 0.4;
+    options.x_ticks.enabled = true;
+    options.y_ticks.enabled = true;
+    options.axis_style.stroke = Some(SemanticPaint::Solid(noon_core::BLUE));
+
+    let plane = scene.number_plane(&options).unwrap();
+    let x_axis = plane.x_axis().unwrap();
+    let y_axis = plane.y_axis().unwrap();
+    let x_tip = x_axis.tip().unwrap().expect("enabled x-axis tip");
+    assert!(y_axis.tip().unwrap().is_none(), "y tip remains disabled");
+    assert_eq!(x_tip.path_query().unwrap().start().unwrap(), (2.0, 0.0));
+    let tip_style = x_tip.state().unwrap().style;
+    assert_eq!(tip_style.fill, Some(SemanticPaint::Solid(noon_core::BLUE)));
+    assert_eq!(tip_style.stroke_width, 0.0);
+
+    let store = scene.integration_store().borrow();
+    let x_ticks = store
+        .semantic_family_members_checked(x_axis.ticks().unwrap().node_id())
+        .unwrap();
+    let y_ticks = store
+        .semantic_family_members_checked(y_axis.ticks().unwrap().node_id())
+        .unwrap();
+    assert_eq!(
+        x_ticks.len(),
+        3,
+        "tip endpoint and origin ticks are omitted"
+    );
+    assert_eq!(
+        y_ticks.len(),
+        2,
+        "tipless y axis retains its range endpoints"
+    );
+    assert_eq!(resources(&scene), 1);
+}
+
+#[test]
+fn invalid_number_plane_tip_fails_before_resource_or_scene_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let options = ManimNumberPlaneOptions {
+        x_include_tip: true,
+        x_tip_width: f64::NAN,
+        ..ManimNumberPlaneOptions::default()
+    };
+    assert!(scene.number_plane(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn number_plane_rejects_invalid_axis_style_before_publication() {
     let mut scene = Scene::new();
     let revision = scene.revision();
