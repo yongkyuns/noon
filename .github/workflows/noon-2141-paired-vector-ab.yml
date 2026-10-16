@@ -62,9 +62,12 @@ jobs:
           lib.write_text(source.replace(old,"    pub(crate) fn for_individual_path_draws() -> Self {"))
           path=root/"gpu/retained_text.rs"
           source=path.read_text()
-          old="            geometry: FramePreparer::for_mixed_retained_path_draws(),"
-          assert source.count(old)==1
-          path.write_text(source.replace(old,"            geometry: FramePreparer::for_individual_path_draws(),"))
+          # All THREE construction points must use the old policy. Preload
+          # and compaction replace the initial preparer during scene playback.
+          old="FramePreparer::for_mixed_retained_path_draws()"
+          assert source.count(old)==3, "baseline must cover default/preload/compaction"
+          path.write_text(source.replace(old,"FramePreparer::for_individual_path_draws()"))
+          assert path.read_text().count("FramePreparer::for_individual_path_draws()")==3
           PY
           git -C baseline diff --check
           git -C baseline diff --name-only > evidence/baseline-files-changed.txt
@@ -177,6 +180,46 @@ jobs:
                     (after/before - 1)*100)
           print("NOTE: software WebGL2 wall durations and last-rendered-frame counter",
                 "snapshots only; no physical GPU timestamps or qualified FPS speedup.")
+          PY
+
+      # This check would have failed the previous contaminated A/B: both
+      # variants drew ~154 calls despite ~10,430 contributed instances.
+      # A passing job must show real individual draws in the control, not
+      # merely two distinct binary hashes and a completed animation.
+      - name: Require genuine individual vs packed draw-count separation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from statistics import median
+          counts={}
+          for variant in ("baseline","candidate"):
+              captures=[]
+              files=sorted(Path("evidence").glob(variant+"-*/report.json"))
+              assert len(files)==2,(variant,"missing capture groups",files)
+              for file in files:
+                  report=json.loads(file.read_text())
+                  assert report.get("status")=="collected-unqualified",(file,report.get("status"))
+                  assert len(report.get("runs",()))==2,(file,"incomplete group")
+                  for run in report["runs"]:
+                      assert run.get("status")=="endpoint-observed",(file,run.get("status"))
+                      late=[entry["metrics"] for entry in run["samples"]
+                            if entry.get("metrics")
+                            and 23 <= entry["metrics"].get("time",-1) < 25
+                            and entry["metrics"].get("ready")
+                            and entry["metrics"]["counters"].get("objectCount",0)>=10000
+                            and entry["metrics"]["counters"].get("instancesDrawn",0)>=10000]
+                      assert late,(variant,file,run["index"],"no fully realized ray draw")
+                      captures.append(median(v["counters"]["drawCalls"] for v in late))
+              counts[variant]=captures
+              print(variant,"per-run late-frame median draw calls",captures)
+          # Exact anchored workload contains 10k separate ray objects plus
+          # other paths; 8k control draws proves no packed preparer crept in.
+          assert min(counts["baseline"])>8000,("invalid baseline: packed path policy leaked",counts)
+          assert max(counts["candidate"])<min(counts["baseline"])/2,(
+              "packed candidate failed to reduce actual geometry submission",counts)
+          print("A/B control validated; raw per-window and wall time still diagnostic only.")
           PY
 
       - name: Upload both complete and failed diagnostic captures
