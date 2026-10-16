@@ -1,6 +1,8 @@
 """Rust-prepared native Text and DecimalNumber coordinate label families."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import noon as _base
 import _manim_compat as _compat
 import _manim_plotting as _plot
@@ -55,7 +57,7 @@ def _family(handle, size, color):
         wrapper._initialize_text(str(source), size, object_handle, color, 1.0,
                                  presentation_applied=True)
         members.append(wrapper)
-    return _plot._family(object.__new__(_compat.Group), handle, members)
+    return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
 def _decimal_family(handle, color):
@@ -67,7 +69,7 @@ def _decimal_family(handle, color):
         member, None, color=color, presentation_applied=True,
     )
                for member in engine_call(_decimal_members, handle)]
-    return _plot._family(object.__new__(_compat.Group), handle, members)
+    return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
 def _remember(axis, labels):
@@ -77,16 +79,58 @@ def _remember(axis, labels):
     axis.numbers = labels
 
 
-def number_mobjects(axis, values, *, attach, config):
+def number_mobjects(axis, values, *, attach, config, excluding=None):
     _cold_labels()
     values_js = _plot._array(() if values is None else values)
     options, size, color = _options(config)
+    try:
+        excluded_js = _plot._array(() if excluding is None else excluding)
+        engine_call(options.setExcludedNumbers, excluded_js)
+        engine_call(options.setTickRangeFlags,
+                    bool(getattr(axis, "include_tip", False)),
+                    bool(getattr(axis, "exclude_origin_tick", False)))
+    except BaseException:
+        options.free()
+        raise
     handle = engine_call(axis._semantic_family_handle.numberLabelFamily,
                          values_js, values is None, options, bool(attach))
     labels = _family(handle, size, color)
     if attach:
         _remember(axis, labels)
     return labels
+
+
+def custom_labels(axis, labels, *, config):
+    """Attach string/number labels without moving text placement into Python."""
+    _cold_labels()
+    if not isinstance(labels, Mapping):
+        raise TypeError("add_labels requires a mapping from positions to labels")
+    positions = []
+    texts = []
+    for position, label in labels.items():
+        positions.append(_base._ir._finite_number("label position", position))
+        if isinstance(label, bool):
+            raise TypeError("custom labels must be strings or finite numbers")
+        if not isinstance(label, str):
+            if isinstance(label, (int, float)):
+                _base._ir._finite_number("label value", label)
+            else:
+                raise NotImplementedError(
+                    "native NumberLine labels currently accept strings or finite numbers"
+                )
+        texts.append(str(label))
+
+    values_js = _plot._array(positions)
+    texts_js = _plot._to_js(texts)
+    options, size, color = _options(config)
+    family_handle = engine_call(
+        axis._semantic_family_handle.numberLineCustomLabelFamily,
+        values_js, texts_js, options,
+    )
+    family = _family(family_handle, size, color)
+    axis._semantic_member_wrappers[_shared._family_wrapper_key(family)] = family
+    axis.labels = family
+    return family
 
 
 def add_coordinates(axes, x_values, y_values, *, x_config, y_config, config):

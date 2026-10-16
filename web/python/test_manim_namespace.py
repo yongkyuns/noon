@@ -62,6 +62,12 @@ class ManimNamespaceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "requires optional package 'numpy'"):
                 pending.log
 
+    def test_tick_query_loads_numpy_only_when_referenced(self):
+        self.assertEqual(namespace.required_packages("line.get_tick_range()"), ("numpy",))
+        self.assertEqual(namespace.required_packages("query = line.get_tick_range; query()"), ("numpy",))
+        self.assertEqual(namespace.required_packages("line = NumberLine()"), ())
+        self.assertEqual(namespace.required_packages("message = 'line.get_tick_range()'"), ())
+
     def test_array_helpers_load_numpy_for_direct_aliased_and_module_calls(self) -> None:
         for source in ["stretch_array_to_length(values, 3)",
                        "from manim import stretch_array_to_length as stretch\nstretch(values, 3)",

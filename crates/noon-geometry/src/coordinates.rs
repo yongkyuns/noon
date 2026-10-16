@@ -4,6 +4,9 @@
 //! the Semantic Scene; endpoints must come from either authored state or one
 //! coherent effective frame, never a mixture of the two.
 
+/// Default admission budget shared by linear NumberLine construction and queries.
+pub const DEFAULT_NUMBER_LINE_TICK_LIMIT: usize = 10_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateError {
     InvalidRange,
@@ -101,6 +104,35 @@ impl NumberLineFrame {
         ])
     }
 
+    /// Return the endpoints of a Manim-style tick centered on `number`.
+    /// `half_length` is the distance from the center to either endpoint, so it
+    /// matches Manim's `size` argument rather than half of its total length.
+    pub fn tick_segment(
+        self,
+        number: f64,
+        half_length: f64,
+    ) -> Result<[[f64; 2]; 2], CoordinateError> {
+        if !half_length.is_finite() {
+            return Err(CoordinateError::InvalidPoint);
+        }
+        let center = self.number_to_point(number)?;
+        let dx = self.end[0] - self.start[0];
+        let dy = self.end[1] - self.start[1];
+        let length = dx.hypot(dy);
+        if length == 0.0 {
+            return Err(CoordinateError::DegenerateAxis);
+        }
+        if !length.is_finite() {
+            return Err(CoordinateError::InvalidPoint);
+        }
+        let normal = [-dy / length, dx / length];
+        let offset = [half_length * normal[0], half_length * normal[1]];
+        Ok([
+            finite_point([center[0] - offset[0], center[1] - offset[1]])?,
+            finite_point([center[0] + offset[0], center[1] + offset[1]])?,
+        ])
+    }
+
     /// Project onto the current line, matching scalar Manim `p2n` semantics.
     pub fn point_to_number(self, point: [f64; 2]) -> Result<f64, CoordinateError> {
         finite_point(point)?;
@@ -123,6 +155,18 @@ impl NumberLineFrame {
     pub fn unit_size(self) -> f64 {
         (self.end[0] - self.start[0]).hypot(self.end[1] - self.start[1])
             / (self.range[1] - self.range[0])
+    }
+
+    /// Return the pinned linear tick values for this data range. Construction
+    /// and query share the same tick rule so callers do not reconstruct the
+    /// range with frontend-specific floating-point logic.
+    pub fn tick_values(
+        self,
+        include_tip: bool,
+        exclude_origin: bool,
+        limit: usize,
+    ) -> Result<Vec<f64>, CoordinateError> {
+        number_line_tick_values(self.range, include_tip, exclude_origin, limit)
     }
 }
 
@@ -358,6 +402,24 @@ mod tests {
     }
 
     #[test]
+    fn tick_segments_follow_the_current_line_normal_and_scale() {
+        let frame = NumberLineFrame::new([-2.0, 2.0, 1.0], [3.0, 4.0], [3.0, 8.0]).unwrap();
+        assert_eq!(
+            frame.tick_segment(0.0, 0.25).unwrap(),
+            [[3.25, 6.0], [2.75, 6.0]]
+        );
+        let rotated = NumberLineFrame::new([-2.0, 2.0, 1.0], [1.0, 2.0], [5.0, 2.0]).unwrap();
+        assert_eq!(
+            rotated.tick_segment(1.0, 0.5).unwrap(),
+            [[4.0, 1.5], [4.0, 2.5]]
+        );
+        let diagonal = NumberLineFrame::new([-1.0, 1.0, 0.5], [0.0, 0.0], [4.0, 3.0]).unwrap();
+        let [[start_x, start_y], [end_x, end_y]] = diagonal.tick_segment(0.0, 0.5).unwrap();
+        near([start_x, start_y], [2.3, 1.1]);
+        near([end_x, end_y], [1.7, 1.9]);
+    }
+
+    #[test]
     fn positive_and_negative_only_axes_have_centered_range_midpoints() {
         let frame = AxesFrame::centered([2.0, 6.0, 1.0], [-6.0, -2.0, 1.0], 8.0, 4.0).unwrap();
         near(frame.coords_to_point(4.0, -4.0).unwrap(), [0.0, 0.0]);
@@ -393,6 +455,19 @@ mod tests {
     }
 
     #[test]
+    fn number_line_frame_exposes_its_shared_tick_values() {
+        let frame = NumberLineFrame::centered([-2.0, 2.0, 1.0], 4.0, 0.0).unwrap();
+        assert_eq!(
+            frame.tick_values(false, false, 10).unwrap(),
+            vec![-2.0, -1.0, 0.0, 1.0, 2.0]
+        );
+        assert_eq!(
+            frame.tick_values(true, true, 10).unwrap(),
+            vec![-2.0, -1.0, 1.0]
+        );
+    }
+
+    #[test]
     fn invalid_and_singular_queries_are_not_silently_approximated() {
         assert!(NumberLineFrame::centered([0.0, 0.0, 1.0], 1.0, 0.0).is_err());
         assert!(NumberLineFrame::centered([0.0, 1.0, 1.0], 0.0, 0.0).is_err());
@@ -405,6 +480,14 @@ mod tests {
         assert_eq!(
             frame.number_to_point(f64::NAN),
             Err(CoordinateError::InvalidPoint)
+        );
+        assert_eq!(
+            frame.tick_segment(0.5, f64::INFINITY),
+            Err(CoordinateError::InvalidPoint)
+        );
+        assert_eq!(
+            frame.tick_segment(0.5, 0.1),
+            Err(CoordinateError::DegenerateAxis)
         );
         assert_eq!(
             number_line_tick_values([0.0, 100.0, 0.01], false, false, 10),

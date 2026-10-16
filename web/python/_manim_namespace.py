@@ -23,6 +23,7 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "get_tick_range": "numpy",
     "typing": "numpy",
     "get_unit_normal": "numpy",
     "z_to_vector": "numpy",

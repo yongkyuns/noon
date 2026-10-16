@@ -20,7 +20,10 @@ class LiveCoordinateAdapterTests(TestCase):
             numberLine=Mock(return_value=self.options),axes=Mock(return_value=self.options))).start()
         patch.object(plotting,"engine_call",side_effect=lambda fn,*args:fn(*args)).start()
         patch.object(plotting,"_coordinate_style").start()
-        patch.object(plotting,"_attach_number_line",side_effect=lambda wrapper,handle:wrapper).start()
+        self.attach_number_line = patch.object(
+            plotting, "_attach_number_line",
+            side_effect=lambda wrapper, handle, **kwargs: wrapper,
+        ).start()
         patch.object(plotting,"_coordinate_family",side_effect=lambda wrapper,handle,members:wrapper).start()
         patch.object(plotting,"_family",side_effect=lambda wrapper,handle,members:wrapper).start()
 
@@ -31,12 +34,24 @@ class LiveCoordinateAdapterTests(TestCase):
         self.construct()
         self.resolve.assert_called_once_with("coordinates")
         self.live.assert_called_once_with(self.options)
+        self.assertEqual(self.attach_number_line.call_args.kwargs, {
+            "tick_size": 0.1,
+            "include_tip": False,
+            "exclude_origin_tick": False,
+        })
         self.cold.assert_not_called(); self.options.free.assert_not_called()
 
     def test_live_axes_use_the_same_dispatch_without_a_cold_fallback(self):
         self.construct(True)
         self.resolve.assert_called_once_with("coordinates")
         self.live.assert_called_once_with(self.options)
+        self.assertEqual(
+            [call.kwargs for call in self.attach_number_line.call_args_list],
+            [
+                {"tick_size": 0.1, "include_tip": True, "exclude_origin_tick": True},
+                {"tick_size": 0.1, "include_tip": True, "exclude_origin_tick": True},
+            ],
+        )
         self.cold.assert_not_called(); self.options.free.assert_not_called()
 
     def test_axes_defaults_and_two_value_ranges_are_forwarded_for_rust_coercion(self):
@@ -80,6 +95,10 @@ class LiveCoordinateAdapterTests(TestCase):
         plotting._coordinate_options.numberLine.assert_not_called()
         self.construct(True)
         self.options.setTips.assert_called_once_with(True)
+
+    def test_number_line_stores_its_default_exclusion_list(self):
+        line = plotting.NumberLine((0, 2, 1), numbers_to_exclude=(0, 2))
+        self.assertEqual(line.numbers_to_exclude, [0, 2])
 
     def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
         shaft=object()

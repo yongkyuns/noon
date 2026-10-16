@@ -10,6 +10,10 @@ pub struct NumberLabelOptions {
     pub font_size: f32,
     pub decimal_places: u32,
     pub exclude_zero: bool,
+    /// Exact numeric exclusions, checked before allocating text resources.
+    pub excluded_numbers: Vec<f64>,
+    pub include_tip: bool,
+    pub exclude_origin_tick: bool,
     pub direction: [f64; 2],
     pub buff: f64,
     pub color: crate::Color,
@@ -22,10 +26,50 @@ impl Default for NumberLabelOptions {
             font_size: 18.0,
             decimal_places: 0,
             exclude_zero: true,
+            excluded_numbers: Vec::new(),
+            include_tip: false,
+            exclude_origin_tick: false,
             direction: [0.0, -1.0],
             buff: 0.12,
             color: crate::WHITE,
         }
+    }
+}
+
+impl NumberLabelOptions {
+    pub(crate) fn prepare_values(
+        &self,
+        frame: noon_geometry::NumberLineFrame,
+        numbers: Option<&[f64]>,
+    ) -> Result<Vec<super::NumberLabel>, PlotPresentationError> {
+        let automatic = numbers
+            .is_none()
+            .then(|| {
+                frame.tick_values(
+                    self.include_tip,
+                    self.exclude_origin_tick,
+                    super::MAX_PLOT_LABELS,
+                )
+            })
+            .transpose()?;
+        super::number_labels_excluding(
+            frame,
+            numbers.or(automatic.as_deref()),
+            self.decimal_places,
+            self.exclude_zero,
+            &self.excluded_numbers,
+        )
+    }
+
+    pub fn set_excluded_numbers(&mut self, values: &[f64]) -> Result<(), PlotPresentationError> {
+        super::preparation::validate_label_exclusions(values)?;
+        let mut excluded = Vec::new();
+        excluded
+            .try_reserve_exact(values.len())
+            .map_err(|_| PlotPresentationError::AllocationFailed)?;
+        excluded.extend_from_slice(values);
+        self.excluded_numbers = excluded;
+        Ok(())
     }
 }
 

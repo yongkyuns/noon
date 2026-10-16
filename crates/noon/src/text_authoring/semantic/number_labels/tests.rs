@@ -100,6 +100,104 @@ fn detached_labels_attach_only_on_request_and_empty_values_stay_empty() {
 }
 
 #[test]
+fn number_line_exclusions_apply_before_native_text_allocation() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions {
+        exclude_zero: false,
+        excluded_numbers: vec![0.0, 2.0],
+        ..Default::default()
+    };
+
+    let detached = line.get_number_mobjects(None, &options).unwrap();
+    assert_eq!(leaves(&detached).len(), 1);
+    assert_eq!(text(&leaves(&detached)[0]), "1");
+
+    let attached = line.add_numbers(Some(&[0.0, 1.0, 2.0]), &options).unwrap();
+    assert_eq!(leaves(&attached).len(), 1);
+    assert_eq!(
+        leaves(line.family())
+            .iter()
+            .filter(|object| object.state().unwrap().content.text().is_some())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn invalid_exclusions_preserve_options_and_publish_no_resources() {
+    let mut options = NumberLabelOptions::default();
+    options.set_excluded_numbers(&[0.0, 2.0]).unwrap();
+    assert!(options.set_excluded_numbers(&[f64::NAN]).is_err());
+    assert_eq!(options.excluded_numbers, [0.0, 2.0]);
+    assert!(options
+        .set_excluded_numbers(&vec![0.0; crate::plot_presentation::MAX_PLOT_LABELS + 1])
+        .is_err());
+    assert_eq!(options.excluded_numbers, [0.0, 2.0]);
+
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let before = counts(&scene);
+    let revision = scene.revision();
+    options.excluded_numbers.push(f64::INFINITY);
+    assert!(line.add_numbers(None, &options).is_err());
+    assert_eq!(counts(&scene), before);
+    assert_eq!(scene.revision(), revision);
+}
+
+#[test]
+fn automatic_labels_follow_tick_policy_but_explicit_values_keep_zero_and_endpoint() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions {
+        exclude_zero: false,
+        include_tip: true,
+        exclude_origin_tick: true,
+        ..Default::default()
+    };
+    let automatic = line.get_number_mobjects(None, &options).unwrap();
+    assert_eq!(
+        leaves(&automatic).iter().map(text).collect::<Vec<_>>(),
+        ["-2", "-1", "1"]
+    );
+    let explicit = line
+        .get_number_mobjects(Some(&[0.0, 2.0]), &options)
+        .unwrap();
+    assert_eq!(
+        leaves(&explicit).iter().map(text).collect::<Vec<_>>(),
+        ["0", "2"]
+    );
+}
+
+#[test]
+fn custom_number_line_labels_keep_text_and_order_in_the_attached_family() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions::default();
+    let labels = line
+        .add_labels(&[(2.0, "Tuesday".into()), (0.0, "Start".into())], &options)
+        .unwrap();
+    let label_members = leaves(&labels);
+    assert_eq!(label_members.len(), 2);
+    assert_eq!(text(&label_members[0]), "Tuesday");
+    assert_eq!(text(&label_members[1]), "Start");
+    assert!(leaves(line.family()).iter().any(|object| object
+        .state()
+        .unwrap()
+        .content
+        .text()
+        .is_some()));
+}
+
+#[test]
 fn second_axis_preparation_failure_is_atomic_including_fonts() {
     let mut scene = Scene::new();
     let axes = scene

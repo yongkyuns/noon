@@ -156,7 +156,7 @@ impl Default for CoordinateTicks {
             enabled: true,
             half_length: 0.1,
             exclude_origin: false,
-            limit: 10_000,
+            limit: noon_geometry::DEFAULT_NUMBER_LINE_TICK_LIMIT,
         }
     }
 }
