@@ -174,6 +174,14 @@ class RasterManifestTests(unittest.TestCase):
                 )
                 self.assertEqual(fixture["expected_duration"], 0.2)
                 self.assertIn(f"class {scene}(Scene)", source)
+        for scene in ("GraphPartiteLayout", "DiGraphPartiteLayout"):
+            with self.subTest(scene=scene):
+                scene_source = source.split(
+                    f"class {scene}(Scene):", maxsplit=1
+                )[1].split("\nclass ", maxsplit=1)[0]
+                self.assertIn("partitions=", scene_source)
+                self.assertIn('"align":', scene_source)
+                self.assertNotIn('"dim":', scene_source)
 
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

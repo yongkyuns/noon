@@ -210,7 +210,7 @@ class GraphPartiteLayout(Scene):
             ["a", "b", "c", "d"],
             [("a", "c"), ("a", "d"), ("b", "c")],
             layout="partite", partitions=[["a", "b"], ["c", "d"]],
-            layout_config={"align": "horizontal", "center": (0.25, -0.2), "dim": 2},
+            layout_config={"align": "horizontal", "center": (0.25, -0.2)},
         )
         self.add(graph)
         self.wait(0.2)
@@ -222,7 +222,7 @@ class DiGraphPartiteLayout(Scene):
             ["a", "b", "c", "d"],
             [("a", "c"), ("b", "c"), ("b", "d")],
             layout="partite", partitions=[["a", "b"], ["c", "d"]],
-            layout_config={"align": "vertical", "center": (-0.2, 0.25), "dim": 2},
+            layout_config={"align": "vertical", "center": (-0.2, 0.25)},
         )
         self.add(graph)
         self.wait(0.2)
