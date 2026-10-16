@@ -37,6 +37,7 @@ class LiveCoordinateAdapterTests(TestCase):
         self.live.assert_called_once_with(self.options)
         self.assertEqual(self.attach_number_line.call_args.kwargs, {
             "tick_size": 0.1,
+            "include_ticks": True,
             "include_tip": False,
             "exclude_origin_tick": False,
         })
@@ -49,8 +50,10 @@ class LiveCoordinateAdapterTests(TestCase):
         self.assertEqual(
             [call.kwargs for call in self.attach_number_line.call_args_list],
             [
-                {"tick_size": 0.1, "include_tip": True, "exclude_origin_tick": True},
-                {"tick_size": 0.1, "include_tip": True, "exclude_origin_tick": True},
+                {"tick_size": 0.1, "include_ticks": True,
+                 "include_tip": True, "exclude_origin_tick": True},
+                {"tick_size": 0.1, "include_ticks": True,
+                 "include_tip": True, "exclude_origin_tick": True},
             ],
         )
         self.cold.assert_not_called(); self.options.free.assert_not_called()
