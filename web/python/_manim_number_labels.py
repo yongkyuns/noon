@@ -234,9 +234,9 @@ def add_coordinates(axes, *axes_numbers, x_config=None, y_config=None, config):
         axis = (x_axis, y_axis)[index]
         options = axis_configs[index]
         if isinstance(value, Mapping):
-            # NumberLine.add_labels owns its Manim-compatible option defaults
-            # and rejects custom TeX constructors in the native-Text profile.
-            axis.add_labels(value, **options)
+            # Custom labels use layout options; numeric formatting options
+            # belong to DecimalNumber labels and must not reach add_labels.
+            _add_axis_custom_labels(axis, value, options)
             families.append(axis.labels)
         else:
             # An omitted positional axis is not passed here; only explicit
@@ -275,13 +275,34 @@ def _validated_exclusion_values(values):
     )
 
 
+def _add_axis_custom_labels(axis, values, settings):
+    """Forward only layout/constructor options accepted by ``add_labels``."""
+    options = {
+        "direction": settings.get(
+            "direction", settings.get(
+                "label_direction", getattr(axis, "label_direction", _base.DOWN)
+            )
+        ),
+        "buff": settings.get(
+            "buff", settings.get(
+                "line_to_number_buff",
+                getattr(axis, "line_to_number_buff", _base.MED_SMALL_BUFF),
+            )
+        ),
+        "font_size": settings.get("font_size", getattr(axis, "font_size", 36)),
+    }
+    if "label_constructor" in settings:
+        options["label_constructor"] = settings["label_constructor"]
+    return axis.add_labels(values, **options)
+
+
 def _add_mixed_coordinate_labels(axes, values, axis_configs, axis_exclusions):
     families = []
     for index, value in enumerate(values):
         axis = (axes.x_axis, axes.y_axis)[index]
         options = axis_configs[index]
         if isinstance(value, Mapping):
-            axis.add_labels(value, **options)
+            _add_axis_custom_labels(axis, value, options)
             families.append(axis.labels)
         else:
             axis.add_numbers(value, excluding=axis_exclusions[index], **options)
@@ -374,7 +395,7 @@ def add_number_plane_coordinates(plane, *axes_numbers, x_config=None, y_config=N
         axis = (plane.x_axis, plane.y_axis)[index]
         options = axis_configs[index]
         if isinstance(value, Mapping):
-            axis.add_labels(value, **options)
+            _add_axis_custom_labels(axis, value, options)
             families.append(axis.labels)
         elif "font" in options:
             axis.add_numbers(value, excluding=axis_exclusions[index], **options)

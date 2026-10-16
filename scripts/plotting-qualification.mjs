@@ -24,6 +24,24 @@ assert.equal(
   "PlotExample execution may change only the import line",
 );
 const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
+const upstreamLogScalingExample = await readFile(
+  new URL("../parity/manim-v0.21/core-examples/log_scaling_example.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  upstreamLogScalingExample.split(plotExampleImport).length - 1,
+  1,
+  "pinned LogScalingExample must contain exactly one Manim wildcard import",
+);
+const adaptedLogScalingExample = upstreamLogScalingExample.replace(plotExampleImport, "from noon import *");
+assert.equal(
+  adaptedLogScalingExample.replace("from noon import *", plotExampleImport),
+  upstreamLogScalingExample,
+  "LogScalingExample execution may change only the import line",
+);
+const logScalingExampleSource = rasterFixtureSource(
+  adaptedLogScalingExample, "LogScalingExample", { requires_latex: true },
+);
 
 async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
   const page = await context.newPage();
@@ -179,12 +197,28 @@ class AxesLogBaseLabels(Scene):
       assert.equal(curveRows.length, 3);
       assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
         "each upstream log curve must retain two-dimensional sampled bounds");
+      const logScalingExample = await page.evaluate(
+        source => window.noonManimCompat.runLive(source),
+        logScalingExampleSource,
+      );
+      assert.equal(logScalingExample.duration, 0, "upstream LogScalingExample is static");
+      assert.equal(logScalingExample.frame.time, 0);
+      assert.equal(logScalingExample.metrics.backend, expectedBackend);
+      assert.ok(logScalingExample.metrics.objectCount > 0);
+      assert.ok(logScalingExample.metrics.presentedFrames > 0);
+      assert.equal(logScalingExample.frame.objects.length, logScalingExample.metrics.objectCount);
+      assert.ok(logScalingExample.frame.objects.every(object => object.present));
+      const plottedGraph = logScalingExample.frame.objects.at(-1);
+      assert.ok(plottedGraph && plottedGraph.bounds.width > 0 && plottedGraph.bounds.height > 0,
+        "the final retained object from upstream LogScalingExample must be its two-dimensional x^2 graph");
+      console.log(`[PASS] ${expectedBackend}: exact upstream LogScalingExample Python-host frame`);
       console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
       await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *
 
 class NumberPlaneNumericLabels(Scene):
     async def construct(self):
+        await prepare_latex()
         plane = NumberPlane(
             x_range=(-2, 2, 1), y_range=(-1, 1, 0.5),
             axis_config={"include_numbers": True, "numbers_to_exclude": [0],
