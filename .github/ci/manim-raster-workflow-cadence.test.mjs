@@ -16,6 +16,20 @@ const triggers = workflow.split("on:\n")[1]?.split("\npermissions:")[0];
 const preflight = workflow.split("\n  preflight:\n")[1]?.split("\n  raster:\n")[0];
 const oracle = workflow.split("\n  raster:\n")[1];
 
+test("native functional gates supersede PR revisions while master runs stay independent", async () => {
+  for (const name of ["native-host-smoke.yml", "native-export-output.yml"]) {
+    const source = await readFile(new URL("../workflows/" + name, import.meta.url), "utf8");
+    const concurrency = source.split("\nconcurrency:\n")[1]?.split("\njobs:\n")[0];
+    assert.ok(concurrency, name + ": missing obsolete-run cancellation policy");
+    assert.match(concurrency,
+      /group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/,
+      "isolate workflows and PRs; each non-PR run must have its own group");
+    assert.match(concurrency,
+      /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/,
+      "only superseded PR revisions may cancel active functional qualification");
+  }
+});
+
 test("full Manim raster qualification runs nightly and by explicit dispatch, not per merge", () => {
   assert.ok(triggers, "missing event configuration");
   assert.match(triggers, /  schedule:\n    - cron: "17 6 \* \* \*"/);
