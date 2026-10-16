@@ -42,6 +42,23 @@ class NumberPlaneAdapterTests(TestCase):
         patch.object(number_plane, "engine_call", side_effect=lambda fn, *args: fn(*args)).start()
         patch.object(number_plane._plot, "_coordinate_style", Mock(name="axis-style")).start()
         self.wrapped_parts = [Mock(name=f"wrapped-{index}") for index in range(4)]
+        vec2 = number_plane._plot._base.Vec2
+
+        def line(start, end):
+            result = Mock(name=f"line-{start}-{end}")
+            result.get_start.return_value = vec2(*start)
+            result.get_end.return_value = vec2(*end)
+            return result
+
+        self.grid_lines = [
+            line((-2, 0), (2, 0)),
+            line((0, -1), (0, 1)),
+            line((-2, 0.5), (2, 0.5)),
+            line((0.5, -1), (0.5, 1)),
+        ]
+        self.wrapped_parts[1].submobjects = self.grid_lines
+        self.wrapped_parts[2].shaft = line((-2, 0), (2, 0))
+        self.wrapped_parts[3].shaft = line((0, -1), (0, 1))
         self.lines = patch.object(
             number_plane, "_lines", side_effect=lambda handle: self.wrapped_parts[(self.lines.call_count - 1) % 2]
         ).start()
@@ -202,6 +219,26 @@ class NumberPlaneAdapterTests(TestCase):
         self.assertIs(plane.get_axis(1), y_axis)
         self.assertIs(plane.get_x_axis(), x_axis)
         self.assertIs(plane.get_y_axis(), y_axis)
+
+    def test_x_and_y_line_aliases_select_major_grid_lines_by_axis_direction(self):
+        plane = self.construct()
+        self.assertEqual(plane.x_lines, (self.grid_lines[0], self.grid_lines[2]))
+        self.assertEqual(plane.y_lines, (self.grid_lines[1], self.grid_lines[3]))
+
+    def test_grid_line_aliases_follow_rotated_current_axis_endpoints(self):
+        vec2 = number_plane._plot._base.Vec2
+
+        def line(start, end):
+            return SimpleNamespace(get_start=lambda: vec2(*start), get_end=lambda: vec2(*end))
+
+        lines = SimpleNamespace(submobjects=[
+            line((0, -2), (0, 2)),
+            line((-1, 0), (1, 0)),
+        ])
+        x_axis = line((0, -2), (0, 2))
+        y_axis = line((1, 0), (-1, 0))
+        self.assertEqual(number_plane._parallel_grid_lines(lines, x_axis), (lines.submobjects[0],))
+        self.assertEqual(number_plane._parallel_grid_lines(lines, y_axis), (lines.submobjects[1],))
 
     def test_group_members_preserve_authoritative_part_identity_and_order(self):
         plane = self.construct()

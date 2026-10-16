@@ -72,6 +72,34 @@ class AxesAccessors(Scene):
       assert.ok(accessors.objectCount > 0);
       assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes coordinate accessors`);
+      const gridLinesSource = `from noon import *
+
+class NumberPlaneGridLineAliases(Scene):
+    async def construct(self):
+        plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
+        assert plane.x_lines.submobjects
+        assert plane.y_lines.submobjects
+        assert all(any(line is member for member in plane.background_lines.submobjects)
+                   for line in plane.x_lines.submobjects)
+        assert all(any(line is member for member in plane.background_lines.submobjects)
+                   for line in plane.y_lines.submobjects)
+        def parallel_to(line, axis):
+            start, end = line.get_start(), line.get_end()
+            axis_start, axis_end = axis.shaft.get_start(), axis.shaft.get_end()
+            dx, dy = end.x - start.x, end.y - start.y
+            ax, ay = axis_end.x - axis_start.x, axis_end.y - axis_start.y
+            return abs(ax * dy - ay * dx) <= 1e-6 * ((ax * ax + ay * ay) ** 0.5) * ((dx * dx + dy * dy) ** 0.5)
+        assert all(parallel_to(line, plane.x_axis) for line in plane.x_lines.submobjects)
+        assert all(parallel_to(line, plane.y_axis) for line in plane.y_lines.submobjects)
+        self.add(plane)
+        await self.wait(0.05)
+`;
+      const gridLines = await qualifyPythonPlayback(context, baseUrl, gridLinesSource, [0, 0.05]);
+      assert.equal(gridLines.rendererBackend, expectedBackend);
+      assert.equal(gridLines.presented, true);
+      assert.ok(gridLines.objectCount > 0);
+      assert.ok(Math.abs(gridLines.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane x_lines/y_lines aliases`);
       return lifecycle;
     } finally {
       await page.close();
