@@ -7,10 +7,10 @@ use crate::{MegaPathBatch, OrderedRenderBatch, PathCoverage, PreparedFrame, Rend
 
 const WINDOW: usize = 32;
 
-//// A mixed painter run can use the already-packed geometry-only mega-path
-//// pipeline without discarding per-object source descriptors. Stop at the
-//// caller's next image/effect/inset boundary, any ordinary non-path item,
-//// detached/specialized path, coverage change or nonadjacent mega segment.
+/// A mixed painter run can use the already-packed geometry-only mega-path
+/// pipeline without discarding per-object source descriptors. Stop at the
+/// caller's next image/effect/inset boundary, any ordinary non-path item,
+/// detached/specialized path, coverage change or nonadjacent mega segment.
 /// The caller must preserve its own painter order and only use this with the
 /// complete retained mixed-frame view (not source capture or partial renders).
 pub(super) fn collect_consecutive_mega_paths<'a>(

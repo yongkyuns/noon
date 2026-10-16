@@ -751,6 +751,7 @@ impl FramePreparer {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn for_individual_path_draws() -> Self {
         Self {
             individual_path_draws: true,

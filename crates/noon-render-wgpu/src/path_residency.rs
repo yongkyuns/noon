@@ -489,7 +489,8 @@ mod tests {
         assert!(frame.mega_source_segment(0).is_none());
         assert!(frame.ordered_render_batches().next().is_none());
         assert_eq!(frame.path_indices, preparer.path_indices.as_slice());
-        assert_eq!(frame.path_index_dirty_ranges, &[0..6]);
+        assert_eq!(frame.path_index_dirty_ranges.len(), 1);
+        assert_eq!(frame.path_index_dirty_ranges.first(), Some(&(0..6)));
         assert!(frame.path_geometry_dirty);
     }
 
