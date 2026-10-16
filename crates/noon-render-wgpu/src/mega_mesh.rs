@@ -20,7 +20,7 @@ impl FramePreparer {
         self.mega_path_instance_dirty_ranges.clear();
         self.mega_path_index_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
-        if self.individual_path_draws {
+        if self.individual_path_draws && !self.mixed_mega_path_draws {
             return;
         }
 
@@ -113,7 +113,7 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) -> bool {
-        if self.individual_path_draws {
+        if self.individual_path_draws && !self.mixed_mega_path_draws {
             return false;
         }
         let Some(path_batch) = self.path_batches.get(path_batch_index).cloned() else {
@@ -202,7 +202,7 @@ impl FramePreparer {
     /// painter position until the next full rebuild compacts the mega stream.
     pub(crate) fn rebuild_mega_render_batches(&mut self) {
         self.mega_path_batches.clear();
-        if self.individual_path_draws {
+        if self.individual_path_draws && !self.mixed_mega_path_draws {
             return;
         }
         let ordered = std::mem::take(&mut self.render_batches);
@@ -267,7 +267,7 @@ impl FramePreparer {
     }
 
     pub(crate) fn detach_mega_path(&mut self, path_batch_index: usize) {
-        if self.individual_path_draws {
+        if self.individual_path_draws && !self.mixed_mega_path_draws {
             return;
         }
         if self
@@ -286,7 +286,7 @@ impl FramePreparer {
     ) {
         // A non-detached path need not own a mega segment: sampled fills
         // live only in the mutable path arena, whose vertex ranges can grow.
-        if self.individual_path_draws
+        if self.individual_path_draws && !self.mixed_mega_path_draws
             || !self
                 .mega_path_segments
                 .get(path_batch_index)

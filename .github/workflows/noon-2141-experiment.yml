@@ -1,0 +1,40 @@
+# Temporary proof gate for #2141; branch-only and not part of product CI.
+name: Research 2141 mixed mega batching
+
+on:
+  push:
+    branches:
+      - codex/2141-mixed-mega-prototype
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-2141-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Mixed renderer compile and focused regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use pinned Rust toolchain
+        run: |
+          rustup install
+          rustc --version
+          cargo --version
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and run packing tests
+        run: cargo test -p noon-render-wgpu --lib gpu::path_batching::tests -- --nocapture
+      - name: Run retained mixed drawing tests
+        run: cargo test -p noon-render-wgpu --lib gpu::retained_text::tests -- --nocapture
+      - name: Compile and lint renderer
+        run: cargo clippy -p noon-render-wgpu --all-targets -- -D warnings

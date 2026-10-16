@@ -559,6 +559,8 @@ fn projected_frame<'a>(
         complete_submission: false,
         submitted_source_slots: Some(&preparer.visible_submission_slots),
         zero_contribution: &preparer.zero_contribution,
+        mega_path_segments: &preparer.mega_path_segments,
+        mega_path_detached: &preparer.mega_path_detached,
         mega_path_offsets: &preparer.mega_path_offsets,
     }
 }

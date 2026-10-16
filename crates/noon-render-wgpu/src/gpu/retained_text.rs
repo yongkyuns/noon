@@ -1110,7 +1110,7 @@ impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
             images: RasterImageFramePreparer::default(),
-            geometry: FramePreparer::for_individual_path_draws(),
+            geometry: FramePreparer::for_mixed_retained_path_draws(),
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
@@ -1265,7 +1265,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_individual_path_draws();
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1295,7 +1295,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_individual_path_draws();
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -3937,6 +3937,11 @@ impl GpuRenderer {
             && self.inset_views.is_empty()
             && excluded.is_empty()
             && text_camera_index.is_none();
+        // Mixed images and glyphs remain exact painter barriers, but stable
+        // unique paths between them may use the ordinary packed mega stream.
+        let batch_mixed_mega = self.inset_views.is_empty()
+            && excluded.is_empty()
+            && text_camera_index.is_none();
         let pixel = Vec2::new(
             self.camera.world_size.x / self.viewport_size[0].max(1) as f32,
             self.camera.world_size.y / self.viewport_size[1].max(1) as f32,
@@ -4010,6 +4015,47 @@ impl GpuRenderer {
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     pass.set_bind_group(0, camera, &[]);
+                    if batch_mixed_mega {
+                        // A later image at an intervening painter rank stops the
+                        // batch *before* its geometry. Glyph/analytic items break
+                        // the actual source iterator and glow sources are
+                        // independent painter anchors, never gathered across.
+                        let next_image_rank = images.peek().map(|(rank, _)| **rank);
+                        let mega = super::path_batching::collect_consecutive_mega_paths(
+                            batch,
+                            &mut items,
+                            &prepared.geometry,
+                            |object| {
+                                if self.has_draw_source_glow(object) {
+                                    return true;
+                                }
+                                let rank = prepared
+                                    .object_indices
+                                    .get(&object)
+                                    .and_then(|index| prepared.painter_ranks.get(*index))
+                                    .copied()
+                                    .unwrap_or(usize::MAX);
+                                next_image_rank.is_some_and(|image_rank| image_rank < rank)
+                            },
+                        );
+                        if let Some(mega) = mega {
+                            stats.geometry += self.draw_resolved_ordered_batch(
+                                pass,
+                                &prepared.geometry,
+                                &super::ResolvedOrderedBatch {
+                                    batch: OrderedRenderBatch {
+                                        primitive: RenderPrimitive::MegaPath { batch: 0 },
+                                        instance_range: 0..u32::try_from(mega.path_count)
+                                            .expect("mixed mega path count exceeds u32 limits"),
+                                    },
+                                    mega: Some(mega),
+                                },
+                                sample_count == 1,
+                                &mut binding,
+                            );
+                            continue;
+                        }
+                    }
                     let groups = super::path_batching::RetainedGeometryBatches::collect(
                         batch,
                         &mut items,
