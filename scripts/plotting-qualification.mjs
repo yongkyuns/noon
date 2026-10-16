@@ -252,6 +252,37 @@ class NumberPlaneAddCoordinates(Scene):
       assert.ok(numberPlaneCoordinates.objectCount > 0);
       assert.ok(Math.abs(numberPlaneCoordinates.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: NumberPlane.add_coordinates positional/default/custom labels`);
+      const numberPlaneTicksSource = `from noon import *
+
+class NumberPlaneAxisTicks(Scene):
+    async def construct(self):
+        plane = NumberPlane(
+            (-2, 2, 1), (-1, 1, 1),
+            axis_config={"include_ticks": True, "tick_size": 0.2,
+                         "exclude_origin_tick": True},
+            y_axis_config={"exclude_origin_tick": False, "tick_size": 0.3},
+        )
+        assert len(plane.x_axis.ticks.submobjects) == 4
+        assert len(plane.y_axis.ticks.submobjects) == 3
+        assert plane.x_axis.include_ticks is True
+        assert plane.y_axis.include_ticks is True
+        assert plane.x_axis.exclude_origin_tick is True
+        assert plane.y_axis.exclude_origin_tick is False
+        assert plane.x_axis.tick_size == 0.2
+        assert plane.y_axis.tick_size == 0.3
+        assert tuple(round(tick.get_center().x) for tick in plane.x_axis.ticks) == (-2, -1, 1, 2)
+        assert tuple(round(tick.get_center().y) for tick in plane.y_axis.ticks) == (-1, 0, 1)
+        self.add(plane)
+        await self.wait(0.05)
+`;
+      const numberPlaneTicks = await qualifyPythonPlayback(
+        context, baseUrl, numberPlaneTicksSource, [0, 0.05],
+      );
+      assert.equal(numberPlaneTicks.rendererBackend, expectedBackend);
+      assert.equal(numberPlaneTicks.presented, true);
+      assert.ok(numberPlaneTicks.objectCount > 0);
+      assert.ok(Math.abs(numberPlaneTicks.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane per-axis ticks and origin exclusion`);
       const gridLinesSource = `from noon import *
 
 class NumberPlaneGridLineAliases(Scene):

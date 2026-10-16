@@ -1,5 +1,5 @@
 //! Thin NumberPlane options and handle observations over shared coordinate semantics.
-use noon::{ManimNumberPlane, ManimNumberPlaneOptions, SemanticPaint};
+use noon::{CoordinateTicks, ManimNumberPlane, ManimNumberPlaneOptions, SemanticPaint};
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_coordinates::{CoordinateRequest, WasmAxesFrame};
@@ -73,6 +73,31 @@ impl WasmCoordinateOptions {
         if let Some(value) = opacity {
             style.stroke_opacity = value;
         }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setPlaneAxisTicks)]
+    pub fn set_plane_axis_ticks(
+        &mut self,
+        axis_index: u32,
+        enabled: bool,
+        tick_size: f64,
+        exclude_origin: bool,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis tick options require NumberPlane options"));
+        };
+        let ticks = match axis_index {
+            0 => &mut options.x_ticks,
+            1 => &mut options.y_ticks,
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        *ticks = CoordinateTicks {
+            enabled,
+            half_length: tick_size,
+            exclude_origin,
+            ..*ticks
+        };
         Ok(())
     }
 }

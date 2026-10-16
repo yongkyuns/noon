@@ -11,6 +11,8 @@ pub struct ManimNumberPlaneOptions {
     pub x_length: Option<f64>,
     pub y_length: Option<f64>,
     pub axis_style: SemanticStyle,
+    pub x_ticks: CoordinateTicks,
+    pub y_ticks: CoordinateTicks,
     pub background_line_style: SemanticStyle,
     pub faded_line_style: Option<SemanticStyle>,
     pub faded_line_ratio: u32,
@@ -61,6 +63,14 @@ impl Default for ManimNumberPlaneOptions {
             x_length: None,
             y_length: None,
             axis_style: number_plane_axis_style(),
+            x_ticks: CoordinateTicks {
+                enabled: false,
+                ..CoordinateTicks::default()
+            },
+            y_ticks: CoordinateTicks {
+                enabled: false,
+                ..CoordinateTicks::default()
+            },
             background_line_style,
             faded_line_style: None,
             faded_line_ratio: 1,
@@ -240,25 +250,11 @@ pub(crate) fn prepare_number_plane(
     let background = transaction.create_node(SemanticNodeCreation::family());
     let x_axis = stage_line(
         &mut transaction,
-        prepare_line(
-            frame.x(),
-            CoordinateTicks {
-                enabled: false,
-                ..CoordinateTicks::default()
-            },
-            &options.axis_style,
-        )?,
+        prepare_line(frame.x(), options.x_ticks, &options.axis_style)?,
     );
     let y_axis = stage_line(
         &mut transaction,
-        prepare_line(
-            frame.y(),
-            CoordinateTicks {
-                enabled: false,
-                ..CoordinateTicks::default()
-            },
-            &options.axis_style,
-        )?,
+        prepare_line(frame.y(), options.y_ticks, &options.axis_style)?,
     );
     stage_grid_lines(
         &mut transaction,

@@ -85,6 +85,47 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 }
 
 #[test]
+fn number_plane_retains_independent_axis_ticks_and_tick_sizes() {
+    let mut scene = Scene::new();
+    let options = ManimNumberPlaneOptions {
+        x_range: [-2.0, 2.0, 1.0],
+        y_range: [-1.0, 1.0, 1.0],
+        x_ticks: CoordinateTicks {
+            enabled: true,
+            half_length: 0.25,
+            exclude_origin: true,
+            ..CoordinateTicks::default()
+        },
+        y_ticks: CoordinateTicks {
+            enabled: true,
+            half_length: 0.15,
+            ..CoordinateTicks::default()
+        },
+        ..ManimNumberPlaneOptions::default()
+    };
+    let plane = scene.number_plane(&options).unwrap();
+    let x_ticks = plane.x_axis().unwrap().ticks().unwrap();
+    let y_ticks = plane.y_axis().unwrap().ticks().unwrap();
+    let store = scene.integration_store().borrow();
+    let x_nodes = store
+        .semantic_family_members_checked(x_ticks.node_id())
+        .unwrap();
+    let y_nodes = store
+        .semantic_family_members_checked(y_ticks.node_id())
+        .unwrap();
+    assert_eq!(x_nodes.len(), 4, "x ticks exclude their origin tick");
+    assert_eq!(y_nodes.len(), 3, "y ticks retain their origin tick");
+    let x_first = x_nodes[0];
+    let y_first = y_nodes[0];
+    drop(store);
+    let x_tick = Mobject::from_node(Rc::clone(scene.integration_store()), x_first).unwrap();
+    let y_tick = Mobject::from_node(Rc::clone(scene.integration_store()), y_first).unwrap();
+    assert!((x_tick.path_query().unwrap().arc_length(None).unwrap() - 0.5).abs() < 1.0e-6);
+    assert!((y_tick.path_query().unwrap().arc_length(None).unwrap() - 0.3).abs() < 1.0e-6);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn number_line_tip_is_retained_and_removes_the_endpoint_tick() {
     let mut scene = Scene::new();
     let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);

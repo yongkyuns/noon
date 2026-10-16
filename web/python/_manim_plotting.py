@@ -139,8 +139,8 @@ def _leaf(handle, kind=_compat.Line):
     return wrapper
 
 
-def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
-                        exclude_origin_tick=False):
+def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_ticks=None,
+                        include_tip=False, exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
         object.__new__(_compat.Group),
@@ -152,6 +152,8 @@ def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
         wrapper.tip = _leaf(engine_call(handle.coordinateTip), _compat.VMobject)
         members.append(wrapper.tip)
     wrapper.tick_size = tick_size
+    if include_ticks is not None:
+        wrapper.include_ticks = include_ticks
     wrapper.include_tip = include_tip
     wrapper.exclude_origin_tick = exclude_origin_tick
     return _coordinate_family(wrapper, handle, members)
@@ -585,6 +587,7 @@ class NumberLine(_compat.Group):
             self,
             engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
             tick_size=tick_size,
+            include_ticks=bool(include_ticks),
             include_tip=bool(include_tip),
             exclude_origin_tick=bool(exclude_origin_tick),
         )
@@ -896,6 +899,7 @@ class Axes(_compat.Group):
                 object.__new__(NumberLine),
                 engine_call(handle.coordinateAxis, index),
                 tick_size=float(tick_size),
+                include_ticks=bool(include_ticks),
                 include_tip=bool(tips),
                 exclude_origin_tick=exclude_origin,
             )

@@ -69,7 +69,7 @@ def _coordinate_decimal_places(axis_range):
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}
 _AXIS_LABEL_KEYS = _plot._AXES_CONFIG_KEYS - {"scaling"}
 _NUMBER_PLANE_AXIS_KEYS = _AXIS_STYLE_KEYS | _AXIS_LABEL_KEYS | {
-    "include_ticks", "include_tip", "scaling",
+    "include_ticks", "include_tip", "tick_size", "exclude_origin_tick", "scaling",
 }
 
 
@@ -93,6 +93,8 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         "stroke_width": 2,
         "include_ticks": False,
         "include_tip": False,
+        "tick_size": 0.1,
+        "exclude_origin_tick": False,
         "line_to_number_buff": _plot._base.SMALL_BUFF,
         "label_direction": _plot._base.DR,
         "font_size": 24,
@@ -110,12 +112,14 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         ("x_axis_config", x_config, _plot._base.DR),
         ("y_axis_config", y_config, _plot._base.DR),
     ):
-        for key in ("include_ticks", "include_tip"):
-            value = config[key]
-            if not isinstance(value, bool):
+        for key in ("include_ticks", "include_tip", "exclude_origin_tick"):
+            if not isinstance(config[key], bool):
                 raise TypeError(f"{name}.{key} must be a boolean")
-            if value:
-                raise NotImplementedError("NumberPlane ticks and tips are not yet supported")
+        if config["include_tip"]:
+            raise NotImplementedError("NumberPlane tips are not yet supported")
+        config["tick_size"] = _plot._finite_axis_option(
+            config["tick_size"], f"{name}.tick_size", nonnegative=True
+        )
         if config.get("scaling") is not None:
             raise NotImplementedError("NumberPlane nonlinear axis scaling is not yet supported")
         labels = {key: config[key] for key in _AXIS_LABEL_KEYS if key in config}
@@ -137,16 +141,19 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
     style = {key: common[key] for key in ("stroke_width", "stroke_opacity", "opacity")
              if key in common}
     color = common.get("color", common.get("stroke_color"))
-    return axis_options[0][0], axis_options[1][0], color, style
+    return (
+        axis_options[0][0], axis_options[1][0], color, style,
+        axis_options[0][1], axis_options[1][1],
+    )
 
 
 class NumberPlane(_plot.Axes):
     """Linear 2D axes with bounded retained major/faded grid lines.
 
     Supports ranges, lengths, grid stroke styles, common axis stroke style,
-    native Text constructor labels with per-axis formatting, and major x/y
-    grid-line aliases. Axis-specific stroke styles, tips, ticks and nonlinear
-    deformation remain unsupported.
+    native Text constructor labels with per-axis formatting, retained per-axis
+    ticks, and major x/y grid-line aliases. Axis-specific stroke styles, tips,
+    and nonlinear deformation remain unsupported.
     Coordinates and plots use the same shared Rust AxesFrame.
     """
 
@@ -159,7 +166,7 @@ class NumberPlane(_plot.Axes):
         if isinstance(faded_line_ratio, bool):
             raise TypeError("faded_line_ratio must be an integer, not bool")
         ratio = index(faded_line_ratio)
-        x_options, y_options, color, style = _axis_configurations(
+        x_options, y_options, color, style, x_axis_options, y_axis_options = _axis_configurations(
             axis_config, x_axis_config, y_axis_config
         )
         x_range_values = () if x_range is None else tuple(x_range)
@@ -178,6 +185,14 @@ class NumberPlane(_plot.Axes):
                 _line_style(options, background_line_style, faded=False)
             if faded_line_style is not None:
                 _line_style(options, faded_line_style, faded=True)
+            for axis_index, config in enumerate((x_axis_options, y_axis_options)):
+                engine_call(
+                    options.setPlaneAxisTicks,
+                    axis_index,
+                    config["include_ticks"],
+                    config["tick_size"],
+                    config["exclude_origin_tick"],
+                )
         except BaseException:
             options.free()
             raise
@@ -188,10 +203,16 @@ class NumberPlane(_plot.Axes):
         )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         x_axis = _plot._attach_number_line(
-            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 2)
+            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 2),
+            tick_size=x_axis_options["tick_size"],
+            include_ticks=x_axis_options["include_ticks"],
+            exclude_origin_tick=x_axis_options["exclude_origin_tick"],
         )
         y_axis = _plot._attach_number_line(
-            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3)
+            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3),
+            tick_size=y_axis_options["tick_size"],
+            include_ticks=y_axis_options["include_ticks"],
+            exclude_origin_tick=y_axis_options["exclude_origin_tick"],
         )
         x_axis.scaling = y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))

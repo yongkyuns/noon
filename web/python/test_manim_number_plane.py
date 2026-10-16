@@ -66,7 +66,8 @@ class NumberPlaneAdapterTests(TestCase):
         self.axes = patch.object(
             number_plane._plot,
             "_attach_number_line",
-            side_effect=lambda wrapper, handle: self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
+            side_effect=lambda wrapper, handle, **kwargs:
+                self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
         ).start()
         self.family = patch.object(number_plane._plot, "_family", side_effect=self._family).start()
         patch.object(number_plane._plot._compat, "VGroup", side_effect=lambda *members: members).start()
@@ -94,6 +95,10 @@ class NumberPlaneAdapterTests(TestCase):
         self.live.assert_called_once_with(self.options)
         self.cold.assert_not_called()
         self.options.free.assert_not_called()
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
+            [(0, False, 0.1, False), (1, False, 0.1, False)],
+        )
 
         self.resolve.return_value = None
         self.live.reset_mock()
@@ -162,6 +167,38 @@ class NumberPlaneAdapterTests(TestCase):
         self.assertEqual(y_axis.number_label_decimal_places, 3)
         self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
         self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
+
+    def test_constructor_forwards_independent_axis_tick_configuration(self):
+        plane = self.construct(
+            axis_config={"include_ticks": True, "tick_size": 0.2},
+            x_axis_config={"exclude_origin_tick": True},
+            y_axis_config={"tick_size": 0.3, "exclude_origin_tick": False},
+        )
+
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
+            [(0, True, 0.2, True), (1, True, 0.3, False)],
+        )
+        self.assertEqual(self.axes.call_args_list[0].kwargs, {
+            "tick_size": 0.2, "include_ticks": True, "exclude_origin_tick": True,
+        })
+        self.assertEqual(self.axes.call_args_list[1].kwargs, {
+            "tick_size": 0.3, "include_ticks": True, "exclude_origin_tick": False,
+        })
+
+    def test_tick_configuration_is_validated_before_host_admission(self):
+        for kwargs in (
+            {"axis_config": {"include_ticks": 1}},
+            {"x_axis_config": {"exclude_origin_tick": 1}},
+            {"y_axis_config": {"tick_size": -0.1}},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
 
     def test_constructor_preserves_integer_and_float_step_label_precision(self):
         for axis_range, expected in (
