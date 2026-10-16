@@ -1,0 +1,189 @@
+# One-off research only; never runs on master or ordinary PRs.
+name: Research 2141 frozen-vector same-source A/B
+
+on:
+  push:
+    branches:
+      - codex/2141-paired-vector-ab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-2141-paired-vector-ab
+  cancel-in-progress: false
+
+jobs:
+  pair:
+    name: Original 10000-vector scene on matched renderer variants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
+      - uses: actions/checkout@v4
+        with:
+          path: baseline
+      - name: Use identical pinned Rust and WASM targets
+        run: |
+          for source in baseline candidate; do
+            (cd "$source" && rustup install && rustup target add wasm32-unknown-unknown)
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - uses: ./candidate/.github/actions/install-wasm-opt
+
+      - name: Commit only the original draw-policy switch in the baseline clone
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("baseline/crates/noon-render-wgpu/src")
+          lib=root/"lib.rs"
+          source=lib.read_text()
+          old="    #[cfg(test)]\n    pub(crate) fn for_individual_path_draws() -> Self {"
+          assert source.count(old)==1
+          lib.write_text(source.replace(old,"    pub(crate) fn for_individual_path_draws() -> Self {"))
+          path=root/"gpu/retained_text.rs"
+          source=path.read_text()
+          old="            geometry: FramePreparer::for_mixed_retained_path_draws(),"
+          assert source.count(old)==1
+          path.write_text(source.replace(old,"            geometry: FramePreparer::for_individual_path_draws(),"))
+          PY
+          git -C baseline diff --check
+          git -C baseline diff --name-only > evidence/baseline-files-changed.txt
+          test "$(wc -l < evidence/baseline-files-changed.txt)" -eq 2
+          git -C baseline diff -- crates/noon-render-wgpu/src/lib.rs \
+            crates/noon-render-wgpu/src/gpu/retained_text.rs > evidence/baseline-only.patch
+          git -C baseline add crates/noon-render-wgpu/src/lib.rs \
+            crates/noon-render-wgpu/src/gpu/retained_text.rs
+          GIT_AUTHOR_DATE=2026-10-16T00:00:00Z \
+          GIT_COMMITTER_DATE=2026-10-16T00:00:00Z \
+            git -C baseline -c user.name='Noon research baseline' \
+              -c user.email='research@example.invalid' \
+              commit -m 'research only: individual mixed path draws'
+          git -C baseline rev-parse HEAD > evidence/baseline-local-commit.txt
+          git -C candidate rev-parse HEAD > evidence/candidate-source-commit.txt
+          test "$(git -C candidate rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C baseline rev-parse HEAD^)" = "$GITHUB_SHA"
+          test -z "$(git -C baseline status --porcelain)"
+          test -z "$(git -C candidate status --porcelain)"
+          sha256sum baseline/crates/noon-render-wgpu/src/lib.rs \
+            baseline/crates/noon-render-wgpu/src/gpu/retained_text.rs \
+            candidate/crates/noon-render-wgpu/src/lib.rs \
+            candidate/crates/noon-render-wgpu/src/gpu/retained_text.rs \
+            > evidence/renderer-source-hashes.txt
+
+      - name: Recover the unchanged SHA-frozen 25-second vector source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            'https://raw.githubusercontent.com/yongkyuns/noon/bf2dbd9fce11742065ccbb5bc2125a038c71c05f/tests/visual-effects/fixtures/showcase_triangle_light_vector_ending.py' \
+            --output evidence/scene.py
+          echo '32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e  evidence/scene.py' | sha256sum --check
+          node --test candidate/experiments/2094/endpoint-admission.test.mjs
+
+      - name: Build optimized baseline WASM without packed mixed path draws
+        run: |
+          set -euo pipefail
+          (cd baseline && bash scripts/build-web-demo.sh)
+          cp baseline/web/runtime-build-identity.json evidence/baseline-build-identity.json
+
+      - name: Build optimized candidate WASM with packed mixed path draws
+        run: |
+          set -euo pipefail
+          (cd candidate && bash scripts/build-web-demo.sh)
+          cp candidate/web/runtime-build-identity.json evidence/candidate-build-identity.json
+
+      - name: Install Chromium/SwiftShader for same-host measurement
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      # Interleaved same-commit A/B/B/A diagnostic. Each capture starts a fresh
+      # browser and plays the exact original scene once cold, once same-page fresh.
+      # This keeps four scene observations per variant while reducing run-order bias.
+      - name: Matched original-vector A/B/B/A raw captures
+        shell: bash
+        run: |
+          set -euo pipefail
+          variants=(baseline candidate candidate baseline)
+          for i in 0 1 2 3; do
+            variant="${variants[$i]}"
+            index="$((i + 1))"
+            export NOON_BASELINE_SITE="$GITHUB_WORKSPACE/$variant/web"
+            export NOON_BASELINE_SCENE="$GITHUB_WORKSPACE/evidence/scene.py"
+            export NOON_BASELINE_OUTPUT="$GITHUB_WORKSPACE/evidence/$variant-$index"
+            export NOON_BASELINE_RUNS=2
+            if [[ "$variant" == baseline ]]; then
+              export NOON_BASELINE_REVISION="$(cat evidence/baseline-local-commit.txt)"
+            else
+              export NOON_BASELINE_REVISION="$GITHUB_SHA"
+            fi
+            echo "Capturing $variant group $index: one cold and one fresh run"
+            node candidate/experiments/2094/baseline.mjs
+          done
+
+      - name: Print paired raw-stage diagnostics without inferring GPU execution time
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from statistics import median
+          totals = {}
+          for name in ("baseline", "candidate"):
+              elapsed = []
+              groups = sorted(Path("evidence").glob(name + "-*/report.json"))
+              for path in groups:
+                  result = json.loads(path.read_text())
+                  print(name, path, "status", result.get("status"))
+                  for run in result.get("runs", ()):
+                      ms = run.get("elapsedMs")
+                      if run.get("status") == "endpoint-observed" and isinstance(ms, (float,int)):
+                          elapsed.append(ms)
+                      windows = []
+                      for window in run.get("exposureIntervals", ()):
+                          draws = (window.get("sampledLastFrameCounters") or {}).get("drawCalls")
+                          windows.append((window.get("authoredWindow"),
+                                          draws.get("median") if isinstance(draws,dict) else None))
+                      print(" run",run.get("index"),"status",run.get("status"),
+                            "wallMs",ms,"drawCountSnapshots",windows)
+              totals[name] = elapsed
+              print(name,"complete_runs",len(elapsed),"median_wall_ms",
+                    median(elapsed) if elapsed else None)
+          if all(len(totals[k]) == 4 for k in ("baseline","candidate")):
+              before = median(totals["baseline"])
+              after = median(totals["candidate"])
+              print("diagnostic paired median wall difference percent",
+                    (after/before - 1)*100)
+          print("NOTE: software WebGL2 wall durations and last-rendered-frame counter",
+                "snapshots only; no physical GPU timestamps or qualified FPS speedup.")
+          PY
+
+      - name: Upload both complete and failed diagnostic captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-2141-paired-raw
+          path: evidence/
+          retention-days: 5
+          if-no-files-found: warn
