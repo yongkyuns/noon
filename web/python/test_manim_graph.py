@@ -57,6 +57,7 @@ class _Context:
         self.spiral_layout_calls = []
         self.partite_layout_calls = []
         self.spring_layout_calls = []
+        self.random_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -76,6 +77,7 @@ class _Context:
     liveCreateSpiralGraph = liveCreateGraph
     liveCreatePartiteGraph = liveCreateGraph
     liveCreateSpringGraph = liveCreateGraph
+    liveCreateRandomGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -102,6 +104,9 @@ class _Context:
     def liveGraphSpringLayout(self, *args):
         self._call("spring")
         self.spring_layout_calls.append(args)
+    def liveGraphRandomLayout(self, *args):
+        self._call("random")
+        self.random_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -154,6 +159,76 @@ class GraphFacadeTests(unittest.TestCase):
         ]
         for actual, wanted in zip(call[3], (value for point in expected for value in point)):
             self.assertAlmostEqual(actual, wanted)
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
+    def test_random_layout_uses_networkx_float32_centered_samples_and_manim_scale(self):
+        import numpy as np
+
+        center = (2.0, -1.3)
+        graph.Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c")],
+            layout="random", layout_scale=0.75,
+            layout_config={"seed": 17, "center": center},
+        )
+        call = self.context.creation_calls[0]
+        expected = (
+            np.random.RandomState(17).rand(3, 2) + np.asarray(center)
+        ).astype(np.float32)
+        self.assertEqual(call[:3], (False, [0, 1, 2], [0, 1, 1, 2]))
+        self.assertEqual(call[4], 0.75)
+        self.assertEqual(call[5], self.context.options[0])
+        self.assertEqual(
+            call[3], [float(value) for point in expected for value in point]
+        )
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
+    def test_random_layout_accepts_numpy_random_module_seed(self):
+        import numpy as np
+
+        previous_state = np.random.get_state()
+        try:
+            np.random.seed(123)
+            expected = np.random.rand(2, 2).astype(np.float32)
+            np.random.seed(123)
+            graph.Graph(
+                ["a", "b"], [], layout="random",
+                layout_config={"seed": np.random},
+            )
+        finally:
+            np.random.set_state(previous_state)
+        call = self.context.creation_calls[0]
+        self.assertEqual(call[3], [float(value) for point in expected for value in point])
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
+    def test_random_change_layout_routes_seeded_positions_to_rust(self):
+        import numpy as np
+
+        value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
+        value.change_layout(
+            "random", scale=0.5,
+            layout_config={"seed": 4, "center": (1.0, -0.5)},
+        )
+        call = self.context.random_layout_calls[0]
+        expected = (
+            np.random.RandomState(4).rand(2, 2) + np.asarray((1.0, -0.5))
+        ).astype(np.float32)
+        self.assertIs(call[0], value._graph_handle)
+        self.assertEqual(call[2], 0.5)
+        self.assertEqual(
+            call[1], [float(value) for point in expected for value in point]
+        )
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
+    def test_random_layout_rejects_unsupported_configuration_before_publication(self):
+        for config, error, message in [
+            ({"dim": 3}, NotImplementedError, "two-dimensional"),
+            ({"scale": 1}, NotImplementedError, "unsupported random"),
+            ({"seed": "bad"}, TypeError, "seed must be"),
+        ]:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a"], [], layout="random", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
 
     def test_worker_loads_numpy_before_graph_layout(self):
         from _manim_namespace import required_packages

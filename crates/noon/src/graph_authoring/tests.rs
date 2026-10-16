@@ -669,6 +669,7 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         spring_fixed: None,
         spring_rescale: true,
         directed: false,
+        random_positions: None,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -756,6 +757,32 @@ fn networkx_spring_layout_preserves_fixed_points_and_skips_rescaling() {
     .positions(2, &[])
     .unwrap();
     assert_eq!(positions, vec![(1.0, 2.0), (3.0, 4.0)]);
+}
+
+#[test]
+fn networkx_random_layout_uses_manim_scale_after_centered_numpy_samples() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Random,
+        scale: 0.5,
+        random_positions: Some(vec![(1.25, 0.25)]),
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(0.75, -0.25)]);
+}
+
+#[test]
+fn networkx_random_layout_rejects_invalid_prepared_positions() {
+    for prepared in [vec![(0.5, 0.5)], vec![(f64::NAN, 0.5), (0.5, 0.5)]] {
+        assert!(GraphLayoutOptions {
+            layout: GraphLayout::Random,
+            random_positions: Some(prepared),
+            ..Default::default()
+        }
+        .positions(2, &[])
+        .is_err());
+    }
 }
 
 #[test]

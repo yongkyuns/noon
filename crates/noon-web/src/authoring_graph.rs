@@ -45,6 +45,7 @@ pub(crate) enum GraphOperation {
         resolution: f64,
         equidistant: bool,
     },
+    Random(noon::GraphLayoutOptions),
     Spring(noon::GraphLayoutOptions),
     Explicit(Vec<(f64, f64)>),
 }
@@ -242,6 +243,12 @@ impl NativeGraph {
             (Self::Directed(graph), GraphOperation::Spring(options)) => {
                 graph.change_layout(scene, options)?;
             }
+            (Self::Undirected(graph), GraphOperation::Random(options)) => {
+                graph.change_layout(scene, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Random(options)) => {
+                graph.change_layout(scene, options)?;
+            }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions(scene, &positions)?;
             }
@@ -434,6 +441,12 @@ impl NativeGraph {
                 graph.change_layout_live(live, options)?;
             }
             (Self::Directed(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Undirected(graph), GraphOperation::Random(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Random(options)) => {
                 graph.change_layout_live(live, options)?;
             }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
@@ -819,6 +832,44 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    /// Transform prepared NetworkX random positions with shared Manim graph semantics.
+    #[wasm_bindgen(js_name = liveCreateRandomGraph)]
+    pub fn live_create_random_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        random_positions: &[f64],
+        scale: f64,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let position_ids = (0..random_positions.len() / 2)
+            .map(|index| index as u32)
+            .collect::<Vec<_>>();
+        let random_positions = vertices(&position_ids, random_positions)?
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect();
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Random,
+            scale,
+            random_positions: Some(random_positions),
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.random_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
     /// Prepare NumPy-seeded initial positions in Python, then let shared Rust
     /// run the NetworkX Fruchterman-Reingold integration.
     #[wasm_bindgen(js_name = liveCreateSpringGraph)]
@@ -1090,6 +1141,32 @@ impl CanonicalAuthoringSceneContext {
                 spring_positions: Some(initial_positions),
                 spring_fixed,
                 spring_rescale: rescale,
+                ..Default::default()
+            }),
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphRandomLayout)]
+    pub fn live_graph_random_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        random_positions: &[f64],
+        scale: f64,
+    ) -> Result<(), JsValue> {
+        let position_ids = (0..random_positions.len() / 2)
+            .map(|index| index as u32)
+            .collect::<Vec<_>>();
+        let random_positions = vertices(&position_ids, random_positions)?
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect();
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Random(noon::GraphLayoutOptions {
+                layout: noon::GraphLayout::Random,
+                scale,
+                random_positions: Some(random_positions),
                 ..Default::default()
             }),
         )

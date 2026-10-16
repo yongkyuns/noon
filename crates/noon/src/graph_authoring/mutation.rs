@@ -71,6 +71,8 @@ pub struct GraphLayoutOptions {
     pub spring_rescale: bool,
     /// Preserve directed adjacency in the force calculation.
     pub directed: bool,
+    /// Prepared NetworkX random-layout positions, including its center offset.
+    pub random_positions: Option<Vec<(f64, f64)>>,
 }
 
 impl Default for GraphLayoutOptions {
@@ -93,6 +95,7 @@ impl Default for GraphLayoutOptions {
             spring_fixed: None,
             spring_rescale: true,
             directed: false,
+            random_positions: None,
         }
     }
 }
@@ -743,6 +746,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Spring {
         return spring_layout(count, edges, options);
     }
+    if options.layout == GraphLayout::Random && options.random_positions.is_some() {
+        return networkx_random_layout(count, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -1101,6 +1107,46 @@ fn spring_layout(
         ));
     }
     Ok(points)
+}
+
+fn networkx_random_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    let positions = options
+        .random_positions
+        .as_ref()
+        .expect("NetworkX random positions are checked by the caller");
+    if positions.len() != count
+        || positions
+            .iter()
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "random positions must provide one finite 2D point per vertex",
+        ));
+    }
+    // ManimCE's `_random_layout` wraps NetworkX's [0, 1) coordinates with
+    // `2 * scale * (position - 0.5)`. Python provides the float32 NetworkX
+    // samples (with its center already added); shared Rust owns this transform.
+    let positions = positions
+        .iter()
+        .map(|&(x, y)| {
+            (
+                2.0 * options.scale * (x - 0.5),
+                2.0 * options.scale * (y - 0.5),
+            )
+        })
+        .collect::<Vec<_>>();
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
 }
 
 struct DeterministicRandom {

@@ -171,6 +171,31 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         options.clone(),
     )?;
 
+    let random_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::Random,
+        scale: 1.0,
+        // NetworkX adds this center to its uniform samples before Manim's
+        // wrapper applies the `2 * scale * (position - 0.5)` transform.
+        random_positions: Some(vec![
+            (2.2946650981903076, -0.7694132328033447),
+            (2.1915206909179688, -1.2320996522903442),
+            (2.786985397338867, -0.6436665058135986),
+        ]),
+        ..Default::default()
+    };
+    let random_positions = random_options.positions(3, &[(0, 1), (1, 2)])?;
+    let random_graph = scene.graph_with_options(
+        [
+            ("m0", random_positions[0]),
+            ("m1", random_positions[1]),
+            ("m2", random_positions[2]),
+        ],
+        [("m0", "m1"), ("m1", "m2")],
+        options.clone(),
+    )?;
+    let mut random_graph = random_graph;
+    random_graph.change_layout(&mut scene, random_options)?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -196,6 +221,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(shells.family()),
         MobjectTarget::Family(spring.family()),
         MobjectTarget::Family(spring_digraph.family()),
+        MobjectTarget::Family(random_graph.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -218,9 +244,9 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        // Spring Graph: two Lines + three vertices.
+        // Spring and random Graphs each add two Lines + three vertices.
         // Spring DiGraph: one Arrow shaft + tip + two vertices.
-        assert_eq!(leaves.len(), 47);
+        assert_eq!(leaves.len(), 52);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

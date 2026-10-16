@@ -135,7 +135,8 @@ class _GraphBase(_compat.Group):
     ``k``, ``iterations``, ``threshold``, ``weight``, ``center``, and ``dim=2``
     configuration. NumPy prepares NetworkX-compatible initial positions while
     Rust owns force integration. Circular layouts accept ``center`` and ``dim=2``
-    through ``layout_config``. Shell layouts accept ``nlist``, ``rotate``,
+    through ``layout_config``; random layouts accept ``seed``, ``center``, and
+    ``dim=2``. Shell layouts accept ``nlist``, ``rotate``,
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
     ``partitions``, ``align``, and ``center``. Other options remain unsupported
@@ -165,11 +166,13 @@ class _GraphBase(_compat.Group):
             vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
         )
         spring = isinstance(layout, str) and layout == "spring"
+        random_layout = isinstance(layout, str) and layout == "random"
         circular = isinstance(layout, str) and layout == "circular"
         shell = isinstance(layout, str) and layout == "shell"
         spiral = isinstance(layout, str) and layout == "spiral"
         partite = isinstance(layout, str) and layout == "partite"
-        if explicit is None and not spring and not circular and not shell and not spiral and not partite:
+        if (explicit is None and not spring and not random_layout and not circular
+                and not shell and not spiral and not partite):
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -202,12 +205,17 @@ class _GraphBase(_compat.Group):
         resolution, equidistant = (0.35, False)
         partitions, align_horizontal = ([], False)
         spring_positions, fixed_indices, spring_k = ([], [], None)
+        random_positions = []
         spring_iterations, spring_threshold, spring_rescale = (50, 1e-4, True)
         spring_fixed_is_set = False
         if spring:
             (center, spring_positions, fixed_indices, spring_k,
              spring_iterations, spring_threshold, spring_rescale,
              scale, spring_fixed_is_set) = _spring_layout_config(
+                layout_config, layout_center, self._graph_key_ids, layout_scale
+            )
+        elif random_layout:
+            center, random_positions, scale = _random_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
             )
         elif shell:
@@ -222,7 +230,7 @@ class _GraphBase(_compat.Group):
             center, partitions, align_horizontal = _partite_layout_config(
                 layout_config, layout_center, self._graph_key_ids
             )
-        if not spring:
+        if not spring and not random_layout:
             scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
@@ -238,6 +246,13 @@ class _GraphBase(_compat.Group):
                     _array(fixed_indices), spring_fixed_is_set,
                     scale, *center, spring_k, spring_iterations, spring_threshold,
                     spring_rescale, options, operation="Graph.create",
+                )
+            elif random_layout:
+                self._graph_handle = engine_call(
+                    context.liveCreateRandomGraph,
+                    bool(self._directed), ids, _array(edge_ids),
+                    _array(value for point in random_positions for value in point),
+                    scale, options, operation="Graph.create",
                 )
             elif circular:
                 self._graph_handle = engine_call(
@@ -411,6 +426,17 @@ class _GraphBase(_compat.Group):
                 scale, *center, spring_k, iterations, threshold, rescale,
                 operation="Graph.spring_layout",
             )
+        elif layout == "random":
+            _, random_positions, scale = _random_layout_config(
+                layout_config, center, self._graph_key_ids, scale
+            )
+            engine_call(
+                self._context().liveGraphRandomLayout,
+                self._graph_handle,
+                _array(value for point in random_positions for value in point),
+                scale,
+                operation="Graph.random_layout",
+            )
         elif layout == "circular":
             center = _circular_layout_center(layout_config, center)
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
@@ -466,7 +492,7 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only spring, circular, shell, spiral, partite, and explicit layouts"
+                "Python Graph qualifies only spring, random, circular, shell, spiral, partite, and explicit layouts"
             )
         return self
 
@@ -539,26 +565,10 @@ def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
         rescale = not fixed_is_set
 
-    seed = options.get("seed")
-    try:
-        import numpy as np
-    except ImportError as error:  # pragma: no cover - only available in the browser runtime
-        raise RuntimeError("spring Graph layout requires NumPy in the Manim runtime") from error
-    if seed is None:
-        rng = np.random
-    elif isinstance(seed, Integral):
-        rng = np.random.RandomState(int(seed))
-    elif isinstance(seed, np.random.RandomState):
-        rng = seed
-    elif hasattr(np.random, "Generator") and isinstance(seed, np.random.Generator):
-        rng = seed
-    else:
-        raise TypeError("spring layout_config seed must be an integer, RandomState, Generator, or None")
+    np, rng = _numpy_random_source(options.get("seed"), "spring")
 
     def random_array(shape):
-        if hasattr(rng, "rand"):
-            return rng.rand(*shape)
-        return rng.random(shape)
+        return _numpy_random_array(rng, shape)
 
     provided = {}
     if pos is not None:
@@ -592,6 +602,63 @@ def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
         center, initial_positions, fixed_indices, spring_k, int(iterations), threshold,
         rescale, scale, fixed_is_set,
     )
+
+
+def _random_layout_config(layout_config, fallback_center, vertex_ids, layout_scale):
+    """Prepare Manim's scaled NetworkX random-layout coordinates."""
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    supported = {"center", "dim", "seed"}
+    unknown = [key for key in options if key not in supported]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported random layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, Integral):
+        raise TypeError("random layout_config dim must be an integer")
+    if dimension != 2:
+        raise NotImplementedError("Graph currently supports only two-dimensional random layouts")
+    raw_center = options.get("center", fallback_center)
+    center = _point((0.0, 0.0) if raw_center is None else raw_center)
+    scale = _shared._ir._finite_number("layout_scale", layout_scale)
+
+    np, rng = _numpy_random_source(options.get("seed"), "random")
+    positions = (_numpy_random_array(rng, (len(vertex_ids), 2)) + np.asarray(center)).astype(np.float32)
+    prepared = [tuple(map(float, point)) for point in positions]
+    return center, prepared, scale
+
+
+def _numpy_random_source(seed, layout_name):
+    try:
+        import numpy as np
+    except ImportError as error:  # pragma: no cover - only available in the browser runtime
+        raise RuntimeError(f"{layout_name} Graph layout requires NumPy in the Manim runtime") from error
+    if seed is None:
+        rng = np.random
+    elif seed is np.random:
+        rng = seed
+    elif isinstance(seed, Integral):
+        rng = np.random.RandomState(int(seed))
+    elif isinstance(seed, np.random.RandomState):
+        rng = seed
+    elif hasattr(np.random, "Generator") and isinstance(seed, np.random.Generator):
+        rng = seed
+    else:
+        raise TypeError(
+            f"{layout_name} layout_config seed must be an integer, RandomState, Generator, or None"
+        )
+    return np, rng
+
+
+def _numpy_random_array(rng, shape):
+    return rng.rand(*shape) if hasattr(rng, "rand") else rng.random(shape)
 
 
 def _circular_layout_center(layout_config, fallback_center):
@@ -757,11 +824,11 @@ def _partite_layout_config(layout_config, fallback_center, vertex_ids):
 
 
 class Graph(_GraphBase):
-    """Undirected retained Graph with qualified spring, circular, shell, spiral, partite, and explicit layouts."""
+    """Undirected retained Graph with qualified spring, random, circular, shell, spiral, partite, and explicit layouts."""
 
 
 class DiGraph(_GraphBase):
-    """Directed retained Graph with shared Rust spring integration and Arrow semantics."""
+    """Directed retained Graph with shared Rust spring/random layouts and Arrow semantics."""
     _directed = True
 
 
