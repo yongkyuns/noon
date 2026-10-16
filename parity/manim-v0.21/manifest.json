@@ -152,7 +152,7 @@
       "scene": "GraphStyleExample",
       "source": "parity/manim-v0.21/core-examples/graph.py",
       "expected_duration": 0.2,
-      "notes": "Pinned ManimCE raster fixture now covers global and per-key vertex/edge stroke opacity. The exact-head upstream raster result is pending; existing tolerances are unchanged."
+      "notes": "Pinned ManimCE raster fixture covers global and per-key vertex/edge stroke opacity with partial custom Text labels. The exact-head upstream raster result is pending; existing tolerances are unchanged."
     },
     {
       "id": "graph-circle-vertex-type",
@@ -160,6 +160,22 @@
       "source": "parity/manim-v0.21/core-examples/graph.py",
       "expected_duration": 0.2,
       "notes": "Pinned ManimCE raster fixture for the standard Circle vertex_type with its constructor-default radius, fill, and stroke."
+    },
+    {
+      "id": "graph-default-labels",
+      "scene": "GraphDefaultLabels",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Pinned default MathTex vertex labels, label color, add_vertices, layout changes, graph copy, and labeled-vertex removal."
+    },
+    {
+      "id": "digraph-partial-labels",
+      "scene": "DiGraphPartialLabels",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Pinned partial caller-supplied MathTex and Text labels through directed layout, add_vertices, copy, and removal."
     },
     {
       "id": "graph-default-spring",

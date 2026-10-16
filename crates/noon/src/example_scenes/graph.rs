@@ -1,9 +1,23 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
 use crate::{
-    ExecutionSession, GraphOptions, MobjectTarget, Scene, StyleUpdate, BLUE, GREEN, PURPLE, RED,
-    YELLOW,
+    ExecutionSession, GraphOptions, Mobject, MobjectFamily, MobjectTarget, Scene, StyleUpdate,
+    BLUE, GREEN, PURPLE, RED, YELLOW,
 };
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+use crate::{Text, BLACK};
+
+fn graph_scene_family(
+    scene: &mut Scene,
+    graph: &MobjectFamily,
+    label: Option<&Mobject>,
+) -> Result<MobjectFamily, crate::AuthoringError> {
+    let mut members = vec![MobjectTarget::Family(graph)];
+    if let Some(label) = label {
+        members.push(MobjectTarget::Object(label));
+    }
+    scene.family(&members)
+}
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -29,6 +43,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     )?;
 
     graph.change_layout_positions(&mut scene, &[(-5.0, -1.0), (-3.5, 1.2), (-2.0, -1.0)])?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    let graph_label = {
+        let mut label = scene.text(Text::new("a").with_font_size(48.0).color(BLACK))?;
+        label.shift(-5.0, -1.0)?;
+        label
+    };
     let mut added_vertex_options = options.clone();
     added_vertex_options.vertex_radius = 0.16;
     added_vertex_options.vertex_fill = YELLOW;
@@ -373,22 +393,31 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         circle_options,
     )?;
 
-    scene.add_many(&[
-        MobjectTarget::Family(graph.family()),
-        MobjectTarget::Family(digraph.family()),
-        MobjectTarget::Family(centered.family()),
-        MobjectTarget::Family(spiral.family()),
-        MobjectTarget::Family(partite.family()),
-        MobjectTarget::Family(shells.family()),
-        MobjectTarget::Family(spring.family()),
-        MobjectTarget::Family(spring_digraph.family()),
-        MobjectTarget::Family(random_graph.family()),
-        MobjectTarget::Family(tree_graph.family()),
-        MobjectTarget::Family(spectral_graph.family()),
-        MobjectTarget::Family(kamada_kawai_graph.family()),
-        MobjectTarget::Family(kamada_kawai_digraph.family()),
-        MobjectTarget::Family(circle_vertices.family()),
-    ])?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    let graph_display = graph_scene_family(&mut scene, graph.family(), Some(&graph_label))?;
+    #[cfg(not(all(feature = "native-text", feature = "bundled-fonts")))]
+    let graph_display = graph_scene_family(&mut scene, graph.family(), None)?;
+    let display_families = [
+        graph_display,
+        graph_scene_family(&mut scene, digraph.family(), None)?,
+        graph_scene_family(&mut scene, centered.family(), None)?,
+        graph_scene_family(&mut scene, spiral.family(), None)?,
+        graph_scene_family(&mut scene, partite.family(), None)?,
+        graph_scene_family(&mut scene, shells.family(), None)?,
+        graph_scene_family(&mut scene, spring.family(), None)?,
+        graph_scene_family(&mut scene, spring_digraph.family(), None)?,
+        graph_scene_family(&mut scene, random_graph.family(), None)?,
+        graph_scene_family(&mut scene, tree_graph.family(), None)?,
+        graph_scene_family(&mut scene, spectral_graph.family(), None)?,
+        graph_scene_family(&mut scene, kamada_kawai_graph.family(), None)?,
+        graph_scene_family(&mut scene, kamada_kawai_digraph.family(), None)?,
+        graph_scene_family(&mut scene, circle_vertices.family(), None)?,
+    ];
+    let scene_roots = display_families
+        .iter()
+        .map(MobjectTarget::Family)
+        .collect::<Vec<_>>();
+    scene.add_many(&scene_roots)?;
     scene.wait(0.21)?;
     Ok(scene)
 }
@@ -417,14 +446,11 @@ mod tests {
         // Kamada-Kawai Graph: two Lines + three vertices.
         // Kamada-Kawai DiGraph: one Arrow, its tip, and two vertices.
         // Circle-vertex Graph: one Line and two stroked circle vertices.
-        assert_eq!(leaves.len(), 82);
+        // The paired labeled Graph example contributes one retained Text leaf.
+        assert_eq!(leaves.len(), 83);
         for leaf in leaves {
-            assert!(store
-                .semantic_object_state_checked(leaf)
-                .unwrap()
-                .content
-                .geometry()
-                .is_some());
+            let content = store.semantic_object_state_checked(leaf).unwrap().content;
+            assert!(content.geometry().is_some() || content.text().is_some());
         }
     }
 }

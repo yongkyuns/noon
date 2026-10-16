@@ -28,10 +28,10 @@ class GraphStyleExample(Scene):
                          "stroke_opacity": 0.55,
                          ("a", "b"): {"stroke_opacity": 0.3}},
         )
-        left = Graph(vertices, edges, layout={
+        left = Graph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
             "a": [-5, -1, 0], "b": [-3.5, 1.2, 0], "c": [-2, -1, 0],
         }, **options)
-        right = DiGraph(vertices, edges, layout={
+        right = DiGraph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
             "a": [2, -1, 0], "b": [3.5, 1.2, 0], "c": [5, -1, 0],
         }, **options)
         self.add(left, right)
@@ -285,4 +285,42 @@ class GraphTreeLayout(Scene):
             layout_config={"orientation": "down", "vertex_spacing": (1.1, 0.8)},
         )
         self.add(graph)
+        self.wait(0.2)
+
+
+class GraphDefaultLabels(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c"), ("c", "a")],
+            layout="circular", layout_scale=1.3,
+            layout_config={"center": (-1.2, 0.2)},
+            labels=True, label_fill_color=YELLOW,
+        )
+        graph.add_vertices("d", positions={"d": (1.5, 0.4)}, labels=True)
+        graph.change_layout(
+            "circular", scale=1.0, layout_config={"center": (-0.8, -0.1)},
+        )
+        copied = graph.copy().shift(3 * RIGHT)
+        graph.remove_vertices("b")
+        self.add(graph, copied)
+        self.wait(0.2)
+
+
+class DiGraphPartialLabels(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c"], [("a", "b"), ("c", "b")],
+            layout={"a": [-2.5, 0.4, 0], "b": [0, -0.4, 0], "c": [2.5, 0.4, 0]},
+            labels={"a": MathTex(r"\alpha", color=GREEN), "c": Text("C", color=ORANGE)},
+        )
+        graph.add_vertices(
+            "d", positions={"d": (2.0, -1.6)},
+            labels={"d": MathTex("d", color=BLUE)},
+        )
+        graph.change_layout(
+            "circular", scale=1.2, layout_config={"center": (0.2, -0.1)},
+        )
+        copied = graph.copy().shift(3 * LEFT)
+        graph.remove_vertices("b")
+        self.add(graph, copied)
         self.wait(0.2)

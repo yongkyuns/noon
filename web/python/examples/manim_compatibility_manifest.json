@@ -455,23 +455,24 @@
     {
       "id": "noon-styled-graphs",
       "title": "StyledGraphs",
-      "summary": "Compare directed and undirected graphs with shared vertex fills, outlines, edge colors and explicit layouts.",
+      "summary": "Compare directed and undirected graphs with shared vertex fills, outlines, edge colors, explicit layouts, and partial Text labels.",
       "status": "ready",
       "path": "python/examples/styled_graph.py",
       "category": "manim-compatible/graphs",
       "features": [
         "Graph",
         "DiGraph",
+        "partial caller-supplied Text labels",
         "vertex_config",
         "edge_config",
         "explicit layout",
         "Manim-compatible"
       ],
       "reuse": "manim-compatible-parity-v0.21",
-      "parity_status": "parity-qualified",
+      "parity_status": "candidate",
       "parity_fixture": "graph-style",
       "thumbnail": "thumbnails/manim/styled-graphs.png",
-      "thumbnail_alt": "Two green triangular graphs with translucent red vertices and blue outlines",
+      "thumbnail_alt": "Two colored triangular graphs with translucent vertices, blue outlines, and a MathTex vertex label on each graph",
       "thumbnail_time": 0,
       "order": 1270
     },

@@ -1,6 +1,6 @@
 """Graph/DiGraph layouts, topology edits, weighted styling, and stroke-opacity options."""
 
-from noon import BLUE, GREEN, PURPLE, RED, YELLOW, Circle, DiGraph, Graph, Scene
+from noon import BLACK, BLUE, GREEN, PURPLE, RED, YELLOW, Circle, DiGraph, Graph, Scene, Text
 
 
 class OrdinaryGraph(Scene):
@@ -38,7 +38,8 @@ class OrdinaryGraph(Scene):
                                                                    "stroke_opacity": 0.3}},
         )
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},
-                      [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
+                      [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit",
+                      labels={"a": Text("a", color=BLACK)}, **graph_styles)
         assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
         _ = graph[("a", "b")]
         assert_rejected_self_edge(graph, "a")

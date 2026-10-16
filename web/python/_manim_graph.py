@@ -7,6 +7,7 @@ topology, arrow endpoints, persistent placements, and publication.
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
+import math
 from numbers import Integral
 
 import _manim_compat as _compat
@@ -141,7 +142,7 @@ def _color_components(name, value):
     return color.red, color.green, color.blue, color.alpha
 
 
-def _circle_vertex_type(vertex_type):
+def _graph_vertex_type(vertex_type):
     from _manim_geometry import Dot
 
     selected = Dot if vertex_type is None else vertex_type
@@ -149,7 +150,45 @@ def _circle_vertex_type(vertex_type):
         raise NotImplementedError(
             "Graph currently supports Dot and Circle vertex_type values"
         )
-    return selected is _compat.Circle
+    return selected
+
+
+def _graph_labels(labels, vertices, label_fill_color):
+    """Build the supported label subset using retained Mobjects."""
+    if isinstance(labels, bool):
+        requested = {key: True for key in vertices} if labels else {}
+    elif isinstance(labels, Mapping):
+        requested = {key: label for key, label in labels.items() if key in vertices}
+    else:
+        raise TypeError("labels must be a bool or a mapping of vertex keys to labels")
+
+    if not requested:
+        return {}
+
+    default_color = (
+        _compat._as_color("label_fill_color", label_fill_color)
+        if any(value is True for value in requested.values())
+        else _base.BLACK
+    )
+    result = {}
+    for key, label in requested.items():
+        if label is None or label is False:
+            continue
+        color = default_color if label is True else _base.BLACK
+        if label is True:
+            label = _base.MathTex(str(key), color=color)
+        elif isinstance(label, str):
+            label = _base.MathTex(label, color=color)
+        elif not isinstance(label, _base.Mobject):
+            raise TypeError(
+                f"labels[{key!r}] must be a string, bool, Mobject, or None"
+            )
+        result[key] = label
+    return result
+
+
+def _labeled_dot_radius(label):
+    return _base.SMALL_BUFF + math.hypot(float(label.width), float(label.height)) / 2
 
 
 def _graph_style_options(vertex_config, edge_config):
@@ -295,7 +334,12 @@ class _GraphBase(_compat.Group):
     per-key radius. The standard ``Circle`` class is accepted as a constructor
     or ``add_vertices`` vertex type using retained circle geometry and Manim's
     Circle defaults; ``add_edges``-created endpoint vertices use Dot. Arbitrary
-    custom mobject types remain unsupported.
+    custom mobject types remain unsupported. Constructor ``labels`` accepts a
+    boolean or a partial vertex-to-label mapping; labels may be booleans,
+    strings, or retained Mobjects. Generated labels use MathTex and
+    ``label_fill_color``; default Dot radii follow Manim's LabeledDot bounds.
+    Label mobjects stay in the shared family and are preserved by layout
+    changes, copies, incremental vertex creation, and vertex removal.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -307,6 +351,8 @@ class _GraphBase(_compat.Group):
 
     def __init__(self, vertices, edges, layout="spring", *, layout_scale=2.0,
                  layout_center=(0.0, 0.0), layout_config=None, **kwargs):
+        labels = kwargs.pop("labels", False)
+        label_fill_color = kwargs.pop("label_fill_color", _base.BLACK)
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
         vertex_type = kwargs.pop("vertex_type", None)
@@ -314,9 +360,13 @@ class _GraphBase(_compat.Group):
         partitions = kwargs.pop("partitions", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
-        circle_vertices = _circle_vertex_type(vertex_type)
+        selected_vertex_type = _graph_vertex_type(vertex_type)
+        circle_vertices = selected_vertex_type is _compat.Circle
         vertex_mapping = vertices if isinstance(vertices, Mapping) else None
         vertices = tuple(vertices)
+        label_mobjects = _graph_labels(labels, vertices, label_fill_color)
+        if label_mobjects and circle_vertices:
+            raise TypeError("Circle vertices do not accept labels; use the default Dot vertex_type")
         edges, edge_data = _coerce_graph_edges(edges)
         explicit = layout if isinstance(layout, Mapping) else (
             vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
@@ -362,6 +412,13 @@ class _GraphBase(_compat.Group):
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids),
             per_key_supported=_VERTEX_CONFIG_KEYS,
         )
+        if label_mobjects and not circle_vertices:
+            for key, label in label_mobjects.items():
+                if (
+                    "radius" not in global_vertex_config
+                    and "radius" not in keyed_vertex_config.get(key, {})
+                ):
+                    keyed_vertex_config.setdefault(key, {})["radius"] = _labeled_dot_radius(label)
         self._default_vertex_config = dict(global_vertex_config)
         if circle_vertices:
             # Match Circle's defaults while retaining the same Rust-owned
@@ -537,10 +594,24 @@ class _GraphBase(_compat.Group):
             raise
         self._edge_wrappers = {}
         self._edge_mapping = None
-        _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
+        self._labels = label_mobjects
+        self.labels = self._labels
+        self._vertex_wrappers = {}
         self._canonical_live_target_context = context
+        # Graph roots own topology and reject generic membership edits. Keep
+        # labels as siblings in an ordinary retained Group around that root.
+        graph_wrapper = object.__new__(_compat.Group)
+        _shared._attach_shared_family(
+            graph_wrapper, engine_call(self._graph_handle.family), context
+        )
+        graph_wrapper._canonical_live_target_context = context
+        self._graph_family_wrapper = graph_wrapper
+        graph_wrapper._refresh_semantic_members = self._refresh_graph_family_members
+        for key, label in self._labels.items():
+            label.move_to(self._raw_vertex(key).get_center())
+        _compat.Group.__init__(self, graph_wrapper, *self._labels.values())
         for key, style in keyed_vertex_config.items():
-            _apply_key_style(self[key], style)
+            _apply_key_style(self._raw_vertex(key), style)
         for edge, style in keyed_edge_config.items():
             _apply_key_style(self._edge_style_target(edge), style)
 
@@ -589,30 +660,50 @@ class _GraphBase(_compat.Group):
         self._edge_wrappers[cache_key] = target
         return target
 
-    def _refresh_semantic_members(self):
-        _shared._attach_shared_family(self, self._semantic_family_handle, self._context())
-
     def _context(self):
         return self._canonical_live_target_context
+
+    def _refresh_graph_family_members(self):
+        """Refresh topology wrappers from the graph's current Rust family."""
+        _shared._attach_shared_family(
+            self._graph_family_wrapper,
+            engine_call(self._graph_handle.family),
+            self._context(),
+        )
+
+    def _raw_vertex(self, key):
+        try:
+            vertex_id = self._graph_key_ids[key]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"Could not find {key} in vertices or edges") from error
+        handle = engine_call(self._graph_handle.vertex, vertex_id)
+        if handle is None:
+            raise ValueError(f"Could not find {key} in vertices or edges")
+        identity = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+        member = self._graph_family_wrapper._semantic_member_wrappers.get(identity)
+        if member is None:
+            member = object.__new__(_compat.VMobject)
+            _shared._attach_shared_handle(member, handle)
+            member._canonical_live_target_context = self._context()
+            self._graph_family_wrapper._semantic_member_wrappers[identity] = member
+        return member
 
     def __getitem__(self, key):
         """Resolve a vertex key or edge tuple to its retained semantic Mobject."""
         try:
-            vertex_id = self._graph_key_ids.get(key)
+            is_vertex = key in self._graph_key_ids
         except TypeError:
-            vertex_id = None
-        if vertex_id is not None:
-            handle = engine_call(self._graph_handle.vertex, vertex_id)
-            if handle is None:
-                raise ValueError(f"Could not find {key} in vertices or edges")
-            identity = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
-            member = self._semantic_member_wrappers.get(identity)
-            if member is None:
-                member = object.__new__(_compat.VMobject)
-                _shared._attach_shared_handle(member, handle)
-                member._canonical_live_target_context = self._context()
-                self._semantic_member_wrappers[identity] = member
-            return member
+            is_vertex = False
+        if is_vertex:
+            vertex = self._raw_vertex(key)
+            label = self._labels.get(key)
+            if label is None:
+                return vertex
+            wrapper = self._vertex_wrappers.get(key)
+            if wrapper is None:
+                wrapper = _compat.VGroup(vertex, label)
+                self._vertex_wrappers[key] = wrapper
+            return wrapper
         if isinstance(key, tuple) and len(key) == 2:
             try:
                 return self._edge_style_target(key)
@@ -649,7 +740,8 @@ class _GraphBase(_compat.Group):
         }
         return self._edge_mapping
 
-    def add_vertices(self, *vertices, positions=None, vertex_type=None, vertex_config=None):
+    def add_vertices(self, *vertices, positions=None, labels=False,
+                     label_fill_color=_base.BLACK, vertex_type=None, vertex_config=None):
         """Append vertices, optionally supplying positions and per-key styles.
 
         ``vertex_type`` supports the standard Dot and Circle classes.
@@ -691,7 +783,20 @@ class _GraphBase(_compat.Group):
                 "stroke_width", "stroke_opacity", "radius",
             },
         )
-        circle_vertices = _circle_vertex_type(vertex_type)
+        label_mobjects = _graph_labels(
+            labels, tuple(key for key, _, _ in pending), label_fill_color
+        )
+        selected_vertex_type = _graph_vertex_type(vertex_type)
+        circle_vertices = selected_vertex_type is _compat.Circle
+        if label_mobjects and circle_vertices:
+            raise TypeError("Circle vertices do not accept labels; use the default Dot vertex_type")
+        if label_mobjects and not circle_vertices:
+            for key, label in label_mobjects.items():
+                if (
+                    "radius" not in global_config
+                    and "radius" not in keyed_config.get(key, {})
+                ):
+                    keyed_config.setdefault(key, {})["radius"] = _labeled_dot_radius(label)
         base_config = (
             {"radius": 1.0, "fill_opacity": 0.0, "stroke_width": 4.0}
             if circle_vertices else {}
@@ -721,6 +826,21 @@ class _GraphBase(_compat.Group):
             if options is not None:
                 options.free()
             raise
+        if label_mobjects:
+            positions_by_key = {key: (x, y) for key, x, y in pending}
+            for key, label in label_mobjects.items():
+                label.move_to(positions_by_key[key])
+            try:
+                self.add(*label_mobjects.values())
+            except BaseException:
+                engine_call(
+                    self._context().liveGraphRemoveVertices,
+                    self._graph_handle,
+                    _array(ids),
+                    operation="Graph.add_vertices.rollback",
+                )
+                raise
+            self._labels.update(label_mobjects)
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
         self._next_graph_id = next_id
         return [self[key] for key, _, _ in pending]
@@ -905,9 +1025,14 @@ class _GraphBase(_compat.Group):
 
         engine_call(self._context().liveGraphRemoveVertices, self._graph_handle,
                     _array(ids), operation="Graph.remove_vertices")
+        labels_to_remove = [self._labels[key] for key in keys if key in self._labels]
+        if labels_to_remove:
+            self.remove(*labels_to_remove)
         removed = set(keys)
         for key in keys:
             del self._graph_key_ids[key]
+            self._labels.pop(key, None)
+            self._vertex_wrappers.pop(key, None)
         kept_edges = [
             (edge, attributes)
             for edge, attributes in zip(self._graph_edges, self._graph_edge_data)
@@ -987,6 +1112,9 @@ class _GraphBase(_compat.Group):
         clone._graph_edge_data = [dict(attributes) for attributes in self._graph_edge_data]
         clone._edge_wrappers = {}
         clone._edge_mapping = None
+        clone._labels = {}
+        clone.labels = clone._labels
+        clone._vertex_wrappers = {}
         clone._next_graph_id = self._next_graph_id
         clone._default_vertex_config = dict(self._default_vertex_config)
         clone._default_edge_config = dict(self._default_edge_config)
@@ -996,7 +1124,15 @@ class _GraphBase(_compat.Group):
             self._graph_handle,
             operation="Graph.copy",
         )
-        _shared._attach_shared_family(clone, engine_call(clone._graph_handle.family), self._context())
+        graph_family = engine_call(clone._graph_handle.family)
+        graph_wrapper = object.__new__(_compat.Group)
+        _shared._attach_shared_family(graph_wrapper, graph_family, self._context())
+        graph_wrapper._canonical_live_target_context = self._context()
+        clone._graph_family_wrapper = graph_wrapper
+        graph_wrapper._refresh_semantic_members = clone._refresh_graph_family_members
+        clone._labels = {key: label.copy() for key, label in self._labels.items()}
+        clone.labels = clone._labels
+        _compat.Group.__init__(clone, graph_wrapper, *clone._labels.values())
         return clone
 
     def change_layout(self, layout="spring", *, scale=2.0, center=(0.0, 0.0),
@@ -1140,6 +1276,8 @@ class _GraphBase(_compat.Group):
             raise NotImplementedError(
                 "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, spectral, kamada_kawai, and explicit layouts"
             )
+        for key, label in self._labels.items():
+            label.move_to(self._raw_vertex(key).get_center())
         return self
 
 

@@ -14,6 +14,11 @@ class _Family:
         return []
 
 
+def _mock_group_init(wrapper, *members, **_kwargs):
+    wrapper._semantic_family_handle = _Family()
+    wrapper._semantic_member_wrappers = {str(index): member for index, member in enumerate(members)}
+
+
 class _Handle:
     def __init__(self, token):
         self.token = token
@@ -54,6 +59,37 @@ class _GraphOptions:
 class _ResultGroup:
     def __init__(self, *members):
         self.submobjects = members
+
+
+class _Label(graph._base.Mobject):
+    def __init__(self, width=0.6, height=0.8):
+        self._width = width
+        self._height = height
+        self.position = None
+        self.copy_result = None
+
+    @property
+    def width(self):
+        return self._width
+
+    @property
+    def height(self):
+        return self._height
+
+    def move_to(self, point):
+        self.position = tuple(point)
+        return self
+
+    def copy(self):
+        return self.copy_result or _Label(self.width, self.height)
+
+
+class _Vertex:
+    def __init__(self, center=(2.0, 3.0, 0.0)):
+        self.center = center
+
+    def get_center(self):
+        return self.center
 
 
 class _Context:
@@ -170,6 +206,7 @@ class GraphFacadeTests(unittest.TestCase):
             patch.object(graph, "_graph_options", side_effect=_GraphOptions),
             patch.object(graph._shared, "_live_constructor_context", return_value=self.context),
             patch.object(graph, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
+            patch.object(graph._compat.Group, "__init__", side_effect=_mock_group_init),
             patch.object(graph._compat.Group, "get_center", return_value=(0, 0, 0)),
             patch.object(graph._compat, "VGroup", side_effect=_ResultGroup),
         ]
@@ -358,6 +395,123 @@ class GraphFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "supports Dot and Circle"):
             graph.Graph({"a": (0, 0)}, [], vertex_type=object)
         self.assertEqual(len(self.context.creation_calls), 1)
+
+    def test_labels_true_creates_centered_mathtex_and_sizes_default_dot(self):
+        label = _Label()
+        vertex = _Vertex()
+        with (
+            patch.object(graph._base, "MathTex", return_value=label, create=True) as math_tex,
+            patch.object(graph._compat.Group, "__init__", return_value=None),
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=vertex),
+            patch.object(graph._compat.Group, "add", return_value=None),
+        ):
+            value = graph.Graph(
+                ["a"], [], labels=True, label_fill_color="#123456",
+                layout={"a": (2, 3)},
+            )
+            labeled_vertex = value["a"]
+
+        math_tex.assert_called_once_with("a", color=graph._compat._as_color("label_fill_color", "#123456"))
+        self.assertEqual(label.position, vertex.center)
+        self.assertIn(("vertex_radius_for", (0, 0.6)), self.context.options[0].calls)
+        self.assertEqual(value._labels, {"a": label})
+        self.assertIs(value.labels, value._labels)
+        self.assertEqual(labeled_vertex.submobjects, (vertex, label))
+
+    def test_partial_label_mappings_keep_mobjects_and_ignore_unmatched_keys(self):
+        supplied = _Label(width=0.4, height=0.3)
+        vertex = _Vertex((1.0, -2.0, 0.0))
+        with (
+            patch.object(graph._base, "MathTex", create=True) as math_tex,
+            patch.object(graph._compat.Group, "__init__", return_value=None),
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=vertex),
+            patch.object(graph._compat.Group, "add", return_value=None),
+        ):
+            value = graph.Graph(
+                ["a", "b"], [], labels={"a": supplied}, label_fill_color="invalid-but-unused",
+                layout={"a": (1, -2), "b": (3, 0)},
+            )
+            labeled_vertex = value["a"]
+            unlabeled_vertex = value["b"]
+
+        math_tex.assert_not_called()
+        self.assertEqual(supplied.position, vertex.center)
+        self.assertEqual(value._labels, {"a": supplied})
+        self.assertIs(labeled_vertex.submobjects[1], supplied)
+        self.assertIs(unlabeled_vertex, vertex)
+        with (
+            patch.object(graph._compat.Group, "add", return_value=None),
+        ):
+            ignored = graph.Graph(
+                ["a"], [], labels={"missing": supplied}, layout={"a": (0, 0)}
+            )
+        self.assertEqual(ignored._labels, {})
+
+    def test_label_mapping_can_create_mathtex_from_a_string(self):
+        label = _Label(width=0.25, height=0.5)
+        vertex = _Vertex()
+        with (
+            patch.object(graph._base, "MathTex", return_value=label, create=True) as math_tex,
+            patch.object(graph._compat.Group, "__init__", return_value=None),
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=vertex),
+            patch.object(graph._compat.Group, "add", return_value=None),
+        ):
+            value = graph.Graph(
+                ["a"], [], labels={"a": r"\alpha"}, layout={"a": (2, 3)},
+            )
+
+        math_tex.assert_called_once_with(r"\alpha", color=graph._base.BLACK)
+        self.assertEqual(label.position, vertex.center)
+        self.assertEqual(value._labels, {"a": label})
+
+    def test_labeled_vertices_can_be_added_atomically_with_radius_and_center(self):
+        label = _Label()
+        with (
+            patch.object(graph._base, "MathTex", return_value=label, create=True),
+            patch.object(graph._compat.Group, "__init__", return_value=None),
+            patch.object(graph._compat.Group, "add", return_value=None),
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+        ):
+            value = graph.Graph({"a": (0, 0)}, [])
+            added = value.add_vertices(
+                "b", positions={"b": (4, 5)}, labels=True,
+                label_fill_color="#ABCDEF",
+            )
+
+        self.assertEqual(value._graph_key_ids, {"a": 0, "b": 1})
+        self.assertEqual(label.position, (4.0, 5.0))
+        self.assertEqual(value._labels, {"b": label})
+        self.assertAlmostEqual(self.context.add_vertex_calls[0][3][0], 0.6)
+        self.assertEqual(added[0].submobjects[1], label)
+
+    def test_graph_copy_owns_independent_label_mobjects(self):
+        label, copied_label = _Label(), _Label()
+        label.copy_result = copied_label
+        with (
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+            patch.object(graph._compat.Group, "add", return_value=None),
+        ):
+            value = graph.Graph({"a": (0, 0)}, [], labels={"a": label})
+            copied = value.copy()
+
+        self.assertIs(value.labels["a"], label)
+        self.assertIs(copied.labels["a"], copied_label)
+        self.assertIsNot(copied.labels["a"], value.labels["a"])
+
+    def test_removing_labeled_vertex_removes_label_from_graph_family(self):
+        label = _Label()
+        with (
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+            patch.object(graph._compat.Group, "add", return_value=None),
+            patch.object(graph._compat.Group, "remove", return_value=None) as remove,
+        ):
+            value = graph.Graph({"a": (0, 0)}, [], labels={"a": label})
+            removed = value.remove_vertices("a")
+
+        remove.assert_called_once_with(label)
+        self.assertEqual(value.labels, {})
+        self.assertNotIn("a", value.vertices)
+        self.assertEqual(len(removed.submobjects), 1)
 
     def test_kamada_kawai_constructor_flattens_networkx_distances_and_initial_positions(self):
         graph.Graph(
@@ -1343,7 +1497,7 @@ class GraphFacadeTests(unittest.TestCase):
             for config, fill, stroke in cases:
                 with self.subTest(constructor=constructor.__name__, config=config):
                     target = Mock()
-                    with patch.object(graph._GraphBase, "__getitem__", return_value=target):
+                    with patch.object(graph._GraphBase, "_raw_vertex", return_value=target):
                         constructor(
                             ["a"], [], layout={"a": (0, 0)},
                             vertex_config={"a": config},

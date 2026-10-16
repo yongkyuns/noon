@@ -44,6 +44,37 @@ class RasterManifestTests(unittest.TestCase):
         self.assertIn("vertex_type=Circle", scene_source)
         self.assertIn('"circle-left": [-1.4, 0, 0]', scene_source)
 
+    def test_graph_label_fixtures_cover_default_partial_and_mutated_labels(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source = (ROOT / "parity/manim-v0.21/core-examples/graph.py").read_text(
+            encoding="utf-8"
+        )
+        style_fixture = next(
+            item for item in manifest["fixtures"] if item["id"] == "graph-style"
+        )
+        style_source = source.split("class GraphStyleExample(Scene):", maxsplit=1)[1]
+        self.assertNotIn("requires_latex", style_fixture)
+        self.assertEqual(style_source.count('labels={"a": Text("a", color=BLACK)}'), 2)
+        for fixture_id, scene, expected in (
+            (
+                "graph-default-labels", "GraphDefaultLabels",
+                ("labels=True", "label_fill_color=YELLOW", "graph.add_vertices",
+                 "graph.change_layout", "graph.copy()", "graph.remove_vertices"),
+            ),
+            (
+                "digraph-partial-labels", "DiGraphPartialLabels",
+                ("labels={", "MathTex", "Text(\"C\"", "graph.add_vertices",
+                 "graph.change_layout", "graph.copy()", "graph.remove_vertices"),
+            ),
+        ):
+            with self.subTest(fixture=fixture_id):
+                fixture = next(item for item in manifest["fixtures"] if item["id"] == fixture_id)
+                self.assertEqual(fixture["scene"], scene)
+                self.assertTrue(fixture["requires_latex"])
+                scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
+                for marker in expected:
+                    self.assertIn(marker, scene_source)
+
     def test_graph_and_digraph_default_spring_fixtures_use_seeded_constructor_defaults(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source = None

@@ -14,10 +14,10 @@ class GraphStyleExample(Scene):
                          "stroke_opacity": 0.55,
                          ("a", "b"): {"stroke_opacity": 0.3}},
         )
-        left = Graph(vertices, edges, layout={
+        left = Graph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
             "a": [-5, -1, 0], "b": [-3.5, 1.2, 0], "c": [-2, -1, 0],
         }, **options)
-        right = DiGraph(vertices, edges, layout={
+        right = DiGraph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
             "a": [2, -1, 0], "b": [3.5, 1.2, 0], "c": [5, -1, 0],
         }, **options)
         self.add(left, right)
