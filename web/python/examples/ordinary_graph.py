@@ -45,6 +45,11 @@ class OrdinaryGraph(Scene):
             vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
         )
         assert len(added_vertices) == 1 and added_vertices[0] is graph["e"]
+        copied = graph.copy()
+        assert tuple(copied.edges) == tuple(graph.edges)
+        removed_copy_edge = copied.remove_edges(("a", "d"))
+        assert len(removed_copy_edge) == 1
+        assert ("a", "d") in graph.edges and ("a", "d") not in copied.edges
 
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
