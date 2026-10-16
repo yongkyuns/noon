@@ -59,6 +59,11 @@ on:
       - 'web/python/_manim_angle.py'
       - 'web/python/test_manim_angle.py'
       - 'compat/manim-v0.21.0.json'
+      - 'scripts/manim-polygon-start-angle.py'
+      - 'crates/noon/src/polygon_authoring.rs'
+      - 'crates/noon/src/semantic_mobject/manim_geometry.rs'
+      - 'web/python/_manim_polygon.py'
+      - 'web/python/test_manim_polygon.py'
       - 'web/python/noon.py'
       - 'web/python/test_paint_queries_gradients.py'
       - 'web/python/_manim_config_utils.py'
@@ -93,7 +98,7 @@ jobs:
           ref: ${{ env.MANIM_REFERENCE_SHA }}
           path: manim-v0.21.0
           persist-credentials: false
-      - name: Verify lightweight namespace values against pinned source
+      - name: Verify pinned source contracts and namespace values
         shell: bash
         run: |
           set -euo pipefail
@@ -105,6 +110,7 @@ jobs:
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
           python3 noon/scripts/manim-match-color.py manim-v0.21.0
           python3 noon/scripts/manim-angle-from-three-points.py manim-v0.21.0
+          python3 noon/scripts/manim-polygon-start-angle.py manim-v0.21.0
       - name: Qualify NumPy user-data contracts against pinned source
         shell: bash
         run: |

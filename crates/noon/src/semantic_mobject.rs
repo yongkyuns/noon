@@ -57,6 +57,7 @@ pub struct ManimGeometryOptions {
     z_index: f64,
     role: noon_core::SemanticObjectRole,
     explicit_angle_radius: Option<f64>,
+    resolved_start_angle: Option<f64>,
 }
 
 impl ManimGeometryOptions {
@@ -74,6 +75,14 @@ impl ManimGeometryOptions {
 
     pub(crate) fn set_explicit_angle_radius(&mut self, radius: Option<f64>) {
         self.explicit_angle_radius = radius;
+    }
+
+    /// Return the resolved Manim start angle for regular polygon constructors.
+    ///
+    /// This is constructor metadata only; the retained Rust path remains the
+    /// authoritative geometry representation.
+    pub fn resolved_start_angle(&self) -> Option<f64> {
+        self.resolved_start_angle
     }
 
     pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
@@ -223,6 +232,7 @@ impl ManimGeometryOptions {
             z_index: 0.0,
             role: noon_core::SemanticObjectRole::Ordinary,
             explicit_angle_radius: None,
+            resolved_start_angle: None,
         }
     }
 
@@ -404,6 +414,7 @@ impl ManimGeometryOptions {
             z_index,
             role,
             explicit_angle_radius: _,
+            resolved_start_angle: _,
         } = self;
         match geometry {
             GeometryRef::Circle { .. }
@@ -453,6 +464,7 @@ impl ManimGeometryOptions {
             z_index,
             role,
             explicit_angle_radius: _,
+            resolved_start_angle: _,
         } = self;
         let GeometryRef::VectorPath(path) = geometry else {
             return Err(AuthoringError::Unsupported(
@@ -700,6 +712,7 @@ impl Mobject {
                 z_index: 0.0,
                 role: noon_core::SemanticObjectRole::Ordinary,
                 explicit_angle_radius: None,
+                resolved_start_angle: None,
             },
         )
     }
