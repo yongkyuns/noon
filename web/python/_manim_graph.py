@@ -505,28 +505,38 @@ class _GraphBase(_compat.Group):
         }
         return self._edge_mapping
 
-    def add_vertices(self, vertices, *, vertex_config=None):
-        """Append explicitly positioned vertices, optionally with per-key styles.
+    def add_vertices(self, *vertices, positions=None, vertex_config=None):
+        """Append vertices, optionally supplying positions and per-key styles.
 
         ``vertex_config`` uses the constructor's global style keys and accepts
         per-key radius, color, fill-opacity, and stroke-width overrides. Global
         values extend constructor defaults; per-key values override those
-        globals in the same graph publication.
+        globals in the same graph publication. A mapping passed as the sole
+        positional argument remains a shorthand for ``positions``.
         """
-        if not isinstance(vertices, Mapping):
-            raise TypeError("Graph vertices must be a mapping of hashable keys to positions")
-        pending, ids, positions = [], [], []
+        if len(vertices) == 1 and isinstance(vertices[0], Mapping):
+            if positions is not None:
+                raise TypeError("positions cannot be combined with a vertex-to-position mapping")
+            positions = vertices[0]
+            vertices = tuple(positions)
+        if positions is not None and not isinstance(positions, Mapping):
+            raise TypeError("positions must be a mapping of vertex keys to positions")
+        if not vertices:
+            return []
+        positions_by_key = positions if isinstance(positions, Mapping) else {}
+        pending, ids, flat_positions = [], [], []
         next_id = self._next_graph_id
-        for key, position in vertices.items():
+        center = _point(self.get_center())
+        for key in vertices:
             if not isinstance(key, Hashable):
                 raise TypeError("Graph vertex keys must be hashable")
             if key in self._graph_key_ids or any(key == item[0] for item in pending):
                 raise ValueError("duplicate Graph vertex key")
-            x, y = _point(position)
+            x, y = _point(positions_by_key.get(key, center))
             pending.append((key, x, y))
             ids.append(next_id)
             next_id += 1
-            positions.extend((x, y))
+            flat_positions.extend((x, y))
         pending_keys = {key for key, _, _ in pending}
         global_config, keyed_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, pending_keys,
@@ -544,7 +554,7 @@ class _GraphBase(_compat.Group):
                 self._context().liveGraphAddVerticesWithOptions,
                 self._graph_handle,
                 _array(ids),
-                _array(positions),
+                _array(flat_positions),
                 _array(style_overrides),
                 options,
                 operation="Graph.add_vertices",
@@ -554,7 +564,7 @@ class _GraphBase(_compat.Group):
             raise
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
         self._next_graph_id = next_id
-        return self
+        return [self[key] for key, _, _ in pending]
 
     def add_edges(self, edges, *, edge_config=None, positions=None, vertex_config=None):
         """Add edges and create any missing endpoint vertices atomically.

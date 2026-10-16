@@ -33,6 +33,11 @@ class OrdinaryGraph(Scene):
             edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("a", "d") in graph.edges
+        added_vertices = graph.add_vertices(
+            "e", positions={"e": (-5.5, -2.4)},
+            vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
+        )
+        assert len(added_vertices) == 1 and added_vertices[0] is graph["e"]
 
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
@@ -46,6 +51,11 @@ class OrdinaryGraph(Scene):
             edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("w", "x") in directed.edges
+        added_vertices = directed.add_vertices(
+            "y", positions={"y": (2, -2.3)},
+            vertex_config={"y": {"radius": 0.16, "color": YELLOW}},
+        )
+        assert len(added_vertices) == 1 and added_vertices[0] is directed["y"]
         centered = Graph(
             ["left", "right"], [("left", "right")], layout="circular",
             layout_scale=(1.4, 0.8), layout_config={"center": (3, -1), "dim": 2},

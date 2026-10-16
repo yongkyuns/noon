@@ -39,6 +39,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("d", (-3.5, -2.4), added_vertex_options)],
         [("a", "d", added_edge_options)],
     )?;
+    let mut standalone_vertex_options = options.clone();
+    standalone_vertex_options.vertex_radius = 0.16;
+    standalone_vertex_options.vertex_fill = YELLOW;
+    standalone_vertex_options.vertex_stroke_width = 0.05;
+    graph
+        .add_vertices_with_options(&mut scene, [("e", (-5.5, -2.4), standalone_vertex_options)])?;
     graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
         fill_color: Some(YELLOW),
         ..Default::default()
@@ -99,6 +105,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("x", (5.0, -2.3), added_vertex_options)],
         [("w", "x", added_edge_options)],
     )?;
+    let mut standalone_vertex_options = options.clone();
+    standalone_vertex_options.vertex_radius = 0.16;
+    standalone_vertex_options.vertex_fill = YELLOW;
+    standalone_vertex_options.vertex_stroke = YELLOW;
+    digraph
+        .add_vertices_with_options(&mut scene, [("y", (2.0, -2.3), standalone_vertex_options)])?;
 
     let mut centered = scene.graph(
         [("left", (4.4, -1.0)), ("right", (1.6, -1.0))],
@@ -295,12 +307,12 @@ mod tests {
         let store = scene.integration_store().borrow();
         let leaves = store.ordered_leaf_nodes(scene.root()).unwrap();
         // Persistent additions keep the same ordinary retained leaves.
-        // Undirected: four Lines + four vertices.
-        // Directed: four Arrow shafts + four tips + four vertices.
+        // Undirected: four Lines + five vertices.
+        // Directed: four Arrow shafts + four tips + five vertices.
         // Spring and random Graphs each add two Lines + three vertices.
         // Tree Graph adds four Lines + five vertices.
         // Spring DiGraph: one Arrow shaft + tip + two vertices.
-        assert_eq!(leaves.len(), 61);
+        assert_eq!(leaves.len(), 63);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

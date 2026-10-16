@@ -560,6 +560,17 @@ class GraphFacadeTests(unittest.TestCase):
             ],
         )
 
+    def test_add_vertices_accepts_keys_positions_and_returns_created_objects(self):
+        value = graph.Graph({"a": (0, 0)}, [])
+
+        created = value.add_vertices("b", "c", positions={"b": (2, 3)})
+
+        self.assertEqual(len(created), 2)
+        self.assertIs(created[0], value["b"])
+        self.assertIs(created[1], value["c"])
+        self.assertEqual(self.context.add_vertex_calls[0][1:3], ([1, 2], [2.0, 3.0, 0.0, 0.0]))
+        self.assertEqual(value.add_vertices(), [])
+
     def test_add_vertex_config_validation_precedes_publication(self):
         value = graph.Graph({"a": (0, 0)}, [])
         for config, error in (
