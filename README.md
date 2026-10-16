@@ -4,6 +4,11 @@ Noon is a **Rust-native 2D animation and interactive graphics engine** with Mani
 
 Rust and Python expose the same observable scene semantics through shared Rust operations. Python supplies Manim-compatible syntax and arbitrary host callbacks where they are genuinely required; it does not implement a second scene, scheduler, runtime, or renderer.
 
+The [demo gallery](https://yongkyuns.github.io/noon/) includes **Light in a
+triangle**, which precomputes mirror reflections and uses ordinary shared Rust
+animations to draw and move the light. Edit its triangle, launch angle and bounce
+counts in Python to explore the geometry. Posters show actual Noon-rendered frames.
+
 ## Architecture
 
 The main data path is intentionally small. Focused diagrams carry the detailed publication, locality, callback, deployment, and ownership contracts instead of crowding them into one picture.
