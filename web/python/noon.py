@@ -918,6 +918,7 @@ _PUBLIC_EXPORTS = {
     "typing": "_manim_typing",
     "get_unit_normal": "_manim_user_vector_bases",
     "z_to_vector": "_manim_user_vector_bases",
+    "lingering": "_manim_rate_functions",
     "AS2700": "_manim_color_palettes",
     "BS381": "_manim_color_palettes",
     "DVIPSNAMES": "_manim_color_palettes",
