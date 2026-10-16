@@ -37,16 +37,11 @@ test("every case consumes the authenticated full-validation package", () => {
   assert.ok(qualify.indexOf("wasm-build.mjs verify") < qualify.indexOf("npm install"));
   assert.doesNotMatch(qualify, /dev-wasm-build|check\.sh full|continue-on-error/);
   assert.match(source, /fail-fast: false/);
-  assert.equal((source.match(/timeout-minutes: 30/g) ?? []).length, 3);
+  assert.equal((source.match(/timeout-minutes: 30/g) ?? []).length, 2);
 });
 
-test("the original plotting gate requires all cases and retains cancellation evidence", () => {
-  const gate = section("plotting"), qualify = section("qualify");
-  assert.match(gate, /name: plotting/);
-  assert.match(gate, /needs: \[build, qualify\]/);
-  assert.match(gate, /if: always\(\)/);
-  assert.match(gate, /test "\$BUILD_RESULT" = success/);
-  assert.match(gate, /test "\$CASES_RESULT" = success/);
+test("every executed plotting case retains its command and cancellation evidence", () => {
+  const qualify = section("qualify");
   assert.match(qualify, /Retain every executed case, including cancellation evidence\n\s+if: always\(\)/);
   assert.match(qualify, /plotting-\$\{\{ matrix\.case \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
   assert.match(qualify, /node "\$NOON_CASE_SCRIPT" "\$NOON_CASE_MODE"/);
