@@ -38,6 +38,18 @@ class GraphStyleExample(Scene):
         self.wait(0.2)
 
 
+class GraphCircleVertexType(Scene):
+    def construct(self):
+        graph = Graph(
+            ["circle-left", "circle-right"],
+            [("circle-left", "circle-right")],
+            layout={"circle-left": [-1.4, 0, 0], "circle-right": [1.4, 0, 0]},
+            vertex_type=Circle,
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
 class GraphDefaultSpringLayout(Scene):
     def construct(self):
         graph = Graph(

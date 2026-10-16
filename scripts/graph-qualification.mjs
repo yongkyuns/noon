@@ -9,7 +9,7 @@ await qualifyPairedAuthoring({
     file: "ordinary_graph.py",
     scene: "OrdinaryGraph",
     factory: "createDirectGraphSmokeRenderer",
-    objectCount: 79,
+    objectCount: 82,
     duration: 0.21,
     sampleTime: 0.21,
   }],

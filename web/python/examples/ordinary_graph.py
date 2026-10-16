@@ -1,6 +1,6 @@
 """Graph/DiGraph layouts, topology edits, weighted styling, and stroke-opacity options."""
 
-from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
+from noon import BLUE, GREEN, PURPLE, RED, YELLOW, Circle, DiGraph, Graph, Scene
 
 
 class OrdinaryGraph(Scene):
@@ -223,9 +223,14 @@ class OrdinaryGraph(Scene):
             "kamada_kawai", scale=0.3,
             layout_config={"center": (5.5, -2.6), "weight": "weight"},
         )
+        circle_vertices = Graph(
+            {"circle-left": (-1.4, 0.0), "circle-right": (1.4, 0.0)},
+            [("circle-left", "circle-right")],
+            layout="explicit", vertex_type=Circle,
+        )
         self.add(
             graph, directed, centered, shell_graph, spiral_graph, partite_graph,
             spring_graph, spring_digraph, random_graph, tree_graph, spectral_graph,
-            kamada_kawai_graph, kamada_kawai_digraph,
+            kamada_kawai_graph, kamada_kawai_digraph, circle_vertices,
         )
         self.wait(0.2)

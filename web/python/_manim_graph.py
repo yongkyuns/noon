@@ -141,6 +141,17 @@ def _color_components(name, value):
     return color.red, color.green, color.blue, color.alpha
 
 
+def _circle_vertex_type(vertex_type):
+    from _manim_geometry import Dot
+
+    selected = Dot if vertex_type is None else vertex_type
+    if selected not in (Dot, _compat.Circle):
+        raise NotImplementedError(
+            "Graph currently supports Dot and Circle vertex_type values"
+        )
+    return selected is _compat.Circle
+
+
 def _graph_style_options(vertex_config, edge_config):
     if _graph_options is None:
         raise RuntimeError("Graph requires the shared Rust authoring host")
@@ -281,8 +292,10 @@ class _GraphBase(_compat.Group):
     plus radius in its atomic mutation. ``add_edges`` inherits constructor-wide
     edge styles and accepts per-edge color, stroke-color, stroke-width, and
     stroke-opacity overrides. Constructor ``vertex_config`` also accepts
-    per-key radius. Custom mobject types remain
-    unsupported.
+    per-key radius. The standard ``Circle`` class is accepted as a constructor
+    or ``add_vertices`` vertex type using retained circle geometry and Manim's
+    Circle defaults; ``add_edges``-created endpoint vertices use Dot. Arbitrary
+    custom mobject types remain unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -296,10 +309,12 @@ class _GraphBase(_compat.Group):
                  layout_center=(0.0, 0.0), layout_config=None, **kwargs):
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
+        vertex_type = kwargs.pop("vertex_type", None)
         root_vertex = kwargs.pop("root_vertex", None)
         partitions = kwargs.pop("partitions", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
+        circle_vertices = _circle_vertex_type(vertex_type)
         vertex_mapping = vertices if isinstance(vertices, Mapping) else None
         vertices = tuple(vertices)
         edges, edge_data = _coerce_graph_edges(edges)
@@ -348,6 +363,16 @@ class _GraphBase(_compat.Group):
             per_key_supported=_VERTEX_CONFIG_KEYS,
         )
         self._default_vertex_config = dict(global_vertex_config)
+        if circle_vertices:
+            # Match Circle's defaults while retaining the same Rust-owned
+            # circle primitives used by Dot vertices. These defaults are also
+            # inherited by later add_vertices()/add_edges() calls.
+            global_vertex_config = {
+                "radius": 1.0,
+                "fill_opacity": 0.0,
+                "stroke_width": 4.0,
+                **global_vertex_config,
+            }
         global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
         )
@@ -624,9 +649,10 @@ class _GraphBase(_compat.Group):
         }
         return self._edge_mapping
 
-    def add_vertices(self, *vertices, positions=None, vertex_config=None):
+    def add_vertices(self, *vertices, positions=None, vertex_type=None, vertex_config=None):
         """Append vertices, optionally supplying positions and per-key styles.
 
+        ``vertex_type`` supports the standard Dot and Circle classes.
         ``vertex_config`` uses the constructor's global style keys and accepts
         per-key radius, color, fill-opacity, stroke-width, and stroke-opacity
         overrides. Global
@@ -665,7 +691,13 @@ class _GraphBase(_compat.Group):
                 "stroke_width", "stroke_opacity", "radius",
             },
         )
-        base_config = {**self._default_vertex_config, **global_config}
+        circle_vertices = _circle_vertex_type(vertex_type)
+        base_config = (
+            {"radius": 1.0, "fill_opacity": 0.0, "stroke_width": 4.0}
+            if circle_vertices else {}
+        )
+        base_config.update(self._default_vertex_config)
+        base_config.update(global_config)
         options = _graph_style_options(base_config, {})
         try:
             style_overrides = _vertex_style_override_rows(

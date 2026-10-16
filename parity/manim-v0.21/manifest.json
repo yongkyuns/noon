@@ -155,6 +155,13 @@
       "notes": "Pinned ManimCE raster fixture now covers global and per-key vertex/edge stroke opacity. The exact-head upstream raster result is pending; existing tolerances are unchanged."
     },
     {
+      "id": "graph-circle-vertex-type",
+      "scene": "GraphCircleVertexType",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned ManimCE raster fixture for the standard Circle vertex_type with its constructor-default radius, fill, and stroke."
+    },
+    {
       "id": "graph-default-spring",
       "scene": "GraphDefaultSpringLayout",
       "source": "parity/manim-v0.21/core-examples/graph.py",

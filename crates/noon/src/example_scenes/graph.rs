@@ -359,6 +359,20 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         },
     )?;
 
+    // Python's standard `vertex_type=Circle` selects radius 1, no fill, and
+    // Manim's four-unit white outline while keeping the same retained circles.
+    let circle_options = GraphOptions {
+        vertex_radius: 1.0,
+        vertex_fill_opacity: 0.0,
+        vertex_stroke_width: 0.04,
+        ..GraphOptions::default()
+    };
+    let circle_vertices = scene.graph_with_options(
+        [("circle-left", (-1.4, 0.0)), ("circle-right", (1.4, 0.0))],
+        [("circle-left", "circle-right")],
+        circle_options,
+    )?;
+
     scene.add_many(&[
         MobjectTarget::Family(graph.family()),
         MobjectTarget::Family(digraph.family()),
@@ -373,6 +387,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(spectral_graph.family()),
         MobjectTarget::Family(kamada_kawai_graph.family()),
         MobjectTarget::Family(kamada_kawai_digraph.family()),
+        MobjectTarget::Family(circle_vertices.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -401,7 +416,8 @@ mod tests {
         // Spectral Graph: three Lines + four vertices.
         // Kamada-Kawai Graph: two Lines + three vertices.
         // Kamada-Kawai DiGraph: one Arrow, its tip, and two vertices.
-        assert_eq!(leaves.len(), 79);
+        // Circle-vertex Graph: one Line and two stroked circle vertices.
+        assert_eq!(leaves.len(), 82);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

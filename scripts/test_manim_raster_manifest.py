@@ -32,6 +32,18 @@ class RasterManifestTests(unittest.TestCase):
         self.assertIn('"stroke_opacity": 0.55', scene_source)
         self.assertIn('("a", "b"): {"stroke_opacity": 0.3}', scene_source)
 
+    def test_graph_circle_vertex_fixture_uses_the_standard_custom_vertex_type(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "graph-circle-vertex-type"
+        )
+        self.assertEqual(fixture["scene"], "GraphCircleVertexType")
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        scene_source = source.split("class GraphCircleVertexType(Scene):", maxsplit=1)[1]
+        self.assertIn("vertex_type=Circle", scene_source)
+        self.assertIn('"circle-left": [-1.4, 0, 0]', scene_source)
+
     def test_graph_and_digraph_default_spring_fixtures_use_seeded_constructor_defaults(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source = None
@@ -52,9 +64,12 @@ class RasterManifestTests(unittest.TestCase):
                 self.assertEqual(fixture["expected_duration"], 0.2)
                 source = source or (ROOT / fixture["source"]).read_text(encoding="utf-8")
                 self.assertIn(f"class {scene}(Scene)", source)
-                self.assertIn(f"graph = {constructor}(", source)
-                self.assertIn('layout_config={"seed": 42}', source)
-                self.assertNotIn('layout="spring"', source)
+                scene_source = source.split(
+                    f"class {scene}(Scene):", maxsplit=1
+                )[1].split("\nclass ", maxsplit=1)[0]
+                self.assertIn(f"graph = {constructor}(", scene_source)
+                self.assertIn('layout_config={"seed": 42}', scene_source)
+                self.assertNotIn('layout="spring"', scene_source)
         self.assertIn('[("a", "b"), ("c", "b")]', source)
 
     def test_weighted_graph_spring_fixtures_select_edge_attribute_weight(self):

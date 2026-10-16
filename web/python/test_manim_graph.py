@@ -311,6 +311,54 @@ class GraphFacadeTests(unittest.TestCase):
             graph.Graph(["a", "b"], [("a", "b", {}, "extra")])
         self.assertEqual(self.context.creation_calls, [])
 
+    def test_circle_vertex_type_uses_circle_defaults_and_mutation_inherits_them(self):
+        value = graph.Graph(
+            {"a": (0, 0)}, [], vertex_type=graph._compat.Circle,
+        )
+
+        self.assertEqual(
+            value._default_vertex_config,
+            {},
+        )
+        self.assertEqual(
+            self.context.options[0].calls,
+            [
+                ("radius", (1.0,)),
+                ("fill_opacity", (0.0,)),
+                ("vertex_width", (4.0,)),
+            ],
+        )
+
+        value.add_vertices("b", positions={"b": (1, 0)})
+        self.assertEqual(self.context.add_vertex_calls[0][-1].calls, [])
+
+        value.add_vertices("c", positions={"c": (2, 0)}, vertex_type=graph._compat.Circle)
+        self.assertEqual(
+            self.context.add_vertex_calls[1][-1].calls,
+            [
+                ("radius", (1.0,)),
+                ("fill_opacity", (0.0,)),
+                ("vertex_width", (4.0,)),
+            ],
+        )
+
+        value.add_edges(("d", "e"), positions={"d": (3, 0), "e": (4, 0)})
+        self.assertEqual(self.context.compound_add_calls[0][4].calls, [])
+
+    def test_circle_vertex_type_respects_global_radius_and_rejects_other_classes(self):
+        value = graph.Graph(
+            {"a": (0, 0)}, [], vertex_type=graph._compat.Circle,
+            vertex_config={"radius": 0.5, "fill_opacity": 0.3},
+        )
+        self.assertEqual(
+            value._default_vertex_config,
+            {"radius": 0.5, "fill_opacity": 0.3},
+        )
+
+        with self.assertRaisesRegex(NotImplementedError, "supports Dot and Circle"):
+            graph.Graph({"a": (0, 0)}, [], vertex_type=object)
+        self.assertEqual(len(self.context.creation_calls), 1)
+
     def test_kamada_kawai_constructor_flattens_networkx_distances_and_initial_positions(self):
         graph.Graph(
             ["a", "b", "c"], [("a", "b"), ("b", "c")],
