@@ -661,9 +661,18 @@ assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 from noon import line_intersection, find_intersection
 np = __import__("numpy")
 from noon import NumberLine
-_ticks = NumberLine([-2, 2]).get_tick_range()
+_line = NumberLine([-2, 2], length=4, include_ticks=False)
+_ticks = _line.get_tick_range()
 assert isinstance(_ticks, np.ndarray) and _ticks.dtype == np.dtype(float)
 assert (_ticks + 1).tolist() == [-1, 0, 1, 2, 3]
+assert np.allclose(tuple(_line @ 1), [1, 0])
+assert abs((_line @ 1) @ _line - 1) < 1e-6
+_line.rotate_about_number(1, np.pi / 2)
+assert np.allclose(tuple(_line @ 1), [1, 0], atol=1e-6)
+assert np.allclose(tuple(_line @ 2), [1, 1], atol=1e-6)
+_line.rotate_about_zero(-np.pi / 2)
+assert np.allclose(tuple(_line @ 0), [1, -1], atol=1e-6)
+assert np.allclose(tuple(_line @ 2), [3, -1], atol=1e-6)
 assert line_intersection([[0, 0, 0], [2, 2, 0]], [[0, 2, 0], [2, 0, 0]]).tolist() == [1, 1, 0]
 assert find_intersection(np.array([[0, 0, 0]]), np.array([[1, 0, 0]]),
                          np.array([[1, 2, 3]]), np.array([[0, 1, 0]]))[0].tolist() == [1, 0, 0]
