@@ -1,8 +1,11 @@
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import _manim_graph as graph
+
+_HAS_NUMPY = importlib.util.find_spec("numpy") is not None
 
 
 class _Family:
@@ -111,11 +114,31 @@ class GraphFacadeTests(unittest.TestCase):
             patch.object(graph._shared, "_live_constructor_context", return_value=self.context),
             patch.object(graph, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
         ]
+        if not _HAS_NUMPY:
+            # These tests exercise facade operations unrelated to NetworkX
+            # seeding. Keep them runnable in the minimal Python test image;
+            # spring contract tests below are explicitly skipped there.
+            self.patches.append(
+                patch.object(graph, "_spring_layout_config", side_effect=self._spring_without_numpy)
+            )
         for patcher in self.patches: patcher.start()
 
     def tearDown(self):
         for patcher in reversed(self.patches): patcher.stop()
 
+    @staticmethod
+    def _spring_without_numpy(layout_config, fallback_center, vertex_ids, layout_scale):
+        center = graph._point((0.0, 0.0) if fallback_center is None else fallback_center)
+        scale = (
+            1.0 if layout_scale is None
+            else graph._shared._ir._finite_number("layout_scale", layout_scale)
+        )
+        return (
+            center, [(0.0, 0.0)] * len(vertex_ids), [], None, 50, 1e-4,
+            layout_scale is not None, scale, False,
+        )
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_default_graph_layout_matches_manim_spring_and_uses_networkx_seed(self):
         graph.Graph(["a", "b", "c"], [("a", "b")], layout_config={"seed": 42})
         call = self.context.creation_calls[0]
@@ -139,6 +162,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(required_packages("DiGraph(['a'], [])"), ("numpy",))
         self.assertEqual(required_packages("Circle()"), ())
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_seed_none_uses_the_shared_numpy_random_stream(self):
         import numpy as np
 
@@ -156,6 +180,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(actual, [tuple(point) for point in expected])
         self.assertEqual(actual_next, expected_next)
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_config_supports_fixed_positions_and_unscaled_layout(self):
         value = graph.Graph(
             ["a", "b", "c"], [("a", "b")],
@@ -177,6 +202,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(call[3][:2], [1.0, 0.0])
         self.assertIsNotNone(value._graph_handle)
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_change_layout_routes_positions_and_options_to_rust(self):
         value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
         value.change_layout(
@@ -190,6 +216,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertAlmostEqual(call[7], 2 / (2 ** 0.5))
         self.assertEqual(call[8:11], (50, 1e-4, False))
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_fixed_nodes_outside_the_graph_are_ignored_by_networkx(self):
         graph.Graph(
             ["a", "b"], [],
@@ -203,6 +230,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertAlmostEqual(call[9], 4 / (2 ** 0.5))
         self.assertFalse(call[12])
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_layout_rejects_unsupported_configuration_before_publication(self):
         invalid = [
             ({"dim": 3}, NotImplementedError, "two-dimensional"),
