@@ -1,4 +1,4 @@
-"""Linear coordinate families and preparation-only plots over shared Rust handles.
+"""Scaled coordinate families and preparation-only plots over shared Rust handles.
 
 The 2D Axes wrapper accepts Manim-style two- or three-value ranges and delegates
 range normalization, defaults, ticks, and retained filled tips to Rust. The
@@ -256,6 +256,35 @@ def _number_line_scale(scaling):
             raise ValueError("LogBase base must be positive and not equal to one")
         return "log", base, bool(getattr(scaling, "custom_labels", True))
     raise NotImplementedError("NumberLine scaling supports LinearBase and LogBase")
+
+
+def _axes_scale_config(config, name):
+    if config is None:
+        return {}
+    if not isinstance(config, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    if any(not isinstance(key, str) for key in config):
+        raise TypeError(f"{name} keys must be strings")
+    unknown = sorted(set(config) - {"scaling"})
+    if unknown:
+        raise NotImplementedError(
+            f"unsupported {name} option(s): " + ", ".join(unknown)
+        )
+    return dict(config)
+
+
+def _axes_scalings(axis_config, x_axis_config, y_axis_config):
+    common = _axes_scale_config(axis_config, "axis_config")
+    x_config = {**common, **_axes_scale_config(x_axis_config, "x_axis_config")}
+    y_config = {**common, **_axes_scale_config(y_axis_config, "y_axis_config")}
+    try:
+        x_scale = _number_line_scale(x_config.get("scaling"))
+        y_scale = _number_line_scale(y_config.get("scaling"))
+    except NotImplementedError as error:
+        raise NotImplementedError(
+            "Axes scaling supports LinearBase and LogBase"
+        ) from error
+    return x_config.get("scaling"), x_scale, y_config.get("scaling"), y_scale
 
 
 def _three_d_axis_config(value, name):
@@ -646,14 +675,18 @@ class UnitInterval(NumberLine):
 
 
 class Axes(_compat.Group):
-    """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
+    """2D axes with Manim v0.21 ranges, dimensions, filled tips, and scales."""
     set_opacity = _compat.VGroup.set_opacity
     set_fill = _compat.VGroup.set_fill
     set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
-                 include_ticks=True, tick_size=0.1, color=None, **kwargs):
+                 include_ticks=True, tick_size=0.1, axis_config=None,
+                 x_axis_config=None, y_axis_config=None, color=None, **kwargs):
+        x_scaling, x_scale, y_scaling, y_scale = _axes_scalings(
+            axis_config, x_axis_config, y_axis_config
+        )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         options = engine_call(
@@ -666,21 +699,27 @@ class Axes(_compat.Group):
         try:
             engine_call(options.setTicks, bool(include_ticks), tick_size, True)
             engine_call(options.setTips, bool(tips))
+            engine_call(options.setAxesScale, 0, x_scale[0], x_scale[1])
+            engine_call(options.setAxesScale, 1, y_scale[0], y_scale[1])
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
-        members = [
-            _attach_number_line(
+        members = []
+        for index, (scaling, scale, exclude_origin) in enumerate((
+            (x_scaling, x_scale, x_scale[0] != "log"),
+            (y_scaling, y_scale, y_scale[0] != "log"),
+        )):
+            axis = _attach_number_line(
                 object.__new__(NumberLine),
                 engine_call(handle.coordinateAxis, index),
                 tick_size=float(tick_size),
                 include_tip=bool(tips),
-                exclude_origin_tick=True,
+                exclude_origin_tick=exclude_origin,
             )
-            for index in (0, 1)
-        ]
+            axis.scaling = scaling if scaling is not None else LinearBase()
+            members.append(axis)
         _coordinate_family(self, handle, members)
 
     @property
