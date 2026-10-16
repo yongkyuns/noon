@@ -658,6 +658,8 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         seed: 42,
         iterations: 24,
         threshold: 0.0,
+        shells: Vec::new(),
+        rotate: None,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -731,6 +733,34 @@ fn two_vertex_circular_layout_applies_scale_and_center() {
     assert!((positions[0].1 + 1.0).abs() < 1e-12);
     assert!((positions[1].0 - 1.6).abs() < 1e-12);
     assert!((positions[1].1 + 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn shell_layout_preserves_membership_order_scale_rotation_and_center() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Shell,
+        scale: 2.0,
+        center: (1.0, -2.0),
+        shells: vec![vec![0, 1], vec![2, 3]],
+        rotate: Some(0.0),
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    let expected = [(2.0, -2.0), (0.0, -2.0), (3.0, -2.0), (-1.0, -2.0)];
+    for (actual, expected) in positions.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-6);
+        assert!((actual.1 - expected.1).abs() < 1e-6);
+    }
+    for shells in [vec![vec![0], vec![0]], vec![vec![0]], vec![vec![0, 4]]] {
+        assert!(GraphLayoutOptions {
+            layout: GraphLayout::Shell,
+            shells,
+            ..Default::default()
+        }
+        .positions(2, &[])
+        .is_err());
+    }
 }
 
 #[test]

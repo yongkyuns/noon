@@ -21,7 +21,16 @@ pub(crate) enum GraphOperation {
     AddEdges(Vec<(u32, u32)>),
     RemoveVertices(Vec<u32>),
     RemoveEdges(Vec<(u32, u32)>),
-    Circular { scale: f64, center: (f64, f64) },
+    Circular {
+        scale: f64,
+        center: (f64, f64),
+    },
+    Shell {
+        shells: Vec<Vec<usize>>,
+        scale: f64,
+        center: (f64, f64),
+        rotate: Option<f64>,
+    },
     Explicit(Vec<(f64, f64)>),
 }
 
@@ -82,6 +91,48 @@ impl NativeGraph {
                         layout: noon::GraphLayout::Circular,
                         scale,
                         center,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Undirected(graph),
+                GraphOperation::Shell {
+                    shells,
+                    scale,
+                    center,
+                    rotate,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Shell,
+                        scale,
+                        center,
+                        shells,
+                        rotate,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Shell {
+                    shells,
+                    scale,
+                    center,
+                    rotate,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Shell,
+                        scale,
+                        center,
+                        shells,
+                        rotate,
                         ..Default::default()
                     },
                 )?;
@@ -148,6 +199,48 @@ impl NativeGraph {
                     },
                 )?;
             }
+            (
+                Self::Undirected(graph),
+                GraphOperation::Shell {
+                    shells,
+                    scale,
+                    center,
+                    rotate,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Shell,
+                        scale,
+                        center,
+                        shells,
+                        rotate,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Shell {
+                    shells,
+                    scale,
+                    center,
+                    rotate,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Shell,
+                        scale,
+                        center,
+                        shells,
+                        rotate,
+                        ..Default::default()
+                    },
+                )?;
+            }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions_live(live, &positions)?;
             }
@@ -185,6 +278,31 @@ fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
         return Err(js_error(format!("{name} requires pairs of vertex IDs")));
     }
     Ok(chunks.map(|pair| (pair[0], pair[1])).collect())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn shell_indices(indices: &[u32], sizes: &[u32]) -> Result<Vec<Vec<usize>>, JsValue> {
+    let total = sizes
+        .iter()
+        .try_fold(0usize, |total, &size| total.checked_add(size as usize));
+    if total != Some(indices.len()) {
+        return Err(js_error(
+            "Graph shell sizes must cover the shell vertex indices",
+        ));
+    }
+    let mut offset = 0usize;
+    Ok(sizes
+        .iter()
+        .map(|&size| {
+            let end = offset + size as usize;
+            let shell = indices[offset..end]
+                .iter()
+                .map(|&index| index as usize)
+                .collect();
+            offset = end;
+            shell
+        })
+        .collect())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -392,6 +510,45 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    /// Compute a NetworkX-compatible 2D shell layout in the shared Rust graph
+    /// implementation before publishing semantic nodes.
+    #[wasm_bindgen(js_name = liveCreateShellGraph)]
+    pub fn live_create_shell_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        shell_vertex_indices: &[u32],
+        shell_sizes: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        rotate: Option<f64>,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let shells = shell_indices(shell_vertex_indices, shell_sizes)?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Shell,
+            scale,
+            center: (center_x, center_y),
+            shells,
+            rotate,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.shell_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = liveGraphCopy)]
     pub fn live_graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
         self.copy_live_graph(&graph.inner)
@@ -442,6 +599,36 @@ impl CanonicalAuthoringSceneContext {
             GraphOperation::Circular {
                 scale,
                 center: (center_x, center_y),
+            },
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphShellLayout)]
+    pub fn live_graph_shell_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        shell_vertex_indices: &[u32],
+        shell_sizes: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        rotate: Option<f64>,
+    ) -> Result<(), JsValue> {
+        if !scale.is_finite()
+            || !center_x.is_finite()
+            || !center_y.is_finite()
+            || rotate.is_some_and(|value| !value.is_finite())
+        {
+            return Err(js_error("shell Graph layout values must be finite"));
+        }
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Shell {
+                shells: shell_indices(shell_vertex_indices, shell_sizes)?,
+                scale,
+                center: (center_x, center_y),
+                rotate,
             },
         )
         .map_err(js_error)

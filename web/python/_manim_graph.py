@@ -6,7 +6,7 @@ topology, arrow endpoints, persistent placements, and publication.
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping
+from collections.abc import Hashable, Mapping, Sequence
 
 import _manim_compat as _compat
 import _manim_semantic_handles as _shared
@@ -133,8 +133,9 @@ class _GraphBase(_compat.Group):
     """Shared retained Graph/DiGraph facade.
 
     Circular layouts accept NetworkX's ``center`` and ``dim=2`` configuration
-    through ``layout_config``. Other circular options and dimensions above two
-    remain unsupported until their Rust semantics are qualified. Constructor
+    through ``layout_config``. Shell layouts accept ``nlist``, ``rotate``,
+    ``center``, and ``dim=2``. Other options remain unsupported until their
+    Rust semantics are qualified. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time; other per-key constructor options remain unsupported.
@@ -160,8 +161,9 @@ class _GraphBase(_compat.Group):
             vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
         )
         circular = isinstance(layout, str) and layout == "circular"
-        if explicit is None and not circular:
-            raise NotImplementedError("Graph requires a circular layout or a complete position mapping")
+        shell = isinstance(layout, str) and layout == "shell"
+        if explicit is None and not circular and not shell:
+            raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
         positions = []
@@ -188,6 +190,11 @@ class _GraphBase(_compat.Group):
         )
         center = (_circular_layout_center(layout_config, layout_center)
                   if circular else _point(layout_center))
+        shell_groups, rotate = ([], None)
+        if shell:
+            center, shell_groups, rotate = _shell_layout_config(
+                layout_config, layout_center, self._graph_key_ids
+            )
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
@@ -199,6 +206,14 @@ class _GraphBase(_compat.Group):
                 self._graph_handle = engine_call(
                     context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
                     scale, *center, options, operation="Graph.create",
+                )
+            elif shell:
+                shell_indices, shell_sizes = _flatten_shells(shell_groups)
+                self._graph_handle = engine_call(
+                    context.liveCreateShellGraph,
+                    bool(self._directed), ids, _array(edge_ids),
+                    _array(shell_indices), _array(shell_sizes), scale, *center, rotate,
+                    options, operation="Graph.create",
                 )
             else:
                 self._graph_handle = engine_call(
@@ -335,6 +350,19 @@ class _GraphBase(_compat.Group):
             center = _circular_layout_center(layout_config, center)
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
                         float(scale), *_point(center), operation="Graph.circular_layout")
+        elif layout == "shell":
+            vertex_order = {key: index for index, key in enumerate(self._graph_key_ids)}
+            center, groups, rotate = _shell_layout_config(
+                layout_config, center, vertex_order
+            )
+            shell_indices, shell_sizes = _flatten_shells(groups)
+            engine_call(
+                self._context().liveGraphShellLayout,
+                self._graph_handle,
+                _array(shell_indices), _array(shell_sizes),
+                _shared._ir._finite_number("scale", scale), *center, rotate,
+                operation="Graph.shell_layout",
+            )
         elif layout == "explicit":
             if not isinstance(positions, Mapping):
                 raise TypeError("explicit Graph layout requires a key-to-position mapping")
@@ -348,7 +376,7 @@ class _GraphBase(_compat.Group):
                         _array(value for point in ordered for value in point),
                         operation="Graph.explicit_layout")
         else:
-            raise NotImplementedError("Python Graph qualifies only circular and explicit layouts")
+            raise NotImplementedError("Python Graph qualifies only circular, shell, and explicit layouts")
         return self
 
 
@@ -375,12 +403,69 @@ def _circular_layout_center(layout_config, fallback_center):
     return _point(options.get("center", fallback_center))
 
 
+def _shell_layout_config(layout_config, fallback_center, vertex_ids):
+    """Resolve the qualified 2D NetworkX shell-layout option subset."""
+    if layout_config is None:
+        return _point(fallback_center), [], None
+    if not isinstance(layout_config, Mapping):
+        raise TypeError("layout_config must be a mapping")
+    options = dict(layout_config)
+    unknown = [key for key in options if key not in {"center", "dim", "nlist", "rotate"}]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported shell layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, int):
+        raise TypeError("shell layout_config dim must be an integer")
+    if dimension != 2:
+        raise ValueError("shell layout currently supports only dim=2")
+    center = _point(options.get("center", fallback_center))
+    # NetworkX returns the center directly for empty and singleton graphs,
+    # before inspecting shell membership or rotation.
+    if len(vertex_ids) <= 1:
+        return center, [], None
+    rotate = options.get("rotate")
+    if rotate is not None:
+        rotate = _shared._ir._finite_number("layout_config.rotate", rotate)
+    nlist = options.get("nlist")
+    groups = []
+    if nlist is not None:
+        if isinstance(nlist, (str, bytes)) or not isinstance(nlist, Sequence):
+            raise TypeError("shell layout_config nlist must be a sequence of vertex sequences")
+        if len(nlist) == 0 and vertex_ids:
+            raise ValueError("shell layout_config nlist must not be empty")
+        seen = set()
+        for shell in nlist:
+            if isinstance(shell, (str, bytes)) or not isinstance(shell, Sequence):
+                raise TypeError("each shell in layout_config nlist must be a vertex sequence")
+            group = []
+            for key in shell:
+                try:
+                    vertex_id = vertex_ids[key]
+                except (KeyError, TypeError) as error:
+                    raise ValueError(f"shell layout references unknown vertex {key!r}") from error
+                if vertex_id in seen:
+                    raise ValueError("shell layout must assign each graph vertex exactly once")
+                seen.add(vertex_id)
+                group.append(vertex_id)
+            groups.append(group)
+        if len(seen) != len(vertex_ids):
+            raise ValueError("shell layout must assign each graph vertex exactly once")
+    return center, groups, rotate
+
+
+def _flatten_shells(groups):
+    return [index for group in groups for index in group], [len(group) for group in groups]
+
+
 class Graph(_GraphBase):
-    """Undirected retained Graph with qualified circular/explicit layouts."""
+    """Undirected retained Graph with qualified circular, shell, and explicit layouts."""
 
 
 class DiGraph(_GraphBase):
-    """Directed retained Graph using Rust's shared Arrow endpoint semantics."""
+    """Directed retained Graph with shared Rust layout and Arrow semantics."""
     _directed = True
 
 

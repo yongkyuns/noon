@@ -44,7 +44,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut digraph = scene.digraph_with_options(
         [("u", (2.0, -1.0)), ("v", (3.5, 1.2)), ("w", (5.0, -1.0))],
         [("u", "v"), ("v", "w"), ("w", "u")],
-        options,
+        options.clone(),
     )?;
     digraph
         .vertex(&"v")
@@ -90,10 +90,27 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         },
     )?;
 
+    let mut shells = scene.graph_with_options(
+        [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
+        [("s0", "s1"), ("s1", "s2")],
+        options,
+    )?;
+    shells.change_layout(
+        &mut scene,
+        crate::GraphLayoutOptions {
+            layout: crate::GraphLayout::Shell,
+            scale: 0.9,
+            center: (0.0, 2.6),
+            shells: vec![vec![0, 1], vec![2]],
+            ..Default::default()
+        },
+    )?;
+
     scene.add_many(&[
         MobjectTarget::Family(graph.family()),
         MobjectTarget::Family(digraph.family()),
         MobjectTarget::Family(centered.family()),
+        MobjectTarget::Family(shells.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -116,7 +133,7 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        assert_eq!(leaves.len(), 23);
+        assert_eq!(leaves.len(), 28);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

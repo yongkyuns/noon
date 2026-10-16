@@ -50,6 +50,7 @@ class _Context:
         self.fail = None
         self.creation_calls = []
         self.layout_calls = []
+        self.shell_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -65,6 +66,7 @@ class _Context:
         return handle
 
     liveCreateCircularGraph = liveCreateGraph
+    liveCreateShellGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -79,6 +81,9 @@ class _Context:
     def liveGraphCircularLayout(self, *args):
         self._call("circular")
         self.layout_calls.append(args)
+    def liveGraphShellLayout(self, *args):
+        self._call("shell")
+        self.shell_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -155,6 +160,61 @@ class GraphFacadeTests(unittest.TestCase):
                     graph.Graph(["a", "b"], [], layout="circular",
                                 layout_config=layout_config)
         self.assertEqual(self.context.creation_calls, [])
+
+    def test_shell_layout_config_reaches_rust_for_construction_and_live_change(self):
+        value = graph.Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c")], layout="shell",
+            layout_scale=2.5,
+            layout_config={
+                "nlist": [["b"], ["a", "c"]],
+                "rotate": 0.25,
+                "center": (2, -1),
+                "dim": 2,
+            },
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0, 1, 2], [0, 1, 1, 2], [1, 0, 2], [1, 2], 2.5, 2.0, -1.0, 0.25),
+        )
+        value.change_layout(
+            "shell", scale=1.5,
+            layout_config={"nlist": [["c", "a"], ["b"]], "center": (-2, 3)},
+        )
+        self.assertEqual(
+            self.context.shell_layout_calls[0][1:],
+            ([2, 0, 1], [2, 1], 1.5, -2.0, 3.0, None),
+        )
+
+        value.remove_vertices(["b"])
+        value.change_layout("shell", layout_config={"nlist": [["c", "a"]]})
+        self.assertEqual(
+            self.context.shell_layout_calls[1][1:],
+            ([1, 0], [2], 2.0, 0.0, 0.0, None),
+        )
+
+    def test_shell_layout_rejects_unqualified_or_incomplete_options_before_publication(self):
+        invalid = [
+            ({"dim": 3}, ValueError, "only dim=2"),
+            ({"unknown": True}, NotImplementedError, "unsupported shell layout_config"),
+            ({"nlist": [["a", "a"], ["b"]]}, ValueError, "exactly once"),
+            ({"nlist": [["a"]]}, ValueError, "exactly once"),
+            ({"nlist": []}, ValueError, "must not be empty"),
+        ]
+        for config, error, message in invalid:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [], layout="shell", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
+
+    def test_shell_singleton_uses_center_without_evaluating_shell_parameters(self):
+        graph.Graph(
+            ["solo"], [], layout="shell",
+            layout_config={"nlist": [["missing"]], "rotate": float("nan")},
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0], [], [], [], 2.0, 0.0, 0.0, None),
+        )
 
     def test_global_style_configs_are_coerced_into_one_typed_rust_options_handle(self):
         graph.DiGraph(

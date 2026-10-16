@@ -33,6 +33,7 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
+    Shell,
     Random,
     Spring,
 }
@@ -45,6 +46,11 @@ pub struct GraphLayoutOptions {
     pub seed: u32,
     pub iterations: usize,
     pub threshold: f64,
+    /// Optional NetworkX shell membership, expressed as vertex indices.
+    /// Empty means one shell containing every vertex.
+    pub shells: Vec<Vec<usize>>,
+    /// Angle increment between shells; `None` uses `PI / shell_count`.
+    pub rotate: Option<f64>,
 }
 
 impl Default for GraphLayoutOptions {
@@ -56,6 +62,8 @@ impl Default for GraphLayoutOptions {
             seed: 0,
             iterations: 50,
             threshold: 1e-4,
+            shells: Vec::new(),
+            rotate: None,
         }
     }
 }
@@ -693,6 +701,9 @@ fn graph_layout(
             "scale, center, and threshold must be finite",
         ));
     }
+    if options.layout == GraphLayout::Shell {
+        return shell_layout(count, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -707,6 +718,7 @@ fn graph_layout(
                 (angle.cos(), angle.sin())
             })
             .collect::<Vec<_>>(),
+        GraphLayout::Shell => unreachable!("shell layout returned above"),
         GraphLayout::Random | GraphLayout::Spring => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
@@ -721,6 +733,78 @@ fn graph_layout(
     {
         return Err(GraphAuthoringError::InvalidLayout(
             "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn shell_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let shells = if options.shells.is_empty() {
+        vec![(0..count).collect::<Vec<_>>()]
+    } else {
+        options.shells.clone()
+    };
+    let mut seen = vec![false; count];
+    for shell in &shells {
+        for &vertex in shell {
+            if vertex >= count || seen[vertex] {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "shell layout must assign each graph vertex exactly once",
+                ));
+            }
+            seen[vertex] = true;
+        }
+    }
+    if seen.iter().any(|assigned| !assigned) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "shell layout must assign each graph vertex exactly once",
+        ));
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    let rotate = options
+        .rotate
+        .unwrap_or(std::f64::consts::PI / shells.len() as f64);
+    if !rotate.is_finite() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "shell rotation must be finite",
+        ));
+    }
+    let radius_bump = options.scale / shells.len() as f64;
+    let mut radius = if shells[0].len() == 1 {
+        0.0
+    } else {
+        radius_bump
+    };
+    let mut first_theta = rotate;
+    let mut positions = vec![(0.0, 0.0); count];
+    for shell in &shells {
+        for (index, &vertex) in shell.iter().enumerate() {
+            // NetworkX 3.4.2 creates the linspace angles as float32 before
+            // adding the (float64) starting rotation.
+            let theta = ((index as f64 * std::f64::consts::TAU / shell.len() as f64) as f32) as f64
+                + first_theta;
+            positions[vertex] = (
+                radius * theta.cos() + options.center.0,
+                radius * theta.sin() + options.center.1,
+            );
+        }
+        radius += radius_bump;
+        first_theta += rotate;
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed shell coordinates are not finite",
         ));
     }
     Ok(positions)

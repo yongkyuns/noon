@@ -38,5 +38,16 @@ class OrdinaryGraph(Scene):
         right = centered["right"].get_center()
         assert abs(left.x - 4.4) < 1e-6 and abs(left.y + 1.0) < 1e-6
         assert abs(right.x - 1.6) < 1e-6 and abs(right.y + 1.0) < 1e-6
-        self.add(graph, directed, centered)
+        shells = [["s0", "s1"], ["s2"]]
+        shell_graph = Graph(
+            ["s0", "s1", "s2"], [("s0", "s1"), ("s1", "s2")],
+            layout="shell", layout_scale=0.9,
+            layout_config={"nlist": shells, "center": (0, 2.6)},
+            **styles,
+        )
+        shell_graph.change_layout(
+            "shell", scale=0.9,
+            layout_config={"nlist": shells, "center": (0, 2.6)},
+        )
+        self.add(graph, directed, centered, shell_graph)
         self.wait(0.2)
