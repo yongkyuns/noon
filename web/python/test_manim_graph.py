@@ -1,4 +1,5 @@
 import importlib.util
+import math
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -59,6 +60,7 @@ class _Context:
         self.spring_layout_calls = []
         self.random_layout_calls = []
         self.tree_layout_calls = []
+        self.add_vertex_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -88,6 +90,9 @@ class _Context:
         return copied
 
     def liveGraphAddVertices(self, *args): self._call("add_vertices")
+    def liveGraphAddVerticesWithOptions(self, *args):
+        self._call("add_vertices")
+        self.add_vertex_calls.append(args)
     def liveGraphAddEdges(self, *args): self._call("add_edges")
     def liveGraphRemoveVertices(self, *args): self._call("remove_vertices")
     def liveGraphRemoveEdges(self, *args): self._call("remove_edges")
@@ -461,6 +466,56 @@ class GraphFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "add_vertices"):
             value.add_vertices({"c": (2, 0)})
         self.assertEqual(value._graph_key_ids, before)
+
+    def test_add_vertices_inherits_global_style_and_publishes_per_key_overrides_once(self):
+        value = graph.Graph(
+            {"a": (0, 0)}, [], vertex_config={"color": "#112233", "stroke_width": 2}
+        )
+        value.add_vertices(
+            {"b": (1, 0), "c": (2, 0)},
+            vertex_config={
+                "fill_opacity": 0.2,
+                "b": {"color": "#445566", "fill_color": "#778899", "fill_opacity": 0.3},
+                "c": {"stroke_color": "#AABBCC", "stroke_width": 4},
+            },
+        )
+        self.assertEqual(value._graph_key_ids, {"a": 0, "b": 1, "c": 2})
+        self.assertEqual(len(self.context.add_vertex_calls), 1)
+        graph_handle, ids, positions, overrides, options = self.context.add_vertex_calls[0]
+        self.assertIs(graph_handle, value._graph_handle)
+        self.assertEqual((ids, positions), ([1, 2], [1.0, 0.0, 2.0, 0.0]))
+        self.assertEqual(len(overrides), 22)
+        self.assertTrue(math.isnan(overrides[0]))
+        self.assertEqual(overrides[1:5], [119 / 255, 136 / 255, 153 / 255, 1.0])
+        self.assertEqual(overrides[5], 0.3)
+        self.assertEqual(overrides[6:10], [68 / 255, 85 / 255, 102 / 255, 1.0])
+        self.assertTrue(math.isnan(overrides[10]))
+        self.assertTrue(math.isnan(overrides[11]))
+        self.assertTrue(all(math.isnan(value) for value in overrides[12:16]))
+        self.assertTrue(math.isnan(overrides[16]))
+        self.assertEqual(overrides[17:21], [170 / 255, 187 / 255, 204 / 255, 1.0])
+        self.assertEqual(overrides[21], 4)
+        self.assertEqual(
+            options.calls,
+            [
+                ("fill", (17 / 255, 34 / 255, 51 / 255, 1.0)),
+                ("stroke", (17 / 255, 34 / 255, 51 / 255, 1.0)),
+                ("fill_opacity", (0.2,)),
+                ("vertex_width", (2.0,)),
+            ],
+        )
+
+    def test_add_vertex_config_validation_precedes_publication(self):
+        value = graph.Graph({"a": (0, 0)}, [])
+        for config, error in (
+            ({"b": {"unknown": 1}}, NotImplementedError),
+            ({"missing": {"color": "#ffffff"}}, TypeError),
+            ({"b": {"fill_opacity": 2}}, ValueError),
+        ):
+            with self.subTest(config=config), self.assertRaises(error):
+                value.add_vertices({"b": (1, 0)}, vertex_config=config)
+            self.assertEqual(value._graph_key_ids, {"a": 0})
+            self.assertEqual(self.context.add_vertex_calls, [])
 
     def test_missing_add_edge_endpoint_is_rejected_before_publication(self):
         value = graph.Graph({"a": (0, 0)}, [])

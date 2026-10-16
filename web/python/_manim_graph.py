@@ -109,6 +109,11 @@ def _set_color(method, name, value):
                 operation="Graph.style")
 
 
+def _color_components(name, value):
+    color = _compat._as_color(name, value)
+    return color.red, color.green, color.blue, color.alpha
+
+
 def _graph_style_options(vertex_config, edge_config):
     if _graph_options is None:
         raise RuntimeError("Graph requires the shared Rust authoring host")
@@ -160,7 +165,9 @@ class _GraphBase(_compat.Group):
     ``layout_config``; the latter takes precedence. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
-    construction time; other per-key constructor options remain unsupported.
+    construction time. ``add_vertices`` inherits constructor-wide vertex
+    styles and accepts the same per-key style subset in its atomic mutation;
+    per-key radius and custom mobject types remain unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -219,6 +226,7 @@ class _GraphBase(_compat.Group):
         global_vertex_config, keyed_vertex_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids)
         )
+        self._default_vertex_config = dict(global_vertex_config)
         global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
         )
@@ -390,7 +398,13 @@ class _GraphBase(_compat.Group):
     def vertices(self):
         return {key: self[key] for key in self._graph_key_ids}
 
-    def add_vertices(self, vertices):
+    def add_vertices(self, vertices, *, vertex_config=None):
+        """Append explicitly positioned vertices, optionally with per-key styles.
+
+        ``vertex_config`` uses the constructor's color, fill-opacity, and
+        stroke-width subset. Global values extend constructor defaults;
+        per-key values override those globals in the same graph publication.
+        """
         if not isinstance(vertices, Mapping):
             raise TypeError("Graph vertices must be a mapping of hashable keys to positions")
         pending, ids, positions = [], [], []
@@ -405,8 +419,46 @@ class _GraphBase(_compat.Group):
             ids.append(next_id)
             next_id += 1
             positions.extend((x, y))
-        engine_call(self._context().liveGraphAddVertices, self._graph_handle,
-                    _array(ids), _array(positions), operation="Graph.add_vertices")
+        pending_keys = {key for key, _, _ in pending}
+        global_config, keyed_config = _split_style_config(
+            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, pending_keys
+        )
+        base_config = {**self._default_vertex_config, **global_config}
+        options = _graph_style_options(base_config, {})
+        try:
+            missing = float("nan")
+            style_overrides = []
+            for key, _, _ in pending:
+                style = keyed_config.get(key, {})
+                fill = style.get("fill_color", style.get("color"))
+                stroke = style.get("stroke_color", style.get("color"))
+                fill_components = (
+                    _color_components("vertex_config.fill_color", fill)
+                    if fill is not None else (missing,) * 4
+                )
+                stroke_components = (
+                    _color_components("vertex_config.stroke_color", stroke)
+                    if stroke is not None else (missing,) * 4
+                )
+                style_overrides.extend((
+                    missing,
+                    *fill_components,
+                    style.get("fill_opacity", missing),
+                    *stroke_components,
+                    style.get("stroke_width", missing),
+                ))
+            engine_call(
+                self._context().liveGraphAddVerticesWithOptions,
+                self._graph_handle,
+                _array(ids),
+                _array(positions),
+                _array(style_overrides),
+                options,
+                operation="Graph.add_vertices",
+            )
+        except BaseException:
+            options.free()
+            raise
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
         self._next_graph_id = next_id
         return self
@@ -445,6 +497,7 @@ class _GraphBase(_compat.Group):
         clone._directed = self._directed
         clone._graph_key_ids = dict(self._graph_key_ids)
         clone._next_graph_id = self._next_graph_id
+        clone._default_vertex_config = dict(self._default_vertex_config)
         clone._canonical_live_target_context = self._context()
         clone._graph_handle = engine_call(
             clone._canonical_live_target_context.liveGraphCopy,

@@ -8,6 +8,8 @@ use wasm_bindgen::prelude::*;
 use crate::authoring_error::js_error;
 #[cfg(target_arch = "wasm32")]
 use crate::CanonicalAuthoringSceneContext;
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
 
 pub(crate) enum NativeGraph {
     Undirected(noon::Graph<u32>),
@@ -18,6 +20,7 @@ pub(crate) enum NativeGraph {
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) enum GraphOperation {
     AddVertices(Vec<(u32, (f64, f64))>),
+    AddVerticesWithOptions(Vec<(u32, (f64, f64), noon::GraphOptions)>),
     AddEdges(Vec<(u32, u32)>),
     RemoveVertices(Vec<u32>),
     RemoveEdges(Vec<(u32, u32)>),
@@ -72,6 +75,12 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddVertices(vertices)) => {
                 graph.add_vertices(scene, vertices)?;
+            }
+            (Self::Undirected(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
+                graph.add_vertices_with_options(scene, vertices)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
+                graph.add_vertices_with_options(scene, vertices)?;
             }
             (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges(scene, edges)?;
@@ -303,6 +312,12 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddVertices(vertices)) => {
                 graph.add_vertices_live(live, vertices)?;
+            }
+            (Self::Undirected(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
+                graph.add_vertices_live_with_options(live, vertices)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
+                graph.add_vertices_live_with_options(live, vertices)?;
             }
             (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges_live(live, edges)?;
@@ -604,6 +619,47 @@ fn manim_stroke_width(name: &str, width: f64) -> Result<f64, JsValue> {
         )));
     }
     Ok(width * noon::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE)
+}
+
+/// Decode sparse per-vertex overrides. Each row contains radius, fill RGBA,
+/// fill opacity, stroke RGBA, and Manim stroke width; NaN means inherit the
+/// batch's global GraphOptions value. A color is either wholly omitted or has
+/// four finite components.
+#[cfg(target_arch = "wasm32")]
+fn vertex_options_with_overrides(
+    base: &noon::GraphOptions,
+    overrides: &[f64],
+    vertex_count: usize,
+) -> Result<Vec<noon::GraphOptions>, JsValue> {
+    const ROW_WIDTH: usize = 11;
+    if overrides.len() != vertex_count * ROW_WIDTH {
+        return Err(js_error(
+            "Graph vertex style overrides have an invalid length",
+        ));
+    }
+
+    overrides
+        .chunks_exact(ROW_WIDTH)
+        .map(|row| {
+            let mut options = base.clone();
+            if !row[0].is_nan() {
+                options.vertex_radius = row[0];
+            }
+            if !row[1..5].iter().all(|component| component.is_nan()) {
+                options.vertex_fill = graph_color(row[1], row[2], row[3], row[4])?;
+            }
+            if !row[5].is_nan() {
+                options.vertex_fill_opacity = row[5];
+            }
+            if !row[6..10].iter().all(|component| component.is_nan()) {
+                options.vertex_stroke = graph_color(row[6], row[7], row[8], row[9])?;
+            }
+            if !row[10].is_nan() {
+                options.vertex_stroke_width = manim_stroke_width("vertex stroke width", row[10])?;
+            }
+            Ok(options)
+        })
+        .collect()
 }
 
 /// Typed global Graph/DiGraph appearance. Python converts public colors and
@@ -1109,6 +1165,33 @@ impl CanonicalAuthoringSceneContext {
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::AddVertices(vertices(vertex_ids, positions)?),
+        )
+        .map_err(js_error)
+    }
+
+    /// Add vertices and their optional per-key appearance in one retained
+    /// graph publication. Style rows encode radius, fill RGBA, fill opacity,
+    /// stroke RGBA, and Manim stroke width; NaN components inherit `options`.
+    #[wasm_bindgen(js_name = liveGraphAddVerticesWithOptions)]
+    pub fn live_graph_add_vertices_with_options(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        vertex_ids: &[u32],
+        positions: &[f64],
+        style_overrides: &[f64],
+        options: WasmGraphOptions,
+    ) -> Result<(), JsValue> {
+        let vertices = vertices(vertex_ids, positions)?;
+        let styles =
+            vertex_options_with_overrides(&options.options, style_overrides, vertices.len())?;
+        let styled_vertices = vertices
+            .into_iter()
+            .zip(styles)
+            .map(|((id, position), options)| (id, position, options))
+            .collect();
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::AddVerticesWithOptions(styled_vertices),
         )
         .map_err(js_error)
     }

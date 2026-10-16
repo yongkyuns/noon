@@ -335,6 +335,62 @@ fn global_options_preserve_graph_and_digraph_style_through_copy_and_mutation() {
 }
 
 #[test]
+fn per_vertex_add_options_publish_styled_geometry_with_topology_once() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        vertex_radius: 0.31,
+        vertex_fill: GREEN,
+        vertex_fill_opacity: 0.6,
+        vertex_stroke: RED,
+        vertex_stroke_width: 0.12,
+        ..GraphOptions::default()
+    };
+
+    graph
+        .add_vertices_with_options(&mut scene, [("b", (1.0, 0.0), options)])
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 1);
+    let state = graph.vertex(&"b").unwrap().state().unwrap();
+    assert!(matches!(
+        state.content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.31).abs() < f32::EPSILON
+    ));
+    assert_eq!(state.style.fill, Some(SemanticPaint::Solid(GREEN)));
+    assert_eq!(state.style.fill_opacity, 0.6);
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(RED)));
+    assert_eq!(state.style.stroke_width, 0.12);
+}
+
+#[test]
+fn invalid_per_vertex_add_options_leave_graph_unpublished() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        vertex_radius: f64::NAN,
+        ..GraphOptions::default()
+    };
+
+    assert!(graph
+        .add_vertices_with_options(&mut scene, [("b", (1.0, 0.0), options)])
+        .is_err());
+
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"b").is_none());
+}
+
+#[test]
 fn valid_empty_graph_publishes_one_detached_declared_family() {
     let mut scene = Scene::new();
     let revision = scene.revision();

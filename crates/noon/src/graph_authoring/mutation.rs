@@ -6,7 +6,8 @@
 
 use super::{
     construction::{arrow_options, line_options, vertex_options, GraphPublication},
-    GraphAuthoringError, GraphEdgeEntry, GraphEdgeMobject, GraphVertexEntry, RetainedGraph,
+    GraphAuthoringError, GraphEdgeEntry, GraphEdgeMobject, GraphOptions, GraphVertexEntry,
+    RetainedGraph,
 };
 use crate::{
     arrow_authoring::{resolve_staged_arrow, stage_prepared_arrow, PreparedArrow, StagedArrow},
@@ -221,38 +222,57 @@ where
     V: IntoIterator<Item = (K, (f64, f64))>,
     P: GraphPublication,
 {
+    let options = graph.options.clone();
+    add_vertices_with_options(
+        publication,
+        graph,
+        vertices
+            .into_iter()
+            .map(|(key, position)| (key, position, options.clone())),
+    )
+}
+
+pub(super) fn add_vertices_with_options<K, V, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    vertices: V,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    P: GraphPublication,
+{
     require_publication(publication, graph)?;
     let vertices = vertices.into_iter().collect::<Vec<_>>();
     let mut seen = HashSet::new();
-    for (key, position) in &vertices {
+    for (key, position, options) in &vertices {
         if graph.vertex_lookup.contains_key(key) || !seen.insert(key.clone()) {
             return Err(GraphAuthoringError::DuplicateMutationVertexKey);
         }
-        vertex_options(*position, &graph.options)?;
+        vertex_options(*position, options)?;
     }
     if vertices.is_empty() {
         return Ok(GraphMutationResult::default());
     }
     let root = graph.family.node_id();
-    let options = graph.options.clone();
     let declaration = graph.semantic_declaration()?.clone();
     let mut topology = declaration.topology().clone();
     let planned = vertices
         .iter()
-        .map(|(key, position)| {
+        .map(|(key, position, options)| {
             let id = topology.add_vertex();
-            Ok((key.clone(), id, *position))
+            Ok((key.clone(), id, *position, options.clone()))
         })
         .collect::<Result<Vec<_>, GraphAuthoringError>>()?;
     let (result, staged) = publication.with_graph_publication(|store, publish| {
         let prepared = planned
             .iter()
-            .map(|(key, id, position)| {
+            .map(|(key, id, position, options)| {
                 Ok((
                     key.clone(),
                     *id,
                     *position,
-                    vertex_options(*position, &options)?.into_state(store)?,
+                    vertex_options(*position, options)?.into_state(store)?,
                 ))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
