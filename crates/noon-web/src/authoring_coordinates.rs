@@ -440,6 +440,11 @@ impl WasmNumberLineFrame {
         self.frame.unit_size()
     }
 
+    #[wasm_bindgen(js_name = unitVector)]
+    pub fn unit_vector(&self) -> Vec<f64> {
+        self.frame.unit_vector().to_vec()
+    }
+
     #[wasm_bindgen(js_name = numberToPoint)]
     pub fn number_to_point(&self, value: f64) -> Result<Vec<f64>, JsValue> {
         self.frame

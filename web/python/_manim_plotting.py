@@ -374,6 +374,7 @@ class NumberLine(_compat.Group):
             return _base.Vec2(*engine_call(frame.numberToPoint, float(number)))
 
     n2p = number_to_point
+    __matmul__ = number_to_point
 
     def point_to_number(self, point):
         point = _base._as_vec2(point)
@@ -382,9 +383,18 @@ class NumberLine(_compat.Group):
 
     p2n = point_to_number
 
+    def __rmatmul__(self, point):
+        if isinstance(point, _base.Mobject):
+            point = point.get_center()
+        return self.point_to_number(point)
+
     def get_unit_size(self):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
+
+    def get_unit_vector(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return _base.Vec2(*engine_call(frame.unitVector))
 
     def get_tick_range(self):
         """Return Manim's linear tick values through the shared Rust query."""
