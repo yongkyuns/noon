@@ -302,6 +302,7 @@
       ],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
+      "requires_latex": true,
       "thumbnail": "thumbnails/manim/animated-number-line.svg",
       "thumbnail_alt": "Number line with a yellow marker moving between labeled values",
       "thumbnail_time": 5.2,

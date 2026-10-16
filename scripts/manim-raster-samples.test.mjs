@@ -132,6 +132,30 @@ test("literal upstream PlotExample is enrolled under the strict static raster ra
     "editing the pinned upstream fixture must trigger raster qualification");
 });
 
+test("pinned LogScalingExample is enrolled for exact-source logarithmic-axis qualification", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const fixture = manifest.fixtures.find(row => row.id === "axes-log-scaling-example");
+  assert.ok(fixture);
+  assert.equal(fixture.scene, "LogScalingExample");
+  assert.equal(fixture.source, "parity/manim-v0.21/core-examples/log_scaling_example.py");
+  assert.equal(fixture.expected_duration, 0);
+  assert.equal(fixture.requires_latex, true);
+  assert.deepEqual(fixture.sample_times, [0]);
+  assert.equal(fixture.noon_source, undefined);
+  const source = await readFile(path.join(repoRoot, fixture.source), "utf8");
+  assert.equal(source.split("from manim import *").length - 1, 1);
+  assert.match(source, /class LogScalingExample\(Scene\)/);
+  assert.match(source, /LogBase\(custom_labels=True\)/);
+  assert.match(source, /x_range=\[0\.001, 10\], use_smoothing=False/);
+  assert.ok(rasterWorkflowIncludes(workflow, fixture.source),
+    "editing the pinned logarithmic-scale fixture must trigger raster qualification");
+});
+
 test("fraction sampling remains the default and records requested and materialized times", () => {
   const samples = resolveRasterReferenceSamples(referenceTimes, undefined, {
     logicalDuration: 65 / 30, terminalState: { time: 65 / 30 },

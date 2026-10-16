@@ -24,6 +24,24 @@ assert.equal(
   "PlotExample execution may change only the import line",
 );
 const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
+const upstreamLogScalingExample = await readFile(
+  new URL("../parity/manim-v0.21/core-examples/log_scaling_example.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  upstreamLogScalingExample.split(plotExampleImport).length - 1,
+  1,
+  "pinned LogScalingExample must contain exactly one Manim wildcard import",
+);
+const adaptedLogScalingExample = upstreamLogScalingExample.replace(plotExampleImport, "from noon import *");
+assert.equal(
+  adaptedLogScalingExample.replace("from noon import *", plotExampleImport),
+  upstreamLogScalingExample,
+  "LogScalingExample execution may change only the import line",
+);
+const logScalingExampleSource = rasterFixtureSource(
+  adaptedLogScalingExample, "LogScalingExample", { requires_latex: true },
+);
 
 async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
   const page = await context.newPage();
@@ -64,7 +82,7 @@ await qualifyPairedAuthoring({
     { id: "graph-queries", file: "graph_queries.py", factory: "createGraphQueriesRenderer", objectCount: 15 },
     { id: "polar-plane", file: "polar_plane.py", factory: "createPolarPlaneRenderer", objectCount: 34 },
     { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 26 },
-    { id: "complex-plane", file: "complex_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
+    { id: "complex-plane", file: "complex_plane.py", factory: "createComplexPlaneRenderer", objectCount: 24 },
     { id: "area", file: "area_helpers.py", factory: "createAreaHelpersRenderer", objectCount: 26 },
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
@@ -98,6 +116,44 @@ class LogBaseNumberLineLabels(Scene):
     assert.equal(logLabels.presented, true);
     assert.ok(Math.abs(logLabels.authoredDuration - 0.05) < 1e-6);
     console.log(`[PASS] ${expectedBackend}: LogBase NumberLine exponent labels`);
+    const axesLogLabelsSource = `from noon import *
+
+class AxesLogBaseLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_length=4, y_length=2, tips=False,
+            x_axis_config={"scaling": LogBase(base=2), "include_numbers": True},
+            y_axis_config={"include_numbers": True, "numbers_to_exclude": []},
+        )
+        x_labels = axes.x_axis.numbers
+        assert tuple(label._source for label in x_labels) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        assert all(isinstance(label, Integer) for label in x_labels)
+        assert tuple(label.get_value() for label in x_labels) == (2, 2, 2, 2, 2)
+        for label, coordinate in zip(x_labels, (0.25, 0.5, 1, 2, 4)):
+            assert abs(label.get_center().x - axes.x_axis.number_to_point(coordinate).x) < 1e-6
+        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 0, 1)
+        coordinate_axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_axis_config={"scaling": LogBase(base=2)}, tips=False,
+        )
+        coordinate_axes.add_coordinates()
+        assert tuple(label._source for label in coordinate_axes.x_axis.numbers) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        self.add(axes, coordinate_axes)
+        await self.wait(0.05)
+`;
+    const axesLogLabels = await qualifyPythonPlayback(
+      context, baseUrl, axesLogLabelsSource, [0, 0.05],
+    );
+    assert.equal(axesLogLabels.rendererBackend, expectedBackend);
+    assert.equal(axesLogLabels.presented, true);
+    assert.ok(Math.abs(axesLogLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: per-axis LogBase exponent labels`);
     const page = await context.newPage();
     try {
       page.setDefaultTimeout(90_000);
@@ -141,12 +197,28 @@ class LogBaseNumberLineLabels(Scene):
       assert.equal(curveRows.length, 3);
       assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
         "each upstream log curve must retain two-dimensional sampled bounds");
+      const logScalingExample = await page.evaluate(
+        source => window.noonManimCompat.runLive(source),
+        logScalingExampleSource,
+      );
+      assert.equal(logScalingExample.duration, 0, "upstream LogScalingExample is static");
+      assert.equal(logScalingExample.frame.time, 0);
+      assert.equal(logScalingExample.metrics.backend, expectedBackend);
+      assert.ok(logScalingExample.metrics.objectCount > 0);
+      assert.ok(logScalingExample.metrics.presentedFrames > 0);
+      assert.equal(logScalingExample.frame.objects.length, logScalingExample.metrics.objectCount);
+      assert.ok(logScalingExample.frame.objects.every(object => object.present));
+      const plottedGraph = logScalingExample.frame.objects.at(-1);
+      assert.ok(plottedGraph && plottedGraph.bounds.width > 0 && plottedGraph.bounds.height > 0,
+        "the final retained object from upstream LogScalingExample must be its two-dimensional x^2 graph");
+      console.log(`[PASS] ${expectedBackend}: exact upstream LogScalingExample Python-host frame`);
       console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
       await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *
 
 class NumberPlaneNumericLabels(Scene):
     async def construct(self):
+        await prepare_latex()
         plane = NumberPlane(
             x_range=(-2, 2, 1), y_range=(-1, 1, 0.5),
             axis_config={"include_numbers": True, "numbers_to_exclude": [0],

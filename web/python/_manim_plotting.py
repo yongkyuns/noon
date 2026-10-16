@@ -332,11 +332,6 @@ def _axes_label_options(config, scale, name, default_direction):
     numbers_to_exclude = _axes_number_values(
         config.get("numbers_to_exclude"), f"{name}.numbers_to_exclude", [0.0]
     )
-    if scale[2] and (include_numbers or numbers_to_include is not None):
-        raise NotImplementedError(
-            "Axes LogBase custom labels require the TeX label profile"
-        )
-
     font_size = _finite_axis_option(config.get("font_size", 36), f"{name}.font_size")
     if font_size <= 0:
         raise ValueError(f"{name}.font_size must be positive")
@@ -348,6 +343,9 @@ def _axes_label_options(config, scale, name, default_direction):
     decimal_config = _decimal_number_options(
         config.get("decimal_number_config"), f"{name}.decimal_number_config",
     )
+    custom_log_labels = scale[0] == "log" and scale[2]
+    if custom_log_labels and decimal_config.get("unit") is not None:
+        raise TypeError("Axes LogBase custom labels supply the exponent unit")
     decimal_places = decimal_config.get("num_decimal_places")
 
     return {
@@ -643,22 +641,10 @@ class NumberLine(_compat.Group):
         self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
         if self.include_numbers or numbers_to_include is not None:
-            if custom_scale_labels:
-                from _manim_number_labels import number_mobjects
-                from _manim_numbers import Integer
-
-                labels = number_mobjects(
-                    self, None, attach=True,
-                    config=self._number_label_config({}),
-                    excluding=(), log_base=self.scaling.base,
-                    number_class=Integer,
-                )
-                self.labels = labels
-            else:
-                self.add_numbers(
-                    x_values=numbers_to_include,
-                    excluding=numbers_to_exclude,
-                )
+            self.add_numbers(
+                x_values=numbers_to_include,
+                excluding=numbers_to_exclude,
+            )
 
     @property
     def shaft(self):
@@ -869,15 +855,33 @@ class NumberLine(_compat.Group):
 
         Repeated calls append another label family, rather than replacing the
         earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
-        into the native-Text subset.
+        into the native-Text subset. LogBase(custom_labels=True) uses Integer
+        exponent labels for the generated logarithmic ticks.
         """
         from _manim_number_labels import number_mobjects
         config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         if excluding is None:
             excluding = getattr(self, "numbers_to_exclude", ())
-        number_mobjects(self, x_values, attach=True, config=config,
-                        excluding=excluding)
+        log_base = None
+        number_class = None
+        if _number_line_scale(getattr(self, "scaling", None))[2]:
+            from _manim_numbers import Integer
+
+            log_base = self.scaling.base
+            number_class = Integer
+            x_values = None
+            excluding = ()
+        if log_base is not None:
+            labels = number_mobjects(
+                self, x_values, attach=True, config=config, excluding=excluding,
+                log_base=log_base, number_class=number_class,
+            )
+            self.labels = labels
+        else:
+            number_mobjects(
+                self, x_values, attach=True, config=config, excluding=excluding,
+            )
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import _manim_number_labels as labels
+import _manim_plotting as plotting
 
 
 class Owned:
@@ -171,6 +172,50 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(call.args[0:2], ([2.0, 0.0], ["Tuesday", "1"]))
         self.assertIs(self.axis.labels, family)
         self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
+
+    def test_log_axes_coordinate_labels_use_per_axis_number_line_addition(self):
+        axes = self.axes()
+        axes.x_axis.scaling = plotting.LogBase(base=2)
+        axes.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
+            axes.x_axis, "numbers", "log-labels"
+        ))
+        axes.y_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
+            axes.y_axis, "numbers", "linear-labels"
+        ))
+
+        result = labels.add_coordinates(axes, config={})
+
+        self.assertIs(result, axes)
+        axes.x_axis.add_numbers.assert_called_once()
+        axes.y_axis.add_numbers.assert_called_once()
+        self.assertEqual(axes.coordinate_labels, ("log-labels", "linear-labels"))
+        self.assertEqual(self.calls, [])
+
+    def test_custom_axes_coordinate_labels_filter_numeric_format_options(self):
+        axes = self.axes()
+        axis = axes.x_axis
+        axis.decimal_number_config = {
+            "num_decimal_places": 2,
+            "include_sign": True,
+            "group_with_commas": False,
+            "unit": "m",
+        }
+        axis.label_direction = (1, -1)
+        axis.line_to_number_buff = 0.2
+        axis.font_size = 22
+        family = Owned()
+        axis.add_labels = Mock(side_effect=lambda values, **options: setattr(
+            axis, "labels", family
+        ))
+
+        result = labels.add_coordinates(axes, {-1: "Left", 1: "Right"}, config={})
+
+        self.assertIs(result, axes)
+        axis.add_labels.assert_called_once_with(
+            {-1: "Left", 1: "Right"},
+            direction=(1, -1), buff=0.2, font_size=22,
+        )
+        self.assertEqual(axes.coordinate_labels, (family,))
 
     def test_custom_labels_reject_unsupported_objects_before_allocating(self):
         with self.assertRaises(NotImplementedError):
@@ -373,6 +418,42 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(axes.coordinate_labels[0], axes.x_axis.labels)
         self.assertEqual(len(axes.coordinate_labels), 1)
         self.assertFalse(hasattr(axes.y_axis, 'numbers'))
+
+    def test_number_plane_custom_mapping_filters_decimal_format_options(self):
+        calls = []
+        def axis(name):
+            value = SimpleNamespace(
+                decimal_number_config={"num_decimal_places": 3, "include_sign": True},
+                numbers_to_exclude=(0.0,),
+                label_direction="left",
+                line_to_number_buff=0.2,
+                font_size=18,
+            )
+            def add_labels(values, **options):
+                calls.append((name, values, options))
+                value.labels = [values, options]
+                return value.labels
+            value.add_labels = add_labels
+            return value
+
+        plane = SimpleNamespace(x_axis=axis("x"), y_axis=axis("y"))
+        constructor = object()
+        result = labels.add_number_plane_coordinates(
+            plane,
+            {1: "Monday"},
+            config={"num_decimal_places": 0, "include_sign": False,
+                    "direction": "right", "buff": 0.4, "font_size": 24,
+                    "label_constructor": constructor},
+        )
+
+        self.assertIs(result, plane)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0:2], ("x", {1: "Monday"}))
+        self.assertEqual(calls[0][2], {
+            "direction": "right", "buff": 0.4, "font_size": 24,
+            "label_constructor": constructor,
+        })
+        self.assertEqual(plane.coordinate_labels, (plane.x_axis.labels,))
 
     def test_number_plane_defaults_to_decimal_glyph_families_and_one_decimal(self):
         x_axis = SimpleNamespace(
