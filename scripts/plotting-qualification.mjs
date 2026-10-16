@@ -23,34 +23,35 @@ await qualifyPairedAuthoring({
       assert.equal(lifecycle.backend, expectedBackend);
       assert.equal(lifecycle.objectCount, 14);
       assert.ok(Math.abs(lifecycle.duration - 0.8) < 1e-6);
-    assert.ok(lifecycle.presentedFrames > 0);
-    const labelSource = `from noon import *
+      assert.ok(lifecycle.presentedFrames > 0);
+      const labelSource = `from noon import *
 
-class NumberPlaneNumericLabels(Scene):
+class CoordinateNumericLabels(Scene):
     async def construct(self):
-        plane = NumberPlane(
-            x_range=(-2, 2, 0.5), y_range=(-1, 1, 0.5),
-            axis_config={"include_numbers": True, "numbers_to_exclude": [0],
-                         "font_size": 20, "line_to_number_buff": 0.12},
-            x_axis_config={"numbers_to_include": [-1, 1]},
-            y_axis_config={"include_numbers": False,
-                           "numbers_to_include": [-0.5, 0.5],
-                           "decimal_number_config": {"num_decimal_places": 1}},
-        )
-        assert len(plane.x_axis.numbers.submobjects) == 2
-        assert len(plane.y_axis.numbers.submobjects) == 2
-        assert plane.x_axis.number_label_decimal_places == 1
-        assert plane.y_axis.number_label_decimal_places == 1
-        self.add(plane)
+        for coordinate_type in (Axes, NumberPlane):
+            plane = coordinate_type(
+                x_range=(-2, 2, 0.5), y_range=(-1, 1, 0.5),
+                axis_config={"include_numbers": True, "numbers_to_exclude": [0],
+                             "font_size": 20, "line_to_number_buff": 0.12},
+                x_axis_config={"numbers_to_include": [-1, 1]},
+                y_axis_config={"include_numbers": False,
+                               "numbers_to_include": [-0.5, 0.5],
+                               "decimal_number_config": {"num_decimal_places": 1}},
+            )
+            assert len(plane.x_axis.numbers.submobjects) == 2
+            assert len(plane.y_axis.numbers.submobjects) == 2
+            assert plane.x_axis.number_label_decimal_places == 1
+            assert plane.y_axis.number_label_decimal_places == 1
+            self.add(plane)
         await self.wait(0.05)
 `;
-    const labels = await qualifyPythonPlayback(context, baseUrl, labelSource, [0, 0.05]);
-    assert.equal(labels.rendererBackend, expectedBackend);
-    assert.equal(labels.presented, true);
-    assert.ok(labels.objectCount > 0);
-    assert.ok(Math.abs(labels.authoredDuration - 0.05) < 1e-6);
-    console.log(`[PASS] ${expectedBackend}: NumberPlane native numeric labels`);
-    return lifecycle;
+      const labels = await qualifyPythonPlayback(context, baseUrl, labelSource, [0, 0.05]);
+      assert.equal(labels.rendererBackend, expectedBackend);
+      assert.equal(labels.presented, true);
+      assert.ok(labels.objectCount > 0);
+      assert.ok(Math.abs(labels.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane native numeric labels`);
+      return lifecycle;
     } finally {
       await page.close();
     }

@@ -1,6 +1,5 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
 import math
-from collections.abc import Mapping
 from operator import index
 
 import noon as _base
@@ -49,21 +48,6 @@ _NUMBER_PLANE_AXIS_KEYS = _AXIS_STYLE_KEYS | _AXIS_LABEL_KEYS | {
 }
 
 
-def _config_mapping(config, name):
-    if config is None:
-        return {}
-    if not isinstance(config, Mapping):
-        raise TypeError(f"{name} must be a mapping")
-    if any(not isinstance(key, str) for key in config):
-        raise TypeError(f"{name} keys must be strings")
-    unknown = sorted(set(config) - _NUMBER_PLANE_AXIS_KEYS)
-    if unknown:
-        raise NotImplementedError(
-            f"unsupported {name} option(s): " + ", ".join(unknown)
-        )
-    return dict(config)
-
-
 def _axis_configurations(axis_config, x_axis_config, y_axis_config):
     common = {
         "stroke_width": 2,
@@ -73,12 +57,12 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         "label_direction": _plot._base.DR,
         "font_size": 24,
     }
-    common.update(_config_mapping(axis_config, "axis_config"))
-    x_config = {**common, **_config_mapping(x_axis_config, "x_axis_config")}
+    common.update(_plot._coordinate_config(axis_config, "axis_config", _NUMBER_PLANE_AXIS_KEYS))
+    x_config = {**common, **_plot._coordinate_config(x_axis_config, "x_axis_config", _NUMBER_PLANE_AXIS_KEYS)}
     y_config = {
         **common,
         "label_direction": _plot._base.DR,
-        **_config_mapping(y_axis_config, "y_axis_config"),
+        **_plot._coordinate_config(y_axis_config, "y_axis_config", _NUMBER_PLANE_AXIS_KEYS),
     }
 
     axis_options = []
@@ -168,7 +152,8 @@ class NumberPlane(_plot.Axes):
         y_axis = _plot._attach_number_line(
             object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3)
         )
-        x_axis.scaling = y_axis.scaling = _plot.LinearBase()
+        x_axis.scaling = _plot.LinearBase()
+        y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
         for axis_index, (axis, config, axis_range) in enumerate((

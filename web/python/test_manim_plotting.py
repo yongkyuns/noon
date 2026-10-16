@@ -49,6 +49,23 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_coordinate_label_precision_rejects_explicit_none_before_host_admission(self):
+        from _manim_number_plane import NumberPlane
+
+        for constructor in (
+            lambda: plotting.NumberLine(decimal_number_config={"num_decimal_places": None}),
+            lambda: plotting.Axes(x_axis_config={
+                "decimal_number_config": {"num_decimal_places": None}}),
+            lambda: NumberPlane(y_axis_config={
+                "decimal_number_config": {"num_decimal_places": None}}),
+        ):
+            with self.subTest(constructor=constructor), patch.object(
+                plotting, "_coordinate_constructor_context",
+                side_effect=AssertionError("invalid precision reached the host"),
+            ):
+                with self.assertRaisesRegex(TypeError, "num_decimal_places"):
+                    constructor()
+
     def test_number_line_default_and_two_value_range_delegate_without_python_defaults(self):
         for values, expected in ((None, []), ([-2, 2], [-2, 2]), ([-2, 2, .5], [-2, 2, .5])):
             with self.subTest(values=values), \
