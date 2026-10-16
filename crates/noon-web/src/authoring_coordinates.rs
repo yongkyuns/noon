@@ -10,6 +10,7 @@ use noon::{
     ManimThreeDAxesFrame, ManimThreeDAxesOptions, NumberLineFrame, PlotSamplingOptions,
     RiemannRectangleOptions, RiemannSample,
 };
+use noon_core::SemanticNumberLineScale;
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::{js_error, AuthoringFailure};
@@ -240,6 +241,23 @@ impl WasmCoordinateOptions {
         }
         options.tip_width = width;
         options.tip_height = height;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setNumberLineScale)]
+    pub fn set_number_line_scale(&mut self, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberLine(options) = &mut self.request else {
+            return Err(js_error("scale settings require a NumberLine"));
+        };
+        let scale = match kind {
+            "linear" => SemanticNumberLineScale::linear(parameter),
+            "log" => SemanticNumberLineScale::log(parameter),
+            _ => return Err(js_error("unsupported NumberLine scale kind")),
+        };
+        if !scale.is_valid() {
+            return Err(js_error("invalid NumberLine scale parameter"));
+        }
+        options.scale = scale;
         Ok(())
     }
 

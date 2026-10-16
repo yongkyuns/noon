@@ -1,4 +1,4 @@
-//! Linear coordinate families over the existing Semantic Scene and path queries.
+//! Coordinate families over the existing Semantic Scene and path queries.
 //!
 //! Ranges live on semantic shafts; wrappers retain family identity, never
 //! endpoints or a second scene. Two-dimensional constructors stay label-free
@@ -22,10 +22,11 @@ use crate::{
 use noon_core::{
     SemanticFunctionPlotRole, SemanticLocalNodeToken, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
-    SemanticNumberLineRole, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
-    SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath, WHITE,
+    SemanticNumberLineRole, SemanticNumberLineScale, SemanticObjectRole, SemanticObjectState,
+    SemanticPaint, SemanticStore, SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin,
+    StrokeWidthMode, Vec2, VectorPath, WHITE,
 };
-use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
+use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 
 /// Where each Riemann rectangle obtains its graph height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,13 +172,14 @@ fn default_axis_style() -> SemanticStyle {
     }
 }
 
-/// Inert linear NumberLine constructor request.
+/// Inert NumberLine constructor request with shared linear or logarithmic mapping.
 #[derive(Clone, Debug)]
 pub struct ManimNumberLineOptions {
     pub range: [f64; 3],
     pub length: Option<f64>,
     pub unit_size: f64,
     pub rotation: f64,
+    pub scale: SemanticNumberLineScale,
     pub numbers_with_elongated_ticks: Vec<f64>,
     pub longer_tick_multiple: f64,
     pub include_tip: bool,
@@ -212,6 +214,7 @@ impl ManimNumberLineOptions {
             length: None,
             unit_size: 1.0,
             rotation: 0.0,
+            scale: SemanticNumberLineScale::default(),
             numbers_with_elongated_ticks: Vec::new(),
             longer_tick_multiple: 2.0,
             include_tip: false,
@@ -239,10 +242,11 @@ impl ManimNumberLineOptions {
         let length = self
             .length
             .unwrap_or_else(|| (self.range[1] - self.range[0]) * self.unit_size);
-        Ok(NumberLineFrame::centered(
+        Ok(NumberLineFrame::centered_with_scale(
             self.range,
             length,
             self.rotation,
+            self.scale,
         )?)
     }
 }
@@ -443,14 +447,19 @@ impl ManimNumberLine {
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
     ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
         let shaft = self.shaft()?;
-        let range = match shaft.state()?.role() {
-            SemanticObjectRole::NumberLine(role) if role.is_valid() => role.range(),
+        let (range, scale) = match shaft.state()?.role() {
+            SemanticObjectRole::NumberLine(role) if role.is_valid() => (role.range(), role.scale()),
             _ => return Err(CoordinateAuthoringError::InvalidTopology),
         };
         let path = query(&shaft)?;
         let (sx, sy) = path.start()?;
         let (ex, ey) = path.end()?;
-        Ok(NumberLineFrame::new(range, [sx, sy], [ex, ey])?)
+        Ok(NumberLineFrame::with_scale(
+            range,
+            [sx, sy],
+            [ex, ey],
+            scale,
+        )?)
     }
 }
 
@@ -1165,9 +1174,10 @@ fn prepare_line_with_elongated_ticks(
             "invalid elongated ticks",
         ));
     }
+    let tick_origin = frame.scaled_range_start()?;
     let mut offsets = elongated
         .iter()
-        .map(|n| n - frame.range()[0])
+        .map(|n| n - tick_origin)
         .collect::<Vec<_>>();
     if offsets.iter().any(|n| !n.is_finite()) {
         return Err(CoordinateError::InvalidPoint.into());
@@ -1184,12 +1194,7 @@ fn prepare_line_with_elongated_ticks(
         ));
     }
     let values = if ticks.enabled {
-        number_line_tick_values(
-            frame.range(),
-            include_tip,
-            ticks.exclude_origin,
-            ticks.limit,
-        )?
+        frame.tick_values(include_tip, ticks.exclude_origin, ticks.limit)?
     } else {
         Vec::new()
     };
@@ -1198,9 +1203,9 @@ fn prepare_line_with_elongated_ticks(
         .try_reserve_exact(values.len() + 1)
         .map_err(|_| CoordinateError::AllocationFailed)?;
     let mut shaft = line_state(frame.start(), frame.end(), style)?;
-    shaft.set_role(SemanticObjectRole::NumberLine(SemanticNumberLineRole::new(
-        frame.range(),
-    )));
+    shaft.set_role(SemanticObjectRole::NumberLine(
+        SemanticNumberLineRole::with_scale(frame.range(), frame.scale()),
+    ));
     states.push(shaft);
     let start = frame.start();
     let end = frame.end();
@@ -1211,7 +1216,7 @@ fn prepare_line_with_elongated_ticks(
         let [x, y] = frame.number_to_point(value)?;
         // Match pinned np.isclose(x - x_min, elongated - x_min), without
         // scanning the complete special-tick list for every ordinary tick.
-        let offset = value - frame.range()[0];
+        let offset = value - tick_origin;
         let index = offsets.partition_point(|candidate| *candidate < offset);
         let is_long = offsets[index.saturating_sub(1)..(index + 1).min(offsets.len())]
             .iter()

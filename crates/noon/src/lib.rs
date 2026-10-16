@@ -265,6 +265,7 @@ pub use matrix_display::{
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::RasterImageSampling;
+pub use noon_core::SemanticNumberLineScale;
 #[cfg(feature = "latex")]
 pub use noon_core::{format_decimal, DecimalFormat, NumericFormatError};
 pub use noon_core::{
@@ -380,7 +381,7 @@ pub mod prelude {
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-        ManimNumberLineOptions,
+        ManimNumberLineOptions, SemanticNumberLineScale,
     };
     #[cfg(feature = "image-decode")]
     pub use crate::{ImageDecodeError, ImageDecodeLimits};

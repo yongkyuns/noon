@@ -4,6 +4,8 @@
 //! the Semantic Scene; endpoints must come from either authored state or one
 //! coherent effective frame, never a mixture of the two.
 
+use noon_core::SemanticNumberLineScale;
+
 /// Default admission budget shared by linear NumberLine construction and queries.
 pub const DEFAULT_NUMBER_LINE_TICK_LIMIT: usize = 10_000;
 
@@ -52,24 +54,55 @@ pub struct NumberLineFrame {
     range: [f64; 3],
     start: [f64; 2],
     end: [f64; 2],
+    scale: SemanticNumberLineScale,
 }
 
 impl NumberLineFrame {
     pub fn new(range: [f64; 3], start: [f64; 2], end: [f64; 2]) -> Result<Self, CoordinateError> {
+        Self::with_scale(range, start, end, SemanticNumberLineScale::default())
+    }
+
+    pub fn with_scale(
+        range: [f64; 3],
+        start: [f64; 2],
+        end: [f64; 2],
+        scale: SemanticNumberLineScale,
+    ) -> Result<Self, CoordinateError> {
         validate_coordinate_range(range)?;
         finite_point(start)?;
         finite_point(end)?;
+        if !scale.is_valid()
+            || scale.map(range[0]).is_none()
+            || scale.map(range[1]).is_none()
+            || scale.map(range[0]) == scale.map(range[1])
+        {
+            return Err(CoordinateError::InvalidRange);
+        }
         let length = (end[0] - start[0]).hypot(end[1] - start[1]);
         if !length.is_finite() {
             return Err(CoordinateError::InvalidPoint);
         }
         // Forward mapping remains meaningful when an animation collapses the
         // line. Only inverse queries reject that singular state.
-        Ok(Self { range, start, end })
+        Ok(Self {
+            range,
+            start,
+            end,
+            scale,
+        })
     }
 
     /// Prepare the centered line before applying the requested rotation.
     pub fn centered(range: [f64; 3], length: f64, rotation: f64) -> Result<Self, CoordinateError> {
+        Self::centered_with_scale(range, length, rotation, SemanticNumberLineScale::default())
+    }
+
+    pub fn centered_with_scale(
+        range: [f64; 3],
+        length: f64,
+        rotation: f64,
+        scale: SemanticNumberLineScale,
+    ) -> Result<Self, CoordinateError> {
         if !length.is_finite() || length <= 0.0 {
             return Err(CoordinateError::InvalidLength);
         }
@@ -78,7 +111,12 @@ impl NumberLineFrame {
         }
         let (sin, cos) = rotation.sin_cos();
         let half = length * 0.5;
-        Self::new(range, [-half * cos, -half * sin], [half * cos, half * sin])
+        Self::with_scale(
+            range,
+            [-half * cos, -half * sin],
+            [half * cos, half * sin],
+            scale,
+        )
     }
 
     pub const fn range(self) -> [f64; 3] {
@@ -93,11 +131,22 @@ impl NumberLineFrame {
         self.end
     }
 
+    pub const fn scale(self) -> SemanticNumberLineScale {
+        self.scale
+    }
+
+    pub fn scaled_range_start(self) -> Result<f64, CoordinateError> {
+        self.scale
+            .map(self.range[0])
+            .ok_or(CoordinateError::InvalidRange)
+    }
+
     pub fn number_to_point(self, number: f64) -> Result<[f64; 2], CoordinateError> {
-        if !number.is_finite() {
-            return Err(CoordinateError::InvalidPoint);
-        }
-        let alpha = (number - self.range[0]) / (self.range[1] - self.range[0]);
+        let coordinate = self
+            .scale
+            .unmap(number)
+            .ok_or(CoordinateError::InvalidPoint)?;
+        let alpha = (coordinate - self.range[0]) / (self.range[1] - self.range[0]);
         finite_point([
             (1.0 - alpha) * self.start[0] + alpha * self.end[0],
             (1.0 - alpha) * self.start[1] + alpha * self.end[1],
@@ -145,11 +194,10 @@ impl NumberLineFrame {
         let alpha = ((point[0] - self.start[0]) * (dx / length)
             + (point[1] - self.start[1]) * (dy / length))
             / length;
-        let number = (1.0 - alpha) * self.range[0] + alpha * self.range[1];
-        if !number.is_finite() {
-            return Err(CoordinateError::InvalidPoint);
-        }
-        Ok(number)
+        let coordinate = (1.0 - alpha) * self.range[0] + alpha * self.range[1];
+        self.scale
+            .map(coordinate)
+            .ok_or(CoordinateError::InvalidPoint)
     }
 
     pub fn unit_size(self) -> f64 {
@@ -175,7 +223,10 @@ impl NumberLineFrame {
         exclude_origin: bool,
         limit: usize,
     ) -> Result<Vec<f64>, CoordinateError> {
-        number_line_tick_values(self.range, include_tip, exclude_origin, limit)
+        number_line_tick_values(self.range, include_tip, exclude_origin, limit)?
+            .into_iter()
+            .map(|value| self.scale.map(value).ok_or(CoordinateError::InvalidRange))
+            .collect()
     }
 }
 
@@ -378,6 +429,7 @@ mod boundary_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon_core::SemanticNumberLineScale;
 
     fn near(left: [f64; 2], right: [f64; 2]) {
         assert!(
@@ -408,6 +460,48 @@ mod tests {
             let point = frame.number_to_point(number).unwrap();
             assert!((frame.point_to_number(point).unwrap() - number).abs() < 1.0e-12);
         }
+    }
+
+    #[test]
+    fn logarithmic_frames_map_queries_ticks_and_inverse_through_shared_scale() {
+        let frame = NumberLineFrame::centered_with_scale(
+            [-2.0, 2.0, 1.0],
+            4.0,
+            0.0,
+            SemanticNumberLineScale::log(10.0),
+        )
+        .unwrap();
+        near(frame.number_to_point(1.0).unwrap(), [0.0, 0.0]);
+        near(frame.number_to_point(10.0).unwrap(), [1.0, 0.0]);
+        assert!((frame.point_to_number([1.0, 0.0]).unwrap() - 10.0).abs() < 1.0e-10);
+        assert!(frame.number_to_point(0.0).is_err());
+        let ticks = frame.tick_values(false, false, 10).unwrap();
+        for (actual, expected) in ticks.into_iter().zip([0.01, 0.1, 1.0, 10.0, 100.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+        let tipped_ticks = frame.tick_values(true, false, 10).unwrap();
+        assert_eq!(tipped_ticks.len(), 4);
+        for (actual, expected) in tipped_ticks.into_iter().zip([0.01, 0.1, 1.0, 10.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn linear_scale_factor_preserves_inverse_queries_and_maps_tick_values() {
+        let frame = NumberLineFrame::centered_with_scale(
+            [-2.0, 2.0, 1.0],
+            4.0,
+            0.0,
+            SemanticNumberLineScale::linear(2.0),
+        )
+        .unwrap();
+        near(frame.number_to_point(0.0).unwrap(), [0.0, 0.0]);
+        near(frame.number_to_point(2.0).unwrap(), [1.0, 0.0]);
+        assert_eq!(
+            frame.tick_values(false, false, 10).unwrap(),
+            [-4.0, -2.0, 0.0, 2.0, 4.0]
+        );
+        assert!((frame.point_to_number([1.0, 0.0]).unwrap() - 2.0).abs() < 1.0e-12);
     }
 
     #[test]

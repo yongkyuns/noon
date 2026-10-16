@@ -1000,6 +1000,8 @@ _PUBLIC_EXPORTS = {
     "SampleSpace": "_manim_sample_space",
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
+    "LinearBase": "_manim_plotting",
+    "LogBase": "_manim_plotting",
     "BarChart": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",
     "VectorScene": "_manim_vector_space",
