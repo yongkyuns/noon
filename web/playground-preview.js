@@ -30,12 +30,17 @@ export function createPlaygroundPreview(frame) {
   let disposed = false;
   let captureInFlight = false;
   const urls = document.defaultView.URL;
+  const releaseUrl = (entry) => {
+    entry.image.removeAttribute("src");
+    urls.revokeObjectURL(entry.url);
+  };
   const release = (entry) => {
     if (entry === null || entry.released) return;
     entry.released = true;
-    urls.revokeObjectURL(entry.url);
-    entry.image.removeAttribute("src");
     entry.image.remove();
+    // Detach immediately, but let the active decoder retain its request. Revoking
+    // its URL or clearing src here can emit WebKitBlobResource load errors.
+    if (!entry.decoding) releaseUrl(entry);
   };
   const update = () => {
     overlay.hidden = !stale || cached === null;
@@ -76,10 +81,16 @@ export function createPlaygroundPreview(frame) {
       if (disposed || ticket !== epoch || blob === null || blob.size > 8 * 1024 * 1024) return;
       const image = document.createElement("img");
       image.alt = "Frozen image from a successful run; current edits are not shown";
-      candidate = { image, url: urls.createObjectURL(blob), identity, released: false };
+      candidate = { image, url: urls.createObjectURL(blob), identity, released: false, decoding: false };
       pending = candidate;
       image.src = candidate.url;
-      await image.decode();
+      candidate.decoding = true;
+      try {
+        await image.decode();
+      } finally {
+        candidate.decoding = false;
+        if (candidate.released) releaseUrl(candidate);
+      }
       if (disposed || ticket !== epoch || candidate.released) return;
       release(cached);
       cached = candidate;
