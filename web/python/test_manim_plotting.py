@@ -106,6 +106,18 @@ class PlottingAdapterTests(unittest.TestCase):
         )
         self.assertTrue(attach.call_args.kwargs["include_tip"])
 
+    def test_unit_interval_inherits_retained_number_line_tip_support(self):
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line") as attach:
+            plotting.UnitInterval(include_tip=True)
+
+        options = factory.numberLine.return_value
+        options.setTips.assert_called_once_with(True)
+        self.assertTrue(attach.call_args.kwargs["include_tip"])
+
     def test_number_line_wrapper_keeps_rust_tip_as_a_direct_family_member(self):
         wrapper = object.__new__(plotting.NumberLine)
         handle = SimpleNamespace(

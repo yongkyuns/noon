@@ -252,7 +252,7 @@ def _three_d_axis_label_object(label):
 
 
 class NumberLine(_compat.Group):
-    """Tipless linear number line with Rust-owned defaults, ticks and range."""
+    """Linear number line with Rust-owned defaults, ticks, and optional tip."""
     set_opacity = _compat.VGroup.set_opacity
 
 
