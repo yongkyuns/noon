@@ -593,6 +593,19 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(call[2], [0.0, 0.0])
         self.assertEqual(call[5], [value._graph_key_ids["a"], value._graph_key_ids["missing"]])
 
+    def test_add_edges_accepts_single_and_variadic_edge_tuples(self):
+        value = graph.Graph({"a": (0, 0)}, [])
+
+        value.add_edges(("a", "b"), ("b", "c"))
+
+        self.assertEqual(value._graph_edges, [("a", "b"), ("b", "c")])
+        self.assertEqual(list(value._graph_key_ids), ["a", "b", "c"])
+        self.assertEqual(len(self.context.compound_add_calls), 1)
+
+        directed = graph.DiGraph({"u": (0, 0), "v": (1, 0)}, [])
+        directed.add_edges(("u", "v"))
+        self.assertEqual(directed._graph_edges, [("u", "v")])
+
     def test_add_edges_atomically_creates_styled_vertices_and_edges(self):
         value = graph.Graph({"a": (1, 1)}, [])
         result = value.add_edges(

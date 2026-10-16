@@ -566,13 +566,34 @@ class _GraphBase(_compat.Group):
         self._next_graph_id = next_id
         return [self[key] for key, _, _ in pending]
 
-    def add_edges(self, edges, *, edge_config=None, positions=None, vertex_config=None):
+    def add_edges(self, *edges, edge_config=None, positions=None, vertex_config=None):
         """Add edges and create any missing endpoint vertices atomically.
 
         Missing vertices default to the current graph center. ``positions`` and
         ``vertex_config`` customize those vertices; edge styles continue to
         inherit graph defaults and accept per-edge overrides.
         """
+        if not edges:
+            return self
+        if len(edges) == 1:
+            argument = edges[0]
+            edge_batch = (
+                isinstance(argument, tuple)
+                and len(argument) == 2
+                and all(isinstance(edge, (tuple, list)) and len(edge) == 2 for edge in argument)
+            )
+            if edge_batch:
+                try:
+                    edge_is_existing_vertex_pair = all(
+                        endpoint in self._graph_key_ids for endpoint in argument
+                    )
+                except TypeError:
+                    edge_is_existing_vertex_pair = False
+                edges = (argument,) if edge_is_existing_vertex_pair else argument
+            elif isinstance(argument, tuple) and len(argument) == 2:
+                edges = (argument,)
+            else:
+                edges = argument
         edges = [tuple(edge) for edge in edges]
         if any(len(edge) != 2 for edge in edges):
             raise ValueError("Graph edges must contain two vertex keys")
