@@ -476,7 +476,7 @@ class GraphFacadeTests(unittest.TestCase):
             vertex_config={
                 "fill_opacity": 0.2,
                 "b": {"color": "#445566", "fill_color": "#778899", "fill_opacity": 0.3},
-                "c": {"stroke_color": "#AABBCC", "stroke_width": 4},
+                "c": {"radius": 0.16, "stroke_color": "#AABBCC", "stroke_width": 4},
             },
         )
         self.assertEqual(value._graph_key_ids, {"a": 0, "b": 1, "c": 2})
@@ -490,7 +490,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(overrides[5], 0.3)
         self.assertEqual(overrides[6:10], [68 / 255, 85 / 255, 102 / 255, 1.0])
         self.assertTrue(math.isnan(overrides[10]))
-        self.assertTrue(math.isnan(overrides[11]))
+        self.assertEqual(overrides[11], 0.16)
         self.assertTrue(all(math.isnan(value) for value in overrides[12:16]))
         self.assertTrue(math.isnan(overrides[16]))
         self.assertEqual(overrides[17:21], [170 / 255, 187 / 255, 204 / 255, 1.0])
@@ -511,6 +511,7 @@ class GraphFacadeTests(unittest.TestCase):
             ({"b": {"unknown": 1}}, NotImplementedError),
             ({"missing": {"color": "#ffffff"}}, TypeError),
             ({"b": {"fill_opacity": 2}}, ValueError),
+            ({"b": {"radius": 0}}, ValueError),
         ):
             with self.subTest(config=config), self.assertRaises(error):
                 value.add_vertices({"b": (1, 0)}, vertex_config=config)

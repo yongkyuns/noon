@@ -26,7 +26,7 @@ class OrdinaryGraph(Scene):
         })
         graph.add_vertices(
             {"d": (-3.5, -2.4)},
-            vertex_config={"d": {"fill_color": YELLOW, "stroke_width": 5}},
+            vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
         ).add_edges([("a", "d")])
 
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},

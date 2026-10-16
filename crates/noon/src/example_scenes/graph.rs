@@ -26,6 +26,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
 
     graph.change_layout_positions(&mut scene, &[(-5.0, -1.0), (-3.5, 1.2), (-2.0, -1.0)])?;
     let mut added_vertex_options = options.clone();
+    added_vertex_options.vertex_radius = 0.16;
     added_vertex_options.vertex_fill = YELLOW;
     added_vertex_options.vertex_stroke_width = 0.05;
     graph.add_vertices_with_options(&mut scene, [("d", (-3.5, -2.4), added_vertex_options)])?;

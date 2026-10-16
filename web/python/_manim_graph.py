@@ -51,7 +51,7 @@ _VERTEX_CONFIG_KEYS = frozenset(
 _EDGE_CONFIG_KEYS = frozenset({"color", "stroke_color", "stroke_width"})
 
 
-def _split_style_config(name, value, supported, entity_keys):
+def _split_style_config(name, value, supported, entity_keys, per_key_supported=None):
     if value is None:
         return {}, {}
     if not isinstance(value, Mapping):
@@ -61,7 +61,7 @@ def _split_style_config(name, value, supported, entity_keys):
         if key in entity_keys:
             if not isinstance(option, Mapping):
                 raise TypeError(f"{name}[{key!r}] must be a mapping of style options")
-            per_key[key] = _validated_key_style(name, option)
+            per_key[key] = _validated_key_style(name, option, per_key_supported)
         elif isinstance(key, str) and key in supported:
             global_values[key] = option
         elif isinstance(key, tuple) and name == "edge_config":
@@ -73,8 +73,9 @@ def _split_style_config(name, value, supported, entity_keys):
     return global_values, per_key
 
 
-def _validated_key_style(name, value):
-    supported = {"color", "fill_color", "stroke_color", "fill_opacity", "stroke_width"}
+def _validated_key_style(name, value, supported=None):
+    if supported is None:
+        supported = {"color", "fill_color", "stroke_color", "fill_opacity", "stroke_width"}
     unknown = [key for key in value if key not in supported]
     if unknown:
         raise NotImplementedError(
@@ -89,6 +90,10 @@ def _validated_key_style(name, value):
         result["fill_opacity"] = _compat._opacity(f"{name}.fill_opacity", result["fill_opacity"])
     if "stroke_width" in result:
         _compat._manim_stroke_width(result["stroke_width"])
+    if "radius" in result:
+        result["radius"] = _shared._ir._finite_number(f"{name}.radius", result["radius"])
+        if result["radius"] <= 0:
+            raise ValueError(f"{name}.radius must be positive")
     return result
 
 
@@ -166,8 +171,9 @@ class _GraphBase(_compat.Group):
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time. ``add_vertices`` inherits constructor-wide vertex
-    styles and accepts the same per-key style subset in its atomic mutation;
-    per-key radius and custom mobject types remain unsupported.
+    styles and accepts the same per-key style subset plus radius in its atomic
+    mutation. Constructor per-key radius and custom mobject types remain
+    unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -401,9 +407,10 @@ class _GraphBase(_compat.Group):
     def add_vertices(self, vertices, *, vertex_config=None):
         """Append explicitly positioned vertices, optionally with per-key styles.
 
-        ``vertex_config`` uses the constructor's color, fill-opacity, and
-        stroke-width subset. Global values extend constructor defaults;
-        per-key values override those globals in the same graph publication.
+        ``vertex_config`` uses the constructor's global style keys and accepts
+        per-key radius, color, fill-opacity, and stroke-width overrides. Global
+        values extend constructor defaults; per-key values override those
+        globals in the same graph publication.
         """
         if not isinstance(vertices, Mapping):
             raise TypeError("Graph vertices must be a mapping of hashable keys to positions")
@@ -421,7 +428,10 @@ class _GraphBase(_compat.Group):
             positions.extend((x, y))
         pending_keys = {key for key, _, _ in pending}
         global_config, keyed_config = _split_style_config(
-            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, pending_keys
+            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, pending_keys,
+            per_key_supported={
+                "color", "fill_color", "stroke_color", "fill_opacity", "stroke_width", "radius",
+            },
         )
         base_config = {**self._default_vertex_config, **global_config}
         options = _graph_style_options(base_config, {})
@@ -441,7 +451,7 @@ class _GraphBase(_compat.Group):
                     if stroke is not None else (missing,) * 4
                 )
                 style_overrides.extend((
-                    missing,
+                    style.get("radius", missing),
                     *fill_components,
                     style.get("fill_opacity", missing),
                     *stroke_components,
