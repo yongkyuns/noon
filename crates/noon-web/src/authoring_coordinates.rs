@@ -410,6 +410,22 @@ impl WasmNumberLineFrame {
         self.frame.range().to_vec()
     }
 
+    #[wasm_bindgen(js_name = tickValues)]
+    pub fn tick_values(
+        &self,
+        include_tip: bool,
+        exclude_origin: bool,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .tick_values(
+                include_tip,
+                exclude_origin,
+                noon_geometry::DEFAULT_NUMBER_LINE_TICK_LIMIT,
+            )
+            .map_err(coordinate_math_failure)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = unitSize)]
     pub fn unit_size(&self) -> f64 {
         self.frame.unit_size()

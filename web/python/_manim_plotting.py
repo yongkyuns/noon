@@ -266,6 +266,8 @@ class NumberLine(_compat.Group):
             options.free()
             raise
         _attach_number_line(self, engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options))
+        self.include_tip = False
+        self.exclude_origin_tick = bool(exclude_origin_tick)
 
     @property
     def shaft(self):
@@ -302,6 +304,16 @@ class NumberLine(_compat.Group):
     def get_unit_size(self):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
+
+    def get_tick_range(self):
+        """Return Manim's linear tick values through the shared Rust query."""
+        with _owned(self._coordinate_frame()) as frame:
+            values = engine_call(
+                frame.tickValues,
+                bool(self.include_tip),
+                bool(self.exclude_origin_tick),
+            )
+            return tuple(float(value) for value in values)
 
     def get_number_mobjects(self, *numbers, **kwargs):
         """Detached ordinary Text labels; no arguments selects automatic ticks."""

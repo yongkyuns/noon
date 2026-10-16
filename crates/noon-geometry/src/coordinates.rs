@@ -4,6 +4,9 @@
 //! the Semantic Scene; endpoints must come from either authored state or one
 //! coherent effective frame, never a mixture of the two.
 
+/// Default admission budget shared by linear NumberLine construction and queries.
+pub const DEFAULT_NUMBER_LINE_TICK_LIMIT: usize = 10_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateError {
     InvalidRange,
@@ -123,6 +126,18 @@ impl NumberLineFrame {
     pub fn unit_size(self) -> f64 {
         (self.end[0] - self.start[0]).hypot(self.end[1] - self.start[1])
             / (self.range[1] - self.range[0])
+    }
+
+    /// Return the pinned linear tick values for this data range. Construction
+    /// and query share the same tick rule so callers do not reconstruct the
+    /// range with frontend-specific floating-point logic.
+    pub fn tick_values(
+        self,
+        include_tip: bool,
+        exclude_origin: bool,
+        limit: usize,
+    ) -> Result<Vec<f64>, CoordinateError> {
+        number_line_tick_values(self.range, include_tip, exclude_origin, limit)
     }
 }
 
@@ -389,6 +404,19 @@ mod tests {
         assert_eq!(
             number_line_tick_values([2.0, 4.0, 0.75], false, true, 10).unwrap(),
             vec![2.0, 2.75, 3.5]
+        );
+    }
+
+    #[test]
+    fn number_line_frame_exposes_its_shared_tick_values() {
+        let frame = NumberLineFrame::centered([-2.0, 2.0, 1.0], 4.0, 0.0).unwrap();
+        assert_eq!(
+            frame.tick_values(false, false, 10).unwrap(),
+            vec![-2.0, -1.0, 0.0, 1.0, 2.0]
+        );
+        assert_eq!(
+            frame.tick_values(true, true, 10).unwrap(),
+            vec![-2.0, -1.0, 1.0]
         );
     }
 

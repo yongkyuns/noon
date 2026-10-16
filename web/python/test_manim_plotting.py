@@ -60,6 +60,19 @@ class PlottingAdapterTests(unittest.TestCase):
                     plotting.NumberLine(values)
             context.assert_not_called()
 
+    def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
+        frame = SimpleNamespace(
+            tickValues=Mock(return_value=[-2.0, -1.0, 1.0]),
+            free=Mock(),
+        )
+        line = object.__new__(plotting.NumberLine)
+        line.include_tip = False
+        line.exclude_origin_tick = True
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
+            self.assertEqual(line.get_tick_range(), (-2.0, -1.0, 1.0))
+        frame.tickValues.assert_called_once_with(False, True)
+        frame.free.assert_called_once_with()
+
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (
             "plot",
