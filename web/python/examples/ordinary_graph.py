@@ -6,6 +6,20 @@ from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 class OrdinaryGraph(Scene):
     def construct(self):
         self.wait(0.01)
+
+        def assert_rejected_self_edge(target, key):
+            vertices_before = tuple(target.vertices)
+            edges_before = tuple(target.edges)
+            try:
+                target.add_edges((key, key))
+            except Exception as error:
+                if "self-edge" not in str(error):
+                    raise
+            else:
+                raise AssertionError("Graph.add_edges accepted an unsupported self-edge")
+            assert tuple(target.vertices) == vertices_before
+            assert tuple(target.edges) == edges_before
+
         styles = dict(
             vertex_config={"radius": 0.21, "fill_color": RED, "fill_opacity": 0.35,
                            "stroke_color": BLUE, "stroke_width": 3},
@@ -23,17 +37,7 @@ class OrdinaryGraph(Scene):
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
         assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
         _ = graph[("a", "b")]
-        vertices_before_rejected_edge = tuple(graph.vertices)
-        edges_before_rejected_edge = tuple(graph.edges)
-        try:
-            graph.add_edges(("a", "a"))
-        except Exception as error:
-            if "self-edge" not in str(error):
-                raise
-        else:
-            raise AssertionError("Graph.add_edges accepted an unsupported self-edge")
-        assert tuple(graph.vertices) == vertices_before_rejected_edge
-        assert tuple(graph.edges) == edges_before_rejected_edge
+        assert_rejected_self_edge(graph, "a")
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
@@ -66,6 +70,7 @@ class OrdinaryGraph(Scene):
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
         assert tuple(directed.edges) == (("u", "v"), ("v", "w"), ("w", "u"))
         _ = directed[("u", "v")]
+        assert_rejected_self_edge(directed, "u")
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
         added_edges = directed.add_edges(
             ("w", "x"),

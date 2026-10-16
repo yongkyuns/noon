@@ -241,6 +241,17 @@ fn graph_mutations_reject_self_edges_without_publishing_topology() {
     assert_eq!(scene.revision(), revision);
     assert_eq!(graph.vertex_keys().copied().collect::<Vec<_>>(), vec!["a"]);
     assert_eq!(graph.topology().unwrap().edges().count(), 0);
+
+    let mut digraph = scene.digraph([("u", (0.0, 1.0))], []).unwrap();
+    let directed_revision = scene.revision();
+    let error = digraph.add_edges(&mut scene, [("u", "u")]).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), directed_revision);
+    assert_eq!(digraph.vertex_keys().copied().collect::<Vec<_>>(), vec!["u"]);
+    assert_eq!(digraph.topology().unwrap().edges().count(), 0);
 }
 
 #[test]
