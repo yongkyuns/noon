@@ -57,6 +57,23 @@ fn formatting_removes_negative_zero_after_rounding_not_before() {
 }
 
 #[test]
+fn number_label_exclusions_use_exact_values_and_preserve_order() {
+    let labels = number_labels_excluding(
+        frame().x(),
+        Some(&[0.0, 2.0, 4.0, 2.0, 6.0]),
+        0,
+        false,
+        &[2.0, 6.0],
+    )
+    .unwrap();
+    assert_eq!(
+        labels.iter().map(|label| label.number).collect::<Vec<_>>(),
+        [0.0, 4.0]
+    );
+    assert!(number_labels_excluding(frame().x(), None, 0, false, &[f64::NAN]).is_err());
+}
+
+#[test]
 fn label_preparation_rejects_nonfinite_values_precision_and_budget() {
     assert!(number_labels(frame().x(), Some(&[1.0, f64::NAN]), 1, false).is_err());
     assert!(number_labels(frame().x(), None, 13, false).is_err());

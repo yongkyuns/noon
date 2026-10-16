@@ -249,7 +249,8 @@ class NumberLine(_compat.Group):
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, numbers_with_elongated_ticks=None,
-                 longer_tick_multiple=2, color=None, **kwargs):
+                 longer_tick_multiple=2, numbers_to_exclude=None,
+                 color=None, **kwargs):
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
@@ -276,6 +277,9 @@ class NumberLine(_compat.Group):
             tick_size=tick_size,
             include_tip=False,
             exclude_origin_tick=bool(exclude_origin_tick),
+        )
+        self.numbers_to_exclude = (
+            [] if numbers_to_exclude is None else list(numbers_to_exclude)
         )
 
     @property
@@ -361,7 +365,7 @@ class NumberLine(_compat.Group):
         """Return detached labels for the automatically selected tick values."""
         return self.get_number_mobjects()
 
-    def add_numbers(self, x_values=None, **kwargs):
+    def add_numbers(self, x_values=None, excluding=None, **kwargs):
         """Atomically append native Text labels before playback; expose .numbers.
 
         Repeated calls append another label family, rather than replacing the
@@ -370,7 +374,10 @@ class NumberLine(_compat.Group):
         from _manim_number_labels import number_mobjects
         config = dict(kwargs)
         config.setdefault("exclude_zero", False)
-        number_mobjects(self, x_values, attach=True, config=config)
+        if excluding is None:
+            excluding = getattr(self, "numbers_to_exclude", ())
+        number_mobjects(self, x_values, attach=True, config=config,
+                        excluding=excluding)
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):

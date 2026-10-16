@@ -77,10 +77,16 @@ def _remember(axis, labels):
     axis.numbers = labels
 
 
-def number_mobjects(axis, values, *, attach, config):
+def number_mobjects(axis, values, *, attach, config, excluding=None):
     _cold_labels()
     values_js = _plot._array(() if values is None else values)
     options, size, color = _options(config)
+    try:
+        excluded_js = _plot._array(() if excluding is None else excluding)
+        engine_call(options.setExcludedNumbers, excluded_js)
+    except BaseException:
+        options.free()
+        raise
     handle = engine_call(axis._semantic_family_handle.numberLabelFamily,
                          values_js, values is None, options, bool(attach))
     labels = _family(handle, size, color)

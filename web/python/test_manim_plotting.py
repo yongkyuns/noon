@@ -142,15 +142,16 @@ class PlottingAdapterTests(unittest.TestCase):
         with patch("_manim_number_labels.number_mobjects") as build:
             self.assertIs(line.add_numbers((0, 1)), line)
             build.assert_called_once_with(line, (0, 1), attach=True,
-                                         config={"exclude_zero": False})
+                                         config={"exclude_zero": False}, excluding=())
         with patch("_manim_number_labels.number_mobjects") as build:
+            line.numbers_to_exclude = (0,)
             self.assertIs(line.add_numbers(), line)
             build.assert_called_once_with(line, None, attach=True,
-                                         config={"exclude_zero": False})
+                                         config={"exclude_zero": False}, excluding=(0,))
         with patch("_manim_number_labels.number_mobjects") as build:
-            self.assertIs(line.add_numbers((0, 1), exclude_zero=True), line)
+            self.assertIs(line.add_numbers((0, 1), excluding=(), exclude_zero=True), line)
             build.assert_called_once_with(line, (0, 1), attach=True,
-                                         config={"exclude_zero": True})
+                                         config={"exclude_zero": True}, excluding=())
 
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (

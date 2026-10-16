@@ -96,6 +96,10 @@ class LiveCoordinateAdapterTests(TestCase):
         self.construct(True)
         self.options.setTips.assert_called_once_with(True)
 
+    def test_number_line_stores_its_default_exclusion_list(self):
+        line = plotting.NumberLine((0, 2, 1), numbers_to_exclude=(0, 2))
+        self.assertEqual(line.numbers_to_exclude, [0, 2])
+
     def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
         shaft=object()
         with patch.object(plotting._shared, "_live_mutation_context", return_value=None), \

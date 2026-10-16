@@ -100,6 +100,39 @@ fn detached_labels_attach_only_on_request_and_empty_values_stay_empty() {
 }
 
 #[test]
+fn number_line_exclusions_apply_before_native_text_allocation() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions {
+        exclude_zero: false,
+        ..Default::default()
+    };
+
+    let detached = line
+        .get_number_mobjects_excluding(None, &[0.0, 2.0], &options)
+        .unwrap();
+    assert_eq!(leaves(&detached).len(), 1);
+    assert_eq!(
+        leaves(&detached)[0].state().unwrap().content.text(),
+        Some("1")
+    );
+
+    let attached = line
+        .add_numbers_excluding(Some(&[0.0, 1.0, 2.0]), &[0.0, 2.0], &options)
+        .unwrap();
+    assert_eq!(leaves(&attached).len(), 1);
+    assert_eq!(
+        leaves(line.family())
+            .iter()
+            .filter(|object| object.state().unwrap().content.text().is_some())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn second_axis_preparation_failure_is_atomic_including_fonts() {
     let mut scene = Scene::new();
     let axes = scene

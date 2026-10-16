@@ -15,6 +15,8 @@ class Owned:
         self.direction = value
     def setExcludeZero(self, value):
         self.exclude = value
+    def setExcludedNumbers(self, value):
+        self.excluded = value
     def setColor(self, *value):
         self.color = value
 
@@ -45,8 +47,9 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.calls.append(values)
         return Owned()
 
-    def invoke(self, values=None, attach=True, **config):
-        return labels.number_mobjects(self.axis, values, attach=attach, config=config)
+    def invoke(self, values=None, attach=True, excluding=None, **config):
+        return labels.number_mobjects(self.axis, values, attach=attach, config=config,
+                                      excluding=excluding)
 
     def axes(self):
         return SimpleNamespace(x_axis=self.axis,
@@ -64,6 +67,11 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(self.axis.numbers, result)
         self.assertIs(self.axis._semantic_member_wrappers[id(result)], result)
         self.assertEqual(self.options[0].freed, 0)  # moved, not manually freed
+        self.assertEqual(self.options[0].excluded, [])
+
+    def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
+        self.invoke(iter((0, 1, 2)), excluding=iter((1,)))
+        self.assertEqual(self.options[0].excluded, [1.0])
 
     def test_none_and_empty_are_distinct_and_detached_does_not_attach(self):
         self.invoke(None, attach=False)
@@ -95,6 +103,19 @@ class NumericLabelAdapterTests(unittest.TestCase):
             self.invoke((1,))
         self.assertIs(caught.exception, error)
         self.assertEqual(self.options[0].freed, 1)
+        self.assertEqual(self.calls, [])
+
+        def reject_exclusions(*args):
+            raise error
+        def make_with_exclusion_failure(*args):
+            option = self.make(*args)
+            option.setExcludedNumbers = reject_exclusions
+            return option
+        labels._plot._coordinate_options.numberLabels = make_with_exclusion_failure
+        with self.assertRaises(ValueError) as caught:
+            self.invoke((1,), excluding=(0,))
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.options[1].freed, 1)
         self.assertEqual(self.calls, [])
 
     def test_consuming_rust_failure_preserves_alias_without_double_free(self):
