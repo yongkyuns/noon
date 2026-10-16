@@ -157,15 +157,6 @@ impl NumberLineFrame {
             / (self.range[1] - self.range[0])
     }
 
-    /// Coordinate-space vector advanced by one data unit along the line.
-    pub fn unit_vector(self) -> [f64; 2] {
-        let range = self.range[1] - self.range[0];
-        [
-            (self.end[0] - self.start[0]) / range,
-            (self.end[1] - self.start[1]) / range,
-        ]
-    }
-
     /// Return the pinned linear tick values for this data range. Construction
     /// and query share the same tick rule so callers do not reconstruct the
     /// range with frontend-specific floating-point logic.
@@ -474,15 +465,6 @@ mod tests {
             frame.tick_values(true, true, 10).unwrap(),
             vec![-2.0, -1.0, 1.0]
         );
-    }
-
-    #[test]
-    fn number_line_frame_unit_vector_tracks_frame_orientation_and_scale() {
-        let frame =
-            NumberLineFrame::centered([-2.0, 2.0, 1.0], 8.0, std::f64::consts::FRAC_PI_2).unwrap();
-        let vector = frame.unit_vector();
-        assert!(vector[0].abs() < 1e-12);
-        assert!((vector[1] - 2.0).abs() < 1e-12);
     }
 
     #[test]

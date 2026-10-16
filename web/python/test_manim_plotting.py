@@ -156,15 +156,8 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.tickValues.assert_called_once_with(False, True)
         frame.free.assert_called_once_with()
 
-    def test_number_line_unit_vector_and_operators_use_shared_coordinate_queries(self):
+    def test_number_line_operators_use_shared_coordinate_queries(self):
         line = object.__new__(plotting.NumberLine)
-        frame = SimpleNamespace(unitVector=Mock(return_value=[0.0, 2.0]), free=Mock())
-        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
-            vector = line.get_unit_vector()
-        self.assertEqual((vector.x, vector.y), (0.0, 2.0))
-        frame.unitVector.assert_called_once_with()
-        frame.free.assert_called_once_with()
-
         frame = SimpleNamespace(
             numberToPoint=Mock(return_value=[3.0, 4.0]),
             pointToNumber=Mock(return_value=2.0),

@@ -392,10 +392,6 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
 
-    def get_unit_vector(self):
-        with _owned(self._coordinate_frame()) as frame:
-            return _base.Vec2(*engine_call(frame.unitVector))
-
     def rotate_about_zero(self, angle, axis=_base.OUT, **kwargs):
         return self.rotate(
             angle,
