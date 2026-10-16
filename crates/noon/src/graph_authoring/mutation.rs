@@ -34,6 +34,7 @@ use std::{
 pub enum GraphLayout {
     Circular,
     Shell,
+    Spiral,
     Random,
     Spring,
 }
@@ -51,6 +52,10 @@ pub struct GraphLayoutOptions {
     pub shells: Vec<Vec<usize>>,
     /// Angle increment between shells; `None` uses `PI / shell_count`.
     pub rotate: Option<f64>,
+    /// Angle step used by the NetworkX 2D spiral layout.
+    pub resolution: f64,
+    /// Space spiral points by chord distance instead of angle.
+    pub equidistant: bool,
 }
 
 impl Default for GraphLayoutOptions {
@@ -64,6 +69,8 @@ impl Default for GraphLayoutOptions {
             threshold: 1e-4,
             shells: Vec::new(),
             rotate: None,
+            resolution: 0.35,
+            equidistant: false,
         }
     }
 }
@@ -704,6 +711,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Shell {
         return shell_layout(count, options);
     }
+    if options.layout == GraphLayout::Spiral {
+        return spiral_layout(count, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -719,6 +729,7 @@ fn graph_layout(
             })
             .collect::<Vec<_>>(),
         GraphLayout::Shell => unreachable!("shell layout returned above"),
+        GraphLayout::Spiral => unreachable!("spiral layout returned above"),
         GraphLayout::Random | GraphLayout::Spring => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
@@ -733,6 +744,54 @@ fn graph_layout(
     {
         return Err(GraphAuthoringError::InvalidLayout(
             "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn spiral_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    if !options.resolution.is_finite() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spiral resolution must be finite",
+        ));
+    }
+    if options.equidistant && options.resolution == 0.0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "equidistant spiral resolution must be nonzero",
+        ));
+    }
+    let mut positions = Vec::with_capacity(count);
+    if options.equidistant {
+        let mut theta = options.resolution;
+        theta += 1.0 / (0.5 * theta);
+        for _ in 0..count {
+            let radius = 0.5 * theta;
+            theta += 1.0 / radius;
+            positions.push((theta.cos() * radius, theta.sin() * radius));
+        }
+    } else {
+        for index in 0..count {
+            let distance = index as f64;
+            let angle = options.resolution * distance;
+            positions.push((distance * angle.cos(), distance * angle.sin()));
+        }
+    }
+    rescale(&mut positions, options.scale, options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed spiral coordinates are not finite",
         ));
     }
     Ok(positions)

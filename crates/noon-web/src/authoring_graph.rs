@@ -31,6 +31,12 @@ pub(crate) enum GraphOperation {
         center: (f64, f64),
         rotate: Option<f64>,
     },
+    Spiral {
+        scale: f64,
+        center: (f64, f64),
+        resolution: f64,
+        equidistant: bool,
+    },
     Explicit(Vec<(f64, f64)>),
 }
 
@@ -137,6 +143,48 @@ impl NativeGraph {
                     },
                 )?;
             }
+            (
+                Self::Undirected(graph),
+                GraphOperation::Spiral {
+                    scale,
+                    center,
+                    resolution,
+                    equidistant,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Spiral,
+                        scale,
+                        center,
+                        resolution,
+                        equidistant,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Spiral {
+                    scale,
+                    center,
+                    resolution,
+                    equidistant,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Spiral,
+                        scale,
+                        center,
+                        resolution,
+                        equidistant,
+                        ..Default::default()
+                    },
+                )?;
+            }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions(scene, &positions)?;
             }
@@ -237,6 +285,48 @@ impl NativeGraph {
                         center,
                         shells,
                         rotate,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Undirected(graph),
+                GraphOperation::Spiral {
+                    scale,
+                    center,
+                    resolution,
+                    equidistant,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Spiral,
+                        scale,
+                        center,
+                        resolution,
+                        equidistant,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Spiral {
+                    scale,
+                    center,
+                    resolution,
+                    equidistant,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Spiral,
+                        scale,
+                        center,
+                        resolution,
+                        equidistant,
                         ..Default::default()
                     },
                 )?;
@@ -549,6 +639,42 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    /// Compute a NetworkX-compatible 2D spiral layout before publishing nodes.
+    #[wasm_bindgen(js_name = liveCreateSpiralGraph)]
+    pub fn live_create_spiral_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        resolution: f64,
+        equidistant: bool,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Spiral,
+            scale,
+            center: (center_x, center_y),
+            resolution,
+            equidistant,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.spiral_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = liveGraphCopy)]
     pub fn live_graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
         self.copy_live_graph(&graph.inner)
@@ -629,6 +755,31 @@ impl CanonicalAuthoringSceneContext {
                 scale,
                 center: (center_x, center_y),
                 rotate,
+            },
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphSpiralLayout)]
+    pub fn live_graph_spiral_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        resolution: f64,
+        equidistant: bool,
+    ) -> Result<(), JsValue> {
+        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+            return Err(js_error("spiral Graph layout values must be finite"));
+        }
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Spiral {
+                scale,
+                center: (center_x, center_y),
+                resolution,
+                equidistant,
             },
         )
         .map_err(js_error)

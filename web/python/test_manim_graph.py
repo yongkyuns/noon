@@ -51,6 +51,7 @@ class _Context:
         self.creation_calls = []
         self.layout_calls = []
         self.shell_layout_calls = []
+        self.spiral_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -67,6 +68,7 @@ class _Context:
 
     liveCreateCircularGraph = liveCreateGraph
     liveCreateShellGraph = liveCreateGraph
+    liveCreateSpiralGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -84,6 +86,9 @@ class _Context:
     def liveGraphShellLayout(self, *args):
         self._call("shell")
         self.shell_layout_calls.append(args)
+    def liveGraphSpiralLayout(self, *args):
+        self._call("spiral")
+        self.spiral_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -214,6 +219,52 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(
             self.context.creation_calls[0][:-1],
             (False, [0], [], [], [], 2.0, 0.0, 0.0, None),
+        )
+
+    def test_spiral_layout_config_reaches_rust_for_construction_and_live_change(self):
+        value = graph.Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c")], layout="spiral",
+            layout_scale=1.5,
+            layout_config={
+                "resolution": 0.2,
+                "equidistant": True,
+                "center": (2, -1),
+                "dim": 2,
+            },
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0, 1, 2], [0, 1, 1, 2], 1.5, 2.0, -1.0, 0.2, True),
+        )
+        value.change_layout(
+            "spiral", scale=0.75,
+            layout_config={"resolution": 0.4, "center": (-2, 3)},
+        )
+        self.assertEqual(
+            self.context.spiral_layout_calls[0][1:],
+            (0.75, -2.0, 3.0, 0.4, False),
+        )
+
+    def test_spiral_layout_rejects_unqualified_options_and_dimensions(self):
+        for config, error, message in [
+            ({"dim": 3}, ValueError, "only dim=2"),
+            ({"unknown": True}, NotImplementedError, "unsupported spiral layout_config"),
+            ({"resolution": float("nan")}, ValueError, "finite"),
+            ({"equidistant": 1}, TypeError, "must be a bool"),
+        ]:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [], layout="spiral", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
+
+    def test_spiral_singleton_uses_center_without_evaluating_spiral_parameters(self):
+        graph.Graph(
+            ["solo"], [], layout="spiral",
+            layout_config={"center": (3, 4), "resolution": float("nan"), "equidistant": 1},
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0], [], 2.0, 3.0, 4.0, 0.35, False),
         )
 
     def test_global_style_configs_are_coerced_into_one_typed_rust_options_handle(self):

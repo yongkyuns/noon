@@ -1,5 +1,5 @@
 // Exact-pixel paired Graph qualification: native direct-WASM and Python use
-// the same retained graph leaves, with circular, shell, and explicit layouts.
+// the same retained graph leaves, with circular, shell, spiral, and explicit layouts.
 import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 
 await qualifyPairedAuthoring({
@@ -9,7 +9,7 @@ await qualifyPairedAuthoring({
     file: "ordinary_graph.py",
     scene: "OrdinaryGraph",
     factory: "createDirectGraphSmokeRenderer",
-    objectCount: 28,
+    objectCount: 33,
     duration: 0.21,
     sampleTime: 0.21,
   }],

@@ -90,6 +90,27 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         },
     )?;
 
+    let mut spiral = scene.graph_with_options(
+        [
+            ("p0", (0.0, -2.6)),
+            ("p1", (0.0, -2.6)),
+            ("p2", (0.0, -2.6)),
+        ],
+        [("p0", "p1"), ("p1", "p2")],
+        options.clone(),
+    )?;
+    spiral.change_layout(
+        &mut scene,
+        crate::GraphLayoutOptions {
+            layout: crate::GraphLayout::Spiral,
+            scale: 0.9,
+            center: (0.0, -2.6),
+            resolution: 0.35,
+            equidistant: true,
+            ..Default::default()
+        },
+    )?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -110,6 +131,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(graph.family()),
         MobjectTarget::Family(digraph.family()),
         MobjectTarget::Family(centered.family()),
+        MobjectTarget::Family(spiral.family()),
         MobjectTarget::Family(shells.family()),
     ])?;
     scene.wait(0.21)?;
@@ -133,7 +155,7 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        assert_eq!(leaves.len(), 28);
+        assert_eq!(leaves.len(), 33);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

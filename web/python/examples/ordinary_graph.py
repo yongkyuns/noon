@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared circular/explicit layouts."""
+"""Graph/DiGraph topology edits and shared circular/shell/spiral layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -49,5 +49,19 @@ class OrdinaryGraph(Scene):
             "shell", scale=0.9,
             layout_config={"nlist": shells, "center": (0, 2.6)},
         )
-        self.add(graph, directed, centered, shell_graph)
+        spiral_graph = Graph(
+            ["p0", "p1", "p2"], [("p0", "p1"), ("p1", "p2")],
+            layout="spiral", layout_scale=0.9,
+            layout_config={
+                "resolution": 0.35, "equidistant": True, "center": (0, -2.6),
+            },
+            **styles,
+        )
+        spiral_graph.change_layout(
+            "spiral", scale=0.9,
+            layout_config={
+                "resolution": 0.35, "equidistant": True, "center": (0, -2.6),
+            },
+        )
+        self.add(graph, directed, centered, shell_graph, spiral_graph)
         self.wait(0.2)

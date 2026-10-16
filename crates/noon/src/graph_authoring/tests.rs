@@ -660,6 +660,8 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         threshold: 0.0,
         shells: Vec::new(),
         rotate: None,
+        resolution: 0.35,
+        equidistant: false,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -761,6 +763,45 @@ fn shell_layout_preserves_membership_order_scale_rotation_and_center() {
         .positions(2, &[])
         .is_err());
     }
+}
+
+#[test]
+fn spiral_layout_rescales_to_networkx_extent_and_supports_equidistant_spacing() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 2.0,
+        center: (3.0, 4.0),
+        resolution: 0.0,
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(1.0, 4.0), (3.0, 4.0), (5.0, 4.0)]);
+
+    let equidistant = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 1.5,
+        equidistant: true,
+        ..Default::default()
+    }
+    .positions(5, &[])
+    .unwrap();
+    assert_eq!(equidistant.len(), 5);
+    assert!(equidistant
+        .iter()
+        .all(|(x, y)| x.is_finite() && y.is_finite()));
+    let extent = equidistant
+        .iter()
+        .fold(0.0_f64, |extent, (x, y)| extent.max(x.abs()).max(y.abs()));
+    assert!((extent - 1.5).abs() < 1e-12);
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        equidistant: true,
+        resolution: 0.0,
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .is_err());
 }
 
 #[test]
