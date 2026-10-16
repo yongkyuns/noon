@@ -3,6 +3,23 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn number_line_frame(
+        &mut self,
+        line: &noon::ManimNumberLine,
+    ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
+        let shaft = line
+            .shaft()
+            .map_err(crate::plot_error::coordinate_failure)?;
+        self.mobject_observation(
+            &shaft,
+            |_| {
+                line.authored_frame()
+                    .map_err(crate::plot_error::coordinate_failure)
+            },
+            |player, _| player.live_effective_number_line_frame(line),
+        )
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(super) fn live_create_path_family(
         &mut self,
@@ -113,6 +130,48 @@ mod tests {
 
     fn options() -> noon::ManimAxesOptions {
         noon::ManimAxesOptions::new([-1.0, 1.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
+    }
+
+    #[test]
+    fn coordinate_queries_preserve_tip_endpoints_through_player_ownership() {
+        for include_tip in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let options = noon::ManimNumberLineOptions {
+                length: Some(2.0),
+                include_tip,
+                ..noon::ManimNumberLineOptions::new([-1.0, 1.0, 1.0])
+            };
+            let line = context.scene.number_line(&options).unwrap();
+            let shaft = line.shaft().unwrap();
+            assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
+            context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
+            context.scene.add_many(&[line.family().into()]).unwrap();
+            let frame = context.number_line_frame(&line).unwrap();
+            assert_eq!(frame.number_to_point(-1.0).unwrap(), [-1.0, 0.0]);
+            assert_eq!(frame.number_to_point(1.0).unwrap(), [1.0, 0.0]);
+            if include_tip {
+                assert!(shaft.path_query().unwrap().end().unwrap().0 < 1.0);
+            }
+
+            let player = context.take_execution_player(1.0, 41).unwrap();
+            assert!(
+                context.number_line_frame(&line).is_err(),
+                "transferred owner"
+            );
+            context.return_execution_player(player).unwrap();
+            context
+                .active_live_player()
+                .unwrap()
+                .live_shift_family(line.family(), 2.0, -1.0)
+                .unwrap();
+            let frame = context.number_line_frame(&line).unwrap();
+            assert_eq!(frame.number_to_point(-1.0).unwrap(), [1.0, -1.0]);
+            assert_eq!(frame.number_to_point(1.0).unwrap(), [3.0, -1.0]);
+            assert_eq!(frame.unit_size(), 1.0);
+
+            let mut foreign = CanonicalAuthoringScene::default();
+            assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
+        }
     }
 
     #[test]

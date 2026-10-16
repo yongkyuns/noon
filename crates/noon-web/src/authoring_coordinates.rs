@@ -775,15 +775,7 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         line: &ManimNumberLine,
     ) -> Result<NumberLineFrame, JsValue> {
-        let range = line.range().map_err(coordinate_failure).map_err(js_error)?;
-        let shaft = line.shaft().map_err(coordinate_failure).map_err(js_error)?;
-        let path =
-            self.query_mobject_path(&WasmAuthoringMobjectHandle::from_semantic_mobject(shaft))?;
-        let start = path.start()?;
-        let end = path.end()?;
-        NumberLineFrame::new(range, [start[0], start[1]], [end[0], end[1]])
-            .map_err(coordinate_math_failure)
-            .map_err(js_error)
+        self.inner.number_line_frame(line).map_err(js_error)
     }
 }
 
