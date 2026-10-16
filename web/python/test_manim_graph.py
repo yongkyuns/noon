@@ -1,7 +1,7 @@
 import importlib.util
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import _manim_graph as graph
 
@@ -497,6 +497,31 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(edge_style["stroke_width"], 2)
         self.assertEqual(graph._compat._manim_stroke_width(edge_style["stroke_width"]), 0.02)
         self.assertEqual(len(self.context.creation_calls), 1)
+
+    def test_per_key_explicit_colors_override_the_color_fallback(self):
+        # Pinned ManimCE gives explicit fill/stroke colors precedence over color.
+        red, blue, green = "#FC6255", "#58C4DD", "#83C167"
+        cases = [
+            ({"color": red}, red, red),
+            ({"color": red, "fill_color": blue}, blue, red),
+            ({"color": red, "stroke_color": green}, red, green),
+            ({"color": red, "fill_color": blue, "stroke_color": green}, blue, green),
+        ]
+        for constructor in (graph.Graph, graph.DiGraph):
+            for config, fill, stroke in cases:
+                with self.subTest(constructor=constructor.__name__, config=config):
+                    target = Mock()
+                    with patch.object(graph._GraphBase, "__getitem__", return_value=target):
+                        constructor(
+                            ["a"], [], layout={"a": (0, 0)},
+                            vertex_config={"a": config},
+                        )
+                    target.set_style.assert_called_once_with(
+                        fill_color=graph._compat._as_color("color", fill),
+                        fill_opacity=None,
+                        stroke_color=graph._compat._as_color("color", stroke),
+                        stroke_width=None,
+                    )
 
     def test_invalid_per_key_and_unsupported_style_configs_fail_before_publication(self):
         with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config key 0"):

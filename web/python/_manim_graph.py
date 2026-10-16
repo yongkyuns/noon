@@ -81,10 +81,8 @@ def _validated_key_style(name, value):
 
 
 def _apply_key_style(target, values):
-    fill_color = values.get("fill_color")
-    stroke_color = values.get("stroke_color")
-    if "color" in values:
-        fill_color = stroke_color = values["color"]
+    fill_color = values.get("fill_color", values.get("color"))
+    stroke_color = values.get("stroke_color", values.get("color"))
     target.set_style(
         fill_color=fill_color,
         fill_opacity=values.get("fill_opacity"),
