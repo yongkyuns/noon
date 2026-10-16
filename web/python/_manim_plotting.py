@@ -339,7 +339,8 @@ class NumberLine(_compat.Group):
         self.label_direction = label_direction
         self.line_to_number_buff = line_to_number_buff
         if decimal_places is None:
-            step = float(values[2]) if len(values) == 3 else 1.0
+            # Manim derives precision before coercing the range to floats.
+            step = values[2] if len(values) == 3 else 1
             decimal_places = _decimal_places_from_step(step)
         self.decimal_number_config = {"num_decimal_places": decimal_places}
         self.number_label_decimal_places = decimal_places

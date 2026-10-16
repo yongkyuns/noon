@@ -107,11 +107,15 @@ class PlottingAdapterTests(unittest.TestCase):
             context.assert_not_called()
 
     def test_number_line_decimal_precision_uses_step_or_explicit_config(self):
-        for step, config, expected in (
-            (0.25, None, 2),
-            (0.1, {"num_decimal_places": 3}, 3),
+        for values, config, expected in (
+            (None, None, 0),
+            ([-2, 2], None, 0),
+            ([-2, 2, 1], None, 0),
+            ([-2, 2, 1.0], None, 1),
+            ([-2, 2, 0.25], None, 2),
+            ([-2, 2, 0.1], {"num_decimal_places": 3}, 3),
         ):
-            with self.subTest(step=step, config=config), \
+            with self.subTest(values=values, config=config), \
                  patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
                  patch.object(plotting, "_coordinate_options"), \
                  patch.object(plotting, "_array", side_effect=list), \
@@ -119,7 +123,7 @@ class PlottingAdapterTests(unittest.TestCase):
                  patch.object(plotting, "_attach_number_line"), \
                  patch("_manim_number_labels.number_mobjects") as build:
                 line = plotting.NumberLine(
-                    [-2, 2, step], include_numbers=True,
+                    values, include_numbers=True,
                     decimal_number_config=config,
                 )
                 self.assertEqual(line.decimal_number_config,
