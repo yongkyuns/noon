@@ -94,7 +94,7 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         "include_ticks": False,
         "include_tip": False,
         "tick_size": 0.1,
-        "exclude_origin_tick": False,
+        "exclude_origin_tick": True,
         "line_to_number_buff": _plot._base.SMALL_BUFF,
         "label_direction": _plot._base.DR,
         "font_size": 24,
@@ -122,6 +122,10 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         )
         if config.get("scaling") is not None:
             raise NotImplementedError("NumberPlane nonlinear axis scaling is not yet supported")
+        # Axes normalizes every linear axis to omit its origin tick after
+        # merging axis_config and x/y_axis_config. Match that inherited rule,
+        # including when the caller explicitly supplies False.
+        config["exclude_origin_tick"] = True
         labels = {key: config[key] for key in _AXIS_LABEL_KEYS if key in config}
         label_options = _plot._axes_label_options(
             labels, ("linear", 1.0, False), name, direction

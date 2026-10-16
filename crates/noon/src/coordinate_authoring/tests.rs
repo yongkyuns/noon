@@ -86,6 +86,9 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 
 #[test]
 fn number_plane_retains_independent_axis_ticks_and_tick_sizes() {
+    let defaults = ManimNumberPlaneOptions::default();
+    assert!(defaults.x_ticks.exclude_origin);
+    assert!(defaults.y_ticks.exclude_origin);
     let mut scene = Scene::new();
     let options = ManimNumberPlaneOptions {
         x_range: [-2.0, 2.0, 1.0],
@@ -98,6 +101,7 @@ fn number_plane_retains_independent_axis_ticks_and_tick_sizes() {
         },
         y_ticks: CoordinateTicks {
             enabled: true,
+            exclude_origin: false,
             half_length: 0.15,
             ..CoordinateTicks::default()
         },

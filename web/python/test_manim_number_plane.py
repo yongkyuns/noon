@@ -97,7 +97,7 @@ class NumberPlaneAdapterTests(TestCase):
         self.options.free.assert_not_called()
         self.assertEqual(
             [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
-            [(0, False, 0.1, False), (1, False, 0.1, False)],
+            [(0, False, 0.1, True), (1, False, 0.1, True)],
         )
 
         self.resolve.return_value = None
@@ -177,13 +177,13 @@ class NumberPlaneAdapterTests(TestCase):
 
         self.assertEqual(
             [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
-            [(0, True, 0.2, True), (1, True, 0.3, False)],
+            [(0, True, 0.2, True), (1, True, 0.3, True)],
         )
         self.assertEqual(self.axes.call_args_list[0].kwargs, {
             "tick_size": 0.2, "include_ticks": True, "exclude_origin_tick": True,
         })
         self.assertEqual(self.axes.call_args_list[1].kwargs, {
-            "tick_size": 0.3, "include_ticks": True, "exclude_origin_tick": False,
+            "tick_size": 0.3, "include_ticks": True, "exclude_origin_tick": True,
         })
 
     def test_tick_configuration_is_validated_before_host_admission(self):

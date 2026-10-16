@@ -65,10 +65,12 @@ impl Default for ManimNumberPlaneOptions {
             axis_style: number_plane_axis_style(),
             x_ticks: CoordinateTicks {
                 enabled: false,
+                exclude_origin: true,
                 ..CoordinateTicks::default()
             },
             y_ticks: CoordinateTicks {
                 enabled: false,
+                exclude_origin: true,
                 ..CoordinateTicks::default()
             },
             background_line_style,
