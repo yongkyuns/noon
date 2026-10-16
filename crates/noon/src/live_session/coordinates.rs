@@ -2,7 +2,7 @@
 use super::*;
 use crate::coordinate_authoring::{
     prepare_axes, prepare_number_line, prepare_number_plane, prepare_polar_plane,
-    publish_prepared_axes, resolve_family,
+    publish_prepared_axes, publish_prepared_number_line, resolve_family,
 };
 use crate::AuthoringError;
 use crate::{
@@ -42,9 +42,11 @@ impl LiveSession<'_> {
         &mut self,
         options: &ManimNumberLineOptions,
     ) -> Result<ManimNumberLine, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_line(options)?;
-        let result = self.apply(transaction)?;
-        ManimNumberLine::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
+        let prepared = prepare_number_line(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_number_line(prepared, store, publish)
+        })?;
+        ManimNumberLine::from_family(MobjectFamily::from_node(Rc::clone(self.store), root)?)
     }
 
     /// Construct a detached retained NumberPlane through this execution's

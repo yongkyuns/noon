@@ -85,6 +85,54 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 }
 
 #[test]
+fn number_line_tip_is_retained_and_removes_the_endpoint_tick() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.length = Some(4.0);
+    options.include_tip = true;
+    options.tip_width = 0.6;
+    options.tip_height = 0.4;
+    let line = scene.number_line(&options).unwrap();
+
+    let root = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(line.family().node_id())
+        .unwrap();
+    assert_eq!(root.len(), 3);
+    let ticks = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(line.ticks().unwrap().node_id())
+        .unwrap();
+    assert_eq!(ticks.len(), 4);
+    let tip = line.tip().unwrap().expect("enabled NumberLine tip");
+    assert_eq!(tip.path_query().unwrap().start().unwrap(), (2.0, 0.0));
+    assert!(matches!(
+        tip.state().unwrap().style.fill,
+        Some(SemanticPaint::Solid(WHITE))
+    ));
+    assert_eq!(resources(&scene), 1);
+
+    let without_tip = scene
+        .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
+        .unwrap();
+    assert!(without_tip.tip().unwrap().is_none());
+}
+
+#[test]
+fn invalid_number_line_tip_fails_before_resource_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.include_tip = true;
+    options.tip_width = 0.0;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn number_line_constructor_defaults_and_partial_ranges_are_shared() {
     let mut scene = Scene::new();
     let defaults = ManimNumberLineOptions::from_range(None).unwrap();

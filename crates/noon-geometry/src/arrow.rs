@@ -77,8 +77,18 @@ impl ArrowGeometry {
 
 /// Apex-first triangular tip vertices, shared by static and dependent arrows.
 pub fn arrow_tip_vertices(apex: (f64, f64), direction: (f64, f64), length: f64) -> [(f64, f64); 3] {
+    arrow_tip_vertices_with_width(apex, direction, length, length)
+}
+
+/// Apex-first triangular tip vertices with independent length and base width.
+pub fn arrow_tip_vertices_with_width(
+    apex: (f64, f64),
+    direction: (f64, f64),
+    length: f64,
+    width: f64,
+) -> [(f64, f64); 3] {
     let base = (apex.0 - direction.0 * length, apex.1 - direction.1 * length);
-    let half_width = length * 0.5;
+    let half_width = width * 0.5;
     let perpendicular = (-direction.1, direction.0);
     [
         apex,
@@ -91,4 +101,17 @@ pub fn arrow_tip_vertices(apex: (f64, f64), direction: (f64, f64), length: f64) 
             base.1 - perpendicular.1 * half_width,
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrow_tip_base_width_is_independent_of_tip_length() {
+        assert_eq!(
+            arrow_tip_vertices_with_width((2.0, 3.0), (1.0, 0.0), 0.5, 0.2),
+            [(2.0, 3.0), (1.5, 3.1), (1.5, 2.9)]
+        );
+    }
 }
