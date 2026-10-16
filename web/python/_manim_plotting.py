@@ -364,7 +364,9 @@ def _axes_number_values(values, name, default):
 
 
 def _configure_axes_numeric_labels(axis, config, range_values):
-    step = range_values[2] if len(range_values) == 3 else 1.0
+    # Preserve the authored step type: ManimCE infers decimal places from
+    # str(step), so integer 1 and float 1.0 intentionally differ.
+    step = range_values[2] if len(range_values) == 3 else 1
     places = config["decimal_places"]
     if places is None:
         places = _decimal_places_from_step(step)
@@ -595,7 +597,9 @@ class NumberLine(_compat.Group):
         self.label_direction = label_direction
         self.line_to_number_buff = line_to_number_buff
         if decimal_places is None:
-            step = float(values[2]) if len(values) == 3 else 1.0
+            # Match NumberLine._decimal_places_from_step before coercing the
+            # range to the numeric Rust boundary. Integer 1 means zero places.
+            step = values[2] if len(values) == 3 else 1
             decimal_places = _decimal_places_from_step(step)
         self.decimal_number_config = {"num_decimal_places": decimal_places}
         self.number_label_decimal_places = decimal_places

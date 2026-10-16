@@ -104,6 +104,7 @@ class NumberPlaneGridLineAliases(Scene):
 
 class AxesLabels(Scene):
     async def construct(self):
+        await prepare_latex()
         axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)
         explicit_x = axes.get_x_axis_label(Text("x-values"), edge=DOWN,
                                           direction=DOWN, buff=0.2)
@@ -113,6 +114,7 @@ class AxesLabels(Scene):
         assert axes.axis_labels is labels
         assert len(labels.submobjects) == 2
         assert all(getattr(label, "_semantic_family_handle", None) is not None
+                   or getattr(label, "_semantic_handle", None) is not None
                    for label in labels.submobjects)
 
         plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)

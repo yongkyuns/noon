@@ -190,6 +190,8 @@ class PlottingAdapterTests(unittest.TestCase):
 
     def test_number_line_decimal_precision_uses_step_or_explicit_config(self):
         for step, config, expected in (
+            (1, None, 0),
+            (1.0, None, 1),
             (0.25, None, 2),
             (0.1, {"num_decimal_places": 3}, 3),
         ):
@@ -214,6 +216,26 @@ class PlottingAdapterTests(unittest.TestCase):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": True})
         with self.assertRaises(ValueError):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": 13})
+
+    def test_axes_label_decimal_precision_preserves_authored_step_type(self):
+        for step, expected in ((1, 0), (1.0, 1)):
+            with self.subTest(step=step):
+                axis = SimpleNamespace(add_numbers=Mock())
+                config = {
+                    "decimal_places": None,
+                    "include_numbers": True,
+                    "numbers_to_include": (1,),
+                    "numbers_to_exclude": (),
+                    "font_size": 36,
+                    "label_direction": plotting._base.DOWN,
+                    "line_to_number_buff": 0.1,
+                }
+                plotting._configure_axes_numeric_labels(axis, config, (-2, 2, step))
+                self.assertEqual(axis.number_label_decimal_places, expected)
+                self.assertEqual(axis.decimal_number_config,
+                                 {"num_decimal_places": expected})
+                self.assertEqual(axis.add_numbers.call_args.kwargs["decimal_places"],
+                                 expected)
 
     def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
         frame = SimpleNamespace(
