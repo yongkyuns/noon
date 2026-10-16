@@ -12,11 +12,11 @@ class OrdinaryGraph(Scene):
             edge_config={"color": GREEN, "stroke_width": 6},
         )
         graph_styles = dict(
-            vertex_config={**styles["vertex_config"], "b": {"fill_color": YELLOW}},
+            vertex_config={**styles["vertex_config"], "b": {"fill_color": YELLOW, "radius": 0.28}},
             edge_config={**styles["edge_config"], ("a", "b"): {"color": PURPLE}},
         )
         directed_styles = dict(
-            vertex_config={**styles["vertex_config"], "v": {"fill_color": YELLOW}},
+            vertex_config={**styles["vertex_config"], "v": {"fill_color": YELLOW, "radius": 0.28}},
             edge_config={**styles["edge_config"], ("v", "w"): {"color": PURPLE}},
         )
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},

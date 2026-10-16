@@ -729,6 +729,17 @@ impl WasmGraphOptions {
         self.options.vertex_radius = radius;
     }
 
+    #[wasm_bindgen(js_name = setVertexRadiusFor)]
+    pub fn set_vertex_radius_for(&mut self, vertex_index: u32, radius: f64) -> Result<(), JsValue> {
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(js_error("vertex radius must be finite and positive"));
+        }
+        self.options
+            .vertex_radius_overrides
+            .insert(vertex_index as usize, radius);
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setVertexFill)]
     pub fn set_vertex_fill(
         &mut self,

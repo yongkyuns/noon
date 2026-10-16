@@ -100,11 +100,15 @@ def _validated_key_style(name, value, supported=None):
 def _apply_key_style(target, values):
     fill_color = values.get("fill_color", values.get("color"))
     stroke_color = values.get("stroke_color", values.get("color"))
+    fill_opacity = values.get("fill_opacity")
+    stroke_width = values.get("stroke_width")
+    if fill_color is None and stroke_color is None and fill_opacity is None and stroke_width is None:
+        return
     target.set_style(
         fill_color=fill_color,
-        fill_opacity=values.get("fill_opacity"),
+        fill_opacity=fill_opacity,
         stroke_color=stroke_color,
-        stroke_width=values.get("stroke_width"),
+        stroke_width=stroke_width,
     )
 
 
@@ -174,7 +178,8 @@ class _GraphBase(_compat.Group):
     styles and accepts the same per-key style subset plus radius in its atomic
     mutation. ``add_edges`` inherits constructor-wide edge styles and accepts
     per-edge color, stroke-color, and stroke-width overrides. Constructor
-    per-key radius and custom mobject types remain unsupported.
+    ``vertex_config`` also accepts per-key radius. Custom mobject types remain
+    unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -231,7 +236,8 @@ class _GraphBase(_compat.Group):
             raise ValueError("Graph layout must cover every vertex exactly once")
         edge_ids = self._edge_ids(edges)
         global_vertex_config, keyed_vertex_config = _split_style_config(
-            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids)
+            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids),
+            per_key_supported=_VERTEX_CONFIG_KEYS,
         )
         self._default_vertex_config = dict(global_vertex_config)
         global_edge_config, keyed_edge_config = _split_style_config(
@@ -291,6 +297,14 @@ class _GraphBase(_compat.Group):
         options = _graph_style_options(global_vertex_config, global_edge_config)
         ids = _array(self._graph_key_ids.values())
         try:
+            for key, style in keyed_vertex_config.items():
+                if "radius" in style:
+                    engine_call(
+                        options.setVertexRadiusFor,
+                        self._graph_key_ids[key],
+                        float(style["radius"]),
+                        operation="Graph.style",
+                    )
             if spring:
                 self._graph_handle = engine_call(
                     context.liveCreateSpringGraph,

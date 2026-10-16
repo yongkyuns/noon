@@ -18,10 +18,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         edge_stroke_width: 0.06,
         ..GraphOptions::default()
     };
+    let mut graph_options = options.clone();
+    graph_options.vertex_radius_overrides.insert(1, 0.28);
     let mut graph = scene.graph_with_options(
         [("a", (-5.0, -1.0)), ("b", (-3.5, 1.2)), ("c", (-2.0, -1.0))],
         [("a", "b"), ("b", "c"), ("c", "a")],
-        options.clone(),
+        graph_options,
     )?;
 
     graph.change_layout_positions(&mut scene, &[(-5.0, -1.0), (-3.5, 1.2), (-2.0, -1.0)])?;
@@ -48,10 +50,12 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             ..Default::default()
         })?;
 
+    let mut digraph_options = options.clone();
+    digraph_options.vertex_radius_overrides.insert(1, 0.28);
     let mut digraph = scene.digraph_with_options(
         [("u", (2.0, -1.0)), ("v", (3.5, 1.2)), ("w", (5.0, -1.0))],
         [("u", "v"), ("v", "w"), ("w", "u")],
-        options.clone(),
+        digraph_options,
     )?;
     digraph
         .vertex(&"v")

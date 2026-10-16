@@ -2,6 +2,7 @@ use super::*;
 use noon_core::{
     SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED, YELLOW,
 };
+use std::collections::HashMap;
 
 fn graph(scene: &mut Scene) -> Graph<&'static str> {
     scene
@@ -248,6 +249,65 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
             .is_err());
         assert_eq!(scene.revision(), revision);
         assert_eq!(scene.integration_store().borrow().len(), nodes);
+    }
+}
+
+#[test]
+fn per_vertex_radius_overrides_follow_constructor_insertion_order() {
+    let options = GraphOptions {
+        vertex_radius: 0.2,
+        vertex_radius_overrides: HashMap::from([(1, 0.31)]),
+        ..GraphOptions::default()
+    };
+    let mut scene = Scene::new();
+    let graph = scene
+        .graph_with_options(
+            [("left", (0.0, 0.0)), ("right", (1.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+            options.clone(),
+        )
+        .unwrap();
+    for (key, expected) in [("left", 0.2_f32), ("right", 0.31_f32)] {
+        assert!(matches!(
+            graph.vertex(&key).unwrap().state().unwrap().content.geometry(),
+            Some(StoredGeometry::Circle { radius }) if (radius - expected).abs() < f32::EPSILON
+        ));
+    }
+
+    let digraph = scene
+        .digraph_with_options(
+            [("u", (2.0, 0.0)), ("v", (3.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+            options,
+        )
+        .unwrap();
+    assert!(matches!(
+        digraph.vertex(&"v").unwrap().state().unwrap().content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.31).abs() < f32::EPSILON
+    ));
+}
+
+#[test]
+fn invalid_per_vertex_radius_override_leaves_graph_unpublished() {
+    for override_index_and_radius in [(0, f64::NAN), (2, 0.3)] {
+        let mut scene = Scene::new();
+        let before = scene.revision();
+        let nodes_before = scene.integration_store().borrow().len();
+        let options = GraphOptions {
+            vertex_radius_overrides: HashMap::from([override_index_and_radius]),
+            ..GraphOptions::default()
+        };
+
+        assert!(scene
+            .graph_with_options(
+                [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+                std::iter::empty::<(&str, &str)>(),
+                options,
+            )
+            .is_err());
+
+        assert_eq!(scene.revision(), before);
+        assert_eq!(scene.integration_store().borrow().len(), nodes_before);
     }
 }
 

@@ -40,6 +40,7 @@ class _GraphOptions:
         self.calls.append((name, values))
 
     def setVertexRadius(self, value): self._record("radius", value)
+    def setVertexRadiusFor(self, index, value): self._record("vertex_radius_for", index, value)
     def setVertexFill(self, *values): self._record("fill", *values)
     def setVertexFillOpacity(self, value): self._record("fill_opacity", value)
     def setVertexStroke(self, *values): self._record("stroke", *values)
@@ -847,6 +848,14 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(graph._compat._manim_stroke_width(edge_style["stroke_width"]), 0.02)
         self.assertEqual(len(self.context.creation_calls), 1)
 
+    def test_constructor_per_key_vertex_radius_is_passed_to_rust_by_vertex_order(self):
+        graph.Graph(
+            ["left", "right"], [], layout={"left": (0, 0), "right": (1, 0)},
+            vertex_config={"right": {"radius": 0.28}},
+        )
+        self.assertIn(("vertex_radius_for", (1, 0.28)), self.context.options[0].calls)
+        self.assertEqual(len(self.context.creation_calls), 1)
+
     def test_per_key_explicit_colors_override_the_color_fallback(self):
         # Pinned ManimCE gives explicit fill/stroke colors precedence over color.
         red, blue, green = "#FC6255", "#58C4DD", "#83C167"
@@ -875,8 +884,8 @@ class GraphFacadeTests(unittest.TestCase):
     def test_invalid_per_key_and_unsupported_style_configs_fail_before_publication(self):
         with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config key 0"):
             graph.Graph(["a"], [], vertex_config={0: {"fill_color": "#ffffff"}})
-        with self.assertRaisesRegex(NotImplementedError, "unsupported per-key vertex_config"):
-            graph.Graph(["a"], [], vertex_config={"a": {"radius": 0.2}})
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            graph.Graph(["a"], [], vertex_config={"a": {"radius": 0}})
         with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config"):
             graph.Graph(["a"], [], vertex_config={0: "#ffffff"})
         with self.assertRaisesRegex(TypeError, "unsupported edge_config"):

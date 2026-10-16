@@ -33,6 +33,9 @@ pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 #[derive(Clone, Debug)]
 pub struct GraphOptions {
     pub vertex_radius: f64,
+    /// Optional per-vertex radius overrides keyed by insertion-order index.
+    /// Language adapters use this for Manim's keyed `vertex_config` radius.
+    pub vertex_radius_overrides: HashMap<usize, f64>,
     pub vertex_fill: Color,
     /// Opacity applied to every vertex fill independently from its color alpha.
     pub vertex_fill_opacity: f64,
@@ -47,6 +50,7 @@ impl Default for GraphOptions {
     fn default() -> Self {
         Self {
             vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
+            vertex_radius_overrides: HashMap::new(),
             vertex_fill: WHITE,
             vertex_fill_opacity: 1.0,
             vertex_stroke: WHITE,
