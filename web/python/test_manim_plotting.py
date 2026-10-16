@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
 import _manim_plotting as plotting
+import _manim_number_labels as number_labels
 import noon as public_api
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
 
@@ -43,6 +44,23 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_axes_add_coordinates_accepts_per_axis_positionals_and_legacy_keywords(self):
+        axes = object.__new__(plotting.Axes)
+        with patch.object(number_labels, "add_coordinates", return_value=axes) as add:
+            self.assertIs(axes.add_coordinates((1, 2)), axes)
+        self.assertEqual(add.call_args.args, (axes, (1, 2)))
+        self.assertEqual(add.call_args.kwargs,
+                         {"x_config": None, "y_config": None, "config": {}})
+
+        with patch.object(number_labels, "add_coordinates", return_value=axes) as add:
+            axes.add_coordinates(x_values=(1,), y_values=(2,))
+        self.assertEqual(add.call_args.args, (axes, (1,), (2,)))
+
+        with patch.object(number_labels, "add_coordinates") as add:
+            with self.assertRaisesRegex(TypeError, "positional axis values"):
+                axes.add_coordinates((1,), x_values=(2,))
+            add.assert_not_called()
+
     def test_number_line_default_and_two_value_range_delegate_without_python_defaults(self):
         for values, expected in ((None, []), ([-2, 2], [-2, 2]), ([-2, 2, .5], [-2, 2, .5])):
             with self.subTest(values=values), \

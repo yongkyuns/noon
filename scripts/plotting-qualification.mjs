@@ -163,6 +163,50 @@ class AxesAccessors(Scene):
       assert.ok(accessors.objectCount > 0);
       assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes coordinate accessors`);
+      const addCoordinatesSource = `from noon import *
+
+class AxesAddCoordinates(Scene):
+    async def construct(self):
+        default_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        assert default_axes.add_coordinates() is default_axes
+        assert len(default_axes.coordinate_labels.submobjects) == 2
+        assert default_axes.x_axis.numbers.submobjects
+        assert default_axes.y_axis.numbers.submobjects
+
+        x_only = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        x_only.add_coordinates((-1, 1))
+        assert len(x_only.coordinate_labels.submobjects) == 1
+        assert tuple(label.source for label in x_only.x_axis.numbers) == ("-1", "1")
+        assert not hasattr(x_only.y_axis, "numbers")
+
+        x_default = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        x_default.add_coordinates(None)
+        assert len(x_default.coordinate_labels.submobjects) == 1
+        assert x_default.x_axis.numbers.submobjects
+        assert not hasattr(x_default.y_axis, "numbers")
+
+        custom = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        custom.add_coordinates({-1: "Left", 1: "Right"})
+        assert len(custom.coordinate_labels.submobjects) == 1
+        assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
+
+        mixed = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        mixed.add_coordinates({0: "origin"}, (-1, 1))
+        assert len(mixed.coordinate_labels.submobjects) == 2
+        assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
+        assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
+
+        self.add(default_axes, x_only, x_default, custom, mixed)
+        await self.wait(0.05)
+`;
+      const addCoordinates = await qualifyPythonPlayback(
+        context, baseUrl, addCoordinatesSource, [0, 0.05],
+      );
+      assert.equal(addCoordinates.rendererBackend, expectedBackend);
+      assert.equal(addCoordinates.presented, true);
+      assert.ok(addCoordinates.objectCount > 0);
+      assert.ok(Math.abs(addCoordinates.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes.add_coordinates positional/default/custom labels`);
       const gridLinesSource = `from noon import *
 
 class NumberPlaneGridLineAliases(Scene):

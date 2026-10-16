@@ -34,6 +34,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
         patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)).start()
         self.wrapped = patch.object(labels, '_family', side_effect=lambda handle, *args: handle).start()
         patch.object(labels._shared, '_family_wrapper_key', side_effect=id).start()
+        patch.object(labels._compat, 'VGroup', side_effect=lambda *families: families).start()
         self.axis = SimpleNamespace(_semantic_family_handle=SimpleNamespace(
                                         numberLabelFamily=self.commit,
                                         numberLineCustomLabelFamily=self.commit),
@@ -54,8 +55,31 @@ class NumericLabelAdapterTests(unittest.TestCase):
                                       excluding=excluding)
 
     def axes(self):
+        self.axis.add_labels = lambda values, **config: labels.custom_labels(
+            self.axis, values, config=config
+        )
+        self.axis.add_numbers = lambda values=None, **config: setattr(
+            self.axis, "numbers", labels.number_mobjects(
+                self.axis, values, attach=True, config=config
+            )
+        )
+        y_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            _semantic_family_handle=SimpleNamespace(
+                numberLabelFamily=self.commit,
+                numberLineCustomLabelFamily=self.commit,
+            ),
+        )
+        y_axis.add_labels = lambda values, **config: labels.custom_labels(
+            y_axis, values, config=config
+        )
+        y_axis.add_numbers = lambda values=None, **config: setattr(
+            y_axis, "numbers", labels.number_mobjects(
+                y_axis, values, attach=True, config=config
+            )
+        )
         return SimpleNamespace(x_axis=self.axis,
-            y_axis=SimpleNamespace(_semantic_member_wrappers={}),
+            y_axis=y_axis,
             _semantic_family_handle=SimpleNamespace(coordinateLabelFamilies=self.commit_axes))
 
     def commit_axes(self, *values):
@@ -177,6 +201,28 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(self.options[0].direction, (0, 1))
         self.assertEqual(self.options[1].direction, (1, 0))
         self.assertEqual([o.freed for o in self.options], [0, 0])
+        self.assertEqual(axes.coordinate_labels,
+                         (axes.x_axis.numbers, axes.y_axis.numbers))
+
+    def test_single_coordinate_argument_labels_only_the_first_axis(self):
+        axes = self.axes()
+        result = labels.add_coordinates(axes, iter((2, 1)), config={},
+                                        x_config=None, y_config=None)
+        self.assertIs(result, axes)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][0:2], ([2.0, 1.0], False))
+        self.assertEqual(axes.coordinate_labels, (axes.x_axis.numbers,))
+        self.assertFalse(hasattr(axes.y_axis, 'numbers'))
+
+    def test_custom_coordinate_mapping_uses_native_labels_and_keeps_omitted_axes_empty(self):
+        axes = self.axes()
+        result = labels.add_coordinates(axes, {1: "Monday"}, config={},
+                                        x_config=None, y_config=None)
+        self.assertIs(result, axes)
+        self.assertEqual(self.calls[0][0:2], ([1.0], ["Monday"]))
+        self.assertIs(axes.coordinate_labels[0], axes.x_axis.labels)
+        self.assertEqual(len(axes.coordinate_labels), 1)
+        self.assertFalse(hasattr(axes.y_axis, 'numbers'))
 
     def test_number_plane_defaults_to_decimal_glyph_families_and_one_decimal(self):
         x_axis = SimpleNamespace(_semantic_member_wrappers={})

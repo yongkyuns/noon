@@ -130,11 +130,45 @@ def custom_labels(axis, labels, *, config):
     return family
 
 
-def add_coordinates(axes, x_values, y_values, *, x_config, y_config, config):
-    return _add_coordinate_labels(
-        axes, "coordinateLabelFamilies", x_values, y_values,
-        x_config=x_config, y_config=y_config, config=config,
-    )
+def add_coordinates(axes, *axes_numbers, x_config=None, y_config=None, config):
+    """Attach coordinate labels using ManimCE's positional per-axis contract.
+
+    No positional values selects default labels on both axes. Otherwise each
+    value configures only its corresponding axis; a mapping creates custom
+    native-Text labels and ``None`` selects that axis' defaults.
+    """
+    x_axis, y_axis = axes.x_axis, axes.y_axis
+    values = (None, None) if not axes_numbers else axes_numbers[:2]
+
+    # Keep the common two-axis numeric case as one Rust publication so both
+    # families are validated before either axis commits labels.
+    if len(values) == 2 and not any(isinstance(value, Mapping) for value in values):
+        result = _add_coordinate_labels(
+            axes, "coordinateLabelFamilies", values[0], values[1],
+            x_config=x_config, y_config=y_config, config=config,
+        )
+        axes.coordinate_labels = _compat.VGroup(x_axis.numbers, y_axis.numbers)
+        return result
+
+    families = []
+    axis_options = (x_config, y_config)
+    for index, value in enumerate(values):
+        axis = (x_axis, y_axis)[index]
+        options = dict(config)
+        options.update({} if axis_options[index] is None else axis_options[index])
+        if isinstance(value, Mapping):
+            # NumberLine.add_labels owns its Manim-compatible option defaults
+            # and rejects custom TeX constructors in the native-Text profile.
+            axis.add_labels(value, **options)
+            families.append(axis.labels)
+        else:
+            # An omitted positional axis is not passed here; only explicit
+            # None asks ManimCE to create that axis' default labels.
+            axis.add_numbers(value, **options)
+            families.append(axis.numbers)
+
+    axes.coordinate_labels = _compat.VGroup(*families)
+    return axes
 
 
 def add_number_plane_coordinates(plane, x_values, y_values, *, x_config, y_config, config):

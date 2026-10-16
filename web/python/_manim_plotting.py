@@ -179,6 +179,7 @@ _THREE_D_AXIS_CONFIG_KEYS = {
     "tip_length", "color", "stroke_width", "stroke_opacity", "opacity",
 }
 _DEFAULT_NUMBER_LINE_TIP_SIZE = 0.35
+_COORDINATE_ARGUMENT_UNSET = object()
 
 
 class LinearBase:
@@ -1164,14 +1165,25 @@ class Axes(_compat.Group):
         members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
         return _family(object.__new__(_compat.VGroup), handle, members)
 
-    def add_coordinates(self, x_values=None, y_values=None, *, x_config=None, y_config=None, **kwargs):
-        """Atomically append both axes' native Text label families before playback.
+    def add_coordinates(self, *axes_numbers, x_values=_COORDINATE_ARGUMENT_UNSET,
+                        y_values=_COORDINATE_ARGUMENT_UNSET, x_config=None,
+                        y_config=None, **kwargs):
+        """Add coordinate labels with ManimCE's positional per-axis behavior.
 
-        Options shared by both axes may be overridden with x_config/y_config.
-        Labels become members and follow subsequent transforms and copies.
+        With no positional values, both axes receive their default labels. Each
+        supplied value configures only that axis, and a mapping creates custom
+        labels. ``x_values``/``y_values`` remain accepted as legacy aliases.
+        Numeric Text labels are retained before playback and follow transforms.
         """
+        if x_values is not _COORDINATE_ARGUMENT_UNSET or y_values is not _COORDINATE_ARGUMENT_UNSET:
+            if axes_numbers:
+                raise TypeError("use positional axis values or x_values/y_values, not both")
+            axes_numbers = (
+                None if x_values is _COORDINATE_ARGUMENT_UNSET else x_values,
+                None if y_values is _COORDINATE_ARGUMENT_UNSET else y_values,
+            )
         from _manim_number_labels import add_coordinates
-        return add_coordinates(self, x_values, y_values, x_config=x_config,
+        return add_coordinates(self, *axes_numbers, x_config=x_config,
                                y_config=y_config, config=kwargs)
 
     def time_series_plan(self, samples, *, run_time):
