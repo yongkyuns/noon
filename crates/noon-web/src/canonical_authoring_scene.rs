@@ -8159,6 +8159,23 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetAngleValue)]
+        pub fn live_set_angle_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            radians: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_angle_value(handle.semantic_mobject(), radians)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMoveToLayout)]
         pub fn live_move_to_layout(
             &mut self,

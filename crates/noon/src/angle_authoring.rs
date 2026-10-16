@@ -2,7 +2,9 @@
 use crate::{
     semantic_mobject::authoring_render_f64, AuthoringError, ManimGeometryOptions, Mobject,
 };
-use noon_core::{SemanticAngleRole, SemanticObjectRole, Vec2, VectorPath};
+use noon_core::{
+    SemanticAngleRole, SemanticMutationTransaction, SemanticObjectRole, Vec2, VectorPath,
+};
 use std::f64::consts::TAU;
 
 #[derive(Clone, Copy, Debug)]
@@ -141,6 +143,21 @@ impl Mobject {
             radians
         })
     }
+
+    /// Replace an Angle's nominal constructor value without rewriting its path.
+    pub fn set_angle_value(&mut self, radians: f64) -> Result<(), AuthoringError> {
+        if !radians.is_finite() {
+            return Err(AuthoringError::InvalidAngleOptions(
+                "angle value must be finite",
+            ));
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_angle_value(self.node_id(), radians);
+        transaction
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +192,67 @@ mod tests {
             angle.shift(2.0, 1.0).unwrap();
             assert_eq!(angle.angle_value(false).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn nominal_value_override_is_transactional_and_does_not_rewrite_geometry() {
+        let mut scene = Scene::new();
+        let mut angle = scene
+            .geometry(
+                ManimGeometryOptions::angle_from_endpoints(
+                    HORIZONTAL,
+                    VERTICAL,
+                    ManimAngleOptions::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let before = angle.path_query().unwrap();
+        let before_anchors = before.start_anchors();
+        let before_ends = before.end_anchors();
+        let before_count = before.curve_count();
+
+        angle.set_angle_value(0.75).unwrap();
+
+        assert_eq!(angle.angle_value(false).unwrap(), 0.75);
+        assert_eq!(angle.angle_value(true).unwrap(), 0.75_f64.to_degrees());
+        let after = angle.path_query().unwrap();
+        assert_eq!(after.start_anchors(), before_anchors);
+        assert_eq!(after.end_anchors(), before_ends);
+        assert_eq!(after.curve_count(), before_count);
+    }
+
+    #[test]
+    fn nominal_value_override_can_fill_an_elbow_value_but_rejects_non_angles_and_non_finite_values()
+    {
+        let mut scene = Scene::new();
+        let elbow = scene
+            .geometry(
+                ManimGeometryOptions::angle_from_endpoints(
+                    HORIZONTAL,
+                    VERTICAL,
+                    ManimAngleOptions {
+                        elbow: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut elbow = elbow;
+        assert_eq!(
+            elbow.angle_value(false),
+            Err(AuthoringError::MissingAngleValue)
+        );
+        elbow.set_angle_value(-0.25).unwrap();
+        assert_eq!(elbow.angle_value(false).unwrap(), -0.25);
+
+        let mut ordinary = scene
+            .geometry(ManimGeometryOptions::circle(1.0).unwrap())
+            .unwrap();
+        assert!(ordinary.set_angle_value(1.0).is_err());
+        assert!(elbow.set_angle_value(f64::NAN).is_err());
+        assert_eq!(elbow.angle_value(false).unwrap(), -0.25);
     }
 
     #[test]
