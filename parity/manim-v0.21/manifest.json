@@ -155,6 +155,13 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "graph-default-spring",
+      "scene": "GraphDefaultSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 default Graph spring layout; exercises constructor-default placement against the pinned Cairo raster."
+    },
+    {
       "id": "area-helpers",
       "scene": "RetainedAreaHelpers",
       "source": "parity/manim-v0.21/core-examples/area_helpers.py",

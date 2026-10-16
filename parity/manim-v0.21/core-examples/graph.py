@@ -33,3 +33,14 @@ class GraphStyleExample(Scene):
         }, **options)
         self.add(left, right)
         self.wait(0.2)
+
+
+class GraphDefaultSpringLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c"],
+            [("a", "b"), ("b", "c")],
+            layout_config={"seed": 42},
+        )
+        self.add(graph)
+        self.wait(0.2)
