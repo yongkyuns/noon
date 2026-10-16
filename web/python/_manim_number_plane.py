@@ -1,5 +1,4 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
-import math
 from operator import index
 
 import noon as _base
@@ -31,12 +30,8 @@ def _lines(handle):
 
 def _coordinate_decimal_places(axis_range):
     """Mirror NumberLine formatting without normalizing the authored step type."""
-    try:
-        step = 1 if axis_range is None or len(axis_range) < 3 else axis_range[2]
-    except (TypeError, IndexError):
-        return 0
-    spelling = str(step)
-    return len(spelling.split(".")[-1]) if "." in spelling else 0
+    step = 1 if axis_range is None or len(axis_range) < 3 else axis_range[2]
+    return _plot._decimal_places_from_step(step)
 
 
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}

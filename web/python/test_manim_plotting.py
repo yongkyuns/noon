@@ -538,6 +538,17 @@ class PlottingAdapterTests(unittest.TestCase):
         x_axis.get_unit_size.assert_called_once_with()
         y_axis.get_unit_size.assert_called_once_with()
 
+    def test_axes_default_and_explicit_label_steps_preserve_authored_precision(self):
+        for axis_range, expected in (((), 0), ((-2, 2), 0),
+                                     ((-2, 2, 1), 0), ((-2, 2, 1.0), 1)):
+            with self.subTest(axis_range=axis_range):
+                axis = SimpleNamespace(add_numbers=Mock())
+                config = plotting._axes_label_options(
+                    {}, ("linear", 1.0, False), "axis", plotting._base.DOWN
+                )
+                plotting._configure_axes_numeric_labels(axis, config, axis_range)
+                self.assertEqual(axis.number_label_decimal_places, expected)
+
     def test_axes_get_axes_builds_one_retained_group_on_first_access(self):
         x_axis, y_axis, group = object(), object(), object()
         axes = object.__new__(plotting.Axes)

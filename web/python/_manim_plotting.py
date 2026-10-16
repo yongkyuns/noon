@@ -368,7 +368,7 @@ def _axes_number_values(values, name, default):
 
 
 def _configure_axes_numeric_labels(axis, config, range_values):
-    step = range_values[2] if len(range_values) == 3 else 1.0
+    step = range_values[2] if len(range_values) == 3 else 1
     places = config["decimal_places"]
     if places is None:
         places = _decimal_places_from_step(step)
