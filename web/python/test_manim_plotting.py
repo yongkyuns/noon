@@ -140,6 +140,28 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.tickValues.assert_called_once_with(False, True)
         frame.free.assert_called_once_with()
 
+    def test_number_line_unit_vector_and_operators_use_shared_coordinate_queries(self):
+        line = object.__new__(plotting.NumberLine)
+        frame = SimpleNamespace(unitVector=Mock(return_value=[0.0, 2.0]), free=Mock())
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
+            vector = line.get_unit_vector()
+        self.assertEqual((vector.x, vector.y), (0.0, 2.0))
+        frame.unitVector.assert_called_once_with()
+        frame.free.assert_called_once_with()
+
+        frame = SimpleNamespace(
+            numberToPoint=Mock(return_value=[3.0, 4.0]),
+            pointToNumber=Mock(return_value=2.0),
+            free=Mock(),
+        )
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
+            point = line @ 2.0
+            self.assertEqual((point.x, point.y), (3.0, 4.0))
+            self.assertEqual(plotting._base.Vec2(3.0, 4.0) @ line, 2.0)
+        frame.numberToPoint.assert_called_once_with(2.0)
+        frame.pointToNumber.assert_called_once_with(3.0, 4.0)
+        self.assertEqual(frame.free.call_count, 2)
+
     def test_number_line_get_tick_uses_current_frame_and_matches_shaft_style(self):
         frame = SimpleNamespace(tickSegment=Mock(return_value=[1.0, 2.0, 3.0, 4.0]),
                                 free=Mock())
