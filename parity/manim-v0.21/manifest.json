@@ -169,6 +169,20 @@
       "notes": "Seeded ManimCE v0.21.0 default DiGraph spring layout with asymmetric edges; exercises directed constructor-default placement against the pinned Cairo raster."
     },
     {
+      "id": "graph-weighted-spring",
+      "scene": "GraphWeightedSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 weighted default Graph spring layout; edge data selects the non-default `strength` attribute against the pinned Cairo raster."
+    },
+    {
+      "id": "digraph-weighted-spring",
+      "scene": "DiGraphWeightedSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 weighted default DiGraph spring layout with asymmetric edges; edge data selects the non-default `strength` attribute against the pinned Cairo raster."
+    },
+    {
       "id": "area-helpers",
       "scene": "RetainedAreaHelpers",
       "source": "parity/manim-v0.21/core-examples/area_helpers.py",

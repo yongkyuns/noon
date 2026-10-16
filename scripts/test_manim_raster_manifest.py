@@ -42,6 +42,41 @@ class RasterManifestTests(unittest.TestCase):
                 self.assertNotIn('layout="spring"', source)
         self.assertIn('[("a", "b"), ("c", "b")]', source)
 
+    def test_weighted_graph_spring_fixtures_select_edge_attribute_weight(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source = (ROOT / "parity/manim-v0.21/core-examples/graph.py").read_text(
+            encoding="utf-8"
+        )
+        for fixture_id, scene, constructor, *edges in (
+            (
+                "graph-weighted-spring", "GraphWeightedSpringLayout", "Graph",
+                '("a", "b", {"strength": 3.0})',
+                '("b", "c", {"strength": 0.4})',
+            ),
+            (
+                "digraph-weighted-spring", "DiGraphWeightedSpringLayout", "DiGraph",
+                '("a", "b", {"strength": 2.5})',
+                '("c", "b", {"strength": 0.6})',
+            ),
+        ):
+            with self.subTest(fixture=fixture_id):
+                fixture = next(
+                    fixture for fixture in manifest["fixtures"]
+                    if fixture["id"] == fixture_id
+                )
+                self.assertEqual(fixture["scene"], scene)
+                self.assertEqual(
+                    fixture["source"],
+                    "parity/manim-v0.21/core-examples/graph.py",
+                )
+                self.assertEqual(fixture["expected_duration"], 0.2)
+                self.assertIn(f"class {scene}(Scene)", source)
+                scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
+                self.assertIn(f"graph = {constructor}(", scene_source)
+                self.assertIn('{"seed": 42, "weight": "strength"}', scene_source)
+                for edge in edges:
+                    self.assertIn(edge, scene_source)
+
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         fixture = next(fixture for fixture in manifest["fixtures"] if fixture["id"] == "polynomial-easings")
