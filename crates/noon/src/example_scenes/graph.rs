@@ -128,6 +128,49 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         },
     )?;
 
+    let spring_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::Spring,
+        scale: 0.65,
+        center: (-3.5, 2.6),
+        spring_k: Some(1.0 / 3.0_f64.sqrt()),
+        spring_positions: Some(vec![
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+        ]),
+        ..Default::default()
+    };
+    let spring_positions = spring_options.positions(3, &[(0, 1), (1, 2)])?;
+    let spring = scene.graph_with_options(
+        [
+            ("r0", spring_positions[0]),
+            ("r1", spring_positions[1]),
+            ("r2", spring_positions[2]),
+        ],
+        [("r0", "r1"), ("r1", "r2")],
+        options.clone(),
+    )?;
+    let spring_digraph_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::Spring,
+        scale: 0.5,
+        center: (5.5, 2.6),
+        spring_positions: Some(vec![
+            (0.07630828937395717, 0.7799187922401146),
+            (0.4384092314408935, 0.7234651778309412),
+        ]),
+        directed: true,
+        ..Default::default()
+    };
+    let spring_digraph_positions = spring_digraph_options.positions(2, &[(0, 1)])?;
+    let spring_digraph = scene.digraph_with_options(
+        [
+            ("t0", spring_digraph_positions[0]),
+            ("t1", spring_digraph_positions[1]),
+        ],
+        [("t0", "t1")],
+        options.clone(),
+    )?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -151,6 +194,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(spiral.family()),
         MobjectTarget::Family(partite.family()),
         MobjectTarget::Family(shells.family()),
+        MobjectTarget::Family(spring.family()),
+        MobjectTarget::Family(spring_digraph.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -173,7 +218,9 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        assert_eq!(leaves.len(), 38);
+        // Spring Graph: two Lines + three vertices.
+        // Spring DiGraph: one Arrow shaft + tip + two vertices.
+        assert_eq!(leaves.len(), 47);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

@@ -27,9 +27,9 @@ use std::{
 /// A deterministic author-time layout. Layout calculations never run on the
 /// playback path; the resulting positions are persistent object translations.
 ///
-/// `Random` and `Spring` use Noon's seeded solver, not NetworkX-compatible
-/// random streams or force integration. `Spring` is O(iterations * V²) and is
-/// deliberately an author-time convenience rather than a runtime operation.
+/// `Random` uses Noon's seeded stream. `Spring` accepts prepared initial
+/// positions from the language adapter and performs NetworkX-compatible force
+/// integration here. Both are author-time layouts, not playback operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphLayout {
     Circular,
@@ -61,6 +61,16 @@ pub struct GraphLayoutOptions {
     pub partitions: Vec<Vec<usize>>,
     /// Swap the two rescaled axes for NetworkX's horizontal multipartite view.
     pub align_horizontal: bool,
+    /// Optional Fruchterman-Reingold optimal distance; `None` uses `1 / sqrt(n)`.
+    pub spring_k: Option<f64>,
+    /// Prepared NumPy-compatible initial positions for NetworkX spring layout.
+    pub spring_positions: Option<Vec<(f64, f64)>>,
+    /// Fixed spring vertices; `Some([])` still disables final rescaling.
+    pub spring_fixed: Option<Vec<usize>>,
+    /// Whether spring positions are rescaled and shifted after integration.
+    pub spring_rescale: bool,
+    /// Preserve directed adjacency in the force calculation.
+    pub directed: bool,
 }
 
 impl Default for GraphLayoutOptions {
@@ -78,6 +88,11 @@ impl Default for GraphLayoutOptions {
             equidistant: false,
             partitions: Vec::new(),
             align_horizontal: false,
+            spring_k: None,
+            spring_positions: None,
+            spring_fixed: None,
+            spring_rescale: true,
+            directed: false,
         }
     }
 }
@@ -626,13 +641,14 @@ where
 pub(super) fn change_layout<K, P>(
     publication: &mut P,
     graph: &mut RetainedGraph<K>,
-    options: GraphLayoutOptions,
+    mut options: GraphLayoutOptions,
 ) -> Result<(), GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
     P: GraphPublication,
 {
     require_publication(publication, graph)?;
+    options.directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
     let edges = if options.layout == GraphLayout::Spring {
@@ -724,6 +740,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Partite {
         return partite_layout(count, options);
     }
+    if options.layout == GraphLayout::Spring {
+        return spring_layout(count, edges, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -741,13 +760,11 @@ fn graph_layout(
         GraphLayout::Shell => unreachable!("shell layout returned above"),
         GraphLayout::Partite => unreachable!("partite layout returned above"),
         GraphLayout::Spiral => unreachable!("spiral layout returned above"),
-        GraphLayout::Random | GraphLayout::Spring => (0..count)
+        GraphLayout::Spring => unreachable!("spring layout returned above"),
+        GraphLayout::Random => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
     };
-    if options.layout == GraphLayout::Spring {
-        spring(&mut positions, edges, options);
-    }
     rescale(&mut positions, options.scale, options.center);
     if positions
         .iter()
@@ -957,46 +974,133 @@ fn rescale(points: &mut [(f64, f64)], scale: f64, center: (f64, f64)) {
     }
 }
 
-fn spring(points: &mut [(f64, f64)], edges: &[(usize, usize)], options: &GraphLayoutOptions) {
-    let count = points.len();
-    let k = (1.0 / count as f64).sqrt();
-    let mut temperature = 0.1;
+fn spring_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    let mut random = DeterministicRandom::new(options.seed);
+    let mut points = options.spring_positions.clone().unwrap_or_else(|| {
+        (0..count)
+            .map(|_| (random.unit(), random.unit()))
+            .collect::<Vec<_>>()
+    });
+    if points.len() != count || points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring positions must provide one finite 2D point per vertex",
+        ));
+    }
+    if options.spring_fixed.is_some() && options.spring_positions.is_none() {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring fixed vertices require initial positions",
+        ));
+    }
+    let mut fixed = vec![false; count];
+    if let Some(indices) = &options.spring_fixed {
+        for &index in indices {
+            let Some(value) = fixed.get_mut(index) else {
+                return Err(GraphAuthoringError::InvalidLayout(
+                    "spring fixed vertex references an unknown vertex",
+                ));
+            };
+            *value = true;
+        }
+    }
+
+    let k = options
+        .spring_k
+        .unwrap_or_else(|| (1.0 / count as f64).sqrt());
+    if !k.is_finite() || k == 0.0 {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spring k must be finite and non-zero",
+        ));
+    }
+    let mut adjacency = vec![0.0; count * count];
+    for &(start, end) in edges {
+        if start >= count || end >= count {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "layout edge endpoints must reference existing vertices",
+            ));
+        }
+        adjacency[start * count + end] = 1.0;
+        if !options.directed {
+            adjacency[end * count + start] = 1.0;
+        }
+    }
+
+    let min_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut temperature = 0.1 * (max_x - min_x).max(max_y - min_y);
     let cooling = temperature / (options.iterations as f64 + 1.0);
     let mut displacement = vec![(0.0, 0.0); count];
     for _ in 0..options.iterations {
         displacement.fill((0.0, 0.0));
         for i in 0..count {
-            for j in (i + 1)..count {
-                let (dx, dy) = (points[i].0 - points[j].0, points[i].1 - points[j].1);
-                let distance = dx.hypot(dy).max(0.01);
-                let force = k * k / (distance * distance);
+            for j in 0..count {
+                if i == j {
+                    continue;
+                }
+                let dx = points[i].0 - points[j].0;
+                let dy = points[i].1 - points[j].1;
+                let distance = (dx * dx + dy * dy).sqrt().max(0.01);
+                let force = k * k / (distance * distance) - adjacency[i * count + j] * distance / k;
                 displacement[i].0 += dx * force;
                 displacement[i].1 += dy * force;
-                displacement[j].0 -= dx * force;
-                displacement[j].1 -= dy * force;
             }
         }
-        for &(a, b) in edges {
-            let (dx, dy) = (points[a].0 - points[b].0, points[a].1 - points[b].1);
-            let force = dx.hypot(dy).max(0.01) / k;
-            displacement[a].0 -= dx * force;
-            displacement[a].1 -= dy * force;
-            displacement[b].0 += dx * force;
-            displacement[b].1 += dy * force;
-        }
-        let mut norm = 0.0;
-        for (point, &(dx, dy)) in points.iter_mut().zip(&displacement) {
-            let factor = temperature / dx.hypot(dy).max(0.01);
-            let (x, y) = (dx * factor, dy * factor);
-            point.0 += x;
-            point.1 += y;
-            norm += x * x + y * y;
+        let mut squared_delta_norm = 0.0;
+        for index in 0..count {
+            let (dx, dy) = displacement[index];
+            let displacement_length = (dx * dx + dy * dy).sqrt();
+            let displacement_length = if displacement_length < 0.01 {
+                0.1
+            } else {
+                displacement_length
+            };
+            let factor = temperature / displacement_length;
+            let (mut delta_x, mut delta_y) = (dx * factor, dy * factor);
+            if fixed[index] {
+                delta_x = 0.0;
+                delta_y = 0.0;
+            }
+            points[index].0 += delta_x;
+            points[index].1 += delta_y;
+            squared_delta_norm += delta_x * delta_x + delta_y * delta_y;
         }
         temperature -= cooling;
-        if norm.sqrt() / (count as f64) < options.threshold {
+        if squared_delta_norm.sqrt() / (count as f64) < options.threshold {
             break;
         }
     }
+    if options.spring_rescale && options.spring_fixed.is_none() {
+        rescale(&mut points, options.scale, options.center);
+    }
+    if points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed coordinates are not finite",
+        ));
+    }
+    Ok(points)
 }
 
 struct DeterministicRandom {

@@ -7,6 +7,7 @@ topology, arrow endpoints, persistent placements, and publication.
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
+from numbers import Integral
 
 import _manim_compat as _compat
 import _manim_semantic_handles as _shared
@@ -132,7 +133,10 @@ def _graph_style_options(vertex_config, edge_config):
 class _GraphBase(_compat.Group):
     """Shared retained Graph/DiGraph facade.
 
-    Circular layouts accept NetworkX's ``center`` and ``dim=2`` configuration
+    The default spring layout accepts NetworkX's ``seed``, ``pos``, ``fixed``,
+    ``k``, ``iterations``, ``threshold``, ``weight``, ``center``, and ``dim=2``
+    configuration. NumPy prepares NetworkX-compatible initial positions while
+    Rust owns force integration. Circular layouts accept ``center`` and ``dim=2``
     through ``layout_config``. Shell layouts accept ``nlist``, ``rotate``,
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
@@ -150,7 +154,7 @@ class _GraphBase(_compat.Group):
 
     _directed = False
 
-    def __init__(self, vertices, edges, layout="circular", *, layout_scale=2.0,
+    def __init__(self, vertices, edges, layout="spring", *, layout_scale=2.0,
                  layout_center=(0.0, 0.0), layout_config=None, **kwargs):
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
@@ -162,11 +166,12 @@ class _GraphBase(_compat.Group):
         explicit = layout if isinstance(layout, Mapping) else (
             vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
         )
+        spring = isinstance(layout, str) and layout == "spring"
         circular = isinstance(layout, str) and layout == "circular"
         shell = isinstance(layout, str) and layout == "shell"
         spiral = isinstance(layout, str) and layout == "spiral"
         partite = isinstance(layout, str) and layout == "partite"
-        if explicit is None and not circular and not shell and not spiral and not partite:
+        if explicit is None and not spring and not circular and not shell and not spiral and not partite:
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -192,12 +197,22 @@ class _GraphBase(_compat.Group):
         global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
         )
-        center = (_circular_layout_center(layout_config, layout_center)
-                  if circular else _point(layout_center))
+        center = (0.0, 0.0)
+        if circular:
+            center = _circular_layout_center(layout_config, layout_center)
         shell_groups, rotate = ([], None)
         resolution, equidistant = (0.35, False)
         partitions, align_horizontal = ([], False)
-        if shell:
+        spring_positions, fixed_indices, spring_k = ([], [], None)
+        spring_iterations, spring_threshold, spring_rescale = (50, 1e-4, True)
+        spring_fixed_is_set = False
+        if spring:
+            (center, spring_positions, fixed_indices, spring_k,
+             spring_iterations, spring_threshold, spring_rescale,
+             scale, spring_fixed_is_set) = _spring_layout_config(
+                layout_config, layout_center, self._graph_key_ids, layout_scale
+            )
+        elif shell:
             center, shell_groups, rotate = _shell_layout_config(
                 layout_config, layout_center, self._graph_key_ids
             )
@@ -209,14 +224,24 @@ class _GraphBase(_compat.Group):
             center, partitions, align_horizontal = _partite_layout_config(
                 layout_config, layout_center, self._graph_key_ids
             )
-        scale = _shared._ir._finite_number("layout_scale", layout_scale)
+        if not spring:
+            scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
         options = _graph_style_options(global_vertex_config, global_edge_config)
         ids = _array(self._graph_key_ids.values())
         try:
-            if circular:
+            if spring:
+                self._graph_handle = engine_call(
+                    context.liveCreateSpringGraph,
+                    bool(self._directed), ids, _array(edge_ids),
+                    _array(value for point in spring_positions for value in point),
+                    _array(fixed_indices), spring_fixed_is_set,
+                    scale, *center, spring_k, spring_iterations, spring_threshold,
+                    spring_rescale, options, operation="Graph.create",
+                )
+            elif circular:
                 self._graph_handle = engine_call(
                     context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
                     scale, *center, options, operation="Graph.create",
@@ -371,11 +396,24 @@ class _GraphBase(_compat.Group):
         _shared._attach_shared_family(clone, engine_call(clone._graph_handle.family), self._context())
         return clone
 
-    def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0),
+    def change_layout(self, layout="spring", *, scale=2.0, center=(0.0, 0.0),
                       positions=None, layout_config=None):
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
-        if layout == "circular":
+        if layout == "spring":
+            (center, initial_positions, fixed_indices, spring_k,
+             iterations, threshold, rescale, scale, fixed_is_set) = _spring_layout_config(
+                layout_config, center, self._graph_key_ids, scale
+            )
+            engine_call(
+                self._context().liveGraphSpringLayout,
+                self._graph_handle,
+                _array(value for point in initial_positions for value in point),
+                _array(fixed_indices), fixed_is_set,
+                scale, *center, spring_k, iterations, threshold, rescale,
+                operation="Graph.spring_layout",
+            )
+        elif layout == "circular":
             center = _circular_layout_center(layout_config, center)
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
                         float(scale), *_point(center), operation="Graph.circular_layout")
@@ -430,9 +468,132 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only circular, shell, spiral, partite, and explicit layouts"
+                "Python Graph qualifies only spring, circular, shell, spiral, partite, and explicit layouts"
             )
         return self
+
+
+def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_scale):
+    """Prepare NetworkX-compatible initial positions for Rust force integration."""
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    supported = {"center", "dim", "seed", "pos", "fixed", "k", "iterations", "threshold", "weight"}
+    unknown = [key for key in options if key not in supported]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported spring layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, Integral):
+        raise TypeError("spring layout_config dim must be an integer")
+    if dimension != 2:
+        raise NotImplementedError("Graph currently supports only two-dimensional spring layouts")
+    raw_center = options.get("center", fallback_center)
+    center = _point((0.0, 0.0) if raw_center is None else raw_center)
+    count = len(vertex_ids)
+    fixed_is_set = "fixed" in options and options["fixed"] is not None
+
+    pos = options.get("pos")
+    if pos is not None and not isinstance(pos, Mapping):
+        raise TypeError("spring layout_config pos must map vertex keys to 2D positions")
+    fixed = options.get("fixed")
+    if fixed_is_set:
+        if pos is None:
+            raise ValueError("spring fixed vertices require a pos mapping")
+        if isinstance(fixed, (str, bytes)):
+            raise TypeError("spring layout_config fixed must be a sequence of vertex keys")
+        try:
+            fixed = list(fixed)
+        except TypeError as error:
+            raise TypeError("spring layout_config fixed must be a sequence of vertex keys") from error
+        missing_positions = [key for key in fixed if key not in pos]
+        if missing_positions:
+            raise ValueError(f"spring fixed vertex {missing_positions[0]!r} is missing from pos")
+    else:
+        fixed = []
+
+    raw_k = options.get("k")
+    spring_k = None if raw_k is None else _shared._ir._finite_number("layout_config.k", raw_k)
+    if spring_k == 0:
+        raise ValueError("spring layout_config k must be non-zero")
+    iterations = options.get("iterations", 50)
+    if isinstance(iterations, bool) or not isinstance(iterations, Integral):
+        raise TypeError("spring layout_config iterations must be an integer")
+    if iterations < 0:
+        raise ValueError("spring layout_config iterations must be non-negative")
+    threshold = _shared._ir._finite_number(
+        "layout_config.threshold", options.get("threshold", 1e-4)
+    )
+    if threshold < 0:
+        raise ValueError("spring layout_config threshold must be non-negative")
+    weight = options.get("weight", "weight")
+    if weight is not None and not isinstance(weight, str):
+        raise TypeError("spring layout_config weight must be a string or None")
+    if layout_scale is None:
+        scale, rescale = 1.0, False
+    else:
+        scale = _shared._ir._finite_number("layout_scale", layout_scale)
+        rescale = not fixed_is_set
+
+    seed = options.get("seed")
+    try:
+        import numpy as np
+    except ImportError as error:  # pragma: no cover - only available in the browser runtime
+        raise RuntimeError("spring Graph layout requires NumPy in the Manim runtime") from error
+    if seed is None:
+        rng = np.random
+    elif isinstance(seed, Integral):
+        rng = np.random.RandomState(int(seed))
+    elif isinstance(seed, np.random.RandomState):
+        rng = seed
+    elif hasattr(np.random, "Generator") and isinstance(seed, np.random.Generator):
+        rng = seed
+    else:
+        raise TypeError("spring layout_config seed must be an integer, RandomState, Generator, or None")
+
+    def random_array(shape):
+        if hasattr(rng, "rand"):
+            return rng.rand(*shape)
+        return rng.random(shape)
+
+    provided = {}
+    if pos is not None:
+        try:
+            domain_size = max(float(coordinate) for value in pos.values() for coordinate in value)
+        except ValueError as error:
+            raise ValueError("spring layout_config pos must contain at least one 2D position") from error
+        if domain_size == 0:
+            domain_size = 1.0
+        for key in vertex_ids:
+            if key in pos:
+                point = _point(pos[key])
+                provided[key] = point
+        initial = random_array((count, 2)) * domain_size + np.asarray(center)
+        for key, point in provided.items():
+            initial[vertex_ids[key], :] = point
+    else:
+        domain_size = 1.0
+        if count <= 1:
+            initial = np.asarray([center] if count == 1 else [], dtype=float).reshape((count, 2))
+        else:
+            initial = random_array((count, 2))
+
+    fixed_indices = [vertex_ids[key] for key in fixed if key in vertex_ids]
+
+    if spring_k is None and fixed_is_set and count > 1:
+        spring_k = domain_size / (count ** 0.5)
+
+    initial_positions = [tuple(map(float, point)) for point in initial]
+    return (
+        center, initial_positions, fixed_indices, spring_k, int(iterations), threshold,
+        rescale, scale, fixed_is_set,
+    )
 
 
 def _circular_layout_center(layout_config, fallback_center):
@@ -598,11 +759,11 @@ def _partite_layout_config(layout_config, fallback_center, vertex_ids):
 
 
 class Graph(_GraphBase):
-    """Undirected retained Graph with qualified circular, shell, spiral, partite, and explicit layouts."""
+    """Undirected retained Graph with qualified spring, circular, shell, spiral, partite, and explicit layouts."""
 
 
 class DiGraph(_GraphBase):
-    """Directed retained Graph with shared Rust layout and Arrow semantics."""
+    """Directed retained Graph with shared Rust spring integration and Arrow semantics."""
     _directed = True
 
 

@@ -664,6 +664,11 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         equidistant: false,
         partitions: Vec::new(),
         align_horizontal: false,
+        spring_k: None,
+        spring_positions: None,
+        spring_fixed: None,
+        spring_rescale: true,
+        directed: false,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -721,6 +726,84 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         })
         .collect::<Vec<_>>();
     assert_eq!(explicit, vec![(-3.0, 2.0), (0.0, -1.0), (4.0, 3.0)]);
+}
+
+#[test]
+fn networkx_spring_layout_preserves_fixed_points_and_skips_rescaling() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 9.0,
+        center: (4.0, -3.0),
+        iterations: 8,
+        threshold: 0.0,
+        spring_positions: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+        spring_fixed: Some(vec![0]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .unwrap();
+    assert_eq!(positions[0], (1.0, 2.0));
+
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 9.0,
+        center: (4.0, -3.0),
+        iterations: 0,
+        spring_positions: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+        spring_fixed: Some(Vec::new()),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(1.0, 2.0), (3.0, 4.0)]);
+}
+
+#[test]
+fn networkx_spring_layout_respects_directed_adjacency() {
+    let base = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        iterations: 2,
+        threshold: 0.0,
+        spring_positions: Some(vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]),
+        spring_rescale: false,
+        ..Default::default()
+    };
+    let undirected = base.positions(3, &[(0, 1)]).unwrap();
+    let directed = GraphLayoutOptions {
+        directed: true,
+        ..base
+    }
+    .positions(3, &[(0, 1)])
+    .unwrap();
+    assert_ne!(undirected, directed);
+}
+
+#[test]
+fn networkx_spring_layout_matches_seeded_reference_coordinates() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 0.65,
+        center: (-3.5, 2.6),
+        iterations: 50,
+        threshold: 1e-4,
+        spring_positions: Some(vec![
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+        ]),
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    let expected = [
+        (-3.4161118363604746, 3.249287412673379),
+        (-3.499907760828529, 2.6007125873266213),
+        (-3.583980402810997, 1.9500000000000002),
+    ];
+    for (actual, expected) in positions.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
 }
 
 #[test]

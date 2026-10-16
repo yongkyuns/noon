@@ -1,6 +1,8 @@
 //! Opaque Graph/DiGraph handles. Python maps its arbitrary keys to `u32`; this
 //! module never interprets graph JSON or owns endpoint/layout geometry.
 
+use std::collections::HashMap;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -43,6 +45,7 @@ pub(crate) enum GraphOperation {
         resolution: f64,
         equidistant: bool,
     },
+    Spring(noon::GraphLayoutOptions),
     Explicit(Vec<(f64, f64)>),
 }
 
@@ -233,6 +236,12 @@ impl NativeGraph {
                     },
                 )?;
             }
+            (Self::Undirected(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout(scene, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout(scene, options)?;
+            }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions(scene, &positions)?;
             }
@@ -420,6 +429,12 @@ impl NativeGraph {
                         ..Default::default()
                     },
                 )?;
+            }
+            (Self::Undirected(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout_live(live, options)?;
             }
             (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
                 graph.change_layout_positions_live(live, &positions)?;
@@ -804,6 +819,91 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    /// Prepare NumPy-seeded initial positions in Python, then let shared Rust
+    /// run the NetworkX Fruchterman-Reingold integration.
+    #[wasm_bindgen(js_name = liveCreateSpringGraph)]
+    pub fn live_create_spring_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        initial_positions: &[f64],
+        fixed_vertex_indices: &[u32],
+        fixed_is_set: bool,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        k: Option<f64>,
+        iterations: u32,
+        threshold: f64,
+        rescale: bool,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let vertex_indices = vertex_ids
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index))
+            .collect::<HashMap<_, _>>();
+        let edge_indices = edges
+            .iter()
+            .map(|&(start, end)| {
+                let start = vertex_indices
+                    .get(&start)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                let end = vertex_indices
+                    .get(&end)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                Ok((start, end))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        let position_ids = (0..vertex_ids.len())
+            .map(|index| index as u32)
+            .collect::<Vec<_>>();
+        let initial_positions = vertices(&position_ids, initial_positions)?
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect();
+        let spring_fixed = if fixed_is_set {
+            Some(
+                fixed_vertex_indices
+                    .iter()
+                    .map(|&index| index as usize)
+                    .collect(),
+            )
+        } else if fixed_vertex_indices.is_empty() {
+            None
+        } else {
+            return Err(js_error("spring fixed indices require fixed to be set"));
+        };
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Spring,
+            scale,
+            center: (center_x, center_y),
+            iterations: iterations as usize,
+            threshold,
+            spring_k: k,
+            spring_positions: Some(initial_positions),
+            spring_fixed,
+            spring_rescale: rescale,
+            directed,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &edge_indices)
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.spring_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = liveGraphCopy)]
     pub fn live_graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
         self.copy_live_graph(&graph.inner)
@@ -940,6 +1040,58 @@ impl CanonicalAuthoringSceneContext {
                 resolution,
                 equidistant,
             },
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphSpringLayout)]
+    pub fn live_graph_spring_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        initial_positions: &[f64],
+        fixed_vertex_indices: &[u32],
+        fixed_is_set: bool,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        k: Option<f64>,
+        iterations: u32,
+        threshold: f64,
+        rescale: bool,
+    ) -> Result<(), JsValue> {
+        let position_ids = (0..initial_positions.len() / 2)
+            .map(|index| index as u32)
+            .collect::<Vec<_>>();
+        let initial_positions = vertices(&position_ids, initial_positions)?
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect();
+        let spring_fixed = if fixed_is_set {
+            Some(
+                fixed_vertex_indices
+                    .iter()
+                    .map(|&index| index as usize)
+                    .collect(),
+            )
+        } else if fixed_vertex_indices.is_empty() {
+            None
+        } else {
+            return Err(js_error("spring fixed indices require fixed to be set"));
+        };
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Spring(noon::GraphLayoutOptions {
+                layout: noon::GraphLayout::Spring,
+                scale,
+                center: (center_x, center_y),
+                iterations: iterations as usize,
+                threshold,
+                spring_k: k,
+                spring_positions: Some(initial_positions),
+                spring_fixed,
+                spring_rescale: rescale,
+                ..Default::default()
+            }),
         )
         .map_err(js_error)
     }

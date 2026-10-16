@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared circular/shell/spiral/partite layouts."""
+"""Graph/DiGraph topology edits and shared spring/circular/shell/spiral/partite layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -79,5 +79,20 @@ class OrdinaryGraph(Scene):
                 "align": "horizontal", "center": (3.5, 2.6),
             },
         )
-        self.add(graph, directed, centered, shell_graph, spiral_graph, partite_graph)
+        spring_graph = Graph(
+            ["r0", "r1", "r2"], [("r0", "r1"), ("r1", "r2")],
+            layout="spring", layout_scale=0.65,
+            layout_config={"seed": 42, "center": (-3.5, 2.6)},
+            **styles,
+        )
+        spring_digraph = DiGraph(
+            ["t0", "t1"], [("t0", "t1")],
+            layout="spring", layout_scale=0.5,
+            layout_config={"seed": 7, "center": (5.5, 2.6)},
+            **styles,
+        )
+        self.add(
+            graph, directed, centered, shell_graph, spiral_graph, partite_graph,
+            spring_graph, spring_digraph,
+        )
         self.wait(0.2)

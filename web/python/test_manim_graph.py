@@ -53,6 +53,7 @@ class _Context:
         self.shell_layout_calls = []
         self.spiral_layout_calls = []
         self.partite_layout_calls = []
+        self.spring_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -71,6 +72,7 @@ class _Context:
     liveCreateShellGraph = liveCreateGraph
     liveCreateSpiralGraph = liveCreateGraph
     liveCreatePartiteGraph = liveCreateGraph
+    liveCreateSpringGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -94,6 +96,9 @@ class _Context:
     def liveGraphPartiteLayout(self, *args):
         self._call("partite")
         self.partite_layout_calls.append(args)
+    def liveGraphSpringLayout(self, *args):
+        self._call("spring")
+        self.spring_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -110,6 +115,109 @@ class GraphFacadeTests(unittest.TestCase):
 
     def tearDown(self):
         for patcher in reversed(self.patches): patcher.stop()
+
+    def test_default_graph_layout_matches_manim_spring_and_uses_networkx_seed(self):
+        graph.Graph(["a", "b", "c"], [("a", "b")], layout_config={"seed": 42})
+        call = self.context.creation_calls[0]
+        self.assertEqual(call[:3], (False, [0, 1, 2], [0, 1]))
+        self.assertEqual(call[4:7], ([], False, 2.0))
+        self.assertEqual(call[7:9], (0.0, 0.0))
+        self.assertIsNone(call[9])
+        self.assertEqual(call[10:], (50, 1e-4, True, self.context.options[0]))
+        expected = [
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+        ]
+        for actual, wanted in zip(call[3], (value for point in expected for value in point)):
+            self.assertAlmostEqual(actual, wanted)
+
+    def test_worker_loads_numpy_before_graph_layout(self):
+        from _manim_namespace import required_packages
+
+        self.assertEqual(required_packages("Graph(['a'], [])"), ("numpy",))
+        self.assertEqual(required_packages("DiGraph(['a'], [])"), ("numpy",))
+        self.assertEqual(required_packages("Circle()"), ())
+
+    def test_spring_seed_none_uses_the_shared_numpy_random_stream(self):
+        import numpy as np
+
+        previous_state = np.random.get_state()
+        try:
+            np.random.seed(123)
+            expected = np.random.rand(2, 2)
+            expected_next = np.random.rand()
+            np.random.seed(123)
+            result = graph._spring_layout_config(None, (0, 0), {"a": 0, "b": 1}, 2.0)
+            actual_next = np.random.rand()
+        finally:
+            np.random.set_state(previous_state)
+        actual = result[1]
+        self.assertEqual(actual, [tuple(point) for point in expected])
+        self.assertEqual(actual_next, expected_next)
+
+    def test_spring_config_supports_fixed_positions_and_unscaled_layout(self):
+        value = graph.Graph(
+            ["a", "b", "c"], [("a", "b")],
+            layout_config={
+                "seed": 7,
+                "pos": {"a": (1, 0), "b": (2, 0), "c": (2, 2)},
+                "fixed": ["a"],
+                "center": (3, -2),
+                "iterations": 12,
+                "threshold": 0,
+            },
+            layout_scale=None,
+        )
+        call = self.context.creation_calls[0]
+        self.assertEqual(call[4:7], ([0], True, 1.0))
+        self.assertEqual(call[7:9], (3.0, -2.0))
+        self.assertAlmostEqual(call[9], 2 / (3 ** 0.5))
+        self.assertEqual(call[10:13], (12, 0.0, False))
+        self.assertEqual(call[3][:2], [1.0, 0.0])
+        self.assertIsNotNone(value._graph_handle)
+
+    def test_spring_change_layout_routes_positions_and_options_to_rust(self):
+        value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
+        value.change_layout(
+            "spring", scale=None,
+            layout_config={"seed": 4, "pos": {"a": (2, 1)}, "fixed": []},
+        )
+        call = self.context.spring_layout_calls[0]
+        self.assertIs(call[0], value._graph_handle)
+        self.assertEqual(call[2:5], ([], True, 1.0))
+        self.assertEqual(call[5:7], (0.0, 0.0))
+        self.assertAlmostEqual(call[7], 2 / (2 ** 0.5))
+        self.assertEqual(call[8:11], (50, 1e-4, False))
+
+    def test_spring_fixed_nodes_outside_the_graph_are_ignored_by_networkx(self):
+        graph.Graph(
+            ["a", "b"], [],
+            layout_config={
+                "pos": {"a": (1, 0), "b": (0, 1), "ignored": (4, 0)},
+                "fixed": ["ignored"],
+            },
+        )
+        call = self.context.creation_calls[0]
+        self.assertEqual(call[4:6], ([], True))
+        self.assertAlmostEqual(call[9], 4 / (2 ** 0.5))
+        self.assertFalse(call[12])
+
+    def test_spring_layout_rejects_unsupported_configuration_before_publication(self):
+        invalid = [
+            ({"dim": 3}, NotImplementedError, "two-dimensional"),
+            ({"scale": 1}, NotImplementedError, "unsupported spring"),
+            ({"fixed": ["a"]}, ValueError, "require a pos mapping"),
+            ({"pos": {"a": (0, 0)}, "fixed": ["missing"]}, ValueError, "missing from pos"),
+            ({"k": 0}, ValueError, "non-zero"),
+            ({"iterations": 2.5}, TypeError, "must be an integer"),
+            ({"weight": 1}, TypeError, "string or None"),
+        ]
+        for config, error, message in invalid:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [], layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
 
     def test_copy_reconstructs_an_independent_native_handle(self):
         original = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
