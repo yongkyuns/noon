@@ -10,14 +10,13 @@ use crate::authoring_error::js_error;
 #[wasm_bindgen]
 pub struct WasmManimGeometryOptions {
     pub(crate) options: noon::ManimGeometryOptions,
-    resolved_start_angle: Option<f64>,
 }
 
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
     #[wasm_bindgen(getter, js_name = resolvedStartAngle)]
     pub fn resolved_start_angle(&self) -> Option<f64> {
-        self.resolved_start_angle
+        self.options.resolved_start_angle()
     }
 
     #[wasm_bindgen(js_name = setZIndex)]
@@ -158,11 +157,7 @@ impl WasmManimGeometryOptions {
 
 impl WasmManimGeometryOptions {
     pub(crate) fn from_options(options: noon::ManimGeometryOptions) -> Self {
-        let resolved_start_angle = options.resolved_start_angle();
-        Self {
-            options,
-            resolved_start_angle,
-        }
+        Self { options }
     }
 }
 

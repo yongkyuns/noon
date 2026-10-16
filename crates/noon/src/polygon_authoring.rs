@@ -46,17 +46,7 @@ fn vertices(n: u32, radius: f64, start: f64) -> Result<Vec<(f64, f64)>, Authorin
         .collect())
 }
 
-#[cfg(test)]
 pub(crate) fn regular_polygram_path(
-    n: u32,
-    density: u32,
-    radius: f64,
-    start: Option<f64>,
-) -> Result<VectorPath, AuthoringError> {
-    regular_polygram_path_and_start_angle(n, density, radius, start).map(|(path, _)| path)
-}
-
-pub(crate) fn regular_polygram_path_and_start_angle(
     n: u32,
     density: u32,
     radius: f64,
@@ -91,18 +81,7 @@ pub(crate) fn regular_polygram_path_and_start_angle(
     Ok((polygram_path(&paths)?, start))
 }
 
-#[cfg(test)]
 pub(crate) fn star_path(
-    n: u32,
-    outer_radius: f64,
-    inner_radius: Option<f64>,
-    density: u32,
-    start: Option<f64>,
-) -> Result<VectorPath, AuthoringError> {
-    star_path_and_start_angle(n, outer_radius, inner_radius, density, start).map(|(path, _)| path)
-}
-
-pub(crate) fn star_path_and_start_angle(
     n: u32,
     outer_radius: f64,
     inner_radius: Option<f64>,

@@ -29,12 +29,7 @@ impl ManimGeometryOptions {
         start_angle: Option<f64>,
     ) -> Result<Self, AuthoringError> {
         let (path, resolved_start_angle) =
-            crate::polygon_authoring::regular_polygram_path_and_start_angle(
-                n,
-                density,
-                radius,
-                start_angle,
-            )?;
+            crate::polygon_authoring::regular_polygram_path(n, density, radius, start_angle)?;
         let mut options = Self::new(GeometryRef::path(path), manim_style(Color::BLUE));
         options.resolved_start_angle = Some(resolved_start_angle);
         Ok(options)
@@ -47,7 +42,7 @@ impl ManimGeometryOptions {
         density: u32,
         start_angle: Option<f64>,
     ) -> Result<Self, AuthoringError> {
-        let (path, resolved_start_angle) = crate::polygon_authoring::star_path_and_start_angle(
+        let (path, resolved_start_angle) = crate::polygon_authoring::star_path(
             n,
             outer_radius,
             inner_radius,

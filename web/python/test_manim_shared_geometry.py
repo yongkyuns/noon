@@ -86,7 +86,8 @@ class ManimSharedGeometryTests(unittest.TestCase):
 
             def regular_polygram(n, density, radius, start_angle):
                 calls.append(("regular", n, density, radius, start_angle))
-                return FakeHandle(snapshot(
+                options = _geometry_test.FakeGeometryOptions({})
+                options.snapshot = snapshot(
                     {"vector_path": {"commands": [
                         {"move_to": {"to": {"x": 0.0, "y": 1.0}}},
                         {"line_to": {"to": {"x": -0.8660254, "y": -0.5}}},
@@ -94,13 +95,15 @@ class ManimSharedGeometryTests(unittest.TestCase):
                         "close",
                     ]}},
                     base_style(BLUE),
-                ))
+                )
+                options.resolvedStartAngle = 1.2345  # Prove the facade forwards Rust metadata.
+                return options
 
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_snapshot)
             _geometry_test.install_option_factory(fake_js, "dot", dot)
-            _geometry_test.install_option_factory(fake_js, "regularPolygram", regular_polygram)
+            fake_js.noonAuthoringGeometryOptions.regularPolygram = staticmethod(regular_polygram)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -134,6 +137,7 @@ class ManimSharedGeometryTests(unittest.TestCase):
             assert dot_obj.style["fill"]["alpha"] == 1.0
             assert dot_obj.style["stroke_width"] == 0.0
             assert triangle_obj.style["stroke"]["red"] == BLUE[0]
+            assert triangle_obj.start_angle == 1.2345
             assert "vector_path" in triangle_obj.geometry
 
             # set_x/set_y must delegate axis placement to the shared Rust move-to
