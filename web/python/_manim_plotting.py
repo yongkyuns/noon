@@ -923,6 +923,56 @@ class Axes(_compat.Group):
         )
         return self.axis_labels
 
+    def get_line_from_axis_to_point(self, index, point, line_func=None,
+                                    line_config=None, color=None, stroke_width=2):
+        """Create a retained line from one coordinate axis to a scene point.
+
+        Projection uses the selected NumberLine's current shared Rust frame;
+        this wrapper only selects the axis and forwards constructor options.
+        """
+        if isinstance(index, bool):
+            raise TypeError("axis index must be an integer, not a boolean")
+        try:
+            index = _index(index)
+        except TypeError:
+            raise TypeError("axis index must be an integer") from None
+        if index not in (0, 1):
+            raise IndexError("2D Axes axis index must be 0 or 1")
+        if line_func is None:
+            line_func = _base.DashedLine
+        if not callable(line_func):
+            raise TypeError("line_func must be callable")
+        if line_config is None:
+            options = {}
+        elif isinstance(line_config, Mapping):
+            options = dict(line_config)
+        else:
+            raise TypeError("line_config must be a mapping")
+
+        point = _base._as_vec2(point)
+        axis = self.get_axis(index)
+        axis_point = axis.number_to_point(axis.point_to_number(point))
+        options["color"] = _compat._as_color(
+            "line color", _base.WHITE if color is None else color
+        )
+        options["stroke_width"] = stroke_width
+        return line_func(axis_point, point, **options)
+
+    def get_vertical_line(self, point, **kwargs):
+        """Create a vertical line from the x-axis to a scene point."""
+        return self.get_line_from_axis_to_point(0, point, **kwargs)
+
+    def get_horizontal_line(self, point, **kwargs):
+        """Create a horizontal line from the y-axis to a scene point."""
+        return self.get_line_from_axis_to_point(1, point, **kwargs)
+
+    def get_lines_to_point(self, point, **kwargs):
+        """Create horizontal and vertical guide lines to a scene point."""
+        return _compat.VGroup(
+            self.get_horizontal_line(point, **kwargs),
+            self.get_vertical_line(point, **kwargs),
+        )
+
     @property
     def x_axis(self):
         return self.submobjects[0]
