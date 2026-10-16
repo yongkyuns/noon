@@ -23,6 +23,8 @@ class Owned:
         self.show_ellipsis = value
     def setUnit(self, value):
         self.unit = value
+    def setLogBase(self, value):
+        self.log_base = value
     def setExcludedNumbers(self, value):
         self.excluded = value
     def setColor(self, *value):
@@ -147,6 +149,11 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertFalse(options.group_with_commas)
         self.assertTrue(options.show_ellipsis)
         self.assertEqual(options.unit, r"\text{m}")
+        self.assertIsNone(options.log_base)
+
+    def test_log_base_is_forwarded_to_the_shared_rust_adapter(self):
+        options, _, _ = labels._options({"font": "Fixture Sans"}, log_base=10)
+        self.assertEqual(self.options[0].log_base, 10.0)
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
         family = Owned()

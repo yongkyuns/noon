@@ -28,7 +28,7 @@ def _cold_labels():
         raise NotImplementedError("construct numeric label families before the first play/wait")
 
 
-def _options(config, *, excluding=()):
+def _options(config, *, excluding=(), log_base=None):
     config = dict(config)
     if "num_decimal_places" in config:
         places = config.pop("num_decimal_places")
@@ -47,6 +47,10 @@ def _options(config, *, excluding=()):
     unit = config.pop("unit", None)
     if unit is not None and not isinstance(unit, str):
         raise TypeError("unit must be a string or None")
+    if log_base is not None:
+        log_base = _base._ir._finite_number("log_base", log_base)
+        if log_base <= 0 or log_base == 1:
+            raise ValueError("log_base must be positive and not equal to one")
     color = _shared._constructor_color("label color", config.pop("color", _base.WHITE))
     if config:
         raise TypeError("unsupported native numeric-label option(s): " + ", ".join(sorted(config)))
@@ -62,6 +66,7 @@ def _options(config, *, excluding=()):
         engine_call(options.setGroupWithCommas, group_with_commas)
         engine_call(options.setShowEllipsis, show_ellipsis)
         engine_call(options.setUnit, unit)
+        engine_call(options.setLogBase, log_base)
         engine_call(options.setExcludedNumbers, _plot._array(excluding))
         engine_call(options.setColor, color.red, color.green, color.blue, color.alpha)
     except BaseException:
@@ -80,12 +85,13 @@ def _family(handle, size, color):
     return _plot._family(object.__new__(_compat.Group), handle, members)
 
 
-def _decimal_family(handle, color):
+def _decimal_family(handle, color, number_class=None):
     from _manim_numbers import DecimalNumber
 
     if _decimal_members is None:
         raise RuntimeError("DecimalNumber labels require the shared Rust authoring host")
-    members = [DecimalNumber._from_numeric_handle(
+    number_class = DecimalNumber if number_class is None else number_class
+    members = [number_class._from_numeric_handle(
         member, None, color=color, presentation_applied=True,
     )
                for member in engine_call(_decimal_members, handle)]
@@ -99,12 +105,15 @@ def _remember(axis, labels):
     axis.numbers = labels
 
 
-def number_mobjects(axis, values, *, attach, config, excluding=None):
+def number_mobjects(axis, values, *, attach, config, excluding=None,
+                    log_base=None, number_class=None):
     _cold_labels()
     native_text = "font" in config
+    if native_text and log_base is not None:
+        raise NotImplementedError("LogBase custom labels require the DecimalNumber profile")
     values_js = _plot._array(() if values is None else values)
     options, size, color = _options(
-        config, excluding=() if excluding is None else excluding,
+        config, excluding=() if excluding is None else excluding, log_base=log_base,
     )
     if native_text:
         handle = engine_call(axis._semantic_family_handle.numberLabelFamily,
@@ -122,7 +131,11 @@ def number_mobjects(axis, values, *, attach, config, excluding=None):
             options,
             bool(attach),
         )
-        labels = _decimal_family(handle, color)
+        labels = (
+            _decimal_family(handle, color)
+            if number_class is None
+            else _decimal_family(handle, color, number_class=number_class)
+        )
     if attach:
         _remember(axis, labels)
     return labels

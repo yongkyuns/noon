@@ -107,6 +107,10 @@ impl WasmNumberLabelOptions {
     pub fn set_unit(&mut self, unit: Option<String>) {
         self.options.unit = unit;
     }
+    #[wasm_bindgen(js_name = setLogBase)]
+    pub fn set_log_base(&mut self, base: Option<f64>) {
+        self.options.log_base = base;
+    }
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(
         &mut self,

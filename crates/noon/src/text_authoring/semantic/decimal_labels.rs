@@ -5,7 +5,7 @@ use crate::plot_presentation::{
     number_labels_excluding, NumberLabelAuthoringError as Error, NumberLabelOptions,
 };
 use crate::{
-    AuthoringError, AxesFrame, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
+    AuthoringError, AxesFrame, Bounds2D64, LatexBackend, ManimAxes, ManimNextToArgs,
     ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, TextAuthoringError,
 };
 use noon_core::{
@@ -49,17 +49,11 @@ impl PreparedDecimalLabels {
         let mut values = Vec::with_capacity(labels.len());
         let mut placements = Vec::with_capacity(labels.len());
         for label in labels {
+            let (value, format) = options.decimal_presentation(label.number)?;
             values.push(PreparedDecimalValue::prepare(
                 backend,
-                label.number,
-                DecimalFormat {
-                    decimal_places: options.decimal_places,
-                    include_sign: options.include_sign,
-                    group_with_commas: options.group_with_commas,
-                    show_ellipsis: options.show_ellipsis,
-                    unit: options.unit.clone(),
-                    ..Default::default()
-                },
+                value,
+                format,
                 options.font_size,
             )?);
             placements.push((label.number, label.point));

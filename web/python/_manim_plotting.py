@@ -225,9 +225,28 @@ class LogBase:
         return _map_scale_values(value, inverse)
 
     def get_custom_labels(self, values, **kwargs):
-        raise NotImplementedError(
-            "LogBase custom labels require the TeX label profile"
-        )
+        from _manim_numbers import Integer
+
+        unit_decimal_places = kwargs.pop("unit_decimal_places", 0)
+        if not isinstance(unit_decimal_places, int) or isinstance(unit_decimal_places, bool):
+            raise TypeError("unit_decimal_places must be an integer")
+        if not 0 <= unit_decimal_places <= 12:
+            raise ValueError("unit_decimal_places must be between 0 and 12")
+        if "unit" in kwargs:
+            raise TypeError("LogBase custom labels supply the exponent unit")
+        try:
+            values = tuple(values)
+        except TypeError as error:
+            raise TypeError("values must be an iterable of positive numbers") from error
+        labels = []
+        for value in values:
+            value = _base._ir._finite_number("log label value", value)
+            if value <= 0:
+                raise ValueError("logarithmic label values must be positive")
+            exponent = self.inverse_function(value)
+            suffix = f"{exponent:.{unit_decimal_places}f}"
+            labels.append(Integer(self.base, unit=f"^{{{suffix}}}", **kwargs))
+        return labels
 
 
 def _map_scale_values(value, function):
@@ -544,10 +563,6 @@ class NumberLine(_compat.Group):
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
         scale_kind, scale_parameter, custom_scale_labels = _number_line_scale(scaling)
-        if custom_scale_labels and (include_numbers or numbers_to_include is not None):
-            raise NotImplementedError(
-                "NumberLine LogBase custom labels require the TeX label profile"
-            )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         font_size = _finite_axis_option(font_size, "font_size")
         if font_size <= 0:
@@ -576,6 +591,8 @@ class NumberLine(_compat.Group):
         decimal_number_config = _decimal_number_options(
             decimal_number_config, "NumberLine.decimal_number_config",
         )
+        if custom_scale_labels and decimal_number_config.get("unit") is not None:
+            raise TypeError("LogBase custom labels supply the exponent unit")
         decimal_places = decimal_number_config.get("num_decimal_places")
         numbers_to_include = (
             None if numbers_to_include is None else list(numbers_to_include)
@@ -626,10 +643,22 @@ class NumberLine(_compat.Group):
         self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
         if self.include_numbers or numbers_to_include is not None:
-            self.add_numbers(
-                x_values=numbers_to_include,
-                excluding=numbers_to_exclude,
-            )
+            if custom_scale_labels:
+                from _manim_number_labels import number_mobjects
+                from _manim_numbers import Integer
+
+                labels = number_mobjects(
+                    self, None, attach=True,
+                    config=self._number_label_config({}),
+                    excluding=(), log_base=self.scaling.base,
+                    number_class=Integer,
+                )
+                self.labels = labels
+            else:
+                self.add_numbers(
+                    x_values=numbers_to_include,
+                    excluding=numbers_to_exclude,
+                )
 
     @property
     def shaft(self):
