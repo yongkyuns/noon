@@ -68,7 +68,7 @@ class NumericLabelQualification(Scene):
         labels = tuple(axes.x_axis.numbers) + tuple(axes.y_axis.numbers)
         centers = tuple(label.get_center() for label in labels)
         origin = axes.c2p(0, 0)
-        self.play(axes.animate.shift(RIGHT), run_time=0.2, rate_func=linear)
+        await self.play(axes.animate.shift(RIGHT), run_time=0.2, rate_func=linear)
         for label, expected in zip(labels, centers):
             near(label.get_center(), expected + RIGHT)
         near(axes.c2p(0, 0), origin + RIGHT)
