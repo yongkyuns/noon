@@ -10,9 +10,11 @@ def near(a, b):
     assert all(abs(x-y) < 2e-5 for x, y in zip(a, b)), (a, b)
 
 class NumericLabelQualification(Scene):
-    def construct(self):
+    async def construct(self):
+        await prepare_latex()
         line = NumberLine((-2, 2, 1), length=4)
         detached = line.get_number_mobjects(1, -1, 1)
+        assert all(isinstance(label, DecimalNumber) for label in detached)
         assert tuple(label.source for label in detached) == ("1", "-1", "1")
         assert len(line.submobjects) == 2
         assert line.add_numbers((), exclude_zero=False) is line
@@ -22,7 +24,7 @@ class NumericLabelQualification(Scene):
         assert len(line.submobjects) == 4
         assert empty is line.submobjects[2]
         assert line.numbers is line.submobjects[3]
-        assert all(isinstance(label, Text) for label in line.numbers)
+        assert all(isinstance(label, DecimalNumber) for label in line.numbers)
         old_center = line.numbers[0].get_center()
         copy = line.copy().shift(RIGHT)
         assert copy.numbers is copy.submobjects[3]
@@ -34,7 +36,7 @@ class NumericLabelQualification(Scene):
         axes = Axes((0, 4, 1), (0, 2, 1), x_length=4, y_length=2)
         before = (len(axes.x_axis), len(axes.y_axis))
         try:
-            axes.add_coordinates(y_config={"font": "No such font family"})
+            axes.add_coordinates(font="Fixture Sans", y_config={"font": "No such font family"})
         except ValueError:
             pass
         else:
@@ -42,6 +44,8 @@ class NumericLabelQualification(Scene):
         assert (len(axes.x_axis), len(axes.y_axis)) == before
         assert not hasattr(axes.x_axis, "numbers")
         assert axes.add_coordinates((0, 2, 4), (1, 2), exclude_zero=False) is axes
+        assert all(isinstance(label, DecimalNumber) for label in axes.x_axis.numbers)
+        assert all(isinstance(label, DecimalNumber) for label in axes.y_axis.numbers)
         assert tuple(label.source for label in axes.x_axis.numbers) == ("0", "2", "4")
         assert tuple(label.source for label in axes.y_axis.numbers) == ("1", "2")
         center = axes.x_axis.numbers[1].get_center()

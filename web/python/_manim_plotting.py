@@ -768,7 +768,10 @@ class NumberLine(_compat.Group):
         return self.ticks
 
     def get_number_mobject(self, number, **kwargs):
-        """Return one detached ordinary Text label at a numeric position."""
+        """Return one detached DecimalNumber label at a numeric position.
+
+        Pass ``font=...`` to select the explicit native-Text subset.
+        """
         from _manim_number_labels import number_mobjects
         number = _base._ir._finite_number("number", number)
         config = self._number_label_config(kwargs)
@@ -825,10 +828,11 @@ class NumberLine(_compat.Group):
         return self
 
     def add_numbers(self, x_values=None, excluding=None, **kwargs):
-        """Atomically append native Text labels before playback; expose .numbers.
+        """Atomically append DecimalNumber labels before playback; expose .numbers.
 
         Repeated calls append another label family, rather than replacing the
-        earlier one. This bounded subset does not construct DecimalNumber/TeX.
+        earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
+        into the native-Text subset.
         """
         from _manim_number_labels import number_mobjects
         config = self._number_label_config(kwargs)
@@ -1193,7 +1197,8 @@ class Axes(_compat.Group):
         With no positional values, both axes receive their default labels. Each
         supplied value configures only that axis, and a mapping creates custom
         labels. ``x_values``/``y_values`` remain accepted as legacy aliases.
-        Numeric Text labels are retained before playback and follow transforms.
+        Numeric defaults use retained DecimalNumber labels and require
+        ``await prepare_latex()``. Passing ``font`` opts into native Text.
         """
         if x_values is not _COORDINATE_ARGUMENT_UNSET or y_values is not _COORDINATE_ARGUMENT_UNSET:
             if axes_numbers:

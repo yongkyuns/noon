@@ -247,9 +247,9 @@ class ManimVectorSpaceTests(unittest.TestCase):
             labels._plot._array = lambda values: tuple(values)
             labels._compat.VGroup = lambda *members: tuple(members)
             options = []
-            def make_options(config):
+            def make_options(config, *, excluding=()):
                 token = Options(len(options))
-                options.append((token, config))
+                options.append((token, config, tuple(excluding)))
                 return token, 18.0, "white"
             labels._options = make_options
             families, remembered = [], []
@@ -267,6 +267,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
             assert options[0][1]["direction"] is labels._base.DOWN
             assert options[1][1]["direction"] is labels._base.LEFT
             assert [entry[1]["decimal_places"] for entry in options] == [1, 2]
+            assert [entry[2] for entry in options] == [(0.0,), (0.0,)]
             assert plane._semantic_family_handle.args[:4] == ((1, 2), False, (3,), False)
             assert plane._semantic_family_handle.args[4:] == (options[0][0], options[1][0])
             assert len(remembered) == 2

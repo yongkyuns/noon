@@ -3,7 +3,8 @@ from noon import *
 
 
 class AnimatedNumberLine(Scene):
-    def construct(self):
+    async def construct(self):
+        await prepare_latex()
         title = Text("NumberLine: position and direction", font_size=28).shift(3 * UP)
         caption = Text("Coordinates follow the line", font_size=22).shift(2 * UP)
         number_line = NumberLine([-4, 4, 1], length=8.8, include_ticks=True, color=WHITE)

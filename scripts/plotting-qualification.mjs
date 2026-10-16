@@ -167,15 +167,35 @@ class AxesAccessors(Scene):
 
 class AxesAddCoordinates(Scene):
     async def construct(self):
+        await prepare_latex()
         default_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
         assert default_axes.add_coordinates() is default_axes
         assert len(default_axes.coordinate_labels.submobjects) == 2
         assert default_axes.x_axis.numbers.submobjects
         assert default_axes.y_axis.numbers.submobjects
+        assert all(isinstance(label, DecimalNumber)
+                   for label in default_axes.x_axis.numbers)
+        assert not any(label.get_value() == 0 for label in default_axes.x_axis.numbers)
+        assert not any(label.get_value() == 0 for label in default_axes.y_axis.numbers)
+
+        configured = Axes(
+            (0, 2, 1), (-1, 1, 1), tips=False,
+            x_axis_config={"numbers_to_exclude": (0, 2)},
+            y_axis_config={"numbers_to_exclude": (-1,)},
+        )
+        configured.add_coordinates((0, 1, 2), (-1, 0, 1))
+        assert tuple(label.get_value() for label in configured.x_axis.numbers) == (1,)
+        assert tuple(label.get_value() for label in configured.y_axis.numbers) == (0, 1)
+
+        override = Axes((0, 2, 1), (-1, 1, 1), tips=False)
+        override.add_coordinates((0, 1, 2), (-1, 0, 1), excluding=(2,))
+        assert tuple(label.get_value() for label in override.x_axis.numbers) == (0, 1)
+        assert tuple(label.get_value() for label in override.y_axis.numbers) == (-1, 0, 1)
 
         x_only = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
         x_only.add_coordinates((-1, 1))
         assert len(x_only.coordinate_labels.submobjects) == 1
+        assert all(isinstance(label, DecimalNumber) for label in x_only.x_axis.numbers)
         assert tuple(label.source for label in x_only.x_axis.numbers) == ("-1", "1")
         assert not hasattr(x_only.y_axis, "numbers")
 
@@ -196,7 +216,7 @@ class AxesAddCoordinates(Scene):
         assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
         assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
 
-        self.add(default_axes, x_only, x_default, custom, mixed)
+        self.add(default_axes, configured, override, x_only, x_default, custom, mixed)
         await self.wait(0.05)
 `;
       const addCoordinates = await qualifyPythonPlayback(
@@ -458,6 +478,30 @@ class NumberLineLineObservations(Scene):
       assert.ok(observations.objectCount > 0);
       assert.ok(Math.abs(observations.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: NumberLine line observations`);
+      const numberLabelsSource = `from noon import *
+
+class NumberLineDecimalNumberLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        line = NumberLine((-2, 2, 1), length=4, include_ticks=True)
+        detached = line.get_number_mobjects(1, -1, 1)
+        assert all(isinstance(label, DecimalNumber) for label in detached)
+        assert tuple(label.get_value() for label in detached) == (1, -1, 1)
+        assert len(line.submobjects) == 2
+        assert line.add_numbers((0, 1, -1), excluding=(0,)) is line
+        assert tuple(label.get_value() for label in line.numbers) == (1, -1)
+        assert all(isinstance(label, DecimalNumber) for label in line.numbers)
+        self.add(line, detached)
+        await self.wait(0.05)
+`;
+      const numberLabels = await qualifyPythonPlayback(
+        context, baseUrl, numberLabelsSource, [0, 0.05],
+      );
+      assert.equal(numberLabels.rendererBackend, expectedBackend);
+      assert.equal(numberLabels.presented, true);
+      assert.ok(numberLabels.objectCount > 0);
+      assert.ok(Math.abs(numberLabels.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberLine DecimalNumber labels`);
       return lifecycle;
     } finally {
       await page.close();

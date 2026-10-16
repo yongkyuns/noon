@@ -170,10 +170,11 @@ fn add_coordinate_families(
     frame: crate::AxesFrame,
     parents: [SemanticNodeId; 2],
     numbers: [Option<&[f64]>; 2],
+    excluded_numbers: [&[f64]; 2],
     options: [&NumberLabelOptions; 2],
 ) -> Result<[MobjectFamily; 2], Error> {
-    let x_labels = prepare(frame.x(), numbers[0], &[], options[0])?;
-    let y_labels = prepare(frame.y(), numbers[1], &[], options[1])?;
+    let x_labels = prepare(frame.x(), numbers[0], excluded_numbers[0], options[0])?;
+    let y_labels = prepare(frame.y(), numbers[1], excluded_numbers[1], options[1])?;
     let mut families = publish(
         store,
         vec![(Some(parents[0]), x_labels), (Some(parents[1]), y_labels)],
@@ -263,6 +264,18 @@ impl ManimAxes {
         x_options: &NumberLabelOptions,
         y_options: &NumberLabelOptions,
     ) -> Result<[MobjectFamily; 2], Error> {
+        self.add_coordinates_excluding(x_numbers, y_numbers, [&[], &[]], x_options, y_options)
+    }
+
+    /// Cold-only atomic construction with ManimCE's exact-value exclusion lists.
+    pub fn add_coordinates_excluding(
+        &self,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        excluded_numbers: [&[f64]; 2],
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
         let x = self.x_axis()?;
         let y = self.y_axis()?;
         let frame = self.authored_frame()?;
@@ -271,6 +284,7 @@ impl ManimAxes {
             frame,
             [x.family().node_id(), y.family().node_id()],
             [x_numbers, y_numbers],
+            excluded_numbers,
             [x_options, y_options],
         )
     }
@@ -286,6 +300,18 @@ impl ManimNumberPlane {
         x_options: &NumberLabelOptions,
         y_options: &NumberLabelOptions,
     ) -> Result<[MobjectFamily; 2], Error> {
+        self.add_coordinates_excluding(x_numbers, y_numbers, [&[], &[]], x_options, y_options)
+    }
+
+    /// Atomically attach text labels while filtering exact axis values.
+    pub fn add_coordinates_excluding(
+        &self,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        excluded_numbers: [&[f64]; 2],
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
         let frame = self.authored_frame()?;
         let x_axis = self.x_axis()?;
         let y_axis = self.y_axis()?;
@@ -294,6 +320,7 @@ impl ManimNumberPlane {
             frame,
             [x_axis.family().node_id(), y_axis.family().node_id()],
             [x_numbers, y_numbers],
+            excluded_numbers,
             [x_options, y_options],
         )
     }

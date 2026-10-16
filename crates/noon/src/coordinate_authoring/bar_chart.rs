@@ -679,6 +679,7 @@ impl PreparedLabeledChart {
             backend,
             chart.frame.y(),
             None,
+            &[],
             label_options,
         )?;
         let names = options

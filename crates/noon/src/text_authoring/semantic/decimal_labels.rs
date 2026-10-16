@@ -2,7 +2,7 @@
 
 use crate::numeric_authoring::PreparedDecimalValue;
 use crate::plot_presentation::{
-    number_labels, NumberLabelAuthoringError as Error, NumberLabelOptions,
+    number_labels_excluding, NumberLabelAuthoringError as Error, NumberLabelOptions,
 };
 use crate::{
     AuthoringError, AxesFrame, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
@@ -28,6 +28,7 @@ impl PreparedDecimalLabels {
         backend: &mut impl LatexBackend,
         frame: NumberLineFrame,
         numbers: Option<&[f64]>,
+        excluded_numbers: &[f64],
         options: &NumberLabelOptions,
     ) -> Result<Self, Error> {
         if !options.buff.is_finite()
@@ -38,7 +39,13 @@ impl PreparedDecimalLabels {
         {
             return Err(AuthoringError::NonFiniteTransform.into());
         }
-        let labels = number_labels(frame, numbers, options.decimal_places, options.exclude_zero)?;
+        let labels = number_labels_excluding(
+            frame,
+            numbers,
+            options.decimal_places,
+            options.exclude_zero,
+            excluded_numbers,
+        )?;
         let mut values = Vec::with_capacity(labels.len());
         let mut placements = Vec::with_capacity(labels.len());
         for label in labels {
@@ -235,10 +242,23 @@ fn publish_decimal_coordinate_families(
     frame: AxesFrame,
     parents: [SemanticNodeId; 2],
     numbers: [Option<&[f64]>; 2],
+    excluded_numbers: [&[f64]; 2],
     options: [&NumberLabelOptions; 2],
 ) -> Result<[SemanticNodeId; 2], Error> {
-    let x = PreparedDecimalLabels::prepare(backend, frame.x(), numbers[0], options[0])?;
-    let y = PreparedDecimalLabels::prepare(backend, frame.y(), numbers[1], options[1])?;
+    let x = PreparedDecimalLabels::prepare(
+        backend,
+        frame.x(),
+        numbers[0],
+        excluded_numbers[0],
+        options[0],
+    )?;
+    let y = PreparedDecimalLabels::prepare(
+        backend,
+        frame.y(),
+        numbers[1],
+        excluded_numbers[1],
+        options[1],
+    )?;
     let (_, roots) = PreparedDecimalLabels::publish_pair(
         store,
         x,
@@ -263,8 +283,24 @@ impl ManimNumberLine {
         numbers: Option<&[f64]>,
         options: &NumberLabelOptions,
     ) -> Result<MobjectFamily, Error> {
-        let prepared =
-            PreparedDecimalLabels::prepare(backend, self.authored_frame()?, numbers, options)?;
+        self.decimal_number_labels_excluding(backend, numbers, &[], options)
+    }
+
+    /// Construct a detached DecimalNumber family with exact-value exclusions.
+    pub fn decimal_number_labels_excluding(
+        &self,
+        backend: &mut impl LatexBackend,
+        numbers: Option<&[f64]>,
+        excluded_numbers: &[f64],
+        options: &NumberLabelOptions,
+    ) -> Result<MobjectFamily, Error> {
+        let prepared = PreparedDecimalLabels::prepare(
+            backend,
+            self.authored_frame()?,
+            numbers,
+            excluded_numbers,
+            options,
+        )?;
         let store = Rc::clone(self.family().integration_store());
         let (_, root) = prepared.publish(&mut store.borrow_mut(), None, |store, transaction| {
             transaction
@@ -282,8 +318,24 @@ impl ManimNumberLine {
         numbers: Option<&[f64]>,
         options: &NumberLabelOptions,
     ) -> Result<MobjectFamily, Error> {
-        let prepared =
-            PreparedDecimalLabels::prepare(backend, self.authored_frame()?, numbers, options)?;
+        self.add_decimal_numbers_excluding(backend, numbers, &[], options)
+    }
+
+    /// Attach a DecimalNumber family with ManimCE's exact-value exclusions.
+    pub fn add_decimal_numbers_excluding(
+        &self,
+        backend: &mut impl LatexBackend,
+        numbers: Option<&[f64]>,
+        excluded_numbers: &[f64],
+        options: &NumberLabelOptions,
+    ) -> Result<MobjectFamily, Error> {
+        let prepared = PreparedDecimalLabels::prepare(
+            backend,
+            self.authored_frame()?,
+            numbers,
+            excluded_numbers,
+            options,
+        )?;
         let store = Rc::clone(self.family().integration_store());
         let (_, root) = prepared.publish(
             &mut store.borrow_mut(),
@@ -309,6 +361,26 @@ impl ManimAxes {
         x_options: &NumberLabelOptions,
         y_options: &NumberLabelOptions,
     ) -> Result<[MobjectFamily; 2], Error> {
+        self.add_decimal_coordinates_excluding(
+            backend,
+            x_numbers,
+            y_numbers,
+            [&[], &[]],
+            x_options,
+            y_options,
+        )
+    }
+
+    /// Atomically attach DecimalNumber coordinate families with exact exclusions.
+    pub fn add_decimal_coordinates_excluding(
+        &self,
+        backend: &mut impl LatexBackend,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        excluded_numbers: [&[f64]; 2],
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
         let frame = self.authored_frame()?;
         let x_axis = self.x_axis()?;
         let y_axis = self.y_axis()?;
@@ -319,6 +391,7 @@ impl ManimAxes {
             frame,
             [x_axis.family().node_id(), y_axis.family().node_id()],
             [x_numbers, y_numbers],
+            excluded_numbers,
             [x_options, y_options],
         )?;
         Ok([
@@ -338,6 +411,26 @@ impl ManimNumberPlane {
         x_options: &NumberLabelOptions,
         y_options: &NumberLabelOptions,
     ) -> Result<[MobjectFamily; 2], Error> {
+        self.add_decimal_coordinates_excluding(
+            backend,
+            x_numbers,
+            y_numbers,
+            [&[], &[]],
+            x_options,
+            y_options,
+        )
+    }
+
+    /// Atomically attach DecimalNumber coordinate families with exact exclusions.
+    pub fn add_decimal_coordinates_excluding(
+        &self,
+        backend: &mut impl LatexBackend,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        excluded_numbers: [&[f64]; 2],
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
         let frame = self.authored_frame()?;
         let x_axis = self.x_axis()?;
         let y_axis = self.y_axis()?;
@@ -348,6 +441,7 @@ impl ManimNumberPlane {
             frame,
             [x_axis.family().node_id(), y_axis.family().node_id()],
             [x_numbers, y_numbers],
+            excluded_numbers,
             [x_options, y_options],
         )?;
         Ok([

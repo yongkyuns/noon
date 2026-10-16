@@ -37,6 +37,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
         patch.object(labels._compat, 'VGroup', side_effect=lambda *families: families).start()
         self.axis = SimpleNamespace(_semantic_family_handle=SimpleNamespace(
                                         numberLabelFamily=self.commit,
+                                        numberLineDecimalNumberLabelFamily=self.commit,
                                         numberLineCustomLabelFamily=self.commit),
                                     _semantic_member_wrappers={})
 
@@ -58,45 +59,74 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.axis.add_labels = lambda values, **config: labels.custom_labels(
             self.axis, values, config=config
         )
-        self.axis.add_numbers = lambda values=None, **config: setattr(
+        self.axis.add_numbers = lambda values=None, excluding=None, **config: setattr(
             self.axis, "numbers", labels.number_mobjects(
-                self.axis, values, attach=True, config=config
+                self.axis, values, attach=True, config=config, excluding=excluding,
             )
         )
+        self.axis.numbers_to_exclude = (0.0,)
         y_axis = SimpleNamespace(
             _semantic_member_wrappers={},
+            numbers_to_exclude=(0.0,),
             _semantic_family_handle=SimpleNamespace(
                 numberLabelFamily=self.commit,
+                numberLineDecimalNumberLabelFamily=self.commit,
                 numberLineCustomLabelFamily=self.commit,
             ),
         )
         y_axis.add_labels = lambda values, **config: labels.custom_labels(
             y_axis, values, config=config
         )
-        y_axis.add_numbers = lambda values=None, **config: setattr(
+        y_axis.add_numbers = lambda values=None, excluding=None, **config: setattr(
             y_axis, "numbers", labels.number_mobjects(
-                y_axis, values, attach=True, config=config
+                y_axis, values, attach=True, config=config, excluding=excluding,
             )
         )
         return SimpleNamespace(x_axis=self.axis,
             y_axis=y_axis,
-            _semantic_family_handle=SimpleNamespace(coordinateLabelFamilies=self.commit_axes))
+            _semantic_family_handle=SimpleNamespace(
+                coordinateLabelFamilies=self.commit_axes,
+                axesDecimalCoordinateLabelFamilies=self.commit_axes,
+            ))
 
     def commit_axes(self, *values):
         self.calls.append(values)
         return Owned(), Owned()
 
     def test_order_duplicates_and_one_pass_values_are_not_recomputed(self):
-        result = self.invoke(iter((2, -1, 2)), font_size='22', decimal_places=2)
+        result = self.invoke(iter((2, -1, 2)), font="Fixture Sans",
+                             font_size='22', decimal_places=2)
         self.assertEqual(self.calls[0][0:2], ([2., -1., 2.], False))
-        self.assertEqual(self.created, [('DejaVu Sans Mono', 22., 2, 0.12)])
+        self.assertEqual(self.created, [('Fixture Sans', 22., 2, 0.12)])
         self.assertIs(self.axis.numbers, result)
         self.assertIs(self.axis._semantic_member_wrappers[id(result)], result)
         self.assertEqual(self.options[0].freed, 0)  # moved, not manually freed
         self.assertEqual(self.options[0].excluded, [])
 
+    def test_number_line_defaults_to_retained_decimal_number_labels(self):
+        family = Owned()
+        bridge = Mock(return_value=family)
+        wrap = patch.object(labels, "_decimal_family", return_value=family).start()
+        patch.object(labels, "_line_decimal_labels", bridge).start()
+        result = self.invoke((1, -1), excluding=(1,))
+        self.assertIs(result, family)
+        bridge.assert_called_once_with(
+            self.axis._semantic_family_handle,
+            [1.0, -1.0], False, self.options[0], True,
+        )
+        self.assertEqual(self.options[0].excluded, [1.0])
+        self.assertIs(self.axis.numbers, family)
+        wrap.assert_called_once_with(family, labels._base.WHITE)
+
+    def test_number_line_numeric_labels_require_the_prepared_tex_backend(self):
+        with patch.object(labels, "_line_decimal_labels", None):
+            with self.assertRaisesRegex(RuntimeError, "prepare_latex"):
+                self.invoke((1,))
+        self.assertEqual(self.options[0].freed, 1)
+        self.assertEqual(self.calls, [])
+
     def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
-        self.invoke(iter((0, 1, 2)), excluding=iter((1,)))
+        self.invoke(iter((0, 1, 2)), font="Fixture Sans", excluding=iter((1,)))
         self.assertEqual(self.options[0].excluded, [1.0])
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
@@ -123,8 +153,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_none_and_empty_are_distinct_and_detached_does_not_attach(self):
-        self.invoke(None, attach=False)
-        self.invoke((), attach=False)
+        self.invoke(None, attach=False, font="Fixture Sans")
+        self.invoke((), attach=False, font="Fixture Sans")
         self.assertEqual([(call[0], call[1], call[3]) for call in self.calls],
                          [([], True, False), ([], False, False)])
         self.assertFalse(hasattr(self.axis, 'numbers'))
@@ -133,7 +163,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_unknown_options_and_host_coercion_fail_before_allocation(self):
         for config in ({'decimal_places': True}, {'decimal_places': 1.5}, {'label_constructor': object}):
             with self.assertRaises(TypeError):
-                self.invoke((1,), **config)
+                self.invoke((1,), font="Fixture Sans", **config)
         with self.assertRaises(ValueError):
             self.invoke(('bad',))
         self.assertEqual(self.options, [])
@@ -175,7 +205,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
             raise error
         self.axis._semantic_family_handle.numberLabelFamily = reject
         with self.assertRaises(ValueError) as caught:
-            self.invoke((1,))
+            self.invoke((1,), font="Fixture Sans")
         self.assertIs(caught.exception, error)
         self.assertIs(self.axis.numbers, previous)
         self.assertEqual(self.options[0].freed, 0)
@@ -184,7 +214,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_second_axis_options_failure_releases_first_and_never_commits(self):
         with self.assertRaises(TypeError):
             labels.add_coordinates(self.axes(), None, None, x_config=None,
-                                   y_config={'decimal_places': False}, config={})
+                                   y_config={'font': ''},
+                                   config={'font': 'Fixture Sans'})
         self.assertEqual(len(self.options), 1)
         self.assertEqual(self.options[0].freed, 1)
         self.assertEqual(self.calls, [])
@@ -194,7 +225,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
         axes = self.axes()
         result = labels.add_coordinates(axes, iter((2, 1)), (),
             x_config={'direction': labels._base.UP}, y_config=None,
-            config={'direction': labels._base.RIGHT, 'font_size': 20})
+            config={'direction': labels._base.RIGHT, 'font_size': 20,
+                    'font': 'Fixture Sans'})
         self.assertIs(result, axes)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][:4], ([2., 1.], False, [], False))
@@ -204,9 +236,59 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(axes.coordinate_labels,
                          (axes.x_axis.numbers, axes.y_axis.numbers))
 
+    def test_axes_default_numeric_coordinates_use_one_decimal_number_commit(self):
+        axes = self.axes()
+        x_family, y_family = Owned(), Owned()
+        bridge = Mock(return_value=(x_family, y_family))
+        patch.object(labels, "_axes_decimal_labels", bridge).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        result = labels.add_coordinates(axes, None, (1, -1), config={})
+        self.assertIs(result, axes)
+        bridge.assert_called_once()
+        self.assertEqual(bridge.call_args.args[:5], (
+            axes._semantic_family_handle, [], True, [1.0, -1.0], False,
+        ))
+        self.assertEqual([options.exclude for options in self.options], [False, False])
+        self.assertEqual([options.excluded for options in self.options], [[0.0], [0.0]])
+        self.assertEqual(axes.coordinate_labels,
+                         (axes.x_axis.numbers, axes.y_axis.numbers))
+        self.assertIs(axes.x_axis.numbers, x_family)
+        self.assertIs(axes.y_axis.numbers, y_family)
+
+    def test_axes_exact_exclusions_follow_axis_config_and_global_override(self):
+        axes = self.axes()
+        axes.x_axis.numbers_to_exclude = (0.0, 2.0)
+        axes.y_axis.numbers_to_exclude = (-1.0,)
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+
+        labels.add_coordinates(axes, (0, 1, 2), (-1, 0, 1), config={})
+        self.assertEqual([option.excluded for option in self.options],
+                         [[0.0, 2.0], [-1.0]])
+
+    def test_axes_explicit_excluding_overrides_both_axis_configs(self):
+        axes = self.axes()
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        labels.add_coordinates(
+            axes, (0, 1, 2), (-1, 0, 1), config={"excluding": iter((2,))},
+        )
+        self.assertEqual([option.excluded for option in self.options], [[2.0], [2.0]])
+
+    def test_axes_explicit_include_zero_overrides_constructor_exclusion(self):
+        axes = self.axes()
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        labels.add_coordinates(axes, (0, 1), (0, 1), config={"exclude_zero": False})
+        self.assertEqual([option.excluded for option in self.options], [[], []])
+        self.assertEqual([option.exclude for option in self.options], [False, False])
+
     def test_single_coordinate_argument_labels_only_the_first_axis(self):
         axes = self.axes()
-        result = labels.add_coordinates(axes, iter((2, 1)), config={},
+        result = labels.add_coordinates(axes, iter((2, 1)), config={'font': 'Fixture Sans'},
                                         x_config=None, y_config=None)
         self.assertIs(result, axes)
         self.assertEqual(len(self.calls), 1)
@@ -251,6 +333,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(result, plane)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1:5], ([1.0], False, [-1.0], False))
+        self.assertEqual([option.exclude for option in self.options], [False, False])
+        self.assertEqual([option.excluded for option in self.options], [[0.0], [0.0]])
         self.assertEqual([entry[2] for entry in self.created], [2, 3])
         self.assertEqual(len(x_axis.numbers), 2)
         self.assertEqual(len(y_axis.numbers), 2)
@@ -305,7 +389,9 @@ class NumericLabelAdapterTests(unittest.TestCase):
             x_config={"font": "Fixture Sans"}, y_config=None,
             config={"font_size": 24},
         )
-        x_axis.add_numbers.assert_called_once_with(None, font_size=24, font="Fixture Sans")
+        x_axis.add_numbers.assert_called_once_with(
+            None, excluding=(0.0,), font_size=24, font="Fixture Sans",
+        )
         self.assertIs(y_axis.numbers, decimal_family)
         self.assertEqual(plane.coordinate_labels, (native_family, decimal_family))
 

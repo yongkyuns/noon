@@ -182,6 +182,34 @@ fn second_axis_preparation_failure_is_atomic_including_fonts() {
 }
 
 #[test]
+fn axes_coordinate_labels_apply_independent_exact_exclusions() {
+    let mut scene = Scene::new();
+    let axes = scene
+        .axes(&ManimAxesOptions::new(
+            [0.0, 2.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            4.0,
+            3.0,
+        ))
+        .unwrap();
+    let options = NumberLabelOptions {
+        exclude_zero: false,
+        ..Default::default()
+    };
+    let [x, y] = axes
+        .add_coordinates_excluding(
+            Some(&[0.0, 1.0, 2.0]),
+            Some(&[-1.0, 0.0, 1.0]),
+            [&[0.0, 2.0], &[-1.0]],
+            &options,
+            &options,
+        )
+        .unwrap();
+    assert_eq!(leaves(&x).iter().map(text).collect::<Vec<_>>(), ["1"]);
+    assert_eq!(leaves(&y).iter().map(text).collect::<Vec<_>>(), ["0", "1"]);
+}
+
+#[test]
 fn number_plane_coordinate_labels_use_shared_layout_and_attach_atomically() {
     let mut scene = Scene::new();
     let plane = scene

@@ -1357,6 +1357,105 @@ mod tests {
     }
 
     #[test]
+    fn number_line_decimal_number_labels_keep_value_metadata_and_apply_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([-2.0, 2.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 1,
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers_excluding(&mut backend, Some(&[-1.0, 0.0, 1.0]), &[0.0], &options)
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["-1.0", "1.0"],
+        );
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.value().unwrap())
+                .collect::<Vec<_>>(),
+            [-1.0, 1.0],
+        );
+        assert!(store
+            .borrow()
+            .semantic_family_members_checked(line.family().node_id())
+            .unwrap()
+            .contains(&labels.node_id()));
+    }
+
+    #[test]
+    fn axes_decimal_coordinate_labels_apply_independent_exact_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimAxes, ManimAxesOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let axes = ManimAxes::create(
+            Rc::clone(scene.integration_store()),
+            &ManimAxesOptions::default(),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let [x, y] = axes
+            .add_decimal_coordinates_excluding(
+                &mut backend,
+                Some(&[0.0, 1.0, 2.0]),
+                Some(&[-1.0, 0.0, 1.0]),
+                [&[0.0, 2.0], &[-1.0]],
+                &options,
+                &options,
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let values = |family: &crate::MobjectFamily| {
+            store
+                .borrow()
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .into_iter()
+                .map(|member| {
+                    DecimalNumber::from_mobject(
+                        Mobject::from_node(Rc::clone(&store), member).unwrap(),
+                    )
+                    .unwrap()
+                    .value()
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(&x), [1.0]);
+        assert_eq!(values(&y), [0.0, 1.0]);
+    }
+
+    #[test]
     fn callback_numeric_reentry_reads_the_prepared_signal_value() {
         use noon_core::{SemanticMutationTransaction, TextResourceLookup};
         let mut backend = RuleBackend;

@@ -115,6 +115,37 @@ fn numbers(values: &[f64], automatic: bool) -> Result<Option<&[f64]>, JsValue> {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    /// Construct retained DecimalNumber labels on one NumberLine axis.
+    #[wasm_bindgen(js_name = numberLineDecimalNumberLabelFamily)]
+    pub fn number_line_decimal_number_label_family(
+        &self,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        attach: bool,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
+        let values = numbers(values, automatic)?;
+        let family = if attach {
+            line.add_decimal_numbers_excluding(
+                compiler,
+                values,
+                &options.excluded_numbers,
+                &options.options,
+            )
+        } else {
+            line.decimal_number_labels_excluding(
+                compiler,
+                values,
+                &options.excluded_numbers,
+                &options.options,
+            )
+        }
+        .map_err(failure)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
     /// Cold-only construction. Python rejects this call after live bootstrap.
     #[wasm_bindgen(js_name = numberLabelFamily)]
     pub fn number_label_family(
@@ -181,9 +212,36 @@ impl WasmAuthoringFamilyHandle {
     ) -> Result<js_sys::Array, JsValue> {
         let axes = ManimAxes::from_family(self.semantic_family()?).map_err(failure)?;
         let families = axes
-            .add_coordinates(
+            .add_coordinates_excluding(
                 numbers(x_values, automatic_x)?,
                 numbers(y_values, automatic_y)?,
+                [&x_options.excluded_numbers, &y_options.excluded_numbers],
+                &x_options.options,
+                &y_options.options,
+            )
+            .map_err(failure)?;
+        Ok(label_family_handles(families))
+    }
+
+    /// Construct both Axes DecimalNumber label families atomically.
+    #[wasm_bindgen(js_name = axesDecimalCoordinateLabelFamilies)]
+    pub fn axes_decimal_coordinate_label_families(
+        &self,
+        x_values: &[f64],
+        automatic_x: bool,
+        y_values: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<js_sys::Array, JsValue> {
+        let axes = ManimAxes::from_family(self.semantic_family()?).map_err(failure)?;
+        let families = axes
+            .add_decimal_coordinates_excluding(
+                compiler,
+                numbers(x_values, automatic_x)?,
+                numbers(y_values, automatic_y)?,
+                [&x_options.excluded_numbers, &y_options.excluded_numbers],
                 &x_options.options,
                 &y_options.options,
             )
@@ -203,9 +261,10 @@ impl WasmAuthoringFamilyHandle {
     ) -> Result<js_sys::Array, JsValue> {
         let plane = ManimNumberPlane::from_family(self.semantic_family()?).map_err(failure)?;
         let families = plane
-            .add_coordinates(
+            .add_coordinates_excluding(
                 numbers(x_values, automatic_x)?,
                 numbers(y_values, automatic_y)?,
+                [&x_options.excluded_numbers, &y_options.excluded_numbers],
                 &x_options.options,
                 &y_options.options,
             )
@@ -226,10 +285,11 @@ impl WasmAuthoringFamilyHandle {
     ) -> Result<js_sys::Array, JsValue> {
         let plane = ManimNumberPlane::from_family(self.semantic_family()?).map_err(failure)?;
         let families = plane
-            .add_decimal_coordinates(
+            .add_decimal_coordinates_excluding(
                 compiler,
                 numbers(x_values, automatic_x)?,
                 numbers(y_values, automatic_y)?,
+                [&x_options.excluded_numbers, &y_options.excluded_numbers],
                 &x_options.options,
                 &y_options.options,
             )
@@ -255,7 +315,12 @@ impl WasmAuthoringFamilyHandle {
         }
         .map_err(failure)?;
         let family = axis
-            .add_decimal_numbers(compiler, numbers(values, automatic)?, &options.options)
+            .add_decimal_numbers_excluding(
+                compiler,
+                numbers(values, automatic)?,
+                &options.excluded_numbers,
+                &options.options,
+            )
             .map_err(failure)?;
         Ok(Self::from_semantic_family(family))
     }
