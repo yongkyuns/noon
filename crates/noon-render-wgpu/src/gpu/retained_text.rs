@@ -4269,7 +4269,7 @@ mod tests {
             let mut text_object = frame.objects[1].clone();
             let mut images = noon_core::RasterImageResourceArena::new();
             let image_handle = images
-                .intern_rgba8(8, 8, vec![46, 173, 237, 148].repeat(64))
+                .intern_rgba8(8, 8, [46, 173, 237, 148].repeat(64))
                 .unwrap();
             let image_content = noon_core::RasterImageContentRef::from_resource(
                 noon_core::SemanticImageContent::new(image_handle),
