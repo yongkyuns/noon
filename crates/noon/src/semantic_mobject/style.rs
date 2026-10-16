@@ -57,6 +57,7 @@ pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
 pub(crate) trait PaintStyleEdit {
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;
+    fn manim_color(&self) -> Result<Color, AuthoringError>;
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64);
     fn set_stroke_color(&mut self, color: Color, opacity_when_enabled: f64);
     fn set_fill_opacity(&mut self, opacity: f64);
@@ -99,6 +100,10 @@ impl PaintStyleEdit for SemanticStyle {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+
+    fn manim_color(&self) -> Result<Color, AuthoringError> {
+        manim_color_from_semantic(self)
     }
 
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64) {
@@ -149,6 +154,15 @@ impl PaintStyleEdit for Style {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+
+    fn manim_color(&self) -> Result<Color, AuthoringError> {
+        Ok(self
+            .fill
+            .filter(|color| color.alpha > 0.0)
+            .or(self.stroke)
+            .map(opaque_paint_color)
+            .unwrap_or(Color::WHITE))
     }
 
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64) {
@@ -288,6 +302,47 @@ pub(crate) fn edit_fade<S: PaintStyleEdit>(
     darkness: f64,
 ) -> Result<(), AuthoringError> {
     edit_fade_occurrences(style, darkness, 1)
+}
+
+/// Interpolate the current Manim color toward a target and apply it to enabled paint.
+/// This follows ManimCE's `Mobject.fade_to` path: `get_color`, color interpolation,
+/// then `set_color` on the object itself.
+pub(crate) fn edit_fade_to<S: PaintStyleEdit>(
+    style: &mut S,
+    target: Color,
+    amount: f64,
+) -> Result<(), AuthoringError> {
+    validate_fade_to_inputs(target, amount)?;
+    // VMobject.set_color changes fill/stroke color without changing their opacity.
+    // Family aliases therefore install the same color without compounding interpolation.
+    let source = style.manim_color()?;
+    let channel = |from: f32, to: f32| f64::from(from) + (f64::from(to) - f64::from(from)) * amount;
+    let color = opaque_color(
+        "fade_to",
+        channel(source.red, target.red),
+        channel(source.green, target.green),
+        channel(source.blue, target.blue),
+    )?;
+    edit_color(
+        style,
+        f64::from(color.red),
+        f64::from(color.green),
+        f64::from(color.blue),
+        1.0,
+    )
+}
+
+pub(crate) fn validate_fade_to_inputs(target: Color, amount: f64) -> Result<(), AuthoringError> {
+    if !amount.is_finite() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    opaque_color(
+        "fade_to target",
+        f64::from(target.red),
+        f64::from(target.green),
+        f64::from(target.blue),
+    )?;
+    Ok(())
 }
 
 pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
@@ -535,6 +590,40 @@ impl Mobject {
         let mut state = self.state()?;
         edit_fade(&mut state.style, darkness)?;
         self.commit_state(state)
+    }
+
+    /// Interpolate this object's Manim color toward `target` by `amount`.
+    pub fn fade_to(&mut self, target: Color, amount: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
+        if !self.has_fade_to_points()? {
+            return Ok(());
+        }
+        let mut state = self.state()?;
+        edit_fade_to(&mut state.style, target, amount)?;
+        self.commit_state(state)
+    }
+
+    pub(crate) fn has_fade_to_points(&self) -> Result<bool, AuthoringError> {
+        let state = self.state()?;
+        match state.content {
+            SemanticObjectContent::Image(_) => Ok(false),
+            SemanticObjectContent::Text(_) => Ok(true),
+            SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
+                let store = self.integration_store().borrow();
+                match store
+                    .geometry_resources()
+                    .get(handle)
+                    .ok_or(AuthoringError::MissingGeometryResource(handle))?
+                {
+                    GeometryResource::Mesh(_) => Ok(true),
+                    GeometryResource::VectorPath(_) => {
+                        drop(store);
+                        Ok(self.local_path_query()?.point_count() > 0)
+                    }
+                }
+            }
+            SemanticObjectContent::Geometry(_) => Ok(self.local_path_query()?.point_count() > 0),
+        }
     }
 }
 

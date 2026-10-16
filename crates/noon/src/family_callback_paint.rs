@@ -1,6 +1,7 @@
 //! Atomic family paint preparation over a revision-pinned effective read view.
 use crate::{
-    AuthoringError, Color, ExecutionSessionCallbackError, MobjectFamily, SemanticNodeId, Style,
+    AuthoringError, Color, ExecutionSessionCallbackError, Mobject, MobjectFamily, SemanticNodeId,
+    Style,
 };
 use noon_core::SceneRevision;
 
@@ -19,6 +20,10 @@ pub enum FamilyPaint {
     },
     Opacity(f64),
     Fade(f64),
+    FadeTo {
+        color: Color,
+        amount: f64,
+    },
 }
 
 impl FamilyPaint {
@@ -39,6 +44,9 @@ impl FamilyPaint {
             } => crate::family_style::stroke(style, color, width, opacity),
             Self::Opacity(value) => crate::semantic_mobject::edit_manim_opacity(style, value),
             Self::Fade(value) => crate::semantic_mobject::edit_fade(style, value),
+            Self::FadeTo { color, amount } => {
+                crate::semantic_mobject::edit_fade_to(style, color, amount)
+            }
         }
     }
 }
@@ -112,7 +120,25 @@ impl MobjectFamily {
         operation: FamilyPaint,
         mut read: impl FnMut(SemanticNodeId) -> Result<Style, ExecutionSessionCallbackError>,
     ) -> Result<Vec<(SemanticNodeId, Style)>, FamilyCallbackPaintError> {
-        let leaves = self.callback_leaf_nodes(revision)?;
+        let mut leaves = self.callback_leaf_nodes(revision)?;
+        if matches!(operation, FamilyPaint::FadeTo { .. }) {
+            let store = self.integration_store().clone();
+            let mut pointful = Vec::with_capacity(leaves.len());
+            for node in leaves {
+                let object = Mobject::from_node(store.clone(), node)
+                    .map_err(FamilyCallbackPaintError::Authoring)?;
+                if object
+                    .has_fade_to_points()
+                    .map_err(FamilyCallbackPaintError::Authoring)?
+                {
+                    pointful.push(node);
+                }
+            }
+            leaves = pointful;
+            if leaves.is_empty() {
+                return Ok(Vec::new());
+            }
+        }
         let multiplicities = if matches!(operation, FamilyPaint::Fade(_)) {
             self.integration_store()
                 .borrow()
@@ -123,24 +149,34 @@ impl MobjectFamily {
         } else {
             std::collections::HashMap::new()
         };
-        operation
-            .apply(&mut Style::default())
-            .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+        if let FamilyPaint::FadeTo { color, amount } = operation {
+            crate::semantic_mobject::validate_fade_to_inputs(color, amount)
+                .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+        } else {
+            operation
+                .apply(&mut Style::default())
+                .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+        }
         let mut changes = Vec::with_capacity(leaves.len());
         for node in leaves {
             let previous = read(node).map_err(FamilyCallbackPaintError::Callback)?;
             let mut next = previous;
-            if let FamilyPaint::Fade(darkness) = operation {
-                crate::semantic_mobject::edit_fade_occurrences(
-                    &mut next,
-                    darkness,
-                    multiplicities[&node],
-                )
-                .map_err(FamilyCallbackPaintError::InvalidPaint)?;
-            } else {
-                operation
-                    .apply(&mut next)
+            match operation {
+                FamilyPaint::Fade(darkness) => {
+                    crate::semantic_mobject::edit_fade_occurrences(
+                        &mut next,
+                        darkness,
+                        multiplicities[&node],
+                    )
                     .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+                }
+                FamilyPaint::FadeTo { color, amount } => {
+                    crate::semantic_mobject::edit_fade_to(&mut next, color, amount)
+                        .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+                }
+                _ => operation
+                    .apply(&mut next)
+                    .map_err(FamilyCallbackPaintError::InvalidPaint)?,
             }
             if next != previous {
                 changes.push((node, next));

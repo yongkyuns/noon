@@ -1567,6 +1567,24 @@ def _fade(self, darkness=0.5, family=True):
     return self
 
 
+def _fade_to(self, color, alpha, family=True):
+    if not family and _is_shared_family(self):
+        return self
+    target = tuple(_ir._finite_number(f"color.{name}", value) for name, value in zip(
+        ("red", "green", "blue", "alpha"), color
+    ))
+    amount = _ir._finite_number("alpha", alpha)
+    handle, context, suffix = _style_target(self)
+    if handle is None:
+        raise RuntimeError("Mobject.fade_to requires the shared Rust authoring host")
+    if context is None:
+        engine_call(handle.fadeTo, *target, amount, operation="Mobject.fade_to")
+    else:
+        operation = context.liveSetFamilyFadeTo if suffix else context.liveFadeTo
+        engine_call(operation, handle, *target, amount, operation="Mobject.fade_to")
+    return self
+
+
 def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF,
                            cell_alignment=_base.ORIGIN, row_alignments=None,
                            col_alignments=None, row_heights=None, col_widths=None,

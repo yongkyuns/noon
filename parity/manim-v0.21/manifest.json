@@ -1487,7 +1487,7 @@
       "scene": "PaintFade",
       "source": "parity/manim-v0.21/core-examples/paint_fade.py",
       "expected_duration": 0.2,
-      "notes": "Leaf/default/nonrecursive and repeated nested-alias paint fades; existing raster policy applies."
+      "notes": "Leaf/default/nonrecursive and repeated nested-alias paint fades plus repeated-alias RGB fade_to interpolation with unchanged paint opacity; existing raster policy applies."
     }
   ],
   "sample_fractions": [
