@@ -34,6 +34,7 @@ use std::{
 pub enum GraphLayout {
     Circular,
     Shell,
+    Partite,
     Spiral,
     Random,
     Spring,
@@ -56,6 +57,10 @@ pub struct GraphLayoutOptions {
     pub resolution: f64,
     /// Space spiral points by chord distance instead of angle.
     pub equidistant: bool,
+    /// Ordered, non-empty multipartite layers expressed as vertex indices.
+    pub partitions: Vec<Vec<usize>>,
+    /// Swap the two rescaled axes for NetworkX's horizontal multipartite view.
+    pub align_horizontal: bool,
 }
 
 impl Default for GraphLayoutOptions {
@@ -71,6 +76,8 @@ impl Default for GraphLayoutOptions {
             rotate: None,
             resolution: 0.35,
             equidistant: false,
+            partitions: Vec::new(),
+            align_horizontal: false,
         }
     }
 }
@@ -714,6 +721,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Spiral {
         return spiral_layout(count, options);
     }
+    if options.layout == GraphLayout::Partite {
+        return partite_layout(count, options);
+    }
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -729,6 +739,7 @@ fn graph_layout(
             })
             .collect::<Vec<_>>(),
         GraphLayout::Shell => unreachable!("shell layout returned above"),
+        GraphLayout::Partite => unreachable!("partite layout returned above"),
         GraphLayout::Spiral => unreachable!("spiral layout returned above"),
         GraphLayout::Random | GraphLayout::Spring => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
@@ -744,6 +755,65 @@ fn graph_layout(
     {
         return Err(GraphAuthoringError::InvalidLayout(
             "computed coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+fn partite_layout(
+    count: usize,
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if options.partitions.is_empty() || options.partitions.iter().any(Vec::is_empty) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "partite layout requires non-empty partition layers",
+        ));
+    }
+    let mut seen = vec![false; count];
+    for &vertex in options.partitions.iter().flatten() {
+        let Some(assigned) = seen.get_mut(vertex) else {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "partite partition references an unknown vertex",
+            ));
+        };
+        if std::mem::replace(assigned, true) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "partite layers must assign every vertex exactly once",
+            ));
+        }
+    }
+    if seen.iter().any(|assigned| !assigned) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "partite layers must assign every vertex exactly once",
+        ));
+    }
+
+    let width = options.partitions.len();
+    let mut positions = vec![(0.0, 0.0); count];
+    for (layer_index, layer) in options.partitions.iter().enumerate() {
+        let layer_height = layer.len();
+        for (row, &vertex) in layer.iter().enumerate() {
+            positions[vertex] = (
+                layer_index as f64 - (width - 1) as f64 / 2.0,
+                row as f64 - (layer_height - 1) as f64 / 2.0,
+            );
+        }
+    }
+    rescale(&mut positions, options.scale, options.center);
+    if options.align_horizontal {
+        for (x, y) in &mut positions {
+            std::mem::swap(x, y);
+        }
+    }
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed partite coordinates are not finite",
         ));
     }
     Ok(positions)

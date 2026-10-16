@@ -31,6 +31,12 @@ pub(crate) enum GraphOperation {
         center: (f64, f64),
         rotate: Option<f64>,
     },
+    Partite {
+        partitions: Vec<Vec<usize>>,
+        scale: f64,
+        center: (f64, f64),
+        align_horizontal: bool,
+    },
     Spiral {
         scale: f64,
         center: (f64, f64),
@@ -139,6 +145,48 @@ impl NativeGraph {
                         center,
                         shells,
                         rotate,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Undirected(graph),
+                GraphOperation::Partite {
+                    partitions,
+                    scale,
+                    center,
+                    align_horizontal,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Partite,
+                        scale,
+                        center,
+                        partitions,
+                        align_horizontal,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Partite {
+                    partitions,
+                    scale,
+                    center,
+                    align_horizontal,
+                },
+            ) => {
+                graph.change_layout(
+                    scene,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Partite,
+                        scale,
+                        center,
+                        partitions,
+                        align_horizontal,
                         ..Default::default()
                     },
                 )?;
@@ -291,6 +339,48 @@ impl NativeGraph {
             }
             (
                 Self::Undirected(graph),
+                GraphOperation::Partite {
+                    partitions,
+                    scale,
+                    center,
+                    align_horizontal,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Partite,
+                        scale,
+                        center,
+                        partitions,
+                        align_horizontal,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::Partite {
+                    partitions,
+                    scale,
+                    center,
+                    align_horizontal,
+                },
+            ) => {
+                graph.change_layout_live(
+                    live,
+                    noon::GraphLayoutOptions {
+                        layout: noon::GraphLayout::Partite,
+                        scale,
+                        center,
+                        partitions,
+                        align_horizontal,
+                        ..Default::default()
+                    },
+                )?;
+            }
+            (
+                Self::Undirected(graph),
                 GraphOperation::Spiral {
                     scale,
                     center,
@@ -371,14 +461,14 @@ fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn shell_indices(indices: &[u32], sizes: &[u32]) -> Result<Vec<Vec<usize>>, JsValue> {
+fn grouped_indices(indices: &[u32], sizes: &[u32], name: &str) -> Result<Vec<Vec<usize>>, JsValue> {
     let total = sizes
         .iter()
         .try_fold(0usize, |total, &size| total.checked_add(size as usize));
     if total != Some(indices.len()) {
-        return Err(js_error(
-            "Graph shell sizes must cover the shell vertex indices",
-        ));
+        return Err(js_error(format!(
+            "{name} sizes must cover the grouped vertex indices"
+        )));
     }
     let mut offset = 0usize;
     Ok(sizes
@@ -617,7 +707,7 @@ impl CanonicalAuthoringSceneContext {
         options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
         let edges = pairs(edge_pairs, "Graph edges")?;
-        let shells = shell_indices(shell_vertex_indices, shell_sizes)?;
+        let shells = grouped_indices(shell_vertex_indices, shell_sizes, "Graph shell")?;
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Shell,
             scale,
@@ -630,6 +720,45 @@ impl CanonicalAuthoringSceneContext {
         .map_err(|error| {
             js_error(crate::authoring_error::AuthoringFailure::unclassified(
                 "graph.shell_layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
+    /// Compute a NetworkX-compatible multipartite layout before publishing nodes.
+    #[wasm_bindgen(js_name = liveCreatePartiteGraph)]
+    pub fn live_create_partite_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        partition_vertex_indices: &[u32],
+        partition_sizes: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        align_horizontal: bool,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let partitions =
+            grouped_indices(partition_vertex_indices, partition_sizes, "Graph partition")?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Partite,
+            scale,
+            center: (center_x, center_y),
+            partitions,
+            align_horizontal,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.partite_layout",
                 &error,
             ))
         })?;
@@ -751,10 +880,40 @@ impl CanonicalAuthoringSceneContext {
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::Shell {
-                shells: shell_indices(shell_vertex_indices, shell_sizes)?,
+                shells: grouped_indices(shell_vertex_indices, shell_sizes, "Graph shell")?,
                 scale,
                 center: (center_x, center_y),
                 rotate,
+            },
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphPartiteLayout)]
+    pub fn live_graph_partite_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        partition_vertex_indices: &[u32],
+        partition_sizes: &[u32],
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        align_horizontal: bool,
+    ) -> Result<(), JsValue> {
+        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+            return Err(js_error("partite Graph layout values must be finite"));
+        }
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Partite {
+                partitions: grouped_indices(
+                    partition_vertex_indices,
+                    partition_sizes,
+                    "Graph partition",
+                )?,
+                scale,
+                center: (center_x, center_y),
+                align_horizontal,
             },
         )
         .map_err(js_error)

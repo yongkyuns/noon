@@ -52,6 +52,7 @@ class _Context:
         self.layout_calls = []
         self.shell_layout_calls = []
         self.spiral_layout_calls = []
+        self.partite_layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -69,6 +70,7 @@ class _Context:
     liveCreateCircularGraph = liveCreateGraph
     liveCreateShellGraph = liveCreateGraph
     liveCreateSpiralGraph = liveCreateGraph
+    liveCreatePartiteGraph = liveCreateGraph
 
     def liveGraphCopy(self, handle):
         self._call("copy")
@@ -89,6 +91,9 @@ class _Context:
     def liveGraphSpiralLayout(self, *args):
         self._call("spiral")
         self.spiral_layout_calls.append(args)
+    def liveGraphPartiteLayout(self, *args):
+        self._call("partite")
+        self.partite_layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -266,6 +271,51 @@ class GraphFacadeTests(unittest.TestCase):
             self.context.creation_calls[0][:-1],
             (False, [0], [], 2.0, 3.0, 4.0, 0.35, False),
         )
+
+    def test_partite_layout_preserves_partition_order_missing_nodes_and_alignment(self):
+        value = graph.Graph(
+            ["a", "b", "c", "d"], [("a", "b")], layout="partite",
+            layout_scale=1.2,
+            layout_config={
+                "partitions": [["c", "a"], ["b"]],
+                "align": "horizontal",
+                "center": (2, -1),
+            },
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0, 1, 2, 3], [0, 1], [0, 2, 1, 3], [2, 1, 1],
+             1.2, 2.0, -1.0, True),
+        )
+        value.remove_vertices(["b"])
+        value.change_layout(
+            "partite", scale=0.8,
+            layout_config={"partitions": [["c"], ["a"]]},
+        )
+        self.assertEqual(
+            self.context.partite_layout_calls[0][1:],
+            ([1, 0, 2], [1, 1, 1], 0.8, 0.0, 0.0, False),
+        )
+
+        digraph = graph.DiGraph(
+            ["a", "b"], [("a", "b")], layout="partite",
+            layout_config={"partitions": [["a"], ["b"]]},
+        )
+        self.assertTrue(self.context.creation_calls[1][0])
+
+    def test_partite_layout_rejects_missing_or_unsupported_configuration(self):
+        invalid = [
+            ({}, ValueError, "requires a non-empty partitions"),
+            ({"partitions": []}, ValueError, "requires a non-empty partitions"),
+            ({"partitions": [["missing"]]}, ValueError, "unknown vertex"),
+            ({"partitions": [["a"]], "align": "diagonal"}, ValueError, "align must be"),
+            ({"partitions": [["a"]], "dim": 2}, NotImplementedError, "unsupported partite"),
+        ]
+        for config, error, message in invalid:
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [], layout="partite", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
 
     def test_global_style_configs_are_coerced_into_one_typed_rust_options_handle(self):
         graph.DiGraph(

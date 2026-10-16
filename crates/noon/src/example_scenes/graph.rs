@@ -111,6 +111,23 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         },
     )?;
 
+    let mut partite = scene.graph_with_options(
+        [("q0", (3.5, 2.6)), ("q1", (3.5, 2.6)), ("q2", (3.5, 2.6))],
+        [("q0", "q1"), ("q1", "q2")],
+        options.clone(),
+    )?;
+    partite.change_layout(
+        &mut scene,
+        crate::GraphLayoutOptions {
+            layout: crate::GraphLayout::Partite,
+            scale: 0.9,
+            center: (3.5, 2.6),
+            partitions: vec![vec![0], vec![1, 2]],
+            align_horizontal: true,
+            ..Default::default()
+        },
+    )?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -132,6 +149,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(digraph.family()),
         MobjectTarget::Family(centered.family()),
         MobjectTarget::Family(spiral.family()),
+        MobjectTarget::Family(partite.family()),
         MobjectTarget::Family(shells.family()),
     ])?;
     scene.wait(0.21)?;
@@ -155,7 +173,7 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        assert_eq!(leaves.len(), 33);
+        assert_eq!(leaves.len(), 38);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

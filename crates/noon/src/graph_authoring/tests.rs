@@ -662,6 +662,8 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         rotate: None,
         resolution: 0.35,
         equidistant: false,
+        partitions: Vec::new(),
+        align_horizontal: false,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -802,6 +804,69 @@ fn spiral_layout_rescales_to_networkx_extent_and_supports_equidistant_spacing() 
     }
     .positions(4, &[])
     .is_err());
+}
+
+#[test]
+fn partite_layout_matches_networkx_layer_order_alignment_and_validation() {
+    let vertical = GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        scale: 2.0,
+        center: (3.0, 4.0),
+        partitions: vec![vec![0, 1], vec![2]],
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    let expected = [(2.0, 2.5), (2.0, 5.5), (5.0, 4.0)];
+    for (actual, expected) in vertical.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+    }
+
+    let horizontal = GraphLayoutOptions {
+        align_horizontal: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Partite,
+            scale: 2.0,
+            center: (3.0, 4.0),
+            partitions: vec![vec![0, 1], vec![2]],
+            ..Default::default()
+        }
+    }
+    .positions(3, &[])
+    .unwrap();
+    for (actual, expected) in horizontal.iter().zip([(2.5, 2.0), (5.5, 2.0), (4.0, 5.0)]) {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+    }
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0, 0], vec![1]],
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0]],
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0], vec![]],
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        ..Default::default()
+    }
+    .positions(0, &[])
+    .unwrap()
+    .is_empty());
 }
 
 #[test]

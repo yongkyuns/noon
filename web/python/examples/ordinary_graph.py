@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared circular/shell/spiral layouts."""
+"""Graph/DiGraph topology edits and shared circular/shell/spiral/partite layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -63,5 +63,21 @@ class OrdinaryGraph(Scene):
                 "resolution": 0.35, "equidistant": True, "center": (0, -2.6),
             },
         )
-        self.add(graph, directed, centered, shell_graph, spiral_graph)
+        partite_graph = Graph(
+            ["q0", "q1", "q2"], [("q0", "q1"), ("q1", "q2")],
+            layout="partite", layout_scale=0.9,
+            layout_config={
+                "partitions": [["q0"], ["q1", "q2"]],
+                "align": "horizontal", "center": (3.5, 2.6),
+            },
+            **styles,
+        )
+        partite_graph.change_layout(
+            "partite", scale=0.9,
+            layout_config={
+                "partitions": [["q0"], ["q1", "q2"]],
+                "align": "horizontal", "center": (3.5, 2.6),
+            },
+        )
+        self.add(graph, directed, centered, shell_graph, spiral_graph, partite_graph)
         self.wait(0.2)

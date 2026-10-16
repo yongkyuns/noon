@@ -135,7 +135,8 @@ class _GraphBase(_compat.Group):
     Circular layouts accept NetworkX's ``center`` and ``dim=2`` configuration
     through ``layout_config``. Shell layouts accept ``nlist``, ``rotate``,
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
-    ``equidistant``, ``center``, and ``dim=2``. Other options remain unsupported
+    ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
+    ``partitions``, ``align``, and ``center``. Other options remain unsupported
     until their Rust semantics are qualified. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
@@ -164,7 +165,8 @@ class _GraphBase(_compat.Group):
         circular = isinstance(layout, str) and layout == "circular"
         shell = isinstance(layout, str) and layout == "shell"
         spiral = isinstance(layout, str) and layout == "spiral"
-        if explicit is None and not circular and not shell and not spiral:
+        partite = isinstance(layout, str) and layout == "partite"
+        if explicit is None and not circular and not shell and not spiral and not partite:
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -194,6 +196,7 @@ class _GraphBase(_compat.Group):
                   if circular else _point(layout_center))
         shell_groups, rotate = ([], None)
         resolution, equidistant = (0.35, False)
+        partitions, align_horizontal = ([], False)
         if shell:
             center, shell_groups, rotate = _shell_layout_config(
                 layout_config, layout_center, self._graph_key_ids
@@ -201,6 +204,10 @@ class _GraphBase(_compat.Group):
         elif spiral:
             center, resolution, equidistant = _spiral_layout_config(
                 layout_config, layout_center, len(self._graph_key_ids)
+            )
+        elif partite:
+            center, partitions, align_horizontal = _partite_layout_config(
+                layout_config, layout_center, self._graph_key_ids
             )
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
@@ -215,7 +222,7 @@ class _GraphBase(_compat.Group):
                     scale, *center, options, operation="Graph.create",
                 )
             elif shell:
-                shell_indices, shell_sizes = _flatten_shells(shell_groups)
+                shell_indices, shell_sizes = _flatten_groups(shell_groups)
                 self._graph_handle = engine_call(
                     context.liveCreateShellGraph,
                     bool(self._directed), ids, _array(edge_ids),
@@ -227,6 +234,15 @@ class _GraphBase(_compat.Group):
                     context.liveCreateSpiralGraph,
                     bool(self._directed), ids, _array(edge_ids), scale, *center,
                     resolution, equidistant, options, operation="Graph.create",
+                )
+            elif partite:
+                partition_indices, partition_sizes = _flatten_groups(partitions)
+                self._graph_handle = engine_call(
+                    context.liveCreatePartiteGraph,
+                    bool(self._directed), ids, _array(edge_ids),
+                    _array(partition_indices), _array(partition_sizes),
+                    scale, *center, align_horizontal, options,
+                    operation="Graph.create",
                 )
             else:
                 self._graph_handle = engine_call(
@@ -368,7 +384,7 @@ class _GraphBase(_compat.Group):
             center, groups, rotate = _shell_layout_config(
                 layout_config, center, vertex_order
             )
-            shell_indices, shell_sizes = _flatten_shells(groups)
+            shell_indices, shell_sizes = _flatten_groups(groups)
             engine_call(
                 self._context().liveGraphShellLayout,
                 self._graph_handle,
@@ -387,6 +403,19 @@ class _GraphBase(_compat.Group):
                 resolution, equidistant,
                 operation="Graph.spiral_layout",
             )
+        elif layout == "partite":
+            center, partitions, align_horizontal = _partite_layout_config(
+                layout_config, center, self._graph_key_ids
+            )
+            partition_indices, partition_sizes = _flatten_groups(partitions)
+            engine_call(
+                self._context().liveGraphPartiteLayout,
+                self._graph_handle,
+                _array(partition_indices), _array(partition_sizes),
+                _shared._ir._finite_number("scale", scale), *center,
+                align_horizontal,
+                operation="Graph.partite_layout",
+            )
         elif layout == "explicit":
             if not isinstance(positions, Mapping):
                 raise TypeError("explicit Graph layout requires a key-to-position mapping")
@@ -401,7 +430,7 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only circular, shell, spiral, and explicit layouts"
+                "Python Graph qualifies only circular, shell, spiral, partite, and explicit layouts"
             )
         return self
 
@@ -482,7 +511,7 @@ def _shell_layout_config(layout_config, fallback_center, vertex_ids):
     return center, groups, rotate
 
 
-def _flatten_shells(groups):
+def _flatten_groups(groups):
     return [index for group in groups for index in group], [len(group) for group in groups]
 
 
@@ -519,8 +548,57 @@ def _spiral_layout_config(layout_config, fallback_center, vertex_count):
     return center, resolution, equidistant
 
 
+def _partite_layout_config(layout_config, fallback_center, vertex_ids):
+    """Resolve Manim's partition assignment and qualified NetworkX align options."""
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    unknown = [key for key in options if key not in {"partitions", "align", "center"}]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported partite layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    center = _point(options.get("center", fallback_center))
+    align = options.get("align", "vertical")
+    if align not in ("vertical", "horizontal"):
+        raise ValueError("partite layout_config align must be 'vertical' or 'horizontal'")
+    specifications = options.get("partitions")
+    if specifications is None or isinstance(specifications, (str, bytes)) or not isinstance(specifications, Sequence):
+        raise ValueError("partite layout requires a non-empty partitions sequence")
+    if not specifications:
+        raise ValueError("partite layout requires a non-empty partitions sequence")
+
+    position_by_key = {key: index for index, key in enumerate(vertex_ids)}
+    layer_by_position = {}
+    for layer, partition in enumerate(specifications):
+        if isinstance(partition, (str, bytes)) or not isinstance(partition, Sequence):
+            raise TypeError("each partite partition must be a sequence of vertex keys")
+        for key in partition:
+            try:
+                position = position_by_key[key]
+            except (KeyError, TypeError) as error:
+                raise ValueError(f"partite layout references unknown vertex {key!r}") from error
+            # Manim assigns each partition in order, so a repeated key receives
+            # the subset number from its last occurrence.
+            layer_by_position[position] = layer
+    for position in range(len(position_by_key)):
+        layer_by_position.setdefault(position, len(specifications))
+
+    ordered_layers = sorted(set(layer_by_position.values()))
+    groups = [
+        [position for position in range(len(position_by_key))
+         if layer_by_position[position] == layer]
+        for layer in ordered_layers
+    ]
+    return center, groups, align == "horizontal"
+
+
 class Graph(_GraphBase):
-    """Undirected retained Graph with qualified circular, shell, spiral, and explicit layouts."""
+    """Undirected retained Graph with qualified circular, shell, spiral, partite, and explicit layouts."""
 
 
 class DiGraph(_GraphBase):
