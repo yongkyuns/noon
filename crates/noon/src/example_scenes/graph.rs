@@ -69,6 +69,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         crate::GraphLayoutOptions {
             layout: crate::GraphLayout::Circular,
             scale: 1.6,
+            scale_y: Some(1.0),
             center: (3.5, 0.0),
             ..Default::default()
         },
@@ -85,6 +86,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         crate::GraphLayoutOptions {
             layout: crate::GraphLayout::Circular,
             scale: 1.4,
+            scale_y: Some(0.8),
             center: (3.0, -1.0),
             ..Default::default()
         },
@@ -104,6 +106,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         crate::GraphLayoutOptions {
             layout: crate::GraphLayout::Spiral,
             scale: 0.9,
+            scale_y: Some(0.55),
             center: (0.0, -2.6),
             resolution: 0.35,
             equidistant: true,
@@ -121,6 +124,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         crate::GraphLayoutOptions {
             layout: crate::GraphLayout::Partite,
             scale: 0.9,
+            scale_y: Some(0.55),
             center: (3.5, 2.6),
             partitions: vec![vec![0], vec![1, 2]],
             align_horizontal: true,
@@ -131,6 +135,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let spring_options = crate::GraphLayoutOptions {
         layout: crate::GraphLayout::Spring,
         scale: 0.65,
+        scale_y: Some(0.35),
         center: (-3.5, 2.6),
         spring_k: Some(1.0 / 3.0_f64.sqrt()),
         spring_positions: Some(vec![
@@ -174,6 +179,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let random_options = crate::GraphLayoutOptions {
         layout: crate::GraphLayout::Random,
         scale: 1.0,
+        scale_y: Some(0.5),
         // NetworkX adds this center to its uniform samples before Manim's
         // wrapper applies the `2 * scale * (position - 0.5)` transform.
         random_positions: Some(vec![
@@ -200,6 +206,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let tree_options = crate::GraphLayoutOptions {
         layout: crate::GraphLayout::Tree,
         scale: 0.65,
+        scale_y: Some(0.35),
         tree_root: Some(0),
         ..Default::default()
     };

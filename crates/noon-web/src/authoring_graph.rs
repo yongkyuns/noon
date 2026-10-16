@@ -25,6 +25,7 @@ pub(crate) enum GraphOperation {
     RemoveEdges(Vec<(u32, u32)>),
     Circular {
         scale: f64,
+        scale_y: Option<f64>,
         center: (f64, f64),
     },
     Shell {
@@ -36,11 +37,13 @@ pub(crate) enum GraphOperation {
     Partite {
         partitions: Vec<Vec<usize>>,
         scale: f64,
+        scale_y: Option<f64>,
         center: (f64, f64),
         align_horizontal: bool,
     },
     Spiral {
         scale: f64,
+        scale_y: Option<f64>,
         center: (f64, f64),
         resolution: f64,
         equidistant: bool,
@@ -90,23 +93,39 @@ impl NativeGraph {
             (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
                 graph.remove_edges(scene, edges)?;
             }
-            (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
+            (
+                Self::Undirected(graph),
+                GraphOperation::Circular {
+                    scale,
+                    scale_y,
+                    center,
+                },
+            ) => {
                 graph.change_layout(
                     scene,
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Circular,
                         scale,
+                        scale_y,
                         center,
                         ..Default::default()
                     },
                 )?;
             }
-            (Self::Directed(graph), GraphOperation::Circular { scale, center }) => {
+            (
+                Self::Directed(graph),
+                GraphOperation::Circular {
+                    scale,
+                    scale_y,
+                    center,
+                },
+            ) => {
                 graph.change_layout(
                     scene,
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Circular,
                         scale,
+                        scale_y,
                         center,
                         ..Default::default()
                     },
@@ -159,6 +178,7 @@ impl NativeGraph {
                 GraphOperation::Partite {
                     partitions,
                     scale,
+                    scale_y,
                     center,
                     align_horizontal,
                 },
@@ -168,6 +188,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Partite,
                         scale,
+                        scale_y,
                         center,
                         partitions,
                         align_horizontal,
@@ -180,6 +201,7 @@ impl NativeGraph {
                 GraphOperation::Partite {
                     partitions,
                     scale,
+                    scale_y,
                     center,
                     align_horizontal,
                 },
@@ -189,6 +211,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Partite,
                         scale,
+                        scale_y,
                         center,
                         partitions,
                         align_horizontal,
@@ -200,6 +223,7 @@ impl NativeGraph {
                 Self::Undirected(graph),
                 GraphOperation::Spiral {
                     scale,
+                    scale_y,
                     center,
                     resolution,
                     equidistant,
@@ -210,6 +234,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Spiral,
                         scale,
+                        scale_y,
                         center,
                         resolution,
                         equidistant,
@@ -221,6 +246,7 @@ impl NativeGraph {
                 Self::Directed(graph),
                 GraphOperation::Spiral {
                     scale,
+                    scale_y,
                     center,
                     resolution,
                     equidistant,
@@ -231,6 +257,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Spiral,
                         scale,
+                        scale_y,
                         center,
                         resolution,
                         equidistant,
@@ -297,23 +324,39 @@ impl NativeGraph {
             (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
                 graph.remove_edges_live(live, edges)?;
             }
-            (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
+            (
+                Self::Undirected(graph),
+                GraphOperation::Circular {
+                    scale,
+                    scale_y,
+                    center,
+                },
+            ) => {
                 graph.change_layout_live(
                     live,
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Circular,
                         scale,
+                        scale_y,
                         center,
                         ..Default::default()
                     },
                 )?;
             }
-            (Self::Directed(graph), GraphOperation::Circular { scale, center }) => {
+            (
+                Self::Directed(graph),
+                GraphOperation::Circular {
+                    scale,
+                    scale_y,
+                    center,
+                },
+            ) => {
                 graph.change_layout_live(
                     live,
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Circular,
                         scale,
+                        scale_y,
                         center,
                         ..Default::default()
                     },
@@ -366,6 +409,7 @@ impl NativeGraph {
                 GraphOperation::Partite {
                     partitions,
                     scale,
+                    scale_y,
                     center,
                     align_horizontal,
                 },
@@ -375,6 +419,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Partite,
                         scale,
+                        scale_y,
                         center,
                         partitions,
                         align_horizontal,
@@ -387,6 +432,7 @@ impl NativeGraph {
                 GraphOperation::Partite {
                     partitions,
                     scale,
+                    scale_y,
                     center,
                     align_horizontal,
                 },
@@ -396,6 +442,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Partite,
                         scale,
+                        scale_y,
                         center,
                         partitions,
                         align_horizontal,
@@ -407,6 +454,7 @@ impl NativeGraph {
                 Self::Undirected(graph),
                 GraphOperation::Spiral {
                     scale,
+                    scale_y,
                     center,
                     resolution,
                     equidistant,
@@ -417,6 +465,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Spiral,
                         scale,
+                        scale_y,
                         center,
                         resolution,
                         equidistant,
@@ -428,6 +477,7 @@ impl NativeGraph {
                 Self::Directed(graph),
                 GraphOperation::Spiral {
                     scale,
+                    scale_y,
                     center,
                     resolution,
                     equidistant,
@@ -438,6 +488,7 @@ impl NativeGraph {
                     noon::GraphLayoutOptions {
                         layout: noon::GraphLayout::Spiral,
                         scale,
+                        scale_y,
                         center,
                         resolution,
                         equidistant,
@@ -709,6 +760,7 @@ impl CanonicalAuthoringSceneContext {
         vertex_ids: &[u32],
         edge_pairs: &[u32],
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         options: WasmGraphOptions,
@@ -717,6 +769,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Circular,
             scale,
+            scale_y,
             center: (center_x, center_y),
             ..Default::default()
         }
@@ -782,6 +835,7 @@ impl CanonicalAuthoringSceneContext {
         partition_vertex_indices: &[u32],
         partition_sizes: &[u32],
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         align_horizontal: bool,
@@ -793,6 +847,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Partite,
             scale,
+            scale_y,
             center: (center_x, center_y),
             partitions,
             align_horizontal,
@@ -819,6 +874,7 @@ impl CanonicalAuthoringSceneContext {
         vertex_ids: &[u32],
         edge_pairs: &[u32],
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         resolution: f64,
@@ -829,6 +885,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Spiral,
             scale,
+            scale_y,
             center: (center_x, center_y),
             resolution,
             equidistant,
@@ -856,6 +913,7 @@ impl CanonicalAuthoringSceneContext {
         edge_pairs: &[u32],
         random_positions: &[f64],
         scale: f64,
+        scale_y: Option<f64>,
         options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
         let edges = pairs(edge_pairs, "Graph edges")?;
@@ -869,6 +927,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Random,
             scale,
+            scale_y,
             random_positions: Some(random_positions),
             ..Default::default()
         }
@@ -897,6 +956,7 @@ impl CanonicalAuthoringSceneContext {
         spacing_x: Option<f64>,
         spacing_y: Option<f64>,
         scale: f64,
+        scale_y: Option<f64>,
         options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
         let edges = pairs(edge_pairs, "Graph edges")?;
@@ -927,6 +987,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Tree,
             scale,
+            scale_y,
             tree_root: Some(root_index as usize),
             tree_orientation_up: orientation_up,
             tree_vertex_spacing: vertex_spacing,
@@ -958,6 +1019,7 @@ impl CanonicalAuthoringSceneContext {
         fixed_vertex_indices: &[u32],
         fixed_is_set: bool,
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         k: Option<f64>,
@@ -1008,6 +1070,7 @@ impl CanonicalAuthoringSceneContext {
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Spring,
             scale,
+            scale_y,
             center: (center_x, center_y),
             iterations: iterations as usize,
             threshold,
@@ -1070,16 +1133,22 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         graph: &mut WasmGraphHandle,
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
     ) -> Result<(), JsValue> {
-        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+        if !scale.is_finite()
+            || scale_y.is_some_and(|value| !value.is_finite())
+            || !center_x.is_finite()
+            || !center_y.is_finite()
+        {
             return Err(js_error("circular Graph layout values must be finite"));
         }
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::Circular {
                 scale,
+                scale_y,
                 center: (center_x, center_y),
             },
         )
@@ -1123,11 +1192,16 @@ impl CanonicalAuthoringSceneContext {
         partition_vertex_indices: &[u32],
         partition_sizes: &[u32],
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         align_horizontal: bool,
     ) -> Result<(), JsValue> {
-        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+        if !scale.is_finite()
+            || scale_y.is_some_and(|value| !value.is_finite())
+            || !center_x.is_finite()
+            || !center_y.is_finite()
+        {
             return Err(js_error("partite Graph layout values must be finite"));
         }
         self.mutate_live_graph(
@@ -1139,6 +1213,7 @@ impl CanonicalAuthoringSceneContext {
                     "Graph partition",
                 )?,
                 scale,
+                scale_y,
                 center: (center_x, center_y),
                 align_horizontal,
             },
@@ -1151,18 +1226,24 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         graph: &mut WasmGraphHandle,
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         resolution: f64,
         equidistant: bool,
     ) -> Result<(), JsValue> {
-        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+        if !scale.is_finite()
+            || scale_y.is_some_and(|value| !value.is_finite())
+            || !center_x.is_finite()
+            || !center_y.is_finite()
+        {
             return Err(js_error("spiral Graph layout values must be finite"));
         }
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::Spiral {
                 scale,
+                scale_y,
                 center: (center_x, center_y),
                 resolution,
                 equidistant,
@@ -1179,6 +1260,7 @@ impl CanonicalAuthoringSceneContext {
         fixed_vertex_indices: &[u32],
         fixed_is_set: bool,
         scale: f64,
+        scale_y: Option<f64>,
         center_x: f64,
         center_y: f64,
         k: Option<f64>,
@@ -1210,6 +1292,7 @@ impl CanonicalAuthoringSceneContext {
             GraphOperation::Spring(noon::GraphLayoutOptions {
                 layout: noon::GraphLayout::Spring,
                 scale,
+                scale_y,
                 center: (center_x, center_y),
                 iterations: iterations as usize,
                 threshold,
@@ -1229,6 +1312,7 @@ impl CanonicalAuthoringSceneContext {
         graph: &mut WasmGraphHandle,
         random_positions: &[f64],
         scale: f64,
+        scale_y: Option<f64>,
     ) -> Result<(), JsValue> {
         let position_ids = (0..random_positions.len() / 2)
             .map(|index| index as u32)
@@ -1242,6 +1326,7 @@ impl CanonicalAuthoringSceneContext {
             GraphOperation::Random(noon::GraphLayoutOptions {
                 layout: noon::GraphLayout::Random,
                 scale,
+                scale_y,
                 random_positions: Some(random_positions),
                 ..Default::default()
             }),
@@ -1258,6 +1343,7 @@ impl CanonicalAuthoringSceneContext {
         spacing_x: Option<f64>,
         spacing_y: Option<f64>,
         scale: f64,
+        scale_y: Option<f64>,
     ) -> Result<(), JsValue> {
         let vertex_spacing = match (spacing_x, spacing_y) {
             (Some(x), Some(y)) => Some((x, y)),
@@ -1269,6 +1355,7 @@ impl CanonicalAuthoringSceneContext {
             GraphOperation::Tree(noon::GraphLayoutOptions {
                 layout: noon::GraphLayout::Tree,
                 scale,
+                scale_y,
                 tree_root: Some(root_index as usize),
                 tree_orientation_up: orientation_up,
                 tree_vertex_spacing: vertex_spacing,

@@ -141,11 +141,12 @@ class GraphFacadeTests(unittest.TestCase):
         center = graph._point((0.0, 0.0) if fallback_center is None else fallback_center)
         scale = (
             1.0 if layout_scale is None
-            else graph._shared._ir._finite_number("layout_scale", layout_scale)
+            else graph._layout_scale_pair(layout_scale)[0]
         )
+        scale_y = None if layout_scale is None else graph._layout_scale_pair(layout_scale)[1]
         return (
             center, [(0.0, 0.0)] * len(vertex_ids), [], None, 50, 1e-4,
-            layout_scale is not None, scale, False,
+            layout_scale is not None, scale, scale_y, False,
         )
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
@@ -153,10 +154,10 @@ class GraphFacadeTests(unittest.TestCase):
         graph.Graph(["a", "b", "c"], [("a", "b")], layout_config={"seed": 42})
         call = self.context.creation_calls[0]
         self.assertEqual(call[:3], (False, [0, 1, 2], [0, 1]))
-        self.assertEqual(call[4:7], ([], False, 2.0))
-        self.assertEqual(call[7:9], (0.0, 0.0))
-        self.assertIsNone(call[9])
-        self.assertEqual(call[10:], (50, 1e-4, True, self.context.options[0]))
+        self.assertEqual(call[4:8], ([], False, 2.0, None))
+        self.assertEqual(call[8:10], (0.0, 0.0))
+        self.assertIsNone(call[10])
+        self.assertEqual(call[11:], (50, 1e-4, True, self.context.options[0]))
         expected = [
             (0.3745401188473625, 0.9507143064099162),
             (0.7319939418114051, 0.5986584841970366),
@@ -181,10 +182,62 @@ class GraphFacadeTests(unittest.TestCase):
         ).astype(np.float32)
         self.assertEqual(call[:3], (False, [0, 1, 2], [0, 1, 1, 2]))
         self.assertEqual(call[4], 0.75)
-        self.assertEqual(call[5], self.context.options[0])
+        self.assertIsNone(call[5])
+        self.assertEqual(call[6], self.context.options[0])
         self.assertEqual(
             call[3], [float(value) for point in expected for value in point]
         )
+
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX graph layout seeding requires NumPy")
+    def test_two_axis_layout_scale_reaches_qualified_constructors_and_live_changes(self):
+        scale = (1.25, 0.5)
+        graph.Graph(["a", "b"], [("a", "b")], layout_scale=scale)
+        graph.Graph(["a", "b"], [("a", "b")], layout="random", layout_scale=scale)
+        graph.Graph(
+            ["a", "b"], [("a", "b")], layout="tree", layout_scale=scale,
+            layout_config={"root_vertex": "a"},
+        )
+        graph.Graph(["a", "b"], [("a", "b")], layout="circular", layout_scale=scale)
+        graph.Graph(["a", "b"], [("a", "b")], layout="spiral", layout_scale=scale)
+        graph.Graph(
+            ["a", "b"], [("a", "b")], layout="partite", layout_scale=scale,
+            layout_config={"partitions": [["a"], ["b"]]},
+        )
+        self.assertEqual(self.context.creation_calls[0][6:8], scale)
+        self.assertEqual(self.context.creation_calls[1][4:6], scale)
+        self.assertEqual(self.context.creation_calls[2][7:9], scale)
+        self.assertEqual(self.context.creation_calls[3][3:5], scale)
+        self.assertEqual(self.context.creation_calls[4][3:5], scale)
+        self.assertEqual(self.context.creation_calls[5][5:7], scale)
+
+        value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
+        value.change_layout("spring", scale=scale)
+        value.change_layout("random", scale=scale)
+        value.change_layout("tree", scale=scale, root_vertex="a")
+        value.change_layout("circular", scale=scale)
+        value.change_layout("spiral", scale=scale)
+        value.change_layout("partite", scale=scale, layout_config={"partitions": [["a"], ["b"]]})
+        self.assertEqual(self.context.spring_layout_calls[0][4:6], scale)
+        self.assertEqual(self.context.random_layout_calls[0][2:4], scale)
+        self.assertEqual(self.context.tree_layout_calls[0][5:7], scale)
+        self.assertEqual(self.context.layout_calls[0][1:3], scale)
+        self.assertEqual(self.context.spiral_layout_calls[0][1:3], scale)
+        self.assertEqual(self.context.partite_layout_calls[0][3:5], scale)
+
+    def test_layout_scale_tuple_validation_and_shell_scalar_contract(self):
+        self.assertEqual(graph._layout_scale_pair((1, 0.5)), (1.0, 0.5))
+        for value, error in [
+            ((1,), ValueError),
+            ((1, 2, 3), ValueError),
+            ((1, float("nan")), ValueError),
+            ((1, "2"), TypeError),
+        ]:
+            with self.subTest(value=value):
+                with self.assertRaises(error):
+                    graph._layout_scale_pair(value)
+        with self.assertRaisesRegex(NotImplementedError, "shell layout_scale must be a scalar"):
+            graph.Graph(["a", "b"], [("a", "b")], layout="shell", layout_scale=(1, 0.5))
+        self.assertEqual(self.context.creation_calls, [])
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
     def test_random_layout_accepts_numpy_random_module_seed(self):
@@ -253,7 +306,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         layout_call = self.context.tree_layout_calls[0]
         self.assertIs(layout_call[0], value._graph_handle)
-        self.assertEqual(layout_call[1:], (1, False, 1.0, 2.0, 0.5))
+        self.assertEqual(layout_call[1:], (1, False, 1.0, 2.0, 0.5, None))
 
     def test_tree_root_vertex_constructor_and_change_layout_arguments(self):
         graph.Graph(
@@ -338,10 +391,10 @@ class GraphFacadeTests(unittest.TestCase):
             layout_scale=None,
         )
         call = self.context.creation_calls[0]
-        self.assertEqual(call[4:7], ([0], True, 1.0))
-        self.assertEqual(call[7:9], (3.0, -2.0))
-        self.assertAlmostEqual(call[9], 2 / (3 ** 0.5))
-        self.assertEqual(call[10:13], (12, 0.0, False))
+        self.assertEqual(call[4:8], ([0], True, 1.0, None))
+        self.assertEqual(call[8:10], (3.0, -2.0))
+        self.assertAlmostEqual(call[10], 2 / (3 ** 0.5))
+        self.assertEqual(call[11:14], (12, 0.0, False))
         self.assertEqual(call[3][:2], [1.0, 0.0])
         self.assertIsNotNone(value._graph_handle)
 
@@ -354,10 +407,10 @@ class GraphFacadeTests(unittest.TestCase):
         )
         call = self.context.spring_layout_calls[0]
         self.assertIs(call[0], value._graph_handle)
-        self.assertEqual(call[2:5], ([], True, 1.0))
-        self.assertEqual(call[5:7], (0.0, 0.0))
-        self.assertAlmostEqual(call[7], 2 / (2 ** 0.5))
-        self.assertEqual(call[8:11], (50, 1e-4, False))
+        self.assertEqual(call[2:6], ([], True, 1.0, None))
+        self.assertEqual(call[6:8], (0.0, 0.0))
+        self.assertAlmostEqual(call[8], 2 / (2 ** 0.5))
+        self.assertEqual(call[9:12], (50, 1e-4, False))
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_fixed_nodes_outside_the_graph_are_ignored_by_networkx(self):
@@ -370,8 +423,8 @@ class GraphFacadeTests(unittest.TestCase):
         )
         call = self.context.creation_calls[0]
         self.assertEqual(call[4:6], ([], True))
-        self.assertAlmostEqual(call[9], 4 / (2 ** 0.5))
-        self.assertFalse(call[12])
+        self.assertAlmostEqual(call[10], 4 / (2 ** 0.5))
+        self.assertFalse(call[13])
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_layout_rejects_unsupported_configuration_before_publication(self):
@@ -426,7 +479,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[0][:-1],
-            (False, [0, 1], [0, 1], 1.4, 3.0, -1.0),
+            (False, [0, 1], [0, 1], 1.4, None, 3.0, -1.0),
         )
 
         value.change_layout(
@@ -435,7 +488,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.layout_calls[0][1:],
-            (1.7, 2.0, 4.0),
+            (1.7, None, 2.0, 4.0),
         )
 
     def test_circular_layout_config_rejects_unqualified_dimensions_and_options(self):
@@ -518,7 +571,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[0][:-1],
-            (False, [0, 1, 2], [0, 1, 1, 2], 1.5, 2.0, -1.0, 0.2, True),
+            (False, [0, 1, 2], [0, 1, 1, 2], 1.5, None, 2.0, -1.0, 0.2, True),
         )
         value.change_layout(
             "spiral", scale=0.75,
@@ -526,7 +579,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.spiral_layout_calls[0][1:],
-            (0.75, -2.0, 3.0, 0.4, False),
+            (0.75, None, -2.0, 3.0, 0.4, False),
         )
 
     def test_spiral_layout_rejects_unqualified_options_and_dimensions(self):
@@ -548,7 +601,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[0][:-1],
-            (False, [0], [], 2.0, 3.0, 4.0, 0.35, False),
+            (False, [0], [], 2.0, None, 3.0, 4.0, 0.35, False),
         )
 
     def test_partite_layout_preserves_partition_order_missing_nodes_and_alignment(self):
@@ -564,7 +617,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(
             self.context.creation_calls[0][:-1],
             (False, [0, 1, 2, 3], [0, 1], [0, 2, 1, 3], [2, 1, 1],
-             1.2, 2.0, -1.0, True),
+             1.2, None, 2.0, -1.0, True),
         )
         value.remove_vertices(["b"])
         value.change_layout(
@@ -573,7 +626,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.partite_layout_calls[0][1:],
-            ([1, 0, 2], [1, 1, 1], 0.8, 0.0, 0.0, False),
+            ([1, 0, 2], [1, 1, 1], 0.8, None, 0.0, 0.0, False),
         )
 
         digraph = graph.DiGraph(

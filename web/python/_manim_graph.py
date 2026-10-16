@@ -33,6 +33,18 @@ def _point(value):
     return float(point.x), float(point.y)
 
 
+def _layout_scale_pair(value):
+    """Return independent x/y scale values accepted by Manim's 2D layouts."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        if len(value) != 2:
+            raise ValueError("2D layout_scale tuples must contain x and y values")
+        return (
+            _shared._ir._finite_number("layout_scale[0]", value[0]),
+            _shared._ir._finite_number("layout_scale[1]", value[1]),
+        )
+    return _shared._ir._finite_number("layout_scale", value), None
+
+
 _VERTEX_CONFIG_KEYS = frozenset(
     {"color", "fill_color", "stroke_color", "stroke_width", "radius", "fill_opacity"}
 )
@@ -141,7 +153,10 @@ class _GraphBase(_compat.Group):
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
     ``partitions``, ``align``, and ``center``; tree layouts accept
     ``root_vertex``, ``orientation``, and ``vertex_spacing``. Other options
-    remain unsupported until their Rust semantics are qualified. Constructor
+    remain unsupported until their Rust semantics are qualified. Two-axis
+    ``layout_scale`` tuples are supported for spring, random, circular, spiral,
+    partite, and tree layouts; shell layout follows NetworkX's scalar-only
+    scale contract. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time; other per-key constructor options remain unsupported.
@@ -212,20 +227,21 @@ class _GraphBase(_compat.Group):
         spring_positions, fixed_indices, spring_k = ([], [], None)
         random_positions = []
         tree_root, tree_orientation_up, tree_spacing = (None, False, None)
+        scale_y = None
         spring_iterations, spring_threshold, spring_rescale = (50, 1e-4, True)
         spring_fixed_is_set = False
         if spring:
             (center, spring_positions, fixed_indices, spring_k,
              spring_iterations, spring_threshold, spring_rescale,
-             scale, spring_fixed_is_set) = _spring_layout_config(
+             scale, scale_y, spring_fixed_is_set) = _spring_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
             )
         elif random_layout:
-            center, random_positions, scale = _random_layout_config(
+            center, random_positions, scale, scale_y = _random_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
             )
         elif tree:
-            tree_root, tree_orientation_up, tree_spacing, scale = _tree_layout_config(
+            tree_root, tree_orientation_up, tree_spacing, scale, scale_y = _tree_layout_config(
                 layout_config, self._graph_key_ids, layout_scale, self._directed,
                 root_vertex=root_vertex,
             )
@@ -242,7 +258,12 @@ class _GraphBase(_compat.Group):
                 layout_config, layout_center, self._graph_key_ids
             )
         if not spring and not random_layout and not tree:
-            scale = _shared._ir._finite_number("layout_scale", layout_scale)
+            if shell:
+                if isinstance(layout_scale, Sequence) and not isinstance(layout_scale, (str, bytes)):
+                    raise NotImplementedError("shell layout_scale must be a scalar")
+                scale = _shared._ir._finite_number("layout_scale", layout_scale)
+            else:
+                scale, scale_y = _layout_scale_pair(layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
@@ -255,7 +276,7 @@ class _GraphBase(_compat.Group):
                     bool(self._directed), ids, _array(edge_ids),
                     _array(value for point in spring_positions for value in point),
                     _array(fixed_indices), spring_fixed_is_set,
-                    scale, *center, spring_k, spring_iterations, spring_threshold,
+                    scale, scale_y, *center, spring_k, spring_iterations, spring_threshold,
                     spring_rescale, options, operation="Graph.create",
                 )
             elif random_layout:
@@ -263,20 +284,20 @@ class _GraphBase(_compat.Group):
                     context.liveCreateRandomGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(value for point in random_positions for value in point),
-                    scale, options, operation="Graph.create",
+                    scale, scale_y, options, operation="Graph.create",
                 )
             elif tree:
                 spacing_x, spacing_y = (None, None) if tree_spacing is None else tree_spacing
                 self._graph_handle = engine_call(
                     context.liveCreateTreeGraph,
                     bool(self._directed), ids, _array(edge_ids), tree_root,
-                    tree_orientation_up, spacing_x, spacing_y, scale, options,
+                    tree_orientation_up, spacing_x, spacing_y, scale, scale_y, options,
                     operation="Graph.create",
                 )
             elif circular:
                 self._graph_handle = engine_call(
                     context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
-                    scale, *center, options, operation="Graph.create",
+                    scale, scale_y, *center, options, operation="Graph.create",
                 )
             elif shell:
                 shell_indices, shell_sizes = _flatten_groups(shell_groups)
@@ -289,7 +310,7 @@ class _GraphBase(_compat.Group):
             elif spiral:
                 self._graph_handle = engine_call(
                     context.liveCreateSpiralGraph,
-                    bool(self._directed), ids, _array(edge_ids), scale, *center,
+                    bool(self._directed), ids, _array(edge_ids), scale, scale_y, *center,
                     resolution, equidistant, options, operation="Graph.create",
                 )
             elif partite:
@@ -298,7 +319,7 @@ class _GraphBase(_compat.Group):
                     context.liveCreatePartiteGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(partition_indices), _array(partition_sizes),
-                    scale, *center, align_horizontal, options,
+                    scale, scale_y, *center, align_horizontal, options,
                     operation="Graph.create",
                 )
             else:
@@ -436,7 +457,7 @@ class _GraphBase(_compat.Group):
             raise NotImplementedError("root_vertex is supported only by the tree layout")
         if layout == "spring":
             (center, initial_positions, fixed_indices, spring_k,
-             iterations, threshold, rescale, scale, fixed_is_set) = _spring_layout_config(
+             iterations, threshold, rescale, scale, scale_y, fixed_is_set) = _spring_layout_config(
                 layout_config, center, self._graph_key_ids, scale
             )
             engine_call(
@@ -444,23 +465,23 @@ class _GraphBase(_compat.Group):
                 self._graph_handle,
                 _array(value for point in initial_positions for value in point),
                 _array(fixed_indices), fixed_is_set,
-                scale, *center, spring_k, iterations, threshold, rescale,
+                scale, scale_y, *center, spring_k, iterations, threshold, rescale,
                 operation="Graph.spring_layout",
             )
         elif layout == "random":
-            _, random_positions, scale = _random_layout_config(
+            _, random_positions, scale, scale_y = _random_layout_config(
                 layout_config, center, self._graph_key_ids, scale
             )
             engine_call(
                 self._context().liveGraphRandomLayout,
                 self._graph_handle,
                 _array(value for point in random_positions for value in point),
-                scale,
+                scale, scale_y,
                 operation="Graph.random_layout",
             )
         elif layout == "tree":
             vertex_order = {key: index for index, key in enumerate(self._graph_key_ids)}
-            root_index, orientation_up, spacing, scale = _tree_layout_config(
+            root_index, orientation_up, spacing, scale, scale_y = _tree_layout_config(
                 layout_config, vertex_order, scale, self._directed,
                 root_vertex=root_vertex,
             )
@@ -468,18 +489,21 @@ class _GraphBase(_compat.Group):
             engine_call(
                 self._context().liveGraphTreeLayout,
                 self._graph_handle,
-                root_index, orientation_up, spacing_x, spacing_y, scale,
+                root_index, orientation_up, spacing_x, spacing_y, scale, scale_y,
                 operation="Graph.tree_layout",
             )
         elif layout == "circular":
             center = _circular_layout_center(layout_config, center)
+            scale_x, scale_y = _layout_scale_pair(scale)
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
-                        float(scale), *_point(center), operation="Graph.circular_layout")
+                        scale_x, scale_y, *_point(center), operation="Graph.circular_layout")
         elif layout == "shell":
             vertex_order = {key: index for index, key in enumerate(self._graph_key_ids)}
             center, groups, rotate = _shell_layout_config(
                 layout_config, center, vertex_order
             )
+            if isinstance(scale, Sequence) and not isinstance(scale, (str, bytes)):
+                raise NotImplementedError("shell layout_scale must be a scalar")
             shell_indices, shell_sizes = _flatten_groups(groups)
             engine_call(
                 self._context().liveGraphShellLayout,
@@ -492,10 +516,11 @@ class _GraphBase(_compat.Group):
             center, resolution, equidistant = _spiral_layout_config(
                 layout_config, center, len(self._graph_key_ids)
             )
+            scale_x, scale_y = _layout_scale_pair(scale)
             engine_call(
                 self._context().liveGraphSpiralLayout,
                 self._graph_handle,
-                _shared._ir._finite_number("scale", scale), *center,
+                scale_x, scale_y, *center,
                 resolution, equidistant,
                 operation="Graph.spiral_layout",
             )
@@ -504,11 +529,12 @@ class _GraphBase(_compat.Group):
                 layout_config, center, self._graph_key_ids
             )
             partition_indices, partition_sizes = _flatten_groups(partitions)
+            scale_x, scale_y = _layout_scale_pair(scale)
             engine_call(
                 self._context().liveGraphPartiteLayout,
                 self._graph_handle,
                 _array(partition_indices), _array(partition_sizes),
-                _shared._ir._finite_number("scale", scale), *center,
+                scale_x, scale_y, *center,
                 align_horizontal,
                 operation="Graph.partite_layout",
             )
@@ -594,9 +620,9 @@ def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
     if weight is not None and not isinstance(weight, str):
         raise TypeError("spring layout_config weight must be a string or None")
     if layout_scale is None:
-        scale, rescale = 1.0, False
+        scale, scale_y, rescale = 1.0, None, False
     else:
-        scale = _shared._ir._finite_number("layout_scale", layout_scale)
+        scale, scale_y = _layout_scale_pair(layout_scale)
         rescale = not fixed_is_set
 
     np, rng = _numpy_random_source(options.get("seed"), "spring")
@@ -634,7 +660,7 @@ def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
     initial_positions = [tuple(map(float, point)) for point in initial]
     return (
         center, initial_positions, fixed_indices, spring_k, int(iterations), threshold,
-        rescale, scale, fixed_is_set,
+        rescale, scale, scale_y, fixed_is_set,
     )
 
 
@@ -661,12 +687,12 @@ def _random_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
         raise NotImplementedError("Graph currently supports only two-dimensional random layouts")
     raw_center = options.get("center", fallback_center)
     center = _point((0.0, 0.0) if raw_center is None else raw_center)
-    scale = _shared._ir._finite_number("layout_scale", layout_scale)
+    scale, scale_y = _layout_scale_pair(layout_scale)
 
     np, rng = _numpy_random_source(options.get("seed"), "random")
     positions = (_numpy_random_array(rng, (len(vertex_ids), 2)) + np.asarray(center)).astype(np.float32)
     prepared = [tuple(map(float, point)) for point in positions]
-    return center, prepared, scale
+    return center, prepared, scale, scale_y
 
 
 def _tree_layout_config(layout_config, vertex_ids, layout_scale, directed, *, root_vertex=None):
@@ -708,8 +734,8 @@ def _tree_layout_config(layout_config, vertex_ids, layout_scale, directed, *, ro
             _shared._ir._finite_number("layout_config.vertex_spacing[0]", spacing[0]),
             _shared._ir._finite_number("layout_config.vertex_spacing[1]", spacing[1]),
         )
-    scale = _shared._ir._finite_number("layout_scale", layout_scale)
-    return root_index, orientation == "up", spacing, scale
+    scale, scale_y = _layout_scale_pair(layout_scale)
+    return root_index, orientation == "up", spacing, scale, scale_y
 
 
 def _numpy_random_source(seed, layout_name):

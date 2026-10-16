@@ -654,6 +654,7 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
     let options = GraphLayoutOptions {
         layout: GraphLayout::Spring,
         scale: 3.0,
+        scale_y: None,
         center: (1.0, -2.0),
         seed: 42,
         iterations: 24,
@@ -773,6 +774,107 @@ fn networkx_random_layout_uses_manim_scale_after_centered_numpy_samples() {
     .positions(1, &[])
     .unwrap();
     assert_eq!(positions, vec![(0.75, -0.25)]);
+}
+
+#[test]
+fn manim_layout_scale_tuples_apply_per_axis_for_networkx_and_tree_layouts() {
+    let circular = GraphLayoutOptions {
+        layout: GraphLayout::Circular,
+        scale: 1.0,
+        scale_y: Some(0.5),
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    assert!((circular[0].0 - 1.0).abs() < 1e-12);
+    assert!(circular[0].1.abs() < 1e-12);
+    assert!(circular[1].0.abs() < 1e-12);
+    assert!((circular[1].1 - 0.5).abs() < 1e-7);
+
+    let spiral_uniform = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 1.0,
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    let spiral_anisotropic = GraphLayoutOptions {
+        scale_y: Some(0.5),
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Spiral,
+            scale: 1.0,
+            ..Default::default()
+        }
+    }
+    .positions(4, &[])
+    .unwrap();
+    for (uniform, anisotropic) in spiral_uniform.iter().zip(spiral_anisotropic) {
+        assert!((uniform.0 - anisotropic.0).abs() < 1e-12);
+        assert!((uniform.1 * 0.5 - anisotropic.1).abs() < 1e-12);
+    }
+
+    let partite_vertical = GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        scale: 1.0,
+        scale_y: Some(0.5),
+        partitions: vec![vec![0, 1], vec![2]],
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    let partite_horizontal = GraphLayoutOptions {
+        align_horizontal: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Partite,
+            scale: 1.0,
+            scale_y: Some(0.5),
+            partitions: vec![vec![0, 1], vec![2]],
+            ..Default::default()
+        }
+    }
+    .positions(3, &[])
+    .unwrap();
+    for (vertical, horizontal) in partite_vertical.iter().zip(partite_horizontal) {
+        assert!((vertical.0 - horizontal.1).abs() < 1e-12);
+        assert!((vertical.1 - horizontal.0).abs() < 1e-12);
+    }
+
+    let random = GraphLayoutOptions {
+        layout: GraphLayout::Random,
+        scale: 0.75,
+        scale_y: Some(0.25),
+        random_positions: Some(vec![(1.25, 0.25)]),
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .unwrap();
+    assert_eq!(random, vec![(1.125, -0.125)]);
+
+    let spring = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 1.0,
+        scale_y: Some(3.0),
+        iterations: 0,
+        spring_positions: Some(vec![(0.0, 0.0), (2.0, 4.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .unwrap();
+    assert_eq!(spring, vec![(-0.5, -3.0), (0.5, 3.0)]);
+
+    let tree = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        scale: 0.75,
+        scale_y: Some(0.25),
+        tree_root: Some(0),
+        ..Default::default()
+    }
+    .positions(5, &[(0, 1), (0, 2), (1, 3), (1, 4)])
+    .unwrap();
+    let x_extent = tree.iter().map(|&(x, _)| x.abs()).fold(0.0_f64, f64::max);
+    let y_extent = tree.iter().map(|&(_, y)| y.abs()).fold(0.0_f64, f64::max);
+    assert!((x_extent - 0.75).abs() < 1e-12);
+    assert!((y_extent - 0.25).abs() < 1e-12);
 }
 
 #[test]

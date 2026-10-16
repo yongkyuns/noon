@@ -46,6 +46,9 @@ pub enum GraphLayout {
 pub struct GraphLayoutOptions {
     pub layout: GraphLayout,
     pub scale: f64,
+    /// Optional independent vertical scale for 2D layouts that support it.
+    /// `None` preserves the scalar `scale` behavior.
+    pub scale_y: Option<f64>,
     pub center: (f64, f64),
     pub seed: u32,
     pub iterations: usize,
@@ -88,6 +91,7 @@ impl Default for GraphLayoutOptions {
         Self {
             layout: GraphLayout::Spring,
             scale: 2.0,
+            scale_y: None,
             center: (0.0, 0.0),
             seed: 0,
             iterations: 50,
@@ -736,6 +740,7 @@ fn graph_layout(
     options: &GraphLayoutOptions,
 ) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
     if !options.scale.is_finite()
+        || options.scale_y.is_some_and(|scale| !scale.is_finite())
         || !options.center.0.is_finite()
         || !options.center.1.is_finite()
         || !options.threshold.is_finite()
@@ -786,7 +791,7 @@ fn graph_layout(
             .collect::<Vec<_>>(),
         GraphLayout::Tree => unreachable!("tree layout returned above"),
     };
-    rescale(&mut positions, options.scale, options.center);
+    rescale(&mut positions, layout_scales(options), options.center);
     if positions
         .iter()
         .any(|(x, y)| !x.is_finite() || !y.is_finite())
@@ -840,7 +845,7 @@ fn partite_layout(
             );
         }
     }
-    rescale(&mut positions, options.scale, options.center);
+    rescale(&mut positions, layout_scales(options), options.center);
     if options.align_horizontal {
         for (x, y) in &mut positions {
             std::mem::swap(x, y);
@@ -893,7 +898,7 @@ fn spiral_layout(
             positions.push((distance * angle.cos(), distance * angle.sin()));
         }
     }
-    rescale(&mut positions, options.scale, options.center);
+    rescale(&mut positions, layout_scales(options), options.center);
     if positions
         .iter()
         .any(|(x, y)| !x.is_finite() || !y.is_finite())
@@ -977,7 +982,11 @@ fn shell_layout(
     Ok(positions)
 }
 
-fn rescale(points: &mut [(f64, f64)], scale: f64, center: (f64, f64)) {
+fn layout_scales(options: &GraphLayoutOptions) -> (f64, f64) {
+    (options.scale, options.scale_y.unwrap_or(options.scale))
+}
+
+fn rescale(points: &mut [(f64, f64)], scale: (f64, f64), center: (f64, f64)) {
     let (sum_x, sum_y) = points
         .iter()
         .fold((0.0, 0.0), |(x, y), point| (x + point.0, y + point.1));
@@ -988,10 +997,11 @@ fn rescale(points: &mut [(f64, f64)], scale: f64, center: (f64, f64)) {
         point.1 -= mean.1;
         extent = extent.max(point.0.abs()).max(point.1.abs());
     }
-    let factor = if extent > 0.0 { scale / extent } else { 1.0 };
+    let factor_x = if extent > 0.0 { scale.0 / extent } else { 1.0 };
+    let factor_y = if extent > 0.0 { scale.1 / extent } else { 1.0 };
     for point in points {
-        point.0 = point.0 * factor + center.0;
-        point.1 = point.1 * factor + center.1;
+        point.0 = point.0 * factor_x + center.0;
+        point.1 = point.1 * factor_y + center.1;
     }
 }
 
@@ -1114,7 +1124,7 @@ fn spring_layout(
         }
     }
     if options.spring_rescale && options.spring_fixed.is_none() {
-        rescale(&mut points, options.scale, options.center);
+        rescale(&mut points, layout_scales(options), options.center);
     }
     if points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
         return Err(GraphAuthoringError::InvalidLayout(
@@ -1144,14 +1154,10 @@ fn networkx_random_layout(
     // ManimCE's `_random_layout` wraps NetworkX's [0, 1) coordinates with
     // `2 * scale * (position - 0.5)`. Python provides the float32 NetworkX
     // samples (with its center already added); shared Rust owns this transform.
+    let (scale_x, scale_y) = layout_scales(options);
     let positions = positions
         .iter()
-        .map(|&(x, y)| {
-            (
-                2.0 * options.scale * (x - 0.5),
-                2.0 * options.scale * (y - 0.5),
-            )
-        })
+        .map(|&(x, y)| (2.0 * scale_x * (x - 0.5), 2.0 * scale_y * (y - 0.5)))
         .collect::<Vec<_>>();
     if positions
         .iter()
@@ -1325,6 +1331,18 @@ fn tree_layout(
             // half-extent. It also overrides layout_scale entirely.
             (spacing_x, spacing_y)
         }
+        None if options.scale_y.is_some() => (
+            if width > 0.0 {
+                2.0 * options.scale / width
+            } else {
+                1.0
+            },
+            if height > 0.0 {
+                2.0 * options.scale_y.expect("checked above") / height
+            } else {
+                1.0
+            },
+        ),
         None if width > 0.0 || height > 0.0 => {
             let scale = 2.0 * options.scale / width.max(height);
             (scale, scale)
@@ -1376,6 +1394,12 @@ mod layout_preparation_tests {
         assert!(options.positions(2, &[(0, 2)]).is_err());
         assert!(GraphLayoutOptions {
             scale: f64::NAN,
+            ..options.clone()
+        }
+        .positions(0, &[])
+        .is_err());
+        assert!(GraphLayoutOptions {
+            scale_y: Some(f64::INFINITY),
             ..options.clone()
         }
         .positions(0, &[])
