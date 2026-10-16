@@ -16,19 +16,19 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
     "zoomed", "zoomIndicated", "zoomRestored", "zoomReset",
-    "nativeDragBaseline", "nativeDragReleased", "nativeDragHover", "nativeDragCancelTransient",
+    "nativeDragBaseline", "nativeDragReleased", "nativeDragReleasedHover", "nativeDragCancelTransient",
     "nativeDragCancelled", "nativeDragCancelSettled", "nativeDragRunReset",
   ];
   const captures = names.map((name) => Buffer.from(name));
   const decoded = new Map(captures.map((bytes, index) => {
     const data = new Uint8Array(64 * 64 * 4);
     const changed = [0, selectedPixels, clearPixels, 0, authoredPixels, 0, authoredPixels, 0, 0,
-      1000, 400, 1000, 0, 0, 650, 650, 1400, 650, 650, 0][index];
+      1000, 400, 1000, 0, 0, 650, nativeHoverPixels, 1400, 650, 650, 0][index];
     for (let i = 0; i < changed; i += 1) data[i * 4] = 1;
     return [bytes, { width: 64, height: 64, data }];
   }));
@@ -65,6 +65,18 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   } };
   const inspection = { pending: [], samples: [], wheelEvents: [] };
   browserWindow.__noonInspectionTest = inspection;
+  class ExecutionWorkerClient {
+    async submitBrowserPointerInput(input) {
+      if (input.kind === "release" && deferNativeRelease) await new Promise(resolve => setTimeout(resolve, 10));
+      events.push(`native:ack:${input.kind}`);
+      return {
+        pointerInputAccepted: input.kind !== "release" || nativeReleaseAccepted,
+        canUndoTranslationDrag: ["release", "cancel"].includes(input.kind),
+      };
+    }
+  }
+  const nativeClient = new ExecutionWorkerClient();
+  let browserTime = 0;
   const acceptWheel = () => {
     const changed = wheelReplies.length ? wheelReplies.shift() : true;
     if (changed === null) return false;
@@ -82,6 +94,8 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     evaluate: async (fn, argument) => {
       if (String(fn).includes("new PointerEvent")) {
         frame += 1;
+        const kind = { pointerdown: "press", pointermove: "move", pointerup: "release", pointercancel: "cancel" }[argument.type];
+        void nativeClient.submitBrowserPointerInput({ kind, source_id: 1, pointer_id: 73 });
         return true;
       }
       return fn({ style: { setProperty() {} },
@@ -111,7 +125,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         : "noon-pointer-selection";
     },
     evaluate: async (fn, argument) => {
-      if (String(fn).includes("await import(")) {
+      if (String(fn).includes("prototype.scrollInspectionView")) {
         inspection.pending = [];
         inspection.samples = [];
         inspection.wheelEvents = [];
@@ -121,8 +135,10 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
         }));
         return undefined;
       }
-      const value = await vm.runInNewContext(`(${fn.toString()})(argument)`, {
-        window: browserWindow, document: browserDocument, argument,
+      const browserSource = fn.toString().replace('await import("./execution-worker-client.js")', "clientModule");
+      const value = await vm.runInNewContext(`(${browserSource})(argument)`, {
+        window: browserWindow, document: browserDocument, argument, clientModule: { ExecutionWorkerClient },
+        performance: { now: () => browserTime += 125 },
       });
       return value === undefined ? value : JSON.parse(JSON.stringify(value));
     },
@@ -290,6 +306,40 @@ test("native drag capture failure retains earlier gesture evidence and records f
   assert.match(report.error, /capture failed: nativeDragCancelTransient/);
   assert.equal(result.writes.has("nativeDragCancelTransient.png"), false);
   assert.ok(!result.events.includes("passed"));
+});
+
+test("native release acknowledgement precedes the released capture even when delayed", async () => {
+  const result = await runSmoke({
+    deferNativeRelease: true,
+    env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" },
+  });
+  assert.equal(result.error, undefined);
+  const report = assertRetained(result, ["nativeDragReleased", "nativeDragReleasedHover"]);
+  assert.ok(result.events.indexOf("native:ack:release") < result.events.indexOf("capture:nativeDragReleased"));
+  const release = report.nativeInputDrag.acknowledgements.find(sample => sample.kind === "release");
+  assert.equal(release.accepted, true);
+  assert.equal(release.canUndo, true);
+});
+
+test("a rejected native release fails before accepting a released baseline", async () => {
+  const result = await runSmoke({
+    nativeReleaseAccepted: false,
+    env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" },
+  });
+  assert.match(result.error?.message, /touch release was not acknowledged by Rust/);
+  assertRetained(result, ["nativeDragBaseline"]);
+  assert.ok(!result.events.includes("capture:nativeDragReleased"));
+});
+
+test("movement after acknowledged release still fails the exact pixel assertion", async () => {
+  const result = await runSmoke({
+    nativeHoverPixels: 651,
+    env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" },
+  });
+  assert.match(result.error?.message, /released touch continued translating/);
+  assert.equal(result.error.actual, 1);
+  assert.equal(result.error.expected, 0);
+  assertRetained(result, ["nativeDragReleased", "nativeDragReleasedHover"]);
 });
 
 test("21 differing pixels still fail but retain all original evidence", async () => {
