@@ -147,10 +147,14 @@ def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
+    members = [shaft, ticks]
+    if include_tip:
+        wrapper.tip = _leaf(engine_call(handle.coordinateTip), _compat.VMobject)
+        members.append(wrapper.tip)
     wrapper.tick_size = tick_size
     wrapper.include_tip = include_tip
     wrapper.exclude_origin_tick = exclude_origin_tick
-    return _coordinate_family(wrapper, handle, [shaft, ticks])
+    return _coordinate_family(wrapper, handle, members)
 
 
 def _coordinate_style(options, color, kwargs):
@@ -174,6 +178,7 @@ _THREE_D_AXIS_CONFIG_KEYS = {
     "include_tip", "include_ticks", "tick_size", "exclude_origin_tick",
     "tip_length", "color", "stroke_width", "stroke_opacity", "opacity",
 }
+_DEFAULT_NUMBER_LINE_TIP_SIZE = 0.35
 
 
 def _three_d_axis_config(value, name):
@@ -257,7 +262,8 @@ class NumberLine(_compat.Group):
                  longer_tick_multiple=2, include_numbers=False,
                  numbers_to_exclude=None, numbers_to_include=None,
                  font_size=36, label_direction=None,
-                 line_to_number_buff=None, label_constructor=None,
+                 line_to_number_buff=None, tip_width=None, tip_height=None,
+                 tip_shape=None, label_constructor=None,
                  decimal_number_config=None,
                  color=None, **kwargs):
         values = () if x_range is None else tuple(x_range)
@@ -274,6 +280,16 @@ class NumberLine(_compat.Group):
         line_to_number_buff = _finite_axis_option(
             line_to_number_buff, "line_to_number_buff"
         )
+        if tip_width is None:
+            tip_width = _DEFAULT_NUMBER_LINE_TIP_SIZE
+        if tip_height is None:
+            tip_height = _DEFAULT_NUMBER_LINE_TIP_SIZE
+        tip_width = _finite_axis_option(tip_width, "tip_width")
+        tip_height = _finite_axis_option(tip_height, "tip_height")
+        if tip_width <= 0 or tip_height <= 0:
+            raise ValueError("tip_width and tip_height must be positive")
+        if tip_shape is not None:
+            raise NotImplementedError("custom NumberLine tip shapes are not supported")
         if label_constructor is not None:
             raise NotImplementedError(
                 "NumberLine constructor label_constructor requires the TeX label profile"
@@ -308,14 +324,14 @@ class NumberLine(_compat.Group):
             [] if numbers_to_exclude is None else list(numbers_to_exclude)
         )
         context = _coordinate_constructor_context()
-        if include_tip:
-            raise NotImplementedError("NumberLine tips are not yet supported")
         options = engine_call(
             _coordinate_options.numberLine, _array(values),
             None if length is None else float(length), float(unit_size), float(rotation),
         )
         try:
             engine_call(options.setTicks, bool(include_ticks), tick_size, bool(exclude_origin_tick))
+            engine_call(options.setTips, bool(include_tip))
+            engine_call(options.setNumberLineTipDimensions, tip_width, tip_height)
             engine_call(options.setElongatedTicks,
                         _array(() if numbers_with_elongated_ticks is None else numbers_with_elongated_ticks),
                         float(longer_tick_multiple))
@@ -327,9 +343,11 @@ class NumberLine(_compat.Group):
             self,
             engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
             tick_size=tick_size,
-            include_tip=False,
+            include_tip=bool(include_tip),
             exclude_origin_tick=bool(exclude_origin_tick),
         )
+        self.tip_width = tip_width
+        self.tip_height = tip_height
         self.include_numbers = bool(include_numbers)
         self.numbers_to_include = numbers_to_include
         self.numbers_to_exclude = numbers_to_exclude
@@ -354,6 +372,14 @@ class NumberLine(_compat.Group):
     @property
     def ticks(self):
         return self.submobjects[1]
+
+    @property
+    def tip(self):
+        return self._tip
+
+    @tip.setter
+    def tip(self, value):
+        self._tip = value
 
     def _coordinate_frame(self):
         context = _coordinate_context([self.shaft])

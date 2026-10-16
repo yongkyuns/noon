@@ -90,6 +90,50 @@ class PlottingAdapterTests(unittest.TestCase):
                 else:
                     add_numbers.assert_not_called()
 
+    def test_number_line_constructor_requests_rust_retained_default_tip(self):
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line") as attach:
+            plotting.NumberLine([-2, 2], include_tip=True)
+
+        options = factory.numberLine.return_value
+        options.setTips.assert_called_once_with(True)
+        options.setNumberLineTipDimensions.assert_called_once_with(
+            0.35,
+            0.35,
+        )
+        self.assertTrue(attach.call_args.kwargs["include_tip"])
+
+    def test_number_line_wrapper_keeps_rust_tip_as_a_direct_family_member(self):
+        wrapper = object.__new__(plotting.NumberLine)
+        handle = SimpleNamespace(
+            coordinateShaft=Mock(return_value="shaft_handle"),
+            coordinateTicks=Mock(return_value="ticks_handle"),
+            coordinateTickObjects=Mock(return_value=[]),
+            coordinateTip=Mock(return_value="tip_handle"),
+        )
+        wrapped_shaft = object()
+        wrapped_tip = object()
+        with patch.object(plotting, "_leaf", side_effect=[wrapped_shaft, wrapped_tip]) as leaf, \
+             patch.object(plotting, "_family", return_value="ticks") as family, \
+             patch.object(plotting, "_coordinate_family", side_effect=lambda _, __, members: members):
+            members = plotting._attach_number_line(wrapper, handle, include_tip=True)
+
+        self.assertEqual(members, [wrapped_shaft, "ticks", wrapped_tip])
+        self.assertIs(wrapper.tip, wrapped_tip)
+        leaf.assert_any_call("tip_handle", plotting._compat.VMobject)
+        family.assert_called_once()
+
+    def test_number_line_rejects_custom_or_invalid_tip_options_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context:
+            with self.assertRaises(NotImplementedError):
+                plotting.NumberLine(include_tip=True, tip_shape=object)
+            with self.assertRaises(ValueError):
+                plotting.NumberLine(include_tip=True, tip_width=0)
+            context.assert_not_called()
+
     def test_number_line_rejects_unavailable_label_constructors_and_configs_early(self):
         with patch.object(plotting, "_coordinate_constructor_context") as context:
             with self.assertRaises(NotImplementedError):
