@@ -4242,6 +4242,239 @@ fn retained_sample_count(items: &[RetainedRenderItem], spatial_paths: bool) -> u
 #[cfg(test)]
 mod tests {
     #[test]
+    #[ignore = "requires software Vulkan; branch-only mixed batching raster admission"]
+    fn mixed_mega_native_exact_pixels_against_individual_paths() {
+        pollster::block_on(async {
+            const WIDTH: u32 = 128;
+            const HEIGHT: u32 = 64;
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::VULKAN,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                })
+                .await
+                .expect("mixed mega parity requires a native software Vulkan adapter");
+            eprintln!("mixed mega native raster adapter: {:?}", adapter.get_info());
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .unwrap();
+
+            let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+            let base_circle = frame.objects[0].clone();
+            let mut text_object = frame.objects[1].clone();
+            let mut images = noon_core::RasterImageResourceArena::new();
+            let image_handle = images
+                .intern_rgba8(8, 8, vec![46, 173, 237, 148].repeat(64))
+                .unwrap();
+            let image_content = noon_core::RasterImageContentRef::from_resource(
+                noon_core::SemanticImageContent::new(image_handle),
+                images.get(image_handle).unwrap(),
+            );
+            let mut objects = vec![base_circle];
+            let mut image_index = 0;
+            let mut text_index = 0;
+            for index in 0..96_u64 {
+                if index == 48 {
+                    image_index = objects.len();
+                    objects.push(FrameObjectState {
+                        glow: None,
+                        spatial: None,
+                        z_index: 0.0,
+                        id: ObjectId::new(500),
+                        content: ObjectContentRef::Image(image_content),
+                        text_bounds: None,
+                        transform: Transform2D::IDENTITY,
+                        style: Style { opacity: 0.8, ..Style::default() },
+                        appearance: 1.0,
+                    });
+                }
+                if index == 64 {
+                    text_index = objects.len();
+                    text_object.style.opacity = 0.75;
+                    objects.push(text_object.clone());
+                }
+                let x = index as f32;
+                let path = VectorPath::new()
+                    .move_to(Vec2::new(-1.9 + (index % 12) as f32 * 0.13, -0.75 + x * 0.006))
+                    .line_to(Vec2::new(1.45 - (index % 10) as f32 * 0.09, 0.65 - x * 0.005));
+                objects.push(FrameObjectState {
+                    glow: None,
+                    spatial: None,
+                    z_index: 0.0,
+                    id: ObjectId::new(1000 + index),
+                    content: ObjectContentRef::Geometry(GeometryRef::path(path)),
+                    text_bounds: None,
+                    transform: Transform2D::IDENTITY,
+                    style: Style {
+                        fill: None,
+                        stroke: Some(Color::rgba(0.2 + (index % 5) as f32 * 0.13, 0.35, 0.9, 0.55)),
+                        stroke_width: 0.045,
+                        opacity: 0.85,
+                        ..Style::default()
+                    },
+                    appearance: 1.0,
+                });
+            }
+            assert_eq!(objects.len(), 99);
+            frame.objects = objects;
+            frame.presences = vec![true; frame.objects.len()];
+            frame.reveals = vec![1.0; frame.objects.len()];
+            frame.morphs = vec![0.0; frame.objects.len()];
+            frame.render_geometries = vec![None; frame.objects.len()];
+            frame.render_transforms = vec![None; frame.objects.len()];
+
+            let mut old_preparer = RetainedFramePreparer::new();
+            old_preparer.geometry = FramePreparer::for_individual_path_draws();
+            let mut packed_preparer = RetainedFramePreparer::new();
+            let painter_order = (0..frame.objects.len() as u32).collect::<Vec<_>>();
+            old_preparer.set_painter_order(&painter_order);
+            packed_preparer.set_painter_order(&painter_order);
+            let metrics = TextDeviceMetrics::uniform(32.0)
+                .unwrap()
+                .with_world_origin_pixels(Vec2::new(64.0, 32.0))
+                .unwrap();
+            let setup = |renderer: &mut GpuRenderer| {
+                renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+                renderer.set_camera(
+                    &queue,
+                    Camera2D::new(Vec2::ZERO, Vec2::new(4.0, 2.0)).unwrap(),
+                );
+            };
+            let mut old_renderer =
+                GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            let mut packed_renderer =
+                GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            setup(&mut old_renderer);
+            setup(&mut packed_renderer);
+            let mut old_text = old_renderer.create_retained_text_state(&device, &queue);
+            let mut packed_text = packed_renderer.create_retained_text_state(&device, &queue);
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mixed mega native exact comparison"),
+                size: wgpu::Extent3d {
+                    width: WIDTH, height: HEIGHT, depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mixed mega exact RGBA readback"),
+                size: u64::from(WIDTH * HEIGHT * 4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut render = |renderer: &mut GpuRenderer,
+                              state: &mut RetainedTextGpuState,
+                              prepared: &PreparedRetainedGpuFrame<'_>| {
+                renderer.upload_retained(&device, &queue, prepared, state);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let draws = renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        prepared,
+                        state,
+                        wgpu::Color::TRANSPARENT,
+                        None,
+                    )
+                    .unwrap();
+                encoder.copy_texture_to_buffer(
+                    texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &readback,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(WIDTH * 4),
+                            rows_per_image: Some(HEIGHT),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: WIDTH,
+                        height: HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                queue.submit([encoder.finish()]);
+                let (sender, receiver) = std::sync::mpsc::channel();
+                readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                    sender.send(result).unwrap();
+                });
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                receiver.recv().unwrap().unwrap();
+                let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
+                readback.unmap();
+                (pixels, draws)
+            };
+            for step in 0..4 {
+                let changes = match step {
+                    0 => FrameChanges::all(),
+                    1 => {
+                        frame.objects[17].style.opacity = 0.33;
+                        FrameChanges::objects(vec![17])
+                    }
+                    2 => {
+                        frame.objects[image_index].transform.translation.x += 0.15;
+                        FrameChanges::objects(vec![image_index])
+                    }
+                    _ => {
+                        frame.objects[text_index].style.opacity = 0.3;
+                        FrameChanges::objects(vec![text_index])
+                    }
+                };
+                let old = old_preparer
+                    .prepare_with_image_resources(
+                        &device, &frame, &changes, &texts, &fonts, &geometries, &images, metrics,
+                    )
+                    .unwrap();
+                let (reference_pixels, reference_draws) =
+                    render(&mut old_renderer, &mut old_text, &old);
+                let packed = packed_preparer
+                    .prepare_with_image_resources(
+                        &device, &frame, &changes, &texts, &fonts, &geometries, &images, metrics,
+                    )
+                    .unwrap();
+                let (packed_pixels, packed_draws) =
+                    render(&mut packed_renderer, &mut packed_text, &packed);
+                assert_eq!(reference_draws.images, 1, "the original mixed scene must show its image");
+                assert_eq!(packed_draws.images, 1, "the packed mixed scene must show its image");
+                assert!(reference_draws.text.draw_calls > 0 && packed_draws.text.draw_calls > 0);
+                assert!(
+                    reference_draws.geometry.draw_calls > packed_draws.geometry.draw_calls + 32,
+                    "step {step}: packing failed to reduce draw submissions: {} -> {}",
+                    reference_draws.geometry.draw_calls, packed_draws.geometry.draw_calls,
+                );
+                if reference_pixels != packed_pixels {
+                    let mismatch = reference_pixels
+                        .iter()
+                        .zip(&packed_pixels)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    panic!(
+                        "step {step}: native mixed packed raster differs at byte {mismatch}: {} != {}",
+                        reference_pixels[mismatch], packed_pixels[mismatch],
+                    );
+                }
+                assert!(reference_pixels.iter().any(|&channel| channel != 0));
+                eprintln!(
+                    "MIXED_MEGA_NATIVE_EXACT step={step} draws={} packed={} bytes={}",
+                    reference_draws.geometry.draw_calls,
+                    packed_draws.geometry.draw_calls,
+                    reference_pixels.len(),
+                );
+            }
+        });
+    }
+
+    #[test]
     fn zero_contribution_mixed_camera_draw_restores_without_rebuilding_text_or_order() {
         let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
         frame.objects[0].content =
