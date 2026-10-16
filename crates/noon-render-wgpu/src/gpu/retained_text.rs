@@ -4770,7 +4770,7 @@ mod tests {
                 // Prevent a vacant or sample-averaged test from being accepted:
                 // at least one pixel must have distinct sample coverage.
                 assert!(
-                    reference_samples.chunks_exact(16).any(|samples| {
+                    reference_samples.as_chunks::<16>().0.iter().any(|samples| {
                         samples[0..4] != samples[4..8]
                             || samples[0..4] != samples[8..12]
                             || samples[0..4] != samples[12..16]
