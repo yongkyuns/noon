@@ -172,8 +172,9 @@ class _GraphBase(_compat.Group):
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time. ``add_vertices`` inherits constructor-wide vertex
     styles and accepts the same per-key style subset plus radius in its atomic
-    mutation. Constructor per-key radius and custom mobject types remain
-    unsupported.
+    mutation. ``add_edges`` inherits constructor-wide edge styles and accepts
+    per-edge color, stroke-color, and stroke-width overrides. Constructor
+    per-key radius and custom mobject types remain unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -236,6 +237,7 @@ class _GraphBase(_compat.Group):
         global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
         )
+        self._default_edge_config = dict(global_edge_config)
         center = (0.0, 0.0)
         if circular:
             center = _circular_layout_center(layout_config, layout_center)
@@ -473,15 +475,56 @@ class _GraphBase(_compat.Group):
         self._next_graph_id = next_id
         return self
 
-    def add_edges(self, edges):
-        """Add only edges whose endpoints already exist.
+    def add_edges(self, edges, *, edge_config=None):
+        """Add edges between existing vertices, optionally styling them.
 
         Manim's implicit missing-vertex creation needs a shared compound
-        publication with default placement; it is deliberately unsupported
-        here so Python never splits that operation into transactions.
+        publication with default placement; it remains unsupported here so
+        Python never splits that operation into transactions. ``edge_config``
+        accepts the constructor's global edge style keys and per-edge color,
+        stroke-color, and stroke-width overrides.
         """
-        engine_call(self._context().liveGraphAddEdges, self._graph_handle,
-                    _array(self._edge_ids(edges)), operation="Graph.add_edges")
+        edges = list(edges)
+        edge_ids = self._edge_ids(edges)
+        global_config, keyed_config = _split_style_config(
+            "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges),
+            per_key_supported=_EDGE_CONFIG_KEYS,
+        )
+        default_config = _validated_key_style(
+            "edge_config",
+            {**self._default_edge_config, **global_config},
+            _EDGE_CONFIG_KEYS,
+        )
+        options = _graph_style_options(self._default_vertex_config, default_config)
+        try:
+            missing = float("nan")
+            style_overrides = []
+            for edge in edges:
+                style = _validated_key_style(
+                    "edge_config",
+                    {**keyed_config.get(edge, {})},
+                    _EDGE_CONFIG_KEYS,
+                )
+                color = style.get("stroke_color", style.get("color"))
+                color_components = (
+                    _color_components("edge_config.color", color)
+                    if color is not None else (missing,) * 4
+                )
+                style_overrides.extend((
+                    *color_components,
+                    style.get("stroke_width", missing),
+                ))
+            engine_call(
+                self._context().liveGraphAddEdgesWithOptions,
+                self._graph_handle,
+                _array(edge_ids),
+                _array(style_overrides),
+                options,
+                operation="Graph.add_edges",
+            )
+        except BaseException:
+            options.free()
+            raise
         return self
 
     def remove_vertices(self, vertices):
@@ -508,6 +551,7 @@ class _GraphBase(_compat.Group):
         clone._graph_key_ids = dict(self._graph_key_ids)
         clone._next_graph_id = self._next_graph_id
         clone._default_vertex_config = dict(self._default_vertex_config)
+        clone._default_edge_config = dict(self._default_edge_config)
         clone._canonical_live_target_context = self._context()
         clone._graph_handle = engine_call(
             clone._canonical_live_target_context.liveGraphCopy,

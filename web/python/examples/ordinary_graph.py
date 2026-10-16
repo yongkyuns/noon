@@ -27,14 +27,20 @@ class OrdinaryGraph(Scene):
         graph.add_vertices(
             {"d": (-3.5, -2.4)},
             vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
-        ).add_edges([("a", "d")])
+        ).add_edges(
+            [("a", "d")],
+            edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
+        )
 
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
         directed.add_vertices(
             {"x": (5, -2.3)}, vertex_config={"x": {"color": YELLOW}}
-        ).add_edges([("w", "x")])
+        ).add_edges(
+            [("w", "x")],
+            edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
+        )
         centered = Graph(
             ["left", "right"], [("left", "right")], layout="circular",
             layout_scale=(1.4, 0.8), layout_config={"center": (3, -1), "dim": 2},

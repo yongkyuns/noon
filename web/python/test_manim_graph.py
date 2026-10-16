@@ -61,6 +61,8 @@ class _Context:
         self.random_layout_calls = []
         self.tree_layout_calls = []
         self.add_vertex_calls = []
+        self.add_edge_calls = []
+        self.add_edge_options_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -93,7 +95,12 @@ class _Context:
     def liveGraphAddVerticesWithOptions(self, *args):
         self._call("add_vertices")
         self.add_vertex_calls.append(args)
-    def liveGraphAddEdges(self, *args): self._call("add_edges")
+    def liveGraphAddEdges(self, *args):
+        self._call("add_edges")
+        self.add_edge_calls.append(args)
+    def liveGraphAddEdgesWithOptions(self, *args):
+        self._call("add_edges")
+        self.add_edge_options_calls.append(args)
     def liveGraphRemoveVertices(self, *args): self._call("remove_vertices")
     def liveGraphRemoveEdges(self, *args): self._call("remove_edges")
     def liveGraphCircularLayout(self, *args):
@@ -454,6 +461,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertIsNot(copied._graph_handle, original._graph_handle)
         self.assertIsNot(copied._semantic_family_handle, original._semantic_family_handle)
         self.assertEqual(copied._graph_key_ids, original._graph_key_ids)
+        self.assertEqual(copied._default_edge_config, original._default_edge_config)
 
     def test_failed_publication_does_not_change_key_dictionary(self):
         value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
@@ -522,6 +530,53 @@ class GraphFacadeTests(unittest.TestCase):
         value = graph.Graph({"a": (0, 0)}, [])
         with self.assertRaisesRegex(ValueError, "unknown vertex"):
             value.add_edges([("a", "missing")])
+
+    def test_add_edges_inherits_defaults_and_applies_validated_per_edge_styles(self):
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0)}, [],
+            edge_config={"color": "#112233", "stroke_width": 2},
+        )
+        self.assertEqual(value._default_edge_config, {"color": "#112233", "stroke_width": 2})
+        result = value.add_edges(
+            [("a", "b"), ("b", "c")],
+            edge_config={
+                "color": "#ABCDEF",
+                "stroke_width": 4,
+                ("b", "c"): {"color": "#445566", "stroke_width": 6},
+            },
+        )
+
+        self.assertIs(result, value)
+        self.assertEqual(self.context.add_vertex_calls, [])
+        self.assertEqual(self.context.add_edge_calls, [])
+        self.assertEqual(len(self.context.add_edge_options_calls), 1)
+        call = self.context.add_edge_options_calls[0]
+        self.assertEqual(call[1], [0, 1, 1, 2])
+        overrides = call[2]
+        self.assertEqual(len(overrides), 10)
+        self.assertTrue(all(math.isnan(value) for value in overrides[:5]))
+        self.assertEqual(overrides[5:9], [68 / 255, 85 / 255, 102 / 255, 1.0])
+        self.assertEqual(overrides[9], 6)
+        self.assertEqual(
+            call[3].calls,
+            [
+                ("edge_color", (171 / 255, 205 / 255, 239 / 255, 1.0)),
+                ("edge_width", (4.0,)),
+            ],
+        )
+
+    def test_invalid_added_edge_config_is_rejected_before_topology_publication(self):
+        value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [])
+        for config, error in (
+            ({("a", "missing"): {"color": "#ffffff"}}, ValueError),
+            ({"color": "not-a-color"}, ValueError),
+            ({"stroke_width": -1}, ValueError),
+        ):
+            with self.subTest(config=config), self.assertRaises(error):
+                value.add_edges([("a", "b")], edge_config=config)
+            self.assertEqual(self.context.add_vertex_calls, [])
+            self.assertEqual(self.context.add_edge_calls, [])
+            self.assertEqual(self.context.add_edge_options_calls, [])
 
     def test_list_vertices_and_explicit_mapping_use_one_constructor(self):
         value = graph.Graph(["a", "b"], [("a", "b")], layout={"a": (0, 0), "b": (1, 2)})

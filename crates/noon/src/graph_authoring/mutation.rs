@@ -329,24 +329,43 @@ where
     E: IntoIterator<Item = (K, K)>,
     P: GraphPublication,
 {
+    let options = graph.options.clone();
+    add_edges_with_options(
+        publication,
+        graph,
+        edges
+            .into_iter()
+            .map(|(start, end)| (start, end, options.clone())),
+    )
+}
+
+pub(super) fn add_edges_with_options<K, E, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    edges: E,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    E: IntoIterator<Item = (K, K, GraphOptions)>,
+    P: GraphPublication,
+{
     require_publication(publication, graph)?;
     let requested = edges.into_iter().collect::<Vec<_>>();
     if requested.is_empty() {
         return Ok(GraphMutationResult::default());
     }
     let root = graph.family.node_id();
-    let options = graph.options.clone();
     let directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let mut topology = declaration.topology().clone();
     let mut seen = HashSet::new();
     let mut planned = Vec::with_capacity(requested.len());
-    for (start_key, end_key) in &requested {
+    for (start_key, end_key, options) in requested {
         let start = graph
-            .vertex_id(start_key)
+            .vertex_id(&start_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
         let end = graph
-            .vertex_id(end_key)
+            .vertex_id(&end_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
         let canonical = if directed || start <= end {
             (start, end)
@@ -359,13 +378,13 @@ where
         let edge_id = topology.add_edge(start, end, directed)?;
         let edge = topology.edge(edge_id).expect("new graph edge is present");
         let start_position = graph
-            .vertex(start_key)
+            .vertex(&start_key)
             .expect("validated vertex key")
             .state()?
             .transform
             .translation;
         let end_position = graph
-            .vertex(end_key)
+            .vertex(&end_key)
             .expect("validated vertex key")
             .state()?
             .transform
@@ -374,11 +393,12 @@ where
             edge,
             (start_position.x, start_position.y),
             (end_position.x, end_position.y),
+            options,
         ));
     }
     let (result, staged_edges) = publication.with_graph_publication(|store, publish| {
         let mut prepared = Vec::with_capacity(planned.len());
-        for (edge, start_position, end_position) in planned {
+        for (edge, start_position, end_position, options) in planned {
             let geometry = if directed {
                 PreparedNewEdge::Arrow(
                     arrow_options(start_position, end_position, &options)?.prepare(store)?,

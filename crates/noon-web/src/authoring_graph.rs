@@ -22,6 +22,7 @@ pub(crate) enum GraphOperation {
     AddVertices(Vec<(u32, (f64, f64))>),
     AddVerticesWithOptions(Vec<(u32, (f64, f64), noon::GraphOptions)>),
     AddEdges(Vec<(u32, u32)>),
+    AddEdgesWithOptions(Vec<(u32, u32, noon::GraphOptions)>),
     RemoveVertices(Vec<u32>),
     RemoveEdges(Vec<(u32, u32)>),
     Circular {
@@ -87,6 +88,12 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges(scene, edges)?;
+            }
+            (Self::Undirected(graph), GraphOperation::AddEdgesWithOptions(edges)) => {
+                graph.add_edges_with_options(scene, edges)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddEdgesWithOptions(edges)) => {
+                graph.add_edges_with_options(scene, edges)?;
             }
             (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
                 graph.remove_vertices(scene, vertices)?;
@@ -324,6 +331,12 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges_live(live, edges)?;
+            }
+            (Self::Undirected(graph), GraphOperation::AddEdgesWithOptions(edges)) => {
+                graph.add_edges_live_with_options(live, edges)?;
+            }
+            (Self::Directed(graph), GraphOperation::AddEdgesWithOptions(edges)) => {
+                graph.add_edges_live_with_options(live, edges)?;
             }
             (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
                 graph.remove_vertices_live(live, vertices)?;
@@ -656,6 +669,36 @@ fn vertex_options_with_overrides(
             }
             if !row[10].is_nan() {
                 options.vertex_stroke_width = manim_stroke_width("vertex stroke width", row[10])?;
+            }
+            Ok(options)
+        })
+        .collect()
+}
+
+/// Decode sparse per-edge overrides. Each row contains edge RGBA and Manim
+/// stroke width; NaN means inherit the batch's global GraphOptions value.
+#[cfg(target_arch = "wasm32")]
+fn edge_options_with_overrides(
+    base: &noon::GraphOptions,
+    overrides: &[f64],
+    edge_count: usize,
+) -> Result<Vec<noon::GraphOptions>, JsValue> {
+    const ROW_WIDTH: usize = 5;
+    if overrides.len() != edge_count * ROW_WIDTH {
+        return Err(js_error(
+            "Graph edge style overrides have an invalid length",
+        ));
+    }
+
+    overrides
+        .chunks_exact(ROW_WIDTH)
+        .map(|row| {
+            let mut options = base.clone();
+            if !row[..4].iter().all(|component| component.is_nan()) {
+                options.edge_color = graph_color(row[0], row[1], row[2], row[3])?;
+            }
+            if !row[4].is_nan() {
+                options.edge_stroke_width = manim_stroke_width("edge stroke width", row[4])?;
             }
             Ok(options)
         })
@@ -1205,6 +1248,31 @@ impl CanonicalAuthoringSceneContext {
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::AddEdges(pairs(edge_pairs, "Graph edges")?),
+        )
+        .map_err(js_error)
+    }
+
+    /// Add edges and their optional per-edge appearance in one retained graph
+    /// publication. Style rows encode edge RGBA and Manim stroke width; NaN
+    /// components inherit `options`.
+    #[wasm_bindgen(js_name = liveGraphAddEdgesWithOptions)]
+    pub fn live_graph_add_edges_with_options(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        edge_pairs: &[u32],
+        style_overrides: &[f64],
+        options: WasmGraphOptions,
+    ) -> Result<(), JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let styles = edge_options_with_overrides(&options.options, style_overrides, edges.len())?;
+        let styled_edges = edges
+            .into_iter()
+            .zip(styles)
+            .map(|((start, end), options)| (start, end, options))
+            .collect();
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::AddEdgesWithOptions(styled_edges),
         )
         .map_err(js_error)
     }

@@ -30,7 +30,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     added_vertex_options.vertex_fill = YELLOW;
     added_vertex_options.vertex_stroke_width = 0.05;
     graph.add_vertices_with_options(&mut scene, [("d", (-3.5, -2.4), added_vertex_options)])?;
-    graph.add_edges(&mut scene, [("a", "d")])?;
+    let mut added_edge_options = options.clone();
+    added_edge_options.edge_color = PURPLE;
+    added_edge_options.edge_stroke_width = 0.03;
+    graph.add_edges_with_options(&mut scene, [("a", "d", added_edge_options)])?;
     graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
         fill_color: Some(YELLOW),
         ..Default::default()
@@ -82,7 +85,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     added_vertex_options.vertex_fill = YELLOW;
     added_vertex_options.vertex_stroke = YELLOW;
     digraph.add_vertices_with_options(&mut scene, [("x", (5.0, -2.3), added_vertex_options)])?;
-    digraph.add_edges(&mut scene, [("w", "x")])?;
+    let mut added_edge_options = options.clone();
+    added_edge_options.edge_color = PURPLE;
+    added_edge_options.edge_stroke_width = 0.03;
+    digraph.add_edges_with_options(&mut scene, [("w", "x", added_edge_options)])?;
 
     let mut centered = scene.graph(
         [("left", (4.4, -1.0)), ("right", (1.6, -1.0))],

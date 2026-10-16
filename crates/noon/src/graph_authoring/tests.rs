@@ -1,5 +1,7 @@
 use super::*;
-use noon_core::{SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED};
+use noon_core::{
+    SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED, YELLOW,
+};
 
 fn graph(scene: &mut Scene) -> Graph<&'static str> {
     scene
@@ -366,6 +368,61 @@ fn per_vertex_add_options_publish_styled_geometry_with_topology_once() {
     assert_eq!(state.style.fill_opacity, 0.6);
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(RED)));
     assert_eq!(state.style.stroke_width, 0.12);
+}
+
+#[test]
+fn per_edge_add_options_publish_styled_geometry_with_topology_once() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph(
+            [("a", (0.0, 0.0)), ("b", (1.0, 0.0)), ("c", (2.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+        )
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        edge_color: YELLOW,
+        edge_stroke_width: 0.12,
+        ..GraphOptions::default()
+    };
+
+    graph
+        .add_edges_with_options(&mut scene, [("a", "b", options)])
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 2);
+    let edge = graph.edge(&"a", &"b").unwrap();
+    let state = edge.line().state().unwrap();
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(YELLOW)));
+    assert_eq!(state.style.stroke_width, 0.12);
+    assert!(graph.edge(&"b", &"c").is_none());
+}
+
+#[test]
+fn invalid_per_edge_add_options_leave_graph_unpublished() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph(
+            [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+        )
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        edge_stroke_width: f64::NAN,
+        ..GraphOptions::default()
+    };
+
+    assert!(graph
+        .add_edges_with_options(&mut scene, [("a", "b", options)])
+        .is_err());
+
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.edge(&"a", &"b").is_none());
 }
 
 #[test]
