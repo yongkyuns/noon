@@ -33,6 +33,9 @@ class OrdinaryGraph(Scene):
             edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("a", "d") in graph.edges
+        removed_edge = graph.remove_edges(("a", "d"))
+        assert len(removed_edge) == 1
+        graph.add_edges(("a", "d"), edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}})
         added_vertices = graph.add_vertices(
             "e", positions={"e": (-5.5, -2.4)},
             vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
@@ -51,6 +54,10 @@ class OrdinaryGraph(Scene):
             edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("w", "x") in directed.edges
+        removed_vertex = directed.remove_vertices("x")
+        assert len(removed_vertex) == 2
+        directed.add_vertices("x", positions={"x": (5, -2.3)}, vertex_config={"x": {"color": YELLOW}})
+        directed.add_edges(("w", "x"), edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}})
         added_vertices = directed.add_vertices(
             "y", positions={"y": (2, -2.3)},
             vertex_config={"y": {"radius": 0.16, "color": YELLOW}},
