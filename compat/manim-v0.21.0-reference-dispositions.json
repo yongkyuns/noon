@@ -4800,7 +4800,7 @@
     {
       "id": "reference-32ccd9416c553cdc",
       "status": "blocked",
-      "reason": "LogBase numeric coordinate mapping now works on Axes, but this fixture requests numeric labels through axis_config and TeX custom labels. Axes numeric-label config and TeX custom labels remain unqualified; the map/query subset does not qualify this source.",
+      "reason": "Axes now supports native Text include_numbers/numbers_to_include configuration, per-axis overrides, exclusions, label direction, spacing, font size, and decimal precision. This fixture remains blocked because LogBase(custom_labels=True) requests TeX-generated custom labels, which are outside the qualified native-Text label profile.",
       "owners": [
         "#85",
         "#89",

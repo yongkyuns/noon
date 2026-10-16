@@ -110,6 +110,63 @@ class NumberPlaneAdapterTests(TestCase):
         self.cold.assert_not_called()
         self.options.free.assert_not_called()
 
+    def test_constructor_attaches_numeric_labels_with_shared_and_per_axis_options(self):
+        plane = number_plane.NumberPlane(
+            (0, 2, 0.25), (1, 5, 2),
+            axis_config={
+                "include_numbers": True,
+                "numbers_to_exclude": [0, 1],
+                "font_size": 28,
+                "line_to_number_buff": 0.3,
+            },
+            x_axis_config={"numbers_to_include": [0.5, 1.5]},
+            y_axis_config={
+                "include_numbers": False,
+                "numbers_to_include": [2],
+                "label_direction": number_plane._plot._base.LEFT,
+                "decimal_number_config": {"num_decimal_places": 3},
+            },
+        )
+
+        x_axis, y_axis = plane.x_axis, plane.y_axis
+        x_axis.add_numbers.assert_called_once_with(
+            x_values=(0.5, 1.5), excluding=(0.0, 1.0), font_size=28.0,
+            direction=number_plane._plot._base.DR, buff=0.3,
+            decimal_places=2,
+        )
+        y_axis.add_numbers.assert_called_once_with(
+            x_values=(2.0,), excluding=(0.0, 1.0), font_size=28.0,
+            direction=number_plane._plot._base.LEFT, buff=0.3,
+            decimal_places=3,
+        )
+        self.assertEqual(x_axis.number_label_decimal_places, 2)
+        self.assertEqual(y_axis.number_label_decimal_places, 3)
+        self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
+        self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
+
+    def test_explicit_axis_stroke_color_overrides_general_color(self):
+        red, blue = number_plane._plot._base.RED, number_plane._plot._base.BLUE
+        for config, expected in (
+            ({"color": red}, red),
+            ({"color": red, "stroke_color": blue}, blue),
+        ):
+            with self.subTest(config=config):
+                self.construct(axis_config=config)
+                self.assertIs(number_plane._plot._coordinate_style.call_args.args[1], expected)
+
+    def test_unqualified_axis_config_fails_before_host_admission(self):
+        for kwargs, message in (
+            ({"axis_config": {"unknown": True}}, "unsupported axis_config"),
+            ({"x_axis_config": {"stroke_width": 3}}, "per-axis stroke_width"),
+            ({"y_axis_config": {"scaling": number_plane._plot.LogBase()}}, "nonlinear"),
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(NotImplementedError, message):
+                self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
+
     def test_ranges_and_lengths_are_forwarded_without_coordinate_math(self):
         self.construct()
         args = number_plane._plot._coordinate_options.numberPlane.call_args.args

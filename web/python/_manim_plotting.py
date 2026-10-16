@@ -258,14 +258,20 @@ def _number_line_scale(scaling):
     raise NotImplementedError("NumberLine scaling supports LinearBase and LogBase")
 
 
-def _axes_scale_config(config, name):
+_AXES_CONFIG_KEYS = {
+    "scaling", "include_numbers", "numbers_to_include", "numbers_to_exclude",
+    "font_size", "label_direction", "line_to_number_buff", "decimal_number_config",
+}
+
+
+def _coordinate_config(config, name, allowed_keys):
     if config is None:
         return {}
     if not isinstance(config, Mapping):
         raise TypeError(f"{name} must be a mapping")
     if any(not isinstance(key, str) for key in config):
         raise TypeError(f"{name} keys must be strings")
-    unknown = sorted(set(config) - {"scaling"})
+    unknown = sorted(set(config) - allowed_keys)
     if unknown:
         raise NotImplementedError(
             f"unsupported {name} option(s): " + ", ".join(unknown)
@@ -274,9 +280,9 @@ def _axes_scale_config(config, name):
 
 
 def _axes_scalings(axis_config, x_axis_config, y_axis_config):
-    common = _axes_scale_config(axis_config, "axis_config")
-    x_config = {**common, **_axes_scale_config(x_axis_config, "x_axis_config")}
-    y_config = {**common, **_axes_scale_config(y_axis_config, "y_axis_config")}
+    common = _coordinate_config(axis_config, "axis_config", _AXES_CONFIG_KEYS)
+    x_config = {**common, **_coordinate_config(x_axis_config, "x_axis_config", _AXES_CONFIG_KEYS)}
+    y_config = {**common, **_coordinate_config(y_axis_config, "y_axis_config", _AXES_CONFIG_KEYS)}
     try:
         x_scale = _number_line_scale(x_config.get("scaling"))
         y_scale = _number_line_scale(y_config.get("scaling"))
@@ -284,7 +290,103 @@ def _axes_scalings(axis_config, x_axis_config, y_axis_config):
         raise NotImplementedError(
             "Axes scaling supports LinearBase and LogBase"
         ) from error
-    return x_config.get("scaling"), x_scale, y_config.get("scaling"), y_scale
+    return (
+        _axes_label_options(x_config, x_scale, "x_axis_config", _base.DOWN), x_scale,
+        _axes_label_options(y_config, y_scale, "y_axis_config", _base.LEFT), y_scale,
+    )
+
+
+def _number_label_style(font_size, direction, buff, decimal_config, name):
+    font_size = _finite_axis_option(font_size, f"{name}.font_size")
+    if font_size <= 0:
+        raise ValueError(f"{name}.font_size must be positive")
+    direction = _base._as_vec2(direction)
+    buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
+    decimal_config = {} if decimal_config is None else decimal_config
+    if not isinstance(decimal_config, Mapping):
+        raise TypeError(f"{name}.decimal_number_config must be a mapping")
+    if any(not isinstance(key, str) for key in decimal_config):
+        raise TypeError(f"{name}.decimal_number_config keys must be strings")
+    unknown = sorted(set(decimal_config) - {"num_decimal_places"})
+    if unknown:
+        raise NotImplementedError(
+            f"unsupported {name}.decimal_number_config option(s): " + ", ".join(unknown)
+        )
+    precision = None
+    if "num_decimal_places" in decimal_config:
+        precision = decimal_config["num_decimal_places"]
+        if not isinstance(precision, int) or isinstance(precision, bool):
+            raise TypeError(f"{name}.num_decimal_places must be an integer")
+        if not 0 <= precision <= 12:
+            raise ValueError(f"{name}.num_decimal_places must be between 0 and 12")
+    return font_size, direction, buff, precision
+
+
+def _axes_label_options(config, scale, name, default_direction):
+    include_numbers = config.get("include_numbers", False)
+    if not isinstance(include_numbers, bool):
+        raise TypeError(f"{name}.include_numbers must be a boolean")
+    numbers_to_include = _axes_number_values(
+        config.get("numbers_to_include"), f"{name}.numbers_to_include", None
+    )
+    numbers_to_exclude = _axes_number_values(
+        config.get("numbers_to_exclude"), f"{name}.numbers_to_exclude", [0.0]
+    )
+    if scale[2] and (include_numbers or numbers_to_include is not None):
+        raise NotImplementedError(
+            "Axes LogBase custom labels require the TeX label profile"
+        )
+
+    font_size, direction, buff, decimal_places = _number_label_style(
+        config.get("font_size", 36), config.get("label_direction", default_direction),
+        config.get("line_to_number_buff", _base.MED_SMALL_BUFF),
+        config.get("decimal_number_config"), name,
+    )
+
+    return {
+        "scaling": config.get("scaling"),
+        "include_numbers": include_numbers,
+        "numbers_to_include": numbers_to_include,
+        "numbers_to_exclude": numbers_to_exclude,
+        "font_size": font_size,
+        "label_direction": direction,
+        "line_to_number_buff": buff,
+        "decimal_places": decimal_places,
+    }
+
+
+def _axes_number_values(values, name, default):
+    if values is None:
+        return default
+    if isinstance(values, (str, bytes, Mapping)):
+        raise TypeError(f"{name} must be an iterable of finite numbers")
+    try:
+        values = tuple(values)
+    except TypeError as error:
+        raise TypeError(f"{name} must be an iterable of finite numbers") from error
+    return tuple(_base._ir._finite_number(name, value) for value in values)
+
+
+def _configure_axes_numeric_labels(axis, config, range_values):
+    step = range_values[2] if len(range_values) == 3 else 1.0
+    places = config["decimal_places"]
+    if places is None:
+        places = _decimal_places_from_step(step)
+    axis.include_numbers = config["include_numbers"]
+    axis.numbers_to_include = config["numbers_to_include"]
+    axis.numbers_to_exclude = config["numbers_to_exclude"]
+    axis.font_size = config["font_size"]
+    axis.label_direction = config["label_direction"]
+    axis.line_to_number_buff = config["line_to_number_buff"]
+    axis.number_label_decimal_places = places
+    axis.decimal_number_config = {"num_decimal_places": places}
+    if axis.include_numbers or axis.numbers_to_include is not None:
+        axis.add_numbers(
+            x_values=axis.numbers_to_include,
+            excluding=axis.numbers_to_exclude,
+            font_size=axis.font_size, direction=axis.label_direction,
+            buff=axis.line_to_number_buff, decimal_places=places,
+        )
 
 
 def _three_d_axis_config(value, name):
@@ -384,15 +486,10 @@ class NumberLine(_compat.Group):
                 "NumberLine LogBase custom labels require the TeX label profile"
             )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
-        font_size = _finite_axis_option(font_size, "font_size")
-        if font_size <= 0:
-            raise ValueError("font_size must be positive")
-        label_direction = _base.DOWN if label_direction is None else label_direction
-        label_direction = _base._as_vec2(label_direction)
-        if line_to_number_buff is None:
-            line_to_number_buff = _base.MED_SMALL_BUFF
-        line_to_number_buff = _finite_axis_option(
-            line_to_number_buff, "line_to_number_buff"
+        font_size, label_direction, line_to_number_buff, decimal_places = _number_label_style(
+            font_size, _base.DOWN if label_direction is None else label_direction,
+            _base.MED_SMALL_BUFF if line_to_number_buff is None else line_to_number_buff,
+            decimal_number_config, "NumberLine",
         )
         if tip_width is None:
             tip_width = _DEFAULT_NUMBER_LINE_TIP_SIZE
@@ -408,29 +505,6 @@ class NumberLine(_compat.Group):
             raise NotImplementedError(
                 "NumberLine constructor label_constructor requires the TeX label profile"
             )
-        decimal_number_config = (
-            {} if decimal_number_config is None else decimal_number_config
-        )
-        if not isinstance(decimal_number_config, Mapping):
-            raise TypeError("decimal_number_config must be a mapping")
-        if any(not isinstance(key, str) for key in decimal_number_config):
-            raise TypeError("decimal_number_config keys must be strings")
-        unknown_decimal_options = sorted(
-            set(decimal_number_config) - {"num_decimal_places"}
-        )
-        if unknown_decimal_options:
-            raise NotImplementedError(
-                "unsupported NumberLine decimal_number_config option(s): "
-                + ", ".join(unknown_decimal_options)
-            )
-        if "num_decimal_places" in decimal_number_config:
-            decimal_places = decimal_number_config["num_decimal_places"]
-            if not isinstance(decimal_places, int) or isinstance(decimal_places, bool):
-                raise TypeError("num_decimal_places must be an integer")
-            if not 0 <= decimal_places <= 12:
-                raise ValueError("num_decimal_places must be between 0 and 12")
-        else:
-            decimal_places = None
         numbers_to_include = (
             None if numbers_to_include is None else list(numbers_to_include)
         )
@@ -684,15 +758,17 @@ class Axes(_compat.Group):
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, axis_config=None,
                  x_axis_config=None, y_axis_config=None, color=None, **kwargs):
-        x_scaling, x_scale, y_scaling, y_scale = _axes_scalings(
+        x_options, x_scale, y_options, y_scale = _axes_scalings(
             axis_config, x_axis_config, y_axis_config
         )
+        x_range_values = () if x_range is None else tuple(x_range)
+        y_range_values = () if y_range is None else tuple(y_range)
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         options = engine_call(
             _coordinate_options.axes,
-            _array(() if x_range is None else x_range),
-            _array(() if y_range is None else y_range),
+            _array(x_range_values),
+            _array(y_range_values),
             None if x_length is None else float(x_length),
             None if y_length is None else float(y_length),
         )
@@ -707,10 +783,12 @@ class Axes(_compat.Group):
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
         members = []
-        for index, (scaling, scale, exclude_origin) in enumerate((
-            (x_scaling, x_scale, x_scale[0] != "log"),
-            (y_scaling, y_scale, y_scale[0] != "log"),
-        )):
+        axis_setups = (
+            (0, x_options, x_scale, x_range_values),
+            (1, y_options, y_scale, y_range_values),
+        )
+        for index, config, scale, _ in axis_setups:
+            exclude_origin = scale[0] != "log"
             axis = _attach_number_line(
                 object.__new__(NumberLine),
                 engine_call(handle.coordinateAxis, index),
@@ -718,9 +796,11 @@ class Axes(_compat.Group):
                 include_tip=bool(tips),
                 exclude_origin_tick=exclude_origin,
             )
-            axis.scaling = scaling if scaling is not None else LinearBase()
+            axis.scaling = config["scaling"] if config["scaling"] is not None else LinearBase()
             members.append(axis)
         _coordinate_family(self, handle, members)
+        for axis, (_, config, _, range_values) in zip(members, axis_setups):
+            _configure_axes_numeric_labels(axis, config, range_values)
 
     @property
     def x_axis(self):
