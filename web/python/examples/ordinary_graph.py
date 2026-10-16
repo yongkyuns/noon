@@ -26,16 +26,20 @@ class OrdinaryGraph(Scene):
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
-        graph.add_edges(
+        added_edges = graph.add_edges(
             ("a", "d"),
             positions={"d": (-3.5, -2.4)},
             vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
             edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
         )
+        assert len(added_edges) == 2
         assert ("a", "d") in graph.edges
         removed_edge = graph.remove_edges(("a", "d"))
         assert len(removed_edge) == 1
-        graph.add_edges(("a", "d"), edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}})
+        restored_edge = graph.add_edges(
+            ("a", "d"), edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}}
+        )
+        assert len(restored_edge) == 1
         added_vertices = graph.add_vertices(
             "e", positions={"e": (-5.5, -2.4)},
             vertex_config={"e": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
@@ -47,17 +51,21 @@ class OrdinaryGraph(Scene):
         assert tuple(directed.edges) == (("u", "v"), ("v", "w"), ("w", "u"))
         _ = directed[("u", "v")]
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
-        directed.add_edges(
+        added_edges = directed.add_edges(
             ("w", "x"),
             positions={"x": (5, -2.3)},
             vertex_config={"x": {"color": YELLOW}},
             edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
         )
+        assert len(added_edges) == 2
         assert ("w", "x") in directed.edges
         removed_vertex = directed.remove_vertices("x")
         assert len(removed_vertex) == 2
         directed.add_vertices("x", positions={"x": (5, -2.3)}, vertex_config={"x": {"color": YELLOW}})
-        directed.add_edges(("w", "x"), edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}})
+        restored_edge = directed.add_edges(
+            ("w", "x"), edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}}
+        )
+        assert len(restored_edge) == 1
         added_vertices = directed.add_vertices(
             "y", positions={"y": (2, -2.3)},
             vertex_config={"y": {"radius": 0.16, "color": YELLOW}},
