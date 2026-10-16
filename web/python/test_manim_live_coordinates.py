@@ -89,10 +89,15 @@ class LiveCoordinateAdapterTests(TestCase):
         with self.assertRaises(RuntimeError):self.construct()
         self.resolve.assert_not_called();plotting._coordinate_options.numberLine.assert_not_called()
 
-    def test_number_line_tips_remain_unsupported_but_axes_tips_are_options(self):
-        with self.assertRaises(NotImplementedError):
-            plotting.NumberLine((0,2,1), include_tip=True)
-        plotting._coordinate_options.numberLine.assert_not_called()
+    def test_number_line_tip_option_flows_through_live_dispatch(self):
+        plotting.NumberLine((0,2,1), include_tip=True)
+        plotting._coordinate_options.numberLine.assert_called_once()
+        self.options.setTips.assert_called_once_with(True)
+        self.assertTrue(self.attach_number_line.call_args.kwargs["include_tip"])
+        self.live.assert_called_once_with(self.options)
+        self.cold.assert_not_called()
+
+    def test_axes_tips_remain_enabled_by_default(self):
         self.construct(True)
         self.options.setTips.assert_called_once_with(True)
 

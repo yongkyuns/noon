@@ -280,31 +280,7 @@ impl ManimThreeDAxes {
     }
 
     pub fn tip(&self, index: usize) -> Result<Option<Mobject>, CoordinateAuthoringError> {
-        if index > 2 {
-            return Err(CoordinateAuthoringError::InvalidTopology);
-        }
-        let store = Rc::clone(self.family.integration_store());
-        let axis_id = three_axis_members(&self.family)?[index];
-        let tip_id = {
-            let borrowed = store.borrow();
-            let group = borrowed
-                .node(axis_id)
-                .ok_or(CoordinateAuthoringError::InvalidTopology)?;
-            let shaft = group
-                .first_member()
-                .ok_or(CoordinateAuthoringError::InvalidTopology)?;
-            let ticks = group
-                .next_member(shaft)
-                .ok_or(CoordinateAuthoringError::InvalidTopology)?;
-            group.next_member(ticks).filter(|id| {
-                borrowed
-                    .node(*id)
-                    .is_some_and(|node| node.semantic_object_state().is_some())
-            })
-        };
-        tip_id
-            .map(|id| Mobject::from_node(store, id).map_err(Into::into))
-            .transpose()
+        self.axis(index)?.tip()
     }
 
     pub fn authored_frame(&self) -> Result<ManimThreeDAxesFrame, CoordinateAuthoringError> {
@@ -850,9 +826,10 @@ fn publish_prepared_three_d_axes(
                     .ok_or(AuthoringError::NonFiniteObjectState)?;
                 let mut tip =
                     SemanticObjectState::new(noon_core::StoredGeometry::Resource(tip_handle));
+                tip.set_role(SemanticObjectRole::CoordinateTip);
                 tip.transform = SemanticTransform::from(world);
-                tip.style =
-                    tip_style(&axis.style).map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                tip.style = filled_tip_style(&axis.style)
+                    .map_err(|_| AuthoringError::NonFiniteObjectState)?;
                 if axis.shade_in_3d {
                     configure_cairo_axis_path(&mut tip, axis.light_source)
                         .map_err(|_| AuthoringError::NonFiniteObjectState)?;
@@ -913,14 +890,6 @@ fn configure_cairo_axis_path(
             gradient_direction: Some(light_source),
         })
         .map_err(|_| CoordinateAuthoringError::InvalidOptions("invalid Cairo axis appearance"))
-}
-
-fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoringError> {
-    let mut tip = filled_tip_style(style)?;
-    // ThreeDAxes inherits the shaft style on its filled tip. The shared 2D
-    // helper clears this width for its separate outline-free tip contract.
-    tip.stroke_width = style.stroke_width;
-    Ok(tip)
 }
 
 fn three_d_axis_style() -> SemanticStyle {
@@ -1061,7 +1030,7 @@ mod tests {
             object_opacity: 0.8,
         };
 
-        let tip = tip_style(&style).unwrap();
+        let tip = filled_tip_style(&style).unwrap();
         assert_eq!(tip.stroke_width, 2.0);
         assert_eq!(tip.stroke_width_mode, style.stroke_width_mode);
         assert_eq!(tip.stroke_join, style.stroke_join);

@@ -5,9 +5,10 @@ use std::rc::Rc;
 mod riemann;
 
 use noon::{
-    AxesFrame, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimGeometryOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions,
-    NumberLineFrame, PlotSamplingOptions, RiemannRectangleOptions, RiemannSample,
+    AxesFrame, CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions,
+    ManimGeometryOptions, ManimNumberLine, ManimNumberLineOptions, ManimThreeDAxes,
+    ManimThreeDAxesFrame, ManimThreeDAxesOptions, NumberLineFrame, PlotSamplingOptions,
+    RiemannRectangleOptions, RiemannSample,
 };
 use wasm_bindgen::prelude::*;
 
@@ -213,14 +214,32 @@ impl WasmCoordinateOptions {
     #[wasm_bindgen(js_name = setTips)]
     pub fn set_tips(&mut self, enabled: bool) -> Result<(), JsValue> {
         match &mut self.request {
+            CoordinateRequest::NumberLine(options) => options.include_tip = enabled,
             CoordinateRequest::Axes(options) => options.tips = enabled,
             CoordinateRequest::ThreeDAxes(options) => options.tips = enabled,
             _ => {
                 return Err(js_error(
-                    "tips are configurable only for Axes and ThreeDAxes",
+                    "tips are configurable only for NumberLine, Axes, and ThreeDAxes",
                 ));
             }
         }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setNumberLineTipDimensions)]
+    pub fn set_number_line_tip_dimensions(
+        &mut self,
+        width: f64,
+        height: f64,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberLine(options) = &mut self.request else {
+            return Err(js_error("tip dimensions require a NumberLine"));
+        };
+        if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 {
+            return Err(js_error("NumberLine tip width and height must be positive"));
+        }
+        options.tip_width = width;
+        options.tip_height = height;
         Ok(())
     }
 
@@ -697,6 +716,15 @@ impl WasmAuthoringFamilyHandle {
         Self::from_semantic_family(ticks).direct_mobjects()
     }
 
+    #[wasm_bindgen(js_name = coordinateTip)]
+    pub fn coordinate_tip(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        ManimNumberLine::from_family(self.semantic_family()?)
+            .and_then(|line| line.tip()?.ok_or(CoordinateAuthoringError::InvalidTopology))
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
     /// Batch direct leaf handles once, avoiding one full membership scan per leaf.
     #[wasm_bindgen(js_name = directMobjects)]
     pub fn direct_mobjects(&self) -> Result<js_sys::Array, JsValue> {
@@ -747,15 +775,7 @@ impl CanonicalAuthoringSceneContext {
         &mut self,
         line: &ManimNumberLine,
     ) -> Result<NumberLineFrame, JsValue> {
-        let range = line.range().map_err(coordinate_failure).map_err(js_error)?;
-        let shaft = line.shaft().map_err(coordinate_failure).map_err(js_error)?;
-        let path =
-            self.query_mobject_path(&WasmAuthoringMobjectHandle::from_semantic_mobject(shaft))?;
-        let start = path.start()?;
-        let end = path.end()?;
-        NumberLineFrame::new(range, [start[0], start[1]], [end[0], end[1]])
-            .map_err(coordinate_math_failure)
-            .map_err(js_error)
+        self.inner.number_line_frame(line).map_err(js_error)
     }
 }
 

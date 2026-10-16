@@ -2,6 +2,14 @@
 use super::*;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_effective_number_line_frame(
+        &mut self,
+        line: &noon::ManimNumberLine,
+    ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.effective_number_line_frame(line)))?
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_path_family(
         &mut self,

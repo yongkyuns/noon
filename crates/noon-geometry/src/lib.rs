@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod arrow;
-pub use arrow::{arrow_tip_vertices, ArrowGeometry};
+pub use arrow::{arrow_tip_vertices, arrow_tip_vertices_with_width, ArrowGeometry};
 mod boolean;
 mod cairo_path;
 pub use cairo_path::{cairo_path_control_points, cairo_path_geometry, CairoPathGeometry};

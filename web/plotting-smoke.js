@@ -255,7 +255,9 @@ class PlottingQualification(Scene):
 
         # Keep this oracle axis-aligned so physical rectangle corners, not
         # merely callback counts, distinguish exact values from interpolation.
-        sample_axes = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, include_ticks=False)
+        sample_axes = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, include_ticks=False, tips=True)
+        # Tip trimming changes only visible shafts, never the coordinate range.
+        near(sample_axes.c2p(1, 1), (1, 1))
         sample_calls = []
         def quadratic(x):
             sample_calls.append(x)
