@@ -214,6 +214,36 @@ fn invalid_keys_endpoints_duplicate_edges_and_self_loops_do_not_publish() {
 }
 
 #[test]
+fn graph_mutations_reject_self_edges_without_publishing_topology() {
+    let mut scene = Scene::new();
+    let mut graph = scene.graph([("a", (-1.0, 0.0))], []).unwrap();
+    let revision = scene.revision();
+
+    let error = graph.add_edges(&mut scene, [("a", "a")]).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(graph.topology().unwrap().edges().count(), 0);
+
+    let error = graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), GraphOptions::default())],
+            [("b", "b", GraphOptions::default())],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(graph.vertex_keys().copied().collect::<Vec<_>>(), vec!["a"]);
+    assert_eq!(graph.topology().unwrap().edges().count(), 0);
+}
+
+#[test]
 fn invalid_options_are_rejected_even_without_vertices_or_edges() {
     let bad_options = [
         GraphOptions {

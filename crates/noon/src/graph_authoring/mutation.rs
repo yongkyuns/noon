@@ -360,13 +360,16 @@ where
     let mut topology = declaration.topology().clone();
     let mut seen = HashSet::new();
     let mut planned = Vec::with_capacity(requested.len());
-    for (start_key, end_key, options) in requested {
+    for (edge_index, (start_key, end_key, options)) in requested.into_iter().enumerate() {
         let start = graph
             .vertex_id(&start_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
         let end = graph
             .vertex_id(&end_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        if start == end {
+            return Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index });
+        }
         let canonical = if directed || start <= end {
             (start, end)
         } else {
@@ -583,13 +586,16 @@ where
 
     let mut seen_edges = HashSet::new();
     let mut planned_edges = Vec::with_capacity(requested_edges.len());
-    for (start_key, end_key, options) in requested_edges {
+    for (edge_index, (start_key, end_key, options)) in requested_edges.into_iter().enumerate() {
         let start = *vertex_ids
             .get(&start_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
         let end = *vertex_ids
             .get(&end_key)
             .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        if start == end {
+            return Err(GraphAuthoringError::SelfEdgeUnsupported { edge_index });
+        }
         let canonical = if directed || start <= end {
             (start, end)
         } else {

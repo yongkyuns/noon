@@ -76,7 +76,14 @@ class _Context:
         if self.fail == operation:
             raise RuntimeError(operation)
 
+    @staticmethod
+    def _consume_options(*options):
+        for option in options:
+            if option is not None:
+                option.free()
+
     def liveCreateGraph(self, *args):
+        self._consume_options(args[-1])
         self._call("create")
         self.creation_calls.append(args)
         self.options.append(args[-1])
@@ -100,15 +107,18 @@ class _Context:
 
     def liveGraphAddVertices(self, *args): self._call("add_vertices")
     def liveGraphAddVerticesWithOptions(self, *args):
+        self._consume_options(args[-1])
         self._call("add_vertices")
         self.add_vertex_calls.append(args)
     def liveGraphAddEdges(self, *args):
         self._call("add_edges")
         self.add_edge_calls.append(args)
     def liveGraphAddEdgesWithOptions(self, *args):
+        self._consume_options(args[-1])
         self._call("add_edges")
         self.add_edge_options_calls.append(args)
     def liveGraphAddVerticesAndEdgesWithOptions(self, *args):
+        self._consume_options(args[4], args[-1])
         self._call("add_edges")
         self.compound_add_calls.append(args)
     def liveGraphRemoveVertices(self, *args): self._call("remove_vertices")

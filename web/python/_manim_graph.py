@@ -336,6 +336,16 @@ class _GraphBase(_compat.Group):
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
         options = _graph_style_options(global_vertex_config, global_edge_config)
         ids = _array(self._graph_key_ids.values())
+
+        def create_graph(method, *args):
+            nonlocal options
+            # wasm-bindgen consumes this by-value wrapper, including on Err.
+            transferred_options = options
+            options = None
+            return engine_call(
+                method, *args, transferred_options, operation="Graph.create"
+            )
+
         try:
             for key, style in keyed_vertex_config.items():
                 if "radius" in style:
@@ -346,64 +356,62 @@ class _GraphBase(_compat.Group):
                         operation="Graph.style",
                     )
             if spring:
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateSpringGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(value for point in spring_positions for value in point),
                     _array(fixed_indices), spring_fixed_is_set,
                     scale, scale_y, *center, spring_k, spring_iterations, spring_threshold,
-                    spring_rescale, options, operation="Graph.create",
+                    spring_rescale,
                 )
             elif random_layout:
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateRandomGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(value for point in random_positions for value in point),
-                    scale, scale_y, options, operation="Graph.create",
+                    scale, scale_y,
                 )
             elif tree:
                 spacing_x, spacing_y = (None, None) if tree_spacing is None else tree_spacing
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateTreeGraph,
                     bool(self._directed), ids, _array(edge_ids), tree_root,
-                    tree_orientation_up, spacing_x, spacing_y, scale, scale_y, options,
-                    operation="Graph.create",
+                    tree_orientation_up, spacing_x, spacing_y, scale, scale_y,
                 )
             elif circular:
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
-                    scale, scale_y, *center, options, operation="Graph.create",
+                    scale, scale_y, *center,
                 )
             elif shell:
                 shell_indices, shell_sizes = _flatten_groups(shell_groups)
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateShellGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(shell_indices), _array(shell_sizes), scale, *center, rotate,
-                    options, operation="Graph.create",
                 )
             elif spiral:
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateSpiralGraph,
                     bool(self._directed), ids, _array(edge_ids), scale, scale_y, *center,
-                    resolution, equidistant, options, operation="Graph.create",
+                    resolution, equidistant,
                 )
             elif partite:
                 partition_indices, partition_sizes = _flatten_groups(partite_groups)
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreatePartiteGraph,
                     bool(self._directed), ids, _array(edge_ids),
                     _array(partition_indices), _array(partition_sizes),
-                    scale, scale_y, *center, align_horizontal, options,
-                    operation="Graph.create",
+                    scale, scale_y, *center, align_horizontal,
                 )
             else:
-                self._graph_handle = engine_call(
+                self._graph_handle = create_graph(
                     context.liveCreateGraph, bool(self._directed), ids, _array(positions),
-                    _array(edge_ids), options, operation="Graph.create",
+                    _array(edge_ids),
                 )
         except BaseException:
-            options.free()
+            if options is not None:
+                options.free()
             raise
         self._edge_wrappers = {}
         self._edge_mapping = None
@@ -550,17 +558,23 @@ class _GraphBase(_compat.Group):
             style_overrides = _vertex_style_override_rows(
                 (key for key, _, _ in pending), keyed_config
             )
+            vertex_ids = _array(ids)
+            vertex_positions = _array(flat_positions)
+            vertex_styles = _array(style_overrides)
+            transferred_options = options
+            options = None
             engine_call(
                 self._context().liveGraphAddVerticesWithOptions,
                 self._graph_handle,
-                _array(ids),
-                _array(flat_positions),
-                _array(style_overrides),
-                options,
+                vertex_ids,
+                vertex_positions,
+                vertex_styles,
+                transferred_options,
                 operation="Graph.add_vertices",
             )
         except BaseException:
-            options.free()
+            if options is not None:
+                options.free()
             raise
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
         self._next_graph_id = next_id
@@ -648,6 +662,15 @@ class _GraphBase(_compat.Group):
         )
         edge_style_overrides = _edge_style_override_rows(edges, keyed_edge_config)
 
+        vertex_ids_js = _array(vertex_ids) if new_vertices else None
+        vertex_positions_js = (
+            _array(value for point in vertex_positions for value in point)
+            if new_vertices else None
+        )
+        vertex_styles_js = _array(vertex_style_overrides) if new_vertices else None
+        edge_ids_js = _array(edge_ids)
+        edge_styles_js = _array(edge_style_overrides)
+
         vertex_options = (
             _graph_style_options(base_vertex_config, {}) if new_vertices else None
         )
@@ -660,31 +683,38 @@ class _GraphBase(_compat.Group):
 
         try:
             if new_vertices:
+                transferred_vertex_options = vertex_options
+                transferred_edge_options = edge_options
+                vertex_options = None
+                edge_options = None
                 engine_call(
                     self._context().liveGraphAddVerticesAndEdgesWithOptions,
                     self._graph_handle,
-                    _array(vertex_ids),
-                    _array(value for point in vertex_positions for value in point),
-                    _array(vertex_style_overrides),
-                    vertex_options,
-                    _array(edge_ids),
-                    _array(edge_style_overrides),
-                    edge_options,
+                    vertex_ids_js,
+                    vertex_positions_js,
+                    vertex_styles_js,
+                    transferred_vertex_options,
+                    edge_ids_js,
+                    edge_styles_js,
+                    transferred_edge_options,
                     operation="Graph.add_edges",
                 )
             else:
+                transferred_edge_options = edge_options
+                edge_options = None
                 engine_call(
                     self._context().liveGraphAddEdgesWithOptions,
                     self._graph_handle,
-                    _array(edge_ids),
-                    _array(edge_style_overrides),
-                    edge_options,
+                    edge_ids_js,
+                    edge_styles_js,
+                    transferred_edge_options,
                     operation="Graph.add_edges",
                 )
         except BaseException:
             if vertex_options is not None:
                 vertex_options.free()
-            edge_options.free()
+            if edge_options is not None:
+                edge_options.free()
             raise
         self._graph_key_ids.update(zip(new_vertices, vertex_ids))
         self._next_graph_id = next_id + len(new_vertices)

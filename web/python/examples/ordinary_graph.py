@@ -23,6 +23,17 @@ class OrdinaryGraph(Scene):
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
         assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
         _ = graph[("a", "b")]
+        vertices_before_rejected_edge = tuple(graph.vertices)
+        edges_before_rejected_edge = tuple(graph.edges)
+        try:
+            graph.add_edges(("a", "a"))
+        except Exception as error:
+            if "self-edge" not in str(error):
+                raise
+        else:
+            raise AssertionError("Graph.add_edges accepted an unsupported self-edge")
+        assert tuple(graph.vertices) == vertices_before_rejected_edge
+        assert tuple(graph.edges) == edges_before_rejected_edge
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
