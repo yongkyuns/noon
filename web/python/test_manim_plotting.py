@@ -153,6 +153,21 @@ class PlottingAdapterTests(unittest.TestCase):
             build.assert_called_once_with(line, (0, 1), attach=True,
                                          config={"exclude_zero": True}, excluding=())
 
+    def test_number_line_add_labels_uses_native_text_subset_and_returns_self(self):
+        line = object.__new__(plotting.NumberLine)
+        labels = {2: "Tuesday"}
+        with patch("_manim_number_labels.custom_labels") as build:
+            self.assertIs(line.add_labels(labels), line)
+        build.assert_called_once_with(line, labels, config={
+            "direction": plotting._base.DOWN,
+            "buff": 0.12,
+            "font_size": 18,
+        })
+        with patch("_manim_number_labels.custom_labels") as build:
+            with self.assertRaises(NotImplementedError):
+                line.add_labels(labels, label_constructor=object)
+            build.assert_not_called()
+
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (
             "plot",

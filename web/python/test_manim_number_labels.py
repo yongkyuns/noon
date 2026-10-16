@@ -1,7 +1,7 @@
 """Argument/ownership tests only; shared Rust and Pyodide qualify semantics."""
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import _manim_number_labels as labels
 
 
@@ -28,13 +28,15 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.calls = []
         self.addCleanup(patch.stopall)
         patch.object(labels._plot, '_coordinate_options', SimpleNamespace(numberLabels=self.make)).start()
-        patch.object(labels._plot, '_to_js', side_effect=lambda x: x).start()
+        patch.object(labels._plot, '_to_js', side_effect=list).start()
         patch.object(labels._plot, '_outside_callback').start()
         patch.object(labels._shared, '_live_constructor_context', return_value=None).start()
         patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)).start()
         self.wrapped = patch.object(labels, '_family', side_effect=lambda handle, *args: handle).start()
         patch.object(labels._shared, '_family_wrapper_key', side_effect=id).start()
-        self.axis = SimpleNamespace(_semantic_family_handle=SimpleNamespace(numberLabelFamily=self.commit),
+        self.axis = SimpleNamespace(_semantic_family_handle=SimpleNamespace(
+                                        numberLabelFamily=self.commit,
+                                        numberLineCustomLabelFamily=self.commit),
                                     _semantic_member_wrappers={})
 
     def make(self, *values):
@@ -72,6 +74,29 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
         self.invoke(iter((0, 1, 2)), excluding=iter((1,)))
         self.assertEqual(self.options[0].excluded, [1.0])
+
+    def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
+        family = Owned()
+        self.wrapped.side_effect = lambda handle, size, color: family
+        self.axis._semantic_family_handle.numberLineCustomLabelFamily = Mock(
+            return_value=Owned()
+        )
+        result = labels.custom_labels(
+            self.axis,
+            {2: "Tuesday", 0: 1},
+            config={"font_size": 24, "direction": (0, 1), "buff": 0.2},
+        )
+        self.assertIs(result, family)
+        call = self.axis._semantic_family_handle.numberLineCustomLabelFamily.call_args
+        self.assertEqual(call.args[0:2], ([2.0, 0.0], ["Tuesday", "1"]))
+        self.assertIs(self.axis.labels, family)
+        self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
+
+    def test_custom_labels_reject_unsupported_objects_before_allocating(self):
+        with self.assertRaises(NotImplementedError):
+            labels.custom_labels(self.axis, {1: object()}, config={})
+        self.assertEqual(self.options, [])
+        self.assertEqual(self.calls, [])
 
     def test_none_and_empty_are_distinct_and_detached_does_not_attach(self):
         self.invoke(None, attach=False)

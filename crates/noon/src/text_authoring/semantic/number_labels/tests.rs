@@ -133,6 +133,28 @@ fn number_line_exclusions_apply_before_native_text_allocation() {
 }
 
 #[test]
+fn custom_number_line_labels_keep_text_and_order_in_the_attached_family() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions::default();
+    let labels = line
+        .add_labels(&[(2.0, "Tuesday".into()), (0.0, "Start".into())], &options)
+        .unwrap();
+    let label_members = leaves(&labels);
+    assert_eq!(label_members.len(), 2);
+    assert_eq!(text(&label_members[0]), "Tuesday");
+    assert_eq!(text(&label_members[1]), "Start");
+    assert!(leaves(line.family()).iter().any(|object| object
+        .state()
+        .unwrap()
+        .content
+        .text()
+        .is_some()));
+}
+
+#[test]
 fn second_axis_preparation_failure_is_atomic_including_fonts() {
     let mut scene = Scene::new();
     let axes = scene

@@ -135,6 +135,40 @@ impl WasmAuthoringFamilyHandle {
         Ok(Self::from_semantic_family(family))
     }
 
+    /// Attach caller-provided labels at Rust-mapped NumberLine positions.
+    #[wasm_bindgen(js_name = numberLineCustomLabelFamily)]
+    pub fn number_line_custom_label_family(
+        &self,
+        values: &[f64],
+        texts: js_sys::Array,
+        options: WasmNumberLabelOptions,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        if texts.length() as usize != values.len() {
+            return Err(failure(
+                "custom label positions and texts must have equal lengths",
+            ));
+        }
+        if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
+            return Err(failure("number-label limit exceeded"));
+        }
+        let mut labels = Vec::new();
+        labels
+            .try_reserve_exact(values.len())
+            .map_err(|_| failure("number-label allocation failed"))?;
+        for (index, number) in values.iter().enumerate() {
+            let text = texts
+                .get(index as u32)
+                .as_string()
+                .ok_or_else(|| failure("custom number-line label text must be a string"))?;
+            labels.push((*number, text));
+        }
+        let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
+        let family = line
+            .add_labels(&labels, &options.options)
+            .map_err(failure)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
     #[wasm_bindgen(js_name = coordinateLabelFamilies)]
     pub fn coordinate_label_families(
         &self,

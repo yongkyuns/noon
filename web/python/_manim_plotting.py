@@ -365,6 +365,29 @@ class NumberLine(_compat.Group):
         """Return detached labels for the automatically selected tick values."""
         return self.get_number_mobjects()
 
+    def add_labels(self, dict_values, direction=None, buff=None, font_size=None,
+                   label_constructor=None):
+        """Attach caller strings/numbers as positioned native Text labels.
+
+        Existing Mobject labels and TeX/custom constructors remain unsupported
+        by this native-Text profile.
+        """
+        if label_constructor is not None:
+            raise NotImplementedError(
+                "NumberLine.add_labels custom constructors require the TeX label profile"
+            )
+        from _manim_number_labels import custom_labels
+        config = {
+            "direction": getattr(self, "label_direction", _base.DOWN)
+            if direction is None else direction,
+            "buff": getattr(self, "line_to_number_buff", 0.12)
+            if buff is None else buff,
+            "font_size": getattr(self, "font_size", 18)
+            if font_size is None else font_size,
+        }
+        custom_labels(self, dict_values, config=config)
+        return self
+
     def add_numbers(self, x_values=None, excluding=None, **kwargs):
         """Atomically append native Text labels before playback; expose .numbers.
 

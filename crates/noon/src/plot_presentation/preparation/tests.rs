@@ -74,6 +74,25 @@ fn number_label_exclusions_use_exact_values_and_preserve_order() {
 }
 
 #[test]
+fn positioned_text_labels_preserve_source_and_input_order() {
+    let labels = positioned_text_labels(
+        frame().x(),
+        &[(4.0, "Wednesday".into()), (2.0, "Monday".into())],
+    )
+    .unwrap();
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Wednesday", "Monday"]
+    );
+    assert_eq!(labels[0].number, 4.0);
+    near(labels[0].point, [-1.0, -2.0]);
+    assert!(positioned_text_labels(frame().x(), &[(f64::NAN, "bad".into())]).is_err());
+}
+
+#[test]
 fn label_preparation_rejects_nonfinite_values_precision_and_budget() {
     assert!(number_labels(frame().x(), Some(&[1.0, f64::NAN]), 1, false).is_err());
     assert!(number_labels(frame().x(), None, 13, false).is_err());

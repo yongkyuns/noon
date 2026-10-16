@@ -131,6 +131,32 @@ pub fn number_labels_excluding(
     Ok(labels)
 }
 
+/// Prepare caller-provided text at explicit scalar positions without changing
+/// text content or order. Geometry and label admission remain shared Rust work.
+pub fn positioned_text_labels(
+    frame: NumberLineFrame,
+    labels: &[(f64, String)],
+) -> Result<Vec<NumberLabel>, PlotPresentationError> {
+    if labels.len() > MAX_PLOT_LABELS {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label limit exceeded",
+        ));
+    }
+    let mut prepared = Vec::new();
+    prepared
+        .try_reserve_exact(labels.len())
+        .map_err(|_| PlotPresentationError::AllocationFailed)?;
+    for (number, text) in labels {
+        let point = frame.number_to_point(*number)?;
+        prepared.push(NumberLabel {
+            number: *number,
+            text: text.clone(),
+            point,
+        });
+    }
+    Ok(prepared)
+}
+
 /// A finite (data timestamp, scalar measurement). Timestamps must increase
 /// strictly: duplicate timestamps do not define a unique interpolating segment.
 #[derive(Clone, Copy, Debug, PartialEq)]
