@@ -56,6 +56,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
 
+      - name: Verify fail-closed endpoint admission before execution
+        run: node --test experiments/2094/endpoint-admission.test.mjs
+
       - name: Run bounded original-scene baseline without caching
         env:
           NOON_BASELINE_SITE: ${{ runner.temp }}/noon-2094-site
@@ -72,5 +75,7 @@ jobs:
           path: |
             noon-2094-evidence/
             experiments/2094/baseline.mjs
+            experiments/2094/endpoint-admission.mjs
+            experiments/2094/endpoint-admission.test.mjs
           if-no-files-found: error
           retention-days: 7

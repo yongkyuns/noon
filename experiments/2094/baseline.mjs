@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, relative, join } from 'node:path';
 import { chromium } from 'playwright';
+import { endpointAdmission } from './endpoint-admission.mjs';
 
 const expectedScene = '32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e';
 const site = resolve(process.env.NOON_BASELINE_SITE ?? 'site');
@@ -148,7 +149,7 @@ try{
     await page.evaluate(c=>window.__noon2094Probe.reset(c),index>0);
     const started=performance.now();
     await page.locator('#replace-scene').click();
-    let sawRun=false,sawProgress=false,epoch=null;
+    let sawRun=false,sawProgress=false,epoch=null,progressRebuilds=null,progressFrames=0;
     try{
       while(performance.now()-started < maxRunMs){
         const observed=await page.evaluate(()=>{
@@ -168,11 +169,19 @@ try{
         if(observed.patchState==='error')throw Error('Run failed '+observed.statusText);
         const m=observed.metrics;
         if(observed.runInFlight===true&&m?.ready&&m.time>=0&&m.time<24.999){
-          sawProgress=true;epoch=[m.session,m.clockOriginMs];
+          if(!sawProgress){
+            epoch=[m.session,m.clockOriginMs];
+            progressRebuilds=m.counters.rendererRebuilds;
+          }
+          if(m.session===epoch?.[0]&&m.clockOriginMs===epoch?.[1]){
+            sawProgress=true;
+            progressFrames=Math.max(progressFrames,m.frames);
+          }
         }
-        if(sawRun&&sawProgress&&observed.runInFlight===false&&observed.patchState==='applied'
-           &&m?.ready&&!m.needsPresent&&m.frames>0&&Math.abs(m.time-25)<0.001
-           &&epoch?.[0]===m.session&&epoch?.[1]===m.clockOriginMs){
+        const endpoint=endpointAdmission({observed,sawRun,sawProgress,epoch,
+          progressRebuilds,progressFrames});
+        if(endpoint){
+          run.completion=endpoint;
           run.status='endpoint-observed';break;
         }
         await page.waitForTimeout(50);
