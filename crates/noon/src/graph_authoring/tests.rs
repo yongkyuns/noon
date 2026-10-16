@@ -461,6 +461,98 @@ fn per_edge_add_options_publish_styled_geometry_with_topology_once() {
 }
 
 #[test]
+fn adding_vertices_and_edges_publishes_one_atomic_mutation() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let vertex_options = GraphOptions {
+        vertex_radius: 0.24,
+        vertex_fill: GREEN,
+        ..GraphOptions::default()
+    };
+    let edge_options = GraphOptions {
+        edge_color: YELLOW,
+        edge_stroke_width: 0.1,
+        ..GraphOptions::default()
+    };
+
+    let mutation = graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), vertex_options)],
+            [("a", "b", edge_options)],
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(mutation.added_vertices.len(), 1);
+    assert_eq!(mutation.added_edges.len(), 1);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 3);
+    assert!(matches!(
+        graph.vertex(&"b").unwrap().state().unwrap().content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.24).abs() < f32::EPSILON
+    ));
+    let edge_state = graph.edge(&"a", &"b").unwrap().line().state().unwrap();
+    assert_eq!(edge_state.style.stroke, Some(SemanticPaint::Solid(YELLOW)));
+    assert_eq!(edge_state.style.stroke_width, 0.1);
+
+    let mut digraph = scene
+        .digraph([("u", (2.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let mutation = digraph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("v", (3.0, 0.0), GraphOptions::default())],
+            [("u", "v", GraphOptions::default())],
+        )
+        .unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(mutation.added_vertices.len(), 1);
+    assert_eq!(mutation.added_edges.len(), 1);
+    assert!(digraph.edge(&"u", &"v").unwrap().arrow().is_some());
+}
+
+#[test]
+fn invalid_compound_add_rejects_vertices_and_edges_without_publication() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+
+    assert!(graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), GraphOptions::default())],
+            [("missing", "b", GraphOptions::default())],
+        )
+        .is_err());
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"b").is_none());
+
+    let invalid_edge_options = GraphOptions {
+        edge_stroke_width: f64::NAN,
+        ..GraphOptions::default()
+    };
+    assert!(graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("c", (2.0, 0.0), GraphOptions::default())],
+            [("a", "c", invalid_edge_options)],
+        )
+        .is_err());
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"c").is_none());
+}
+
+#[test]
 fn invalid_per_edge_add_options_leave_graph_unpublished() {
     let mut scene = Scene::new();
     let mut graph = scene

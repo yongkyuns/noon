@@ -154,6 +154,45 @@ def _graph_style_options(vertex_config, edge_config):
     return options
 
 
+def _vertex_style_override_rows(vertices, keyed_config):
+    missing = float("nan")
+    rows = []
+    for key in vertices:
+        style = keyed_config.get(key, {})
+        fill = style.get("fill_color", style.get("color"))
+        stroke = style.get("stroke_color", style.get("color"))
+        fill_components = (
+            _color_components("vertex_config.fill_color", fill)
+            if fill is not None else (missing,) * 4
+        )
+        stroke_components = (
+            _color_components("vertex_config.stroke_color", stroke)
+            if stroke is not None else (missing,) * 4
+        )
+        rows.extend((
+            style.get("radius", missing),
+            *fill_components,
+            style.get("fill_opacity", missing),
+            *stroke_components,
+            style.get("stroke_width", missing),
+        ))
+    return rows
+
+
+def _edge_style_override_rows(edges, keyed_config):
+    missing = float("nan")
+    rows = []
+    for edge in edges:
+        style = keyed_config.get(edge, {})
+        color = style.get("stroke_color", style.get("color"))
+        color_components = (
+            _color_components("edge_config.color", color)
+            if color is not None else (missing,) * 4
+        )
+        rows.extend((*color_components, style.get("stroke_width", missing)))
+    return rows
+
+
 class _GraphBase(_compat.Group):
     """Shared retained Graph/DiGraph facade.
 
@@ -487,27 +526,9 @@ class _GraphBase(_compat.Group):
         base_config = {**self._default_vertex_config, **global_config}
         options = _graph_style_options(base_config, {})
         try:
-            missing = float("nan")
-            style_overrides = []
-            for key, _, _ in pending:
-                style = keyed_config.get(key, {})
-                fill = style.get("fill_color", style.get("color"))
-                stroke = style.get("stroke_color", style.get("color"))
-                fill_components = (
-                    _color_components("vertex_config.fill_color", fill)
-                    if fill is not None else (missing,) * 4
-                )
-                stroke_components = (
-                    _color_components("vertex_config.stroke_color", stroke)
-                    if stroke is not None else (missing,) * 4
-                )
-                style_overrides.extend((
-                    style.get("radius", missing),
-                    *fill_components,
-                    style.get("fill_opacity", missing),
-                    *stroke_components,
-                    style.get("stroke_width", missing),
-                ))
+            style_overrides = _vertex_style_override_rows(
+                (key for key, _, _ in pending), keyed_config
+            )
             engine_call(
                 self._context().liveGraphAddVerticesWithOptions,
                 self._graph_handle,
@@ -524,57 +545,108 @@ class _GraphBase(_compat.Group):
         self._next_graph_id = next_id
         return self
 
-    def add_edges(self, edges, *, edge_config=None):
-        """Add edges between existing vertices, optionally styling them.
+    def add_edges(self, edges, *, edge_config=None, positions=None, vertex_config=None):
+        """Add edges and create any missing endpoint vertices atomically.
 
-        Manim's implicit missing-vertex creation needs a shared compound
-        publication with default placement; it remains unsupported here so
-        Python never splits that operation into transactions. ``edge_config``
-        accepts the constructor's global edge style keys and per-edge color,
-        stroke-color, and stroke-width overrides.
+        Missing vertices default to the current graph center. ``positions`` and
+        ``vertex_config`` customize those vertices; edge styles continue to
+        inherit graph defaults and accept per-edge overrides.
         """
-        edges = list(edges)
-        edge_ids = self._edge_ids(edges)
-        global_config, keyed_config = _split_style_config(
+        edges = [tuple(edge) for edge in edges]
+        if any(len(edge) != 2 for edge in edges):
+            raise ValueError("Graph edges must contain two vertex keys")
+        if positions is not None and not isinstance(positions, Mapping):
+            raise TypeError("positions must be a mapping of vertex keys to positions")
+        new_vertices, seen_new_vertices = [], set()
+        try:
+            for key in (key for edge in edges for key in edge):
+                if key not in self._graph_key_ids and key not in seen_new_vertices:
+                    seen_new_vertices.add(key)
+                    new_vertices.append(key)
+        except TypeError as error:
+            raise TypeError("Graph vertex keys must be hashable") from error
+        next_id = self._next_graph_id
+        vertex_ids = list(range(next_id, next_id + len(new_vertices)))
+        ids_by_key = dict(self._graph_key_ids)
+        ids_by_key.update(zip(new_vertices, vertex_ids))
+        edge_ids = [
+            vertex_id
+            for start, end in edges
+            for vertex_id in (ids_by_key[start], ids_by_key[end])
+        ]
+
+        if new_vertices:
+            center = _point(self.get_center())
+            vertex_positions = [
+                _point(positions.get(key, center) if positions is not None else center)
+                for key in new_vertices
+            ]
+        else:
+            vertex_positions = []
+
+        global_vertex_config, keyed_vertex_config = _split_style_config(
+            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(new_vertices),
+            per_key_supported={
+                "color", "fill_color", "stroke_color", "fill_opacity", "stroke_width", "radius",
+            },
+        )
+        base_vertex_config = {**self._default_vertex_config, **global_vertex_config}
+        vertex_style_overrides = _vertex_style_override_rows(
+            new_vertices, keyed_vertex_config
+        )
+
+        global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges),
             per_key_supported=_EDGE_CONFIG_KEYS,
         )
-        default_config = _validated_key_style(
+        default_edge_config = _validated_key_style(
             "edge_config",
-            {**self._default_edge_config, **global_config},
+            {**self._default_edge_config, **global_edge_config},
             _EDGE_CONFIG_KEYS,
         )
-        options = _graph_style_options(self._default_vertex_config, default_config)
+        edge_style_overrides = _edge_style_override_rows(edges, keyed_edge_config)
+
+        vertex_options = (
+            _graph_style_options(base_vertex_config, {}) if new_vertices else None
+        )
         try:
-            missing = float("nan")
-            style_overrides = []
-            for edge in edges:
-                style = _validated_key_style(
-                    "edge_config",
-                    {**keyed_config.get(edge, {})},
-                    _EDGE_CONFIG_KEYS,
-                )
-                color = style.get("stroke_color", style.get("color"))
-                color_components = (
-                    _color_components("edge_config.color", color)
-                    if color is not None else (missing,) * 4
-                )
-                style_overrides.extend((
-                    *color_components,
-                    style.get("stroke_width", missing),
-                ))
-            engine_call(
-                self._context().liveGraphAddEdgesWithOptions,
-                self._graph_handle,
-                _array(edge_ids),
-                _array(style_overrides),
-                options,
-                operation="Graph.add_edges",
-            )
+            edge_options = _graph_style_options(self._default_vertex_config, default_edge_config)
         except BaseException:
-            options.free()
+            if vertex_options is not None:
+                vertex_options.free()
             raise
-        self._graph_edges.extend(tuple(edge) for edge in edges)
+
+        try:
+            if new_vertices:
+                engine_call(
+                    self._context().liveGraphAddVerticesAndEdgesWithOptions,
+                    self._graph_handle,
+                    _array(vertex_ids),
+                    _array(value for point in vertex_positions for value in point),
+                    _array(vertex_style_overrides),
+                    vertex_options,
+                    _array(edge_ids),
+                    _array(edge_style_overrides),
+                    edge_options,
+                    operation="Graph.add_edges",
+                )
+            else:
+                engine_call(
+                    self._context().liveGraphAddEdgesWithOptions,
+                    self._graph_handle,
+                    _array(edge_ids),
+                    _array(edge_style_overrides),
+                    edge_options,
+                    operation="Graph.add_edges",
+                )
+        except BaseException:
+            if vertex_options is not None:
+                vertex_options.free()
+            edge_options.free()
+            raise
+        self._graph_key_ids.update(zip(new_vertices, vertex_ids))
+        self._next_graph_id = next_id + len(new_vertices)
+        self._graph_edges.extend(edges)
         self._edge_mapping = None
         return self
 

@@ -21,6 +21,10 @@ pub(crate) enum NativeGraph {
 pub(crate) enum GraphOperation {
     AddVertices(Vec<(u32, (f64, f64))>),
     AddVerticesWithOptions(Vec<(u32, (f64, f64), noon::GraphOptions)>),
+    AddVerticesAndEdgesWithOptions {
+        vertices: Vec<(u32, (f64, f64), noon::GraphOptions)>,
+        edges: Vec<(u32, u32, noon::GraphOptions)>,
+    },
     AddEdges(Vec<(u32, u32)>),
     AddEdgesWithOptions(Vec<(u32, u32, noon::GraphOptions)>),
     RemoveVertices(Vec<u32>),
@@ -82,6 +86,18 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
                 graph.add_vertices_with_options(scene, vertices)?;
+            }
+            (
+                Self::Undirected(graph),
+                GraphOperation::AddVerticesAndEdgesWithOptions { vertices, edges },
+            ) => {
+                graph.add_vertices_and_edges_with_options(scene, vertices, edges)?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::AddVerticesAndEdgesWithOptions { vertices, edges },
+            ) => {
+                graph.add_vertices_and_edges_with_options(scene, vertices, edges)?;
             }
             (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges(scene, edges)?;
@@ -325,6 +341,18 @@ impl NativeGraph {
             }
             (Self::Directed(graph), GraphOperation::AddVerticesWithOptions(vertices)) => {
                 graph.add_vertices_live_with_options(live, vertices)?;
+            }
+            (
+                Self::Undirected(graph),
+                GraphOperation::AddVerticesAndEdgesWithOptions { vertices, edges },
+            ) => {
+                graph.add_vertices_and_edges_live_with_options(live, vertices, edges)?;
+            }
+            (
+                Self::Directed(graph),
+                GraphOperation::AddVerticesAndEdgesWithOptions { vertices, edges },
+            ) => {
+                graph.add_vertices_and_edges_live_with_options(live, vertices, edges)?;
             }
             (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
                 graph.add_edges_live(live, edges)?;
@@ -1284,6 +1312,52 @@ impl CanonicalAuthoringSceneContext {
         self.mutate_live_graph(
             &mut graph.inner,
             GraphOperation::AddEdgesWithOptions(styled_edges),
+        )
+        .map_err(js_error)
+    }
+
+    /// Add previously missing vertices and their edges through one semantic
+    /// transaction. Vertex and edge style rows use the same sparse layouts as
+    /// the corresponding individual topology-edit operations.
+    #[wasm_bindgen(js_name = liveGraphAddVerticesAndEdgesWithOptions)]
+    pub fn live_graph_add_vertices_and_edges_with_options(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        vertex_ids: &[u32],
+        positions: &[f64],
+        vertex_style_overrides: &[f64],
+        vertex_options: WasmGraphOptions,
+        edge_pairs: &[u32],
+        edge_style_overrides: &[f64],
+        edge_options: WasmGraphOptions,
+    ) -> Result<(), JsValue> {
+        let vertices = vertices(vertex_ids, positions)?;
+        let vertex_styles = vertex_options_with_overrides(
+            &vertex_options.options,
+            vertex_style_overrides,
+            vertices.len(),
+        )?;
+        let styled_vertices = vertices
+            .into_iter()
+            .zip(vertex_styles)
+            .map(|((id, position), options)| (id, position, options))
+            .collect();
+
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let edge_styles =
+            edge_options_with_overrides(&edge_options.options, edge_style_overrides, edges.len())?;
+        let styled_edges = edges
+            .into_iter()
+            .zip(edge_styles)
+            .map(|((start, end), options)| (start, end, options))
+            .collect();
+
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::AddVerticesAndEdgesWithOptions {
+                vertices: styled_vertices,
+                edges: styled_edges,
+            },
         )
         .map_err(js_error)
     }

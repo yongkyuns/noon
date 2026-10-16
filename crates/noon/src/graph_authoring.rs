@@ -451,6 +451,20 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         mutation::add_edges_with_options(scene, &mut self.inner, edges)
     }
 
+    /// Append vertices and their incident edges in one Scene publication.
+    pub fn add_vertices_and_edges_with_options<V, E>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(scene, &mut self.inner, vertices, edges)
+    }
+
     pub fn remove_vertices<V>(
         &mut self,
         scene: &mut Scene,
@@ -533,6 +547,20 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         E: IntoIterator<Item = (K, K, GraphOptions)>,
     {
         mutation::add_edges_with_options(live, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one live publication.
+    pub fn add_vertices_and_edges_live_with_options<V, E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(live, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices_live<V>(
@@ -722,6 +750,20 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         mutation::add_edges_with_options(scene, &mut self.inner, edges)
     }
 
+    /// Append vertices and their incident edges in one Scene publication.
+    pub fn add_vertices_and_edges_with_options<V, E>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(scene, &mut self.inner, vertices, edges)
+    }
+
     pub fn remove_vertices<V>(
         &mut self,
         scene: &mut Scene,
@@ -804,6 +846,20 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         E: IntoIterator<Item = (K, K, GraphOptions)>,
     {
         mutation::add_edges_with_options(live, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one live publication.
+    pub fn add_vertices_and_edges_live_with_options<V, E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(live, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices_live<V>(

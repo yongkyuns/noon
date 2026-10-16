@@ -64,6 +64,7 @@ class _Context:
         self.add_vertex_calls = []
         self.add_edge_calls = []
         self.add_edge_options_calls = []
+        self.compound_add_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -102,6 +103,9 @@ class _Context:
     def liveGraphAddEdgesWithOptions(self, *args):
         self._call("add_edges")
         self.add_edge_options_calls.append(args)
+    def liveGraphAddVerticesAndEdgesWithOptions(self, *args):
+        self._call("add_edges")
+        self.compound_add_calls.append(args)
     def liveGraphRemoveVertices(self, *args): self._call("remove_vertices")
     def liveGraphRemoveEdges(self, *args): self._call("remove_edges")
     def liveGraphCircularLayout(self, *args):
@@ -136,6 +140,7 @@ class GraphFacadeTests(unittest.TestCase):
             patch.object(graph, "_graph_options", side_effect=_GraphOptions),
             patch.object(graph._shared, "_live_constructor_context", return_value=self.context),
             patch.object(graph, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
+            patch.object(graph._compat.Group, "get_center", return_value=(0, 0, 0)),
         ]
         if not _HAS_NUMPY:
             # These tests exercise facade operations unrelated to NetworkX
@@ -568,10 +573,72 @@ class GraphFacadeTests(unittest.TestCase):
             self.assertEqual(value._graph_key_ids, {"a": 0})
             self.assertEqual(self.context.add_vertex_calls, [])
 
-    def test_missing_add_edge_endpoint_is_rejected_before_publication(self):
+    def test_missing_add_edge_endpoint_is_created_at_graph_center(self):
         value = graph.Graph({"a": (0, 0)}, [])
-        with self.assertRaisesRegex(ValueError, "unknown vertex"):
-            value.add_edges([("a", "missing")])
+        value.add_edges([("a", "missing")])
+        self.assertIn("missing", value._graph_key_ids)
+        self.assertEqual(len(self.context.compound_add_calls), 1)
+        call = self.context.compound_add_calls[0]
+        self.assertEqual(call[2], [0.0, 0.0])
+        self.assertEqual(call[5], [value._graph_key_ids["a"], value._graph_key_ids["missing"]])
+
+    def test_add_edges_atomically_creates_styled_vertices_and_edges(self):
+        value = graph.Graph({"a": (1, 1)}, [])
+        result = value.add_edges(
+            [("a", "b"), ("b", "c")],
+            positions={"b": (2, 3)},
+            vertex_config={"radius": 0.2, "c": {"fill_color": "#445566"}},
+            edge_config={
+                "stroke_width": 4,
+                ("a", "b"): {"color": "#AABBCC"},
+            },
+        )
+
+        self.assertIs(result, value)
+        self.assertEqual(list(value._graph_key_ids), ["a", "b", "c"])
+        self.assertEqual(set(value._graph_key_ids), {"a", "b", "c"})
+        self.assertEqual(len(value._graph_edges), 2)
+        self.assertEqual(len(self.context.compound_add_calls), 1)
+        call = self.context.compound_add_calls[0]
+        added_keys = list(value._graph_key_ids)[1:]
+        self.assertEqual(call[1], [value._graph_key_ids[key] for key in added_keys])
+        positions_by_key = dict(zip(added_keys, zip(call[2][::2], call[2][1::2])))
+        self.assertEqual(positions_by_key["b"], (2.0, 3.0))
+        self.assertEqual(positions_by_key["c"], (0.0, 0.0))
+        vertex_rows = {
+            key: call[3][index * 11:(index + 1) * 11]
+            for index, key in enumerate(added_keys)
+        }
+        self.assertEqual(call[4].calls, [("radius", (0.2,))])
+        self.assertTrue(math.isnan(vertex_rows["c"][0]))
+        self.assertEqual(vertex_rows["c"][1:5], [68 / 255, 85 / 255, 102 / 255, 1.0])
+        edge_pairs = call[5]
+        self.assertEqual(
+            edge_pairs,
+            [value._graph_key_ids[key] for edge in [("a", "b"), ("b", "c")] for key in edge],
+        )
+        self.assertEqual(call[6][0:4], [170 / 255, 187 / 255, 204 / 255, 1.0])
+        self.assertTrue(math.isnan(call[6][4]))
+
+        directed = graph.DiGraph({"u": (0, 0)}, [])
+        directed.add_edges([("u", "v")], positions={"v": (1, 2)})
+        self.assertEqual(directed._graph_edges, [("u", "v")])
+        self.assertEqual(len(self.context.compound_add_calls), 2)
+
+    def test_failed_or_invalid_compound_edge_add_keeps_keys_and_edges(self):
+        value = graph.Graph({"a": (0, 0)}, [])
+        before_keys = dict(value._graph_key_ids)
+        self.context.fail = "add_edges"
+        with self.assertRaisesRegex(RuntimeError, "add_edges"):
+            value.add_edges([("a", "b")])
+        self.assertEqual(value._graph_key_ids, before_keys)
+        self.assertEqual(value._graph_edges, [])
+
+        self.context.fail = None
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            value.add_edges([("a", "c")], vertex_config={"c": {"radius": 0}})
+        self.assertEqual(value._graph_key_ids, before_keys)
+        self.assertEqual(value._graph_edges, [])
 
     def test_add_edges_inherits_defaults_and_applies_validated_per_edge_styles(self):
         value = graph.Graph(

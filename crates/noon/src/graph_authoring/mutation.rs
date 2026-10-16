@@ -537,6 +537,265 @@ where
     Ok(mutation)
 }
 
+pub(super) fn add_vertices_and_edges_with_options<K, V, E, P>(
+    publication: &mut P,
+    graph: &mut RetainedGraph<K>,
+    vertices: V,
+    edges: E,
+) -> Result<GraphMutationResult, GraphAuthoringError>
+where
+    K: Clone + Eq + Hash,
+    V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    E: IntoIterator<Item = (K, K, GraphOptions)>,
+    P: GraphPublication,
+{
+    require_publication(publication, graph)?;
+    let vertices = vertices.into_iter().collect::<Vec<_>>();
+    let requested_edges = edges.into_iter().collect::<Vec<_>>();
+    if vertices.is_empty() && requested_edges.is_empty() {
+        return Ok(GraphMutationResult::default());
+    }
+
+    let root = graph.family.node_id();
+    let directed = graph.directed;
+    let declaration = graph.semantic_declaration()?.clone();
+    let mut topology = declaration.topology().clone();
+    let mut vertex_ids = HashMap::with_capacity(graph.vertices.len() + vertices.len());
+    let mut positions = HashMap::with_capacity(graph.vertices.len() + vertices.len());
+    for entry in &graph.vertices {
+        let center = entry.object.state()?.transform.translation;
+        vertex_ids.insert(entry.key.clone(), entry.id);
+        positions.insert(entry.key.clone(), (center.x, center.y));
+    }
+
+    let mut seen_vertices = HashSet::new();
+    let mut planned_vertices = Vec::with_capacity(vertices.len());
+    for (key, position, options) in vertices {
+        if vertex_ids.contains_key(&key) || !seen_vertices.insert(key.clone()) {
+            return Err(GraphAuthoringError::DuplicateMutationVertexKey);
+        }
+        vertex_options(position, &options)?;
+        let id = topology.add_vertex();
+        vertex_ids.insert(key.clone(), id);
+        positions.insert(key.clone(), position);
+        planned_vertices.push((key, id, position, options));
+    }
+
+    let mut seen_edges = HashSet::new();
+    let mut planned_edges = Vec::with_capacity(requested_edges.len());
+    for (start_key, end_key, options) in requested_edges {
+        let start = *vertex_ids
+            .get(&start_key)
+            .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        let end = *vertex_ids
+            .get(&end_key)
+            .ok_or(GraphAuthoringError::UnknownVertexKey)?;
+        let canonical = if directed || start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        if !seen_edges.insert(canonical) {
+            return Err(GraphAuthoringError::DuplicateMutationEdgeKey);
+        }
+        let edge_id = topology.add_edge(start, end, directed)?;
+        let edge = topology.edge(edge_id).expect("new graph edge is present");
+        let start_position = *positions
+            .get(&start_key)
+            .expect("resolved vertex has a position");
+        let end_position = *positions
+            .get(&end_key)
+            .expect("resolved vertex has a position");
+        planned_edges.push((edge, start_position, end_position, options));
+    }
+
+    let (result, staged_vertices, staged_edges) =
+        publication.with_graph_publication(|store, publish| {
+            let prepared_vertices = planned_vertices
+                .into_iter()
+                .map(|(key, id, position, options)| {
+                    Ok((
+                        key,
+                        id,
+                        position,
+                        vertex_options(position, &options)?.into_state(store)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, AuthoringError>>()?;
+            let prepared_edges = planned_edges
+                .into_iter()
+                .map(|(edge, start, end, options)| {
+                    let geometry = if directed {
+                        PreparedNewEdge::Arrow(arrow_options(start, end, &options)?.prepare(store)?)
+                    } else {
+                        PreparedNewEdge::Line(line_options(start, end, &options)?)
+                    };
+                    Ok((edge, geometry))
+                })
+                .collect::<Result<Vec<_>, AuthoringError>>()?;
+            let paths = prepared_edges
+                .iter()
+                .flat_map(|(_, geometry)| match geometry {
+                    PreparedNewEdge::Line(_) => Vec::new(),
+                    PreparedNewEdge::Arrow(arrow) => {
+                        let mut paths = vec![arrow.end_tip.clone()];
+                        if let Some(start_tip) = &arrow.start_tip {
+                            paths.push(start_tip.clone());
+                        }
+                        paths
+                    }
+                })
+                .collect::<Vec<_>>();
+            store.with_geometry_paths(paths, |store, handles| {
+                let mut transaction = SemanticMutationTransaction::new();
+                let staged_vertices = prepared_vertices
+                    .into_iter()
+                    .map(|(key, id, _position, state)| {
+                        let node = transaction.create_node(SemanticNodeCreation::object(state));
+                        transaction.add_member(root, node);
+                        (key, id, node)
+                    })
+                    .collect::<Vec<_>>();
+                let first_vertex = declaration
+                    .vertices()
+                    .next()
+                    .map(|(_, node)| SemanticTransactionNodeRef::from(node))
+                    .or_else(|| {
+                        staged_vertices
+                            .first()
+                            .map(|(_, _, node)| SemanticTransactionNodeRef::from(*node))
+                    })
+                    .expect("new graph edges require an existing or added vertex");
+
+                let mut handle_index = 0;
+                let mut staged_edges = Vec::with_capacity(prepared_edges.len());
+                for (edge, geometry) in prepared_edges {
+                    let staged_edge = match geometry {
+                        PreparedNewEdge::Line(options) => {
+                            let line = transaction.create_node(SemanticNodeCreation::object(
+                                options.into_state(store)?,
+                            ));
+                            let family = transaction.create_node(SemanticNodeCreation::family());
+                            transaction
+                                .add_member(family, line)
+                                .add_member(root, family);
+                            StagedNewEdge::Line { edge, family, line }
+                        }
+                        PreparedNewEdge::Arrow(arrow) => {
+                            let end_tip = handles[handle_index];
+                            handle_index += 1;
+                            let start_tip = arrow.start_tip.is_some().then(|| {
+                                let value = handles[handle_index];
+                                handle_index += 1;
+                                value
+                            });
+                            let arrow =
+                                stage_prepared_arrow(&mut transaction, &arrow, end_tip, start_tip);
+                            transaction.add_member(root, arrow.family);
+                            StagedNewEdge::Arrow { edge, arrow }
+                        }
+                    };
+                    let family: SemanticTransactionNodeRef = match &staged_edge {
+                        StagedNewEdge::Line { family, .. } => (*family).into(),
+                        StagedNewEdge::Arrow { arrow, .. } => arrow.family.into(),
+                    };
+                    transaction.reorder_member_ref(root, family, Some(first_vertex));
+                    staged_edges.push(staged_edge);
+                }
+                debug_assert_eq!(handle_index, handles.len());
+
+                let existing_vertices = declaration.vertices().map(|(id, node)| (id, node.into()));
+                let all_vertices = existing_vertices.chain(
+                    staged_vertices
+                        .iter()
+                        .map(|(_, id, node)| (*id, (*node).into())),
+                );
+                let existing_edges = declaration
+                    .edges()
+                    .map(|(_, binding)| staged_binding(binding));
+                let added_edges = staged_edges.iter().map(|edge| match edge {
+                    StagedNewEdge::Line { edge, family, line } => {
+                        SemanticTransactionGraphEdgeBinding::new(
+                            edge.id,
+                            (*family).into(),
+                            (*line).into(),
+                        )
+                    }
+                    StagedNewEdge::Arrow { edge, arrow } => {
+                        SemanticTransactionGraphEdgeBinding::new_arrow(
+                            edge.id,
+                            arrow.family.into(),
+                            arrow.shaft.into(),
+                            arrow.end_tip.into(),
+                            arrow.start_tip.map(Into::into),
+                            arrow.endpoint_policy,
+                        )
+                    }
+                });
+                replace_declaration(
+                    &mut transaction,
+                    root,
+                    topology,
+                    all_vertices,
+                    existing_edges.chain(added_edges),
+                );
+                Ok((publish(store, transaction)?, staged_vertices, staged_edges))
+            })
+        })?;
+
+    let mut mutation = GraphMutationResult::default();
+    for (key, id, token) in staged_vertices {
+        let node = result
+            .resolve(token)
+            .expect("committed graph vertex resolves");
+        let object = Mobject::from_node(Rc::clone(graph.family.integration_store()), node)?;
+        graph
+            .vertex_lookup
+            .insert(key.clone(), graph.vertices.len());
+        graph.vertices.push(GraphVertexEntry {
+            key,
+            id,
+            object: object.clone(),
+        });
+        mutation.added_vertices.push(object);
+    }
+    for staged in staged_edges {
+        let (edge, object) = match staged {
+            StagedNewEdge::Line { edge, family, line } => {
+                let family = MobjectFamily::from_node(
+                    Rc::clone(graph.family.integration_store()),
+                    result
+                        .resolve(family)
+                        .expect("committed edge family resolves"),
+                )?;
+                let line = Mobject::from_node(
+                    Rc::clone(graph.family.integration_store()),
+                    result.resolve(line).expect("committed edge line resolves"),
+                )?;
+                (edge, GraphEdgeMobject::Line { family, line })
+            }
+            StagedNewEdge::Arrow { edge, arrow } => {
+                let committed = resolve_staged_arrow(arrow, |token| result.resolve(token))
+                    .expect("committed edge arrow resolves");
+                (
+                    edge,
+                    GraphEdgeMobject::Arrow(ManimArrow::from_committed(
+                        Rc::clone(graph.family.integration_store()),
+                        committed,
+                    )?),
+                )
+            }
+        };
+        graph.edge_lookup.insert(edge.id, graph.edges.len());
+        graph.edges.push(GraphEdgeEntry {
+            edge,
+            object: object.clone(),
+        });
+        mutation.added_edges.push(object);
+    }
+    Ok(mutation)
+}
+
 pub(super) fn remove_vertices<K, V, P>(
     publication: &mut P,
     graph: &mut RetainedGraph<K>,

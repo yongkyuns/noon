@@ -26,11 +26,10 @@ class OrdinaryGraph(Scene):
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
-        graph.add_vertices(
-            {"d": (-3.5, -2.4)},
-            vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
-        ).add_edges(
+        graph.add_edges(
             [("a", "d")],
+            positions={"d": (-3.5, -2.4)},
+            vertex_config={"d": {"radius": 0.16, "fill_color": YELLOW, "stroke_width": 5}},
             edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("a", "d") in graph.edges
@@ -40,10 +39,10 @@ class OrdinaryGraph(Scene):
         assert tuple(directed.edges) == (("u", "v"), ("v", "w"), ("w", "u"))
         _ = directed.edges[("u", "v")]
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
-        directed.add_vertices(
-            {"x": (5, -2.3)}, vertex_config={"x": {"color": YELLOW}}
-        ).add_edges(
+        directed.add_edges(
             [("w", "x")],
+            positions={"x": (5, -2.3)},
+            vertex_config={"x": {"color": YELLOW}},
             edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
         )
         assert ("w", "x") in directed.edges
