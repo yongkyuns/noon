@@ -456,12 +456,52 @@ class PlottingAdapterTests(unittest.TestCase):
     def test_axes_reject_unqualified_axis_config_before_host_admission(self):
         with patch.object(plotting, "_coordinate_constructor_context") as context, \
              patch.object(plotting, "_coordinate_options") as factory:
-            with self.assertRaisesRegex(NotImplementedError, "include_numbers"):
-                plotting.Axes(axis_config={"include_numbers": True})
+            with self.assertRaisesRegex(NotImplementedError, "unrecognized_axis_option"):
+                plotting.Axes(axis_config={"unrecognized_axis_option": True})
             with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
                 plotting.Axes(x_axis_config={"scaling": object()})
+            with self.assertRaisesRegex(NotImplementedError, "TeX label profile"):
+                plotting.Axes(
+                    x_axis_config={"scaling": plotting.LogBase(), "include_numbers": True}
+                )
             context.assert_not_called()
             factory.axes.assert_not_called()
+
+    def test_axes_attach_configured_numeric_labels_with_axis_overrides(self):
+        x_axis = SimpleNamespace(add_numbers=Mock())
+        y_axis = SimpleNamespace(add_numbers=Mock())
+        handle = SimpleNamespace(coordinateAxis=Mock(side_effect=["x-axis", "y-axis"]))
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options"), \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=handle), \
+             patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
+             patch.object(plotting, "_coordinate_family"):
+            plotting.Axes(
+                x_range=(-2, 2, 0.5), y_range=(-1, 1, 1),
+                axis_config={"include_numbers": True, "font_size": 30,
+                             "line_to_number_buff": 0.25},
+                x_axis_config={"numbers_to_include": [-1, 1],
+                               "label_direction": plotting._base.UP},
+                y_axis_config={"numbers_to_include": [0.5], "include_numbers": False,
+                               "font_size": 24,
+                               "decimal_number_config": {"num_decimal_places": 2}},
+            )
+
+        x_axis.add_numbers.assert_called_once_with(
+            x_values=(-1.0, 1.0), excluding=[0.0], font_size=30.0,
+            direction=plotting._base._as_vec2(plotting._base.UP), buff=0.25,
+            decimal_places=1,
+        )
+        y_axis.add_numbers.assert_called_once_with(
+            x_values=(0.5,), excluding=[0.0], font_size=24.0,
+            direction=plotting._base._as_vec2(plotting._base.LEFT), buff=0.25,
+            decimal_places=2,
+        )
+        self.assertTrue(x_axis.include_numbers)
+        self.assertFalse(y_axis.include_numbers)
+        self.assertEqual(x_axis.number_label_decimal_places, 1)
+        self.assertEqual(y_axis.number_label_decimal_places, 2)
 
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf
