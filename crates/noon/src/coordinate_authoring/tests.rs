@@ -108,6 +108,12 @@ fn number_line_tip_is_retained_and_removes_the_endpoint_tick() {
     assert_eq!(ticks.len(), 4);
     let tip = line.tip().unwrap().expect("enabled NumberLine tip");
     assert_eq!(tip.path_query().unwrap().start().unwrap(), (2.0, 0.0));
+    let (end_x, end_y) = line.shaft().unwrap().path_query().unwrap().end().unwrap();
+    near([end_x, end_y], [1.6, 0.0]);
+    near(
+        line.authored_frame().unwrap().number_to_point(2.0).unwrap(),
+        [2.0, 0.0],
+    );
     assert!(matches!(
         tip.state().unwrap().style.fill,
         Some(SemanticPaint::Solid(WHITE))
@@ -130,6 +136,123 @@ fn invalid_number_line_tip_fails_before_resource_publication() {
     assert!(scene.number_line(&options).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(resources(&scene), 0);
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+fn number_line_tip_does_not_confuse_labels_or_unrelated_geometry() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
+        .unwrap();
+    line.add_labels(&[(0.0, "zero".into())], &Default::default())
+        .unwrap();
+    assert!(line.tip().unwrap().is_none());
+    let unrelated = scene.circle(0.5).unwrap();
+    line.family().add_many(&[(&unrelated).into()]).unwrap();
+    assert!(line.tip().unwrap().is_none());
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+fn number_line_tip_identity_survives_labels_copy_and_reordering() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.include_tip = true;
+    let line = scene.number_line(&options).unwrap();
+    let tip = line.tip().unwrap().unwrap();
+    line.add_labels(&[(0.0, "zero".into())], &Default::default())
+        .unwrap();
+    line.family().remove_many(&[(&tip).into()]).unwrap();
+    assert!(line.tip().unwrap().is_none());
+    line.family().add_many(&[(&tip).into()]).unwrap();
+    assert_eq!(line.tip().unwrap().unwrap().node_id(), tip.node_id());
+
+    let copied = line.family().copy_family().unwrap();
+    let copy = ManimNumberLine::from_family(copied.root().clone()).unwrap();
+    let copied_tip = copy.tip().unwrap().unwrap();
+    assert_ne!(copied_tip.node_id(), tip.node_id());
+    assert_eq!(
+        copied_tip.node_id(),
+        copied.mobject(&tip).unwrap().node_id()
+    );
+    copy.family()
+        .apply_matrix(&[1.0, 0.25, 0.0, 1.0], 2, 2, 0.0, 0.0)
+        .unwrap();
+    assert_eq!(copy.tip().unwrap().unwrap().node_id(), copied_tip.node_id());
+}
+
+#[test]
+fn retiring_a_coordinate_tip_does_not_rebind_to_a_reused_slot() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.include_tip = true;
+    let line = scene.number_line(&options).unwrap();
+    let tip = line.tip().unwrap().unwrap();
+    scene
+        .integration_store()
+        .borrow_mut()
+        .remove_node(tip.node_id())
+        .unwrap();
+    let ordinary = scene.circle(0.5).unwrap();
+    assert_eq!(ordinary.node_id().slot(), tip.node_id().slot());
+    assert_ne!(ordinary.node_id(), tip.node_id());
+    line.family().add_many(&[(&ordinary).into()]).unwrap();
+    assert!(tip.state().is_err());
+    assert!(line.tip().unwrap().is_none());
+}
+
+#[test]
+fn multiple_coordinate_tips_are_rejected_as_ambiguous() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.include_tip = true;
+    let line = scene.number_line(&options).unwrap();
+    let extra = line.tip().unwrap().unwrap().copy_handle().unwrap();
+    line.family().add_many(&[(&extra).into()]).unwrap();
+    assert!(matches!(
+        line.tip(),
+        Err(CoordinateAuthoringError::InvalidTopology)
+    ));
+}
+
+#[test]
+fn axes_share_coordinate_tip_lookup_without_positional_inference() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&ManimAxesOptions::default()).unwrap();
+    for axis in [axes.x_axis().unwrap(), axes.y_axis().unwrap()] {
+        assert_eq!(
+            axis.tip().unwrap().unwrap().state().unwrap().role(),
+            SemanticObjectRole::CoordinateTip
+        );
+    }
+    let options = ManimThreeDAxesOptions {
+        tips: false,
+        ..Default::default()
+    };
+    let axes = scene.three_d_axes(&options).unwrap();
+    let unrelated = scene.circle(0.5).unwrap();
+    axes.axis(0)
+        .unwrap()
+        .family()
+        .add_many(&[(&unrelated).into()])
+        .unwrap();
+    assert!(axes.tip(0).unwrap().is_none());
+    let tipped = scene
+        .three_d_axes(&ManimThreeDAxesOptions::default())
+        .unwrap();
+    for index in 0..3 {
+        assert_eq!(
+            tipped.tip(index).unwrap().unwrap().node_id(),
+            tipped
+                .axis(index)
+                .unwrap()
+                .tip()
+                .unwrap()
+                .unwrap()
+                .node_id()
+        );
+    }
 }
 
 #[test]
@@ -229,7 +352,7 @@ fn manim_axes_profile_normalizes_ranges_and_retains_filled_tips() {
         ));
         assert_eq!(tip.style.fill, tip.style.stroke);
         assert_eq!(tip.style.fill_opacity, 1.0);
-        assert_eq!(tip.style.stroke_width, 0.0);
+        assert_eq!(tip.style.stroke_width, options.style.stroke_width);
     }
     drop(store);
     assert_eq!(resources(&scene), 2);

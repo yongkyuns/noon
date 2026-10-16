@@ -396,13 +396,24 @@ impl ManimNumberLine {
     }
 
     pub fn tip(&self) -> Result<Option<Mobject>, CoordinateAuthoringError> {
-        let [_, ticks] = coordinate_members(&self.family)?;
+        coordinate_members(&self.family)?;
         let tip = {
             let store = self.family.integration_store().borrow();
-            store
+            let mut tips = store
                 .node(self.family.node_id())
                 .expect("validated coordinate family")
-                .next_member(ticks)
+                .members_iter()
+                .filter(|&id| {
+                    store
+                        .node(id)
+                        .and_then(|node| node.semantic_object_state())
+                        .is_some_and(|state| state.role() == SemanticObjectRole::CoordinateTip)
+                });
+            let tip = tips.next();
+            if tips.next().is_some() {
+                return Err(CoordinateAuthoringError::InvalidTopology);
+            }
+            tip
         };
         tip.map(|node| {
             Mobject::from_node(Rc::clone(self.family.integration_store()), node)
@@ -449,7 +460,12 @@ impl ManimNumberLine {
         };
         let path = query(&shaft)?;
         let (sx, sy) = path.start()?;
-        let (ex, ey) = path.end()?;
+        // The visible shaft stops at the tip base; coordinates still span the
+        // public endpoint. Read both paths from the same authored/effective query.
+        let (ex, ey) = match self.tip()? {
+            Some(tip) => query(&tip)?.start()?,
+            None => path.end()?,
+        };
         Ok(NumberLineFrame::new(range, [sx, sy], [ex, ey])?)
     }
 }
@@ -926,7 +942,7 @@ pub(crate) fn prepare_number_line(
             "invalid NumberLine tip dimensions or tip color",
         ));
     }
-    let states = prepare_line_with_elongated_ticks(
+    let mut states = prepare_line_with_elongated_ticks(
         frame,
         options.ticks,
         &options.style,
@@ -934,6 +950,9 @@ pub(crate) fn prepare_number_line(
         options.longer_tick_multiple,
         options.include_tip,
     )?;
+    if options.include_tip {
+        shorten_coordinate_shaft(&mut states, frame, options.tip_height)?;
+    }
     let tip_path = if options.include_tip {
         let start = frame.start();
         let end = frame.end();
@@ -985,6 +1004,7 @@ pub(crate) fn publish_prepared_number_line(
         let root = stage_line(&mut transaction, states);
         if let Some(handle) = handles.first().copied() {
             let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            state.set_role(SemanticObjectRole::CoordinateTip);
             state.style = tip_style
                 .clone()
                 .ok_or(AuthoringError::NonFiniteObjectState)?;
@@ -1018,7 +1038,16 @@ pub(crate) fn prepare_axes(
     }
     let prepare_axis = |axis: NumberLineFrame| {
         if options.tips {
-            prepare_line_with_elongated_ticks(axis, options.ticks, &options.style, &[], 2.0, true)
+            let mut states = prepare_line_with_elongated_ticks(
+                axis,
+                options.ticks,
+                &options.style,
+                &[],
+                2.0,
+                true,
+            )?;
+            shorten_coordinate_shaft(&mut states, axis, options.tip_length)?;
+            Ok(states)
         } else {
             prepare_line(axis, options.ticks, &options.style)
         }
@@ -1078,6 +1107,7 @@ pub(crate) fn publish_prepared_axes(
                     .copied()
                     .ok_or(AuthoringError::NonFiniteObjectState)?;
                 let mut tip = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                tip.set_role(SemanticObjectRole::CoordinateTip);
                 tip.style = filled_tip_style(&options.style)
                     .map_err(|_| AuthoringError::NonFiniteObjectState)?;
                 let token = transaction.create_node(SemanticNodeCreation::object(tip));
@@ -1135,9 +1165,8 @@ pub(crate) fn filled_tip_style(
     tip.fill = Some(SemanticPaint::Solid(*color));
     tip.fill_opacity = 1.0;
     tip.stroke = Some(SemanticPaint::Solid(*color));
-    // Manim's default ArrowTriangleFilledTip has no outline. Shaft width
-    // controls the axis stroke, not the filled tip's boundary.
-    tip.stroke_width = 0.0;
+    // NumberLine explicitly reapplies its shaft outline after creating the
+    // filled tip; retain that style for both ordinary and 3D coordinates.
     Ok(tip)
 }
 
@@ -1147,6 +1176,25 @@ fn prepare_line(
     style: &SemanticStyle,
 ) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
     prepare_line_with_elongated_ticks(frame, ticks, style, &[], 2.0, false)
+}
+
+fn shorten_coordinate_shaft(
+    states: &mut [SemanticObjectState],
+    frame: NumberLineFrame,
+    tip_length: f64,
+) -> Result<(), CoordinateAuthoringError> {
+    let [sx, sy] = frame.start();
+    let [ex, ey] = frame.end();
+    let length = (ex - sx).hypot(ey - sy);
+    let base = [
+        ex - (ex - sx) / length * tip_length,
+        ey - (ey - sy) / length * tip_length,
+    ];
+    let shaft = states
+        .first_mut()
+        .ok_or(CoordinateAuthoringError::InvalidTopology)?;
+    shaft.content = line_state(frame.start(), base, &shaft.style)?.content;
+    Ok(())
 }
 
 fn prepare_line_with_elongated_ticks(

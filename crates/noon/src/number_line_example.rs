@@ -5,12 +5,14 @@ use crate::{
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
-    for (range, y) in [
-        (None, 2.0),
-        (Some(&[-2.0, 2.0][..]), 0.0),
-        (Some(&[-2.0, 2.0, 0.5][..]), -2.0),
+    for (range, y, include_tip) in [
+        (None, 2.0, false),
+        (Some(&[-2.0, 2.0][..]), 0.0, true),
+        (Some(&[-2.0, 2.0, 0.5][..]), -2.0, false),
     ] {
-        let line = scene.number_line(&ManimNumberLineOptions::from_range(range)?)?;
+        let mut options = ManimNumberLineOptions::from_range(range)?;
+        options.include_tip = include_tip;
+        let line = scene.number_line(&options)?;
         let family = line.family().clone();
         family.shift(0.0, y)?;
         scene.add_many(&[(&family).into()])?;
