@@ -530,6 +530,48 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertIs(axes.get_axes(), group)
         make_group.assert_called_once_with(x_axis, y_axis)
 
+    def test_axes_label_uses_current_axis_layout_edge_and_next_to_contract(self):
+        edge = plotting._base.Vec2(1, -1)
+        direction = plotting._base.Vec2(1, 0.5)
+        label = Mock()
+        layout = SimpleNamespace(
+            criticalX=Mock(return_value=4.0),
+            criticalY=Mock(return_value=-3.0),
+        )
+        axis = SimpleNamespace(
+            _semantic_family_handle=SimpleNamespace(layout=Mock(return_value=layout))
+        )
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (axis, object())
+        with patch.object(plotting, "_axes_label_object", return_value=label), \
+             patch.object(plotting, "engine_call", side_effect=lambda fn, *args: fn(*args)):
+            result = axes.get_x_axis_label("x", edge=edge, direction=direction, buff=0.25)
+
+        self.assertIs(result, label)
+        layout.criticalX.assert_called_once_with(1.0, -1.0)
+        layout.criticalY.assert_called_once_with(1.0, -1.0)
+        label.next_to.assert_called_once_with(
+            plotting._base.Vec2(4.0, -3.0), direction=direction, buff=0.25,
+        )
+
+    def test_axes_label_numbers_reuse_mathtex_label_path(self):
+        label = object()
+        with patch.object(plotting, "_three_d_axis_label_object", return_value=label) as create:
+            self.assertIs(plotting._axes_label_object(2.5), label)
+        create.assert_called_once_with("2.5")
+
+    def test_axes_label_group_is_retained_on_axes(self):
+        x_label, y_label, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        axes.get_x_axis_label = Mock(return_value=x_label)
+        axes.get_y_axis_label = Mock(return_value=y_label)
+        with patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            self.assertIs(axes.get_axis_labels(), group)
+        axes.get_x_axis_label.assert_called_once_with("x")
+        axes.get_y_axis_label.assert_called_once_with("y")
+        make_group.assert_called_once_with(x_label, y_label)
+        self.assertIs(axes.axis_labels, group)
+
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf
 
