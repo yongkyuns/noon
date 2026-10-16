@@ -29,7 +29,6 @@ fn label_family_handles(families: [noon::MobjectFamily; 2]) -> js_sys::Array {
 #[wasm_bindgen]
 pub struct WasmNumberLabelOptions {
     pub(crate) options: NumberLabelOptions,
-    excluded_numbers: Vec<f64>,
 }
 
 #[wasm_bindgen]
@@ -59,28 +58,21 @@ impl WasmCoordinateOptions {
                 buff,
                 ..Default::default()
             },
-            excluded_numbers: Vec::new(),
         })
     }
 }
 
 #[wasm_bindgen]
 impl WasmNumberLabelOptions {
+    #[wasm_bindgen(js_name = setTickRangeFlags)]
+    pub fn set_tick_range_flags(&mut self, include_tip: bool, exclude_origin_tick: bool) {
+        self.options.include_tip = include_tip;
+        self.options.exclude_origin_tick = exclude_origin_tick;
+    }
+
     #[wasm_bindgen(js_name = setExcludedNumbers)]
     pub fn set_excluded_numbers(&mut self, values: &[f64]) -> Result<(), JsValue> {
-        if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
-            return Err(failure("number-label exclusion limit exceeded"));
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(failure("number-label exclusions must be finite"));
-        }
-        let mut excluded_numbers = Vec::new();
-        excluded_numbers
-            .try_reserve_exact(values.len())
-            .map_err(|_| failure("number-label exclusion allocation failed"))?;
-        excluded_numbers.extend_from_slice(values);
-        self.excluded_numbers = excluded_numbers;
-        Ok(())
+        self.options.set_excluded_numbers(values).map_err(failure)
     }
 
     #[wasm_bindgen(js_name = setDirection)]
@@ -127,9 +119,9 @@ impl WasmAuthoringFamilyHandle {
         let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
         let values = numbers(values, automatic)?;
         let family = if attach {
-            line.add_numbers_excluding(values, &options.excluded_numbers, &options.options)
+            line.add_numbers(values, &options.options)
         } else {
-            line.get_number_mobjects_excluding(values, &options.excluded_numbers, &options.options)
+            line.get_number_mobjects(values, &options.options)
         }
         .map_err(failure)?;
         Ok(Self::from_semantic_family(family))

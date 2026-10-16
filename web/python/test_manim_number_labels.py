@@ -17,8 +17,21 @@ class Owned:
         self.exclude = value
     def setExcludedNumbers(self, value):
         self.excluded = value
+    def setTickRangeFlags(self, include_tip, exclude_origin_tick):
+        self.tick_range_flags = (include_tip, exclude_origin_tick)
     def setColor(self, *value):
         self.color = value
+
+
+class LabelFamilyTypeTests(unittest.TestCase):
+    def test_native_labels_keep_vector_style_operations(self):
+        handle = SimpleNamespace(numberLabelMembers=lambda: [])
+        with patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)):
+            family = labels._family(handle, 18, labels._base.WHITE)
+        self.assertIsInstance(family, labels._compat.VGroup)
+        with patch.object(labels._shared, '_group_set_stroke', return_value=family) as stroke:
+            self.assertIs(family.set_stroke(width=2), family)
+        stroke.assert_called_once_with(family, None, 2, None)
 
 
 class NumericLabelAdapterTests(unittest.TestCase):
@@ -74,6 +87,12 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
         self.invoke(iter((0, 1, 2)), excluding=iter((1,)))
         self.assertEqual(self.options[0].excluded, [1.0])
+
+    def test_automatic_tick_selection_keeps_the_axis_tip_and_origin_policy(self):
+        self.axis.include_tip = True
+        self.axis.exclude_origin_tick = True
+        self.invoke()
+        self.assertEqual(self.options[0].tick_range_flags, (True, True))
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
         family = Owned()

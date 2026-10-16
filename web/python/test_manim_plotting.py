@@ -145,10 +145,6 @@ class PlottingAdapterTests(unittest.TestCase):
             build.assert_called_once_with(line, (0, 1), attach=False,
                                          config={"exclude_zero": False})
 
-        with patch.object(plotting.NumberLine, "get_number_mobjects", return_value=family) as get:
-            self.assertIs(line.get_labels(), family)
-        get.assert_called_once_with()
-
     def test_number_line_number_labels_preserve_zero_unless_explicitly_excluded(self):
         line = object.__new__(plotting.NumberLine)
         with patch("_manim_number_labels.number_mobjects") as build:

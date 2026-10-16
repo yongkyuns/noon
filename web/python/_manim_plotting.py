@@ -143,7 +143,7 @@ def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
                         exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
@@ -363,10 +363,6 @@ class NumberLine(_compat.Group):
         config = dict(kwargs)
         config.setdefault("exclude_zero", False)
         return number_mobjects(self, numbers or None, attach=False, config=config)
-
-    def get_labels(self):
-        """Return detached labels for the automatically selected tick values."""
-        return self.get_number_mobjects()
 
     def add_labels(self, dict_values, direction=None, buff=None, font_size=None,
                    label_constructor=None):
@@ -715,7 +711,7 @@ def _attach_three_d_axis(wrapper, handle, tip_handle, *, tick_size=0.1,
                          include_tip=True, exclude_origin_tick=True):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )

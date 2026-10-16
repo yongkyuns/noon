@@ -1,9 +1,7 @@
 //! DecimalNumber coordinate labels prepared and published as one semantic batch.
 
 use crate::numeric_authoring::PreparedDecimalValue;
-use crate::plot_presentation::{
-    number_labels, NumberLabelAuthoringError as Error, NumberLabelOptions,
-};
+use crate::plot_presentation::{NumberLabelAuthoringError as Error, NumberLabelOptions};
 use crate::{
     AuthoringError, AxesFrame, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
     ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, TextAuthoringError,
@@ -38,7 +36,7 @@ impl PreparedDecimalLabels {
         {
             return Err(AuthoringError::NonFiniteTransform.into());
         }
-        let labels = number_labels(frame, numbers, options.decimal_places, options.exclude_zero)?;
+        let labels = options.prepare_values(frame, numbers)?;
         let mut values = Vec::with_capacity(labels.len());
         let mut placements = Vec::with_capacity(labels.len());
         for label in labels {
