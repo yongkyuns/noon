@@ -69,6 +69,35 @@ await qualifyPairedAuthoring({
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
+    const logLabelsSource = `from noon import *
+
+class LogBaseNumberLineLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        linear = NumberLine((-1, 1, 1), include_numbers=True)
+        assert tuple(label.get_value() for label in linear.numbers) == (-1, 0, 1)
+        line = NumberLine(
+            (-2, 2, 1), scaling=LogBase(base=10), include_numbers=True,
+            decimal_number_config={"num_decimal_places": 0},
+        )
+        assert tuple(label._source for label in line.numbers) == (
+            "10^{-2}", "10^{-1}", "10^{0}", "10^{1}", "10^{2}",
+        )
+        assert all(isinstance(label, Integer) for label in line.numbers)
+        assert tuple(label.get_value() for label in line.numbers) == (10, 10, 10, 10, 10)
+        for label, coordinate in zip(line.numbers, (0.01, 0.1, 1, 10, 100)):
+            assert abs(label.get_center().x - line.number_to_point(coordinate).x) < 1e-6
+        assert line.labels is line.numbers
+        self.add(line, linear)
+        await self.wait(0.05)
+`;
+    const logLabels = await qualifyPythonPlayback(
+      context, baseUrl, logLabelsSource, [0, 0.05],
+    );
+    assert.equal(logLabels.rendererBackend, expectedBackend);
+    assert.equal(logLabels.presented, true);
+    assert.ok(Math.abs(logLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: LogBase NumberLine exponent labels`);
     const page = await context.newPage();
     try {
       page.setDefaultTimeout(90_000);

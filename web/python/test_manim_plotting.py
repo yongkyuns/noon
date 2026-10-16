@@ -137,13 +137,72 @@ class PlottingAdapterTests(unittest.TestCase):
         factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 2.0)
         self.assertIs(line.scaling, scaling)
 
-    def test_number_line_rejects_unqualified_scale_labels_before_host_admission(self):
+    def test_number_line_log_custom_labels_use_retained_integers_at_generated_ticks(self):
+        from _manim_numbers import Integer
+
+        labels = object()
+
+        def make_labels(line, values, **options):
+            line.numbers = labels
+            return labels
+
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line"), \
+             patch.object(number_labels, "number_mobjects", side_effect=make_labels) as add:
+            line = plotting.NumberLine(
+                (-2, 2, 1), scaling=plotting.LogBase(base=10),
+                include_numbers=True, numbers_to_exclude=[1],
+                decimal_number_config={"num_decimal_places": 2},
+            )
+
+        factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 10.0)
+        self.assertIs(line.labels, labels)
+        self.assertIs(line.numbers, labels)
+        self.assertEqual(add.call_args.args[:2], (line, None))
+        self.assertEqual(add.call_args.kwargs["excluding"], ())
+        self.assertEqual(add.call_args.kwargs["log_base"], 10.0)
+        self.assertIs(add.call_args.kwargs["number_class"], Integer)
+        self.assertEqual(add.call_args.kwargs["config"]["decimal_places"], 2)
+
+    def test_log_base_custom_labels_construct_integer_base_with_formatted_exponents(self):
+        with patch("_manim_numbers.Integer", side_effect=lambda number, **kwargs: (number, kwargs)) as integer:
+            labels = plotting.LogBase(base=2).get_custom_labels(
+                (0.25, 0.5, 2), unit_decimal_places=2,
+            )
+
+        self.assertEqual(
+            labels,
+            [
+                (2.0, {"unit": "^{-2.00}"}),
+                (2.0, {"unit": "^{-1.00}"}),
+                (2.0, {"unit": "^{1.00}"}),
+            ],
+        )
+        self.assertEqual(integer.call_count, 3)
+        with self.assertRaisesRegex(TypeError, "unit_decimal_places"):
+            plotting.LogBase().get_custom_labels((1,), unit_decimal_places=True)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            plotting.LogBase().get_custom_labels((0,))
+
+    def test_number_line_rejects_unsupported_scaling_before_host_admission(self):
         with patch.object(plotting, "_coordinate_constructor_context") as context, \
              patch.object(plotting, "_coordinate_options") as factory:
-            with self.assertRaisesRegex(NotImplementedError, "custom labels"):
-                plotting.NumberLine((-2, 2, 1), scaling=plotting.LogBase(), include_numbers=True)
             with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
                 plotting.NumberLine((-2, 2, 1), scaling=object())
+            context.assert_not_called()
+            factory.numberLine.assert_not_called()
+
+    def test_number_line_log_labels_reject_an_explicit_unit_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context, \
+             patch.object(plotting, "_coordinate_options") as factory:
+            with self.assertRaisesRegex(TypeError, "supply the exponent unit"):
+                plotting.NumberLine(
+                    (-2, 2, 1), scaling=plotting.LogBase(), include_numbers=True,
+                    decimal_number_config={"unit": "m"},
+                )
             context.assert_not_called()
             factory.numberLine.assert_not_called()
 

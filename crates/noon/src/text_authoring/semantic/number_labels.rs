@@ -6,13 +6,13 @@ use crate::plot_presentation::{
     NumberLabelOptions, PlotPresentationError,
 };
 use crate::{
-    format_decimal, AuthoringError, Bounds2D64, DecimalFormat, ManimAxes, ManimNextToArgs,
-    ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame,
+    AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
+    MobjectFamily, NumberLineFrame,
 };
 use noon_core::{
-    FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, TextResource,
+    format_decimal, FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, SemanticVec3, TextResource,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -36,15 +36,9 @@ fn prepare(
         options.exclude_zero,
         excluded_numbers,
     )?;
-    let format = DecimalFormat {
-        decimal_places: options.decimal_places,
-        include_sign: options.include_sign,
-        group_with_commas: options.group_with_commas,
-        show_ellipsis: options.show_ellipsis,
-        unit: options.unit.clone(),
-    };
     for label in &mut labels {
-        label.text = format_decimal(label.number, &format)
+        let (value, format) = options.decimal_presentation(label.number)?;
+        label.text = format_decimal(value, &format)
             .map_err(|_| PlotPresentationError::InvalidInput("invalid numeric label format"))?;
     }
     prepare_display_labels(labels, options)
