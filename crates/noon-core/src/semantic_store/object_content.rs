@@ -32,7 +32,7 @@ impl TextPresentationBaseline {
 }
 
 mod coordinate_role;
-pub use coordinate_role::SemanticNumberLineRole;
+pub use coordinate_role::{SemanticNumberLineRole, SemanticNumberLineScale};
 mod angle_role;
 pub use angle_role::SemanticAngleRole;
 mod function_plot_role;
