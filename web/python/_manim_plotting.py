@@ -143,7 +143,7 @@ def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
                         exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
@@ -249,6 +249,8 @@ def _three_d_axis_label_object(label):
 class NumberLine(_compat.Group):
     """Tipless linear number line with Rust-owned defaults, ticks and range."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
@@ -385,13 +387,14 @@ class NumberLine(_compat.Group):
 
     def get_tick_range(self):
         """Return Manim's linear tick values through the shared Rust query."""
+        import numpy as np
         with _owned(self._coordinate_frame()) as frame:
             values = engine_call(
                 frame.tickValues,
                 bool(self.include_tip),
                 bool(self.exclude_origin_tick),
             )
-            return tuple(float(value) for value in values)
+            return np.asarray(tuple(float(value) for value in values), dtype=float)
 
     def get_tick(self, x, size=None):
         """Create one Manim-style tick using the current line orientation."""
@@ -425,10 +428,6 @@ class NumberLine(_compat.Group):
         config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         return number_mobjects(self, numbers or None, attach=False, config=config)
-
-    def get_labels(self):
-        """Return detached labels for the automatically selected tick values."""
-        return self.get_number_mobjects()
 
     def _number_label_config(self, values):
         config = dict(values)
@@ -515,6 +514,8 @@ class UnitInterval(NumberLine):
 class Axes(_compat.Group):
     """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
@@ -786,7 +787,7 @@ def _attach_three_d_axis(wrapper, handle, tip_handle, *, tick_size=0.1,
                          include_tip=True, exclude_origin_tick=True):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
@@ -810,6 +811,8 @@ class ThreeDAxes(_compat.Group):
     tick, and filled-tip options.
     """
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),

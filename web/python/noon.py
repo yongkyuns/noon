@@ -915,6 +915,10 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "typing": "_manim_typing",
+    "get_unit_normal": "_manim_user_vector_bases",
+    "z_to_vector": "_manim_user_vector_bases",
+    "lingering": "_manim_rate_functions",
     "AS2700": "_manim_color_palettes",
     "BS381": "_manim_color_palettes",
     "DVIPSNAMES": "_manim_color_palettes",
@@ -925,6 +929,7 @@ _PUBLIC_EXPORTS = {
     "unit": "_manim_unit",
 
     "CubicBezier": "_manim_geometry",
+
     "get_winding_number": "_manim_user_vectors",
     "bezier": "_manim_user_vectors",
     "partial_bezier_points": "_manim_user_vectors",

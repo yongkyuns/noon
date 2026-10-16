@@ -95,6 +95,9 @@ jobs:
       - name: Record ordinary playback and qualify replay endpoints
         if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
         run: node scripts/showcase-live-review.mjs
+      - name: Check visible motion inside the first triangle-light flight
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-triangle-light-motion.mjs browser-smoke-artifacts/showcase/${{ matrix.backend }}
       - name: Retain the review evidence even on failure
         if: always()
         uses: actions/upload-artifact@v7

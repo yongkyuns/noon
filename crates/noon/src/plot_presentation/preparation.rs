@@ -78,16 +78,7 @@ pub fn number_labels_excluding(
             "number-label decimal_places must be between 0 and 12",
         ));
     }
-    if excluded_numbers.len() > MAX_PLOT_LABELS {
-        return Err(PlotPresentationError::InvalidInput(
-            "number-label exclusion limit exceeded",
-        ));
-    }
-    if excluded_numbers.iter().any(|value| !value.is_finite()) {
-        return Err(PlotPresentationError::InvalidInput(
-            "number-label exclusions must be finite",
-        ));
-    }
+    validate_label_exclusions(excluded_numbers)?;
     let generated;
     let numbers = match numbers {
         Some(numbers) => numbers,
@@ -112,7 +103,7 @@ pub fn number_labels_excluding(
         .map_err(|_| PlotPresentationError::AllocationFailed)?;
     for &number in numbers {
         if (exclude_zero && number == 0.0)
-            || excluded_numbers.iter().any(|excluded| *excluded == number)
+            || excluded_numbers.contains(&number)
         {
             continue;
         }
@@ -129,6 +120,20 @@ pub fn number_labels_excluding(
         });
     }
     Ok(labels)
+}
+
+pub(super) fn validate_label_exclusions(values: &[f64]) -> Result<(), PlotPresentationError> {
+    if values.len() > MAX_PLOT_LABELS {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label exclusion limit exceeded",
+        ));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label exclusions must be finite",
+        ));
+    }
+    Ok(())
 }
 
 /// Prepare caller-provided text at explicit scalar positions without changing

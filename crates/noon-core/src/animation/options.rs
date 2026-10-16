@@ -230,6 +230,20 @@ pub fn resolve_transform_animation_options(
     resolve_animation_options_unchecked(defaults, animation, play).validate_transform()
 }
 
+/// Resolve Create reveal direction without admitting curved paths.
+pub fn resolve_create_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    let options =
+        resolve_animation_options_unchecked(defaults, animation, play).validate_transform()?;
+    if options.path_arc.abs() > 1e-12 {
+        return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));
+    }
+    Ok(options)
+}
+
 /// Resolve timing for targetless/structural instant leaves. The shared precedence rule is
 /// unchanged; only an exactly-zero duration is admitted so `Add()` can carry an exact boundary.
 pub fn resolve_add_animation_options(
@@ -305,10 +319,30 @@ impl RateFunction {
             Self::Smoothererstep => "smoothererstep",
             Self::SlowInto => "slow_into",
             Self::DoubleSmooth => "double_smooth",
+            Self::Lingering => "lingering",
+            Self::MirroredLingering => "mirrored_lingering",
             Self::RushInto => "rush_into",
             Self::RushFrom => "rush_from",
             Self::ThereAndBack => "there_and_back",
             Self::EaseInOutCubic => "ease_in_out_cubic",
+            Self::EaseInElastic => "ease_in_elastic",
+            Self::EaseOutElastic => "ease_out_elastic",
+            Self::EaseInOutElastic => "ease_in_out_elastic",
+            Self::EaseInBounce => "ease_in_bounce",
+            Self::EaseOutBounce => "ease_out_bounce",
+            Self::EaseInOutBounce => "ease_in_out_bounce",
+            Self::EaseInBack => "ease_in_back",
+            Self::EaseOutBack => "ease_out_back",
+            Self::EaseInOutBack => "ease_in_out_back",
+            Self::EaseInExpo => "ease_in_expo",
+            Self::EaseOutExpo => "ease_out_expo",
+            Self::EaseInOutExpo => "ease_in_out_expo",
+            Self::EaseInCirc => "ease_in_circ",
+            Self::EaseOutCirc => "ease_out_circ",
+            Self::EaseInOutCirc => "ease_in_out_circ",
+            Self::EaseInSine => "ease_in_sine",
+            Self::EaseOutSine => "ease_out_sine",
+            Self::EaseInOutSine => "ease_in_out_sine",
             Self::EaseInQuad => "ease_in_quad",
             Self::EaseOutQuad => "ease_out_quad",
             Self::EaseInOutQuad => "ease_in_out_quad",
@@ -335,10 +369,30 @@ impl RateFunction {
             "smoothererstep" => Some(Self::Smoothererstep),
             "slow_into" => Some(Self::SlowInto),
             "double_smooth" => Some(Self::DoubleSmooth),
+            "lingering" => Some(Self::Lingering),
+            "mirrored_lingering" => Some(Self::MirroredLingering),
             "rush_into" => Some(Self::RushInto),
             "rush_from" => Some(Self::RushFrom),
             "there_and_back" => Some(Self::ThereAndBack),
             "ease_in_out_cubic" => Some(Self::EaseInOutCubic),
+            "ease_in_elastic" => Some(Self::EaseInElastic),
+            "ease_out_elastic" => Some(Self::EaseOutElastic),
+            "ease_in_out_elastic" => Some(Self::EaseInOutElastic),
+            "ease_in_bounce" => Some(Self::EaseInBounce),
+            "ease_out_bounce" => Some(Self::EaseOutBounce),
+            "ease_in_out_bounce" => Some(Self::EaseInOutBounce),
+            "ease_in_back" => Some(Self::EaseInBack),
+            "ease_out_back" => Some(Self::EaseOutBack),
+            "ease_in_out_back" => Some(Self::EaseInOutBack),
+            "ease_in_expo" => Some(Self::EaseInExpo),
+            "ease_out_expo" => Some(Self::EaseOutExpo),
+            "ease_in_out_expo" => Some(Self::EaseInOutExpo),
+            "ease_in_circ" => Some(Self::EaseInCirc),
+            "ease_out_circ" => Some(Self::EaseOutCirc),
+            "ease_in_out_circ" => Some(Self::EaseInOutCirc),
+            "ease_in_sine" => Some(Self::EaseInSine),
+            "ease_out_sine" => Some(Self::EaseOutSine),
+            "ease_in_out_sine" => Some(Self::EaseInOutSine),
             "ease_in_quad" => Some(Self::EaseInQuad),
             "ease_out_quad" => Some(Self::EaseOutQuad),
             "ease_in_out_quad" => Some(Self::EaseInOutQuad),
@@ -448,6 +502,42 @@ mod tests {
     }
 
     #[test]
+    fn create_options_admit_reversal_but_preserve_path_and_timing_guards() {
+        let authored = AnimationOptions::new()
+            .rate_func(RateFunction::Lingering)
+            .reverse_rate_function(true);
+        let resolved = resolve_create_animation_options(
+            AnimationDefaults::MANIM,
+            authored,
+            AnimationOptions::new().run_time(0.8),
+        )
+        .unwrap();
+        assert!(resolved.reverse_rate_function);
+        assert_eq!(resolved.rate_func, RateFunction::Lingering);
+        assert_eq!(resolved.run_time, 0.8);
+        assert!(matches!(
+            resolve_create_animation_options(
+                AnimationDefaults::MANIM,
+                authored.path_arc(0.5),
+                AnimationOptions::new(),
+            ),
+            Err(AnimationOptionsError::UnsupportedPathArc(value)) if value == 0.5
+        ));
+        assert!(matches!(
+            resolve_create_animation_options(
+                AnimationDefaults::MANIM,
+                authored,
+                AnimationOptions::new().run_time(0.0),
+            ),
+            Err(AnimationOptionsError::InvalidRunTime(value)) if value == 0.0
+        ));
+        assert_eq!(
+            resolve_animation_options(AnimationDefaults::MANIM, authored, AnimationOptions::new()),
+            Err(AnimationOptionsError::UnsupportedReverseRateFunction)
+        );
+    }
+
+    #[test]
     fn transform_options_admit_finite_path_arcs_with_shared_precedence() {
         let resolved = resolve_transform_animation_options(
             AnimationDefaults::MANIM,
@@ -484,6 +574,26 @@ mod tests {
             RateFunction::Smoothererstep,
             RateFunction::SlowInto,
             RateFunction::DoubleSmooth,
+            RateFunction::Lingering,
+            RateFunction::MirroredLingering,
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
             RateFunction::EaseInQuad,
             RateFunction::EaseOutQuad,
             RateFunction::EaseInOutQuad,

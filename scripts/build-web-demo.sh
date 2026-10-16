@@ -80,6 +80,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/paired-authoring-qualification.mjs
   node --check scripts/polynomial-rate-qualification.mjs
   node --check scripts/polynomial-easing-qualification.mjs
+  node --check scripts/elastic-bounce-easing-qualification.mjs
+  node --check scripts/lingering-qualification.mjs
   node --check scripts/cubic-bezier-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs

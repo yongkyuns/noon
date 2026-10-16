@@ -2,8 +2,8 @@
 use super::super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 use crate::family_layout::RelativePlacement;
 use crate::plot_presentation::{
-    number_labels_excluding, positioned_text_labels, NumberLabelAuthoringError as Error,
-    NumberLabelOptions, PlotPresentationError,
+    positioned_text_labels, NumberLabelAuthoringError as Error, NumberLabelOptions,
+    PlotPresentationError,
 };
 use crate::{
     AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
@@ -26,16 +26,9 @@ struct PreparedLabel {
 fn prepare(
     frame: NumberLineFrame,
     numbers: Option<&[f64]>,
-    excluded_numbers: &[f64],
     options: &NumberLabelOptions,
 ) -> Result<Vec<PreparedLabel>, Error> {
-    let labels = number_labels_excluding(
-        frame,
-        numbers,
-        options.decimal_places,
-        options.exclude_zero,
-        excluded_numbers,
-    )?;
+    let labels = options.prepare_values(frame, numbers)?;
     prepare_display_labels(labels, options)
 }
 
@@ -172,8 +165,8 @@ fn add_coordinate_families(
     numbers: [Option<&[f64]>; 2],
     options: [&NumberLabelOptions; 2],
 ) -> Result<[MobjectFamily; 2], Error> {
-    let x_labels = prepare(frame.x(), numbers[0], &[], options[0])?;
-    let y_labels = prepare(frame.y(), numbers[1], &[], options[1])?;
+    let x_labels = prepare(frame.x(), numbers[0], options[0])?;
+    let y_labels = prepare(frame.y(), numbers[1], options[1])?;
     let mut families = publish(
         store,
         vec![(Some(parents[0]), x_labels), (Some(parents[1]), y_labels)],
@@ -192,17 +185,7 @@ impl ManimNumberLine {
         numbers: Option<&[f64]>,
         options: &NumberLabelOptions,
     ) -> Result<MobjectFamily, Error> {
-        self.get_number_mobjects_excluding(numbers, &[], options)
-    }
-
-    /// Cold constructor with ManimCE's exact-value `excluding` filter.
-    pub fn get_number_mobjects_excluding(
-        &self,
-        numbers: Option<&[f64]>,
-        excluded_numbers: &[f64],
-        options: &NumberLabelOptions,
-    ) -> Result<MobjectFamily, Error> {
-        let labels = prepare(self.authored_frame()?, numbers, excluded_numbers, options)?;
+        let labels = prepare(self.authored_frame()?, numbers, options)?;
         Ok(publish(
             Rc::clone(self.family().integration_store()),
             vec![(None, labels)],
@@ -218,17 +201,7 @@ impl ManimNumberLine {
         numbers: Option<&[f64]>,
         options: &NumberLabelOptions,
     ) -> Result<MobjectFamily, Error> {
-        self.add_numbers_excluding(numbers, &[], options)
-    }
-
-    /// Cold-only append with ManimCE's exact-value `excluding` filter.
-    pub fn add_numbers_excluding(
-        &self,
-        numbers: Option<&[f64]>,
-        excluded_numbers: &[f64],
-        options: &NumberLabelOptions,
-    ) -> Result<MobjectFamily, Error> {
-        let labels = prepare(self.authored_frame()?, numbers, excluded_numbers, options)?;
+        let labels = prepare(self.authored_frame()?, numbers, options)?;
         Ok(publish(
             Rc::clone(self.family().integration_store()),
             vec![(Some(self.family().node_id()), labels)],

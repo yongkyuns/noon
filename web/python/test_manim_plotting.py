@@ -1,7 +1,13 @@
 """Adapter lifetime/error tests; real numerical/renderer proof is browser CI."""
 import unittest
+
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 import _manim_plotting as plotting
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
@@ -127,6 +133,7 @@ class PlottingAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": 13})
 
+    @unittest.skipIf(np is None, "NumPy protocol runs in the pinned reference lane")
     def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
         frame = SimpleNamespace(
             tickValues=Mock(return_value=[-2.0, -1.0, 1.0]),
@@ -136,7 +143,12 @@ class PlottingAdapterTests(unittest.TestCase):
         line.include_tip = False
         line.exclude_origin_tick = True
         with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
-            self.assertEqual(line.get_tick_range(), (-2.0, -1.0, 1.0))
+            values = line.get_tick_range()
+        self.assertIsInstance(values, np.ndarray)
+        self.assertEqual(values.dtype, np.dtype(float))
+        self.assertEqual(values.shape, (3,))
+        np.testing.assert_array_equal(values, [-2.0, -1.0, 1.0])
+        np.testing.assert_array_equal(values + 1, [-1.0, 0.0, 2.0])
         frame.tickValues.assert_called_once_with(False, True)
         frame.free.assert_called_once_with()
 
@@ -211,10 +223,6 @@ class PlottingAdapterTests(unittest.TestCase):
                                              "decimal_places": 0,
                                              "exclude_zero": False,
                                          })
-
-        with patch.object(plotting.NumberLine, "get_number_mobjects", return_value=family) as get:
-            self.assertIs(line.get_labels(), family)
-        get.assert_called_once_with()
 
     def test_number_line_number_labels_preserve_zero_unless_explicitly_excluded(self):
         line = object.__new__(plotting.NumberLine)

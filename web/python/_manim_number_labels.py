@@ -57,7 +57,7 @@ def _family(handle, size, color):
         wrapper._initialize_text(str(source), size, object_handle, color, 1.0,
                                  presentation_applied=True)
         members.append(wrapper)
-    return _plot._family(object.__new__(_compat.Group), handle, members)
+    return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
 def _decimal_family(handle, color):
@@ -69,7 +69,7 @@ def _decimal_family(handle, color):
         member, None, color=color, presentation_applied=True,
     )
                for member in engine_call(_decimal_members, handle)]
-    return _plot._family(object.__new__(_compat.Group), handle, members)
+    return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
 def _remember(axis, labels):
@@ -86,6 +86,9 @@ def number_mobjects(axis, values, *, attach, config, excluding=None):
     try:
         excluded_js = _plot._array(() if excluding is None else excluding)
         engine_call(options.setExcludedNumbers, excluded_js)
+        engine_call(options.setTickRangeFlags,
+                    bool(getattr(axis, "include_tip", False)),
+                    bool(getattr(axis, "exclude_origin_tick", False)))
     except BaseException:
         options.free()
         raise

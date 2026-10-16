@@ -107,18 +107,15 @@ fn number_line_exclusions_apply_before_native_text_allocation() {
         .unwrap();
     let options = NumberLabelOptions {
         exclude_zero: false,
+        excluded_numbers: vec![0.0, 2.0],
         ..Default::default()
     };
 
-    let detached = line
-        .get_number_mobjects_excluding(None, &[0.0, 2.0], &options)
-        .unwrap();
+    let detached = line.get_number_mobjects(None, &options).unwrap();
     assert_eq!(leaves(&detached).len(), 1);
     assert_eq!(text(&leaves(&detached)[0]), "1");
 
-    let attached = line
-        .add_numbers_excluding(Some(&[0.0, 1.0, 2.0]), &[0.0, 2.0], &options)
-        .unwrap();
+    let attached = line.add_numbers(Some(&[0.0, 1.0, 2.0]), &options).unwrap();
     assert_eq!(leaves(&attached).len(), 1);
     assert_eq!(
         leaves(line.family())
@@ -126,6 +123,55 @@ fn number_line_exclusions_apply_before_native_text_allocation() {
             .filter(|object| object.state().unwrap().content.text().is_some())
             .count(),
         1
+    );
+}
+
+#[test]
+fn invalid_exclusions_preserve_options_and_publish_no_resources() {
+    let mut options = NumberLabelOptions::default();
+    options.set_excluded_numbers(&[0.0, 2.0]).unwrap();
+    assert!(options.set_excluded_numbers(&[f64::NAN]).is_err());
+    assert_eq!(options.excluded_numbers, [0.0, 2.0]);
+    assert!(options
+        .set_excluded_numbers(&vec![0.0; crate::plot_presentation::MAX_PLOT_LABELS + 1])
+        .is_err());
+    assert_eq!(options.excluded_numbers, [0.0, 2.0]);
+
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+        .unwrap();
+    let before = counts(&scene);
+    let revision = scene.revision();
+    options.excluded_numbers.push(f64::INFINITY);
+    assert!(line.add_numbers(None, &options).is_err());
+    assert_eq!(counts(&scene), before);
+    assert_eq!(scene.revision(), revision);
+}
+
+#[test]
+fn automatic_labels_follow_tick_policy_but_explicit_values_keep_zero_and_endpoint() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
+        .unwrap();
+    let options = NumberLabelOptions {
+        exclude_zero: false,
+        include_tip: true,
+        exclude_origin_tick: true,
+        ..Default::default()
+    };
+    let automatic = line.get_number_mobjects(None, &options).unwrap();
+    assert_eq!(
+        leaves(&automatic).iter().map(text).collect::<Vec<_>>(),
+        ["-2", "-1", "1"]
+    );
+    let explicit = line
+        .get_number_mobjects(Some(&[0.0, 2.0]), &options)
+        .unwrap();
+    assert_eq!(
+        leaves(&explicit).iter().map(text).collect::<Vec<_>>(),
+        ["0", "2"]
     );
 }
 
@@ -234,7 +280,7 @@ fn late_transaction_failure_discards_text_without_interning_fonts() {
     let revision = scene.revision();
     let count = counts(&scene);
     let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
-    let prepared = prepare(frame, None, &[], &NumberLabelOptions::default()).unwrap();
+    let prepared = prepare(frame, None, &NumberLabelOptions::default()).unwrap();
     // Real shaped resources are inserted before this late non-family-parent
     // failure. No scene cloning, deletion of existing text, or leaked fonts.
     assert!(publish(
@@ -245,7 +291,7 @@ fn late_transaction_failure_discards_text_without_interning_fonts() {
     assert_eq!(scene.revision(), revision);
     assert_eq!(counts(&scene), count);
     assert_eq!(sentinel.state().unwrap(), before);
-    let prepared = prepare(frame, None, &[], &NumberLabelOptions::default()).unwrap();
+    let prepared = prepare(frame, None, &NumberLabelOptions::default()).unwrap();
     assert!(publish(Rc::clone(scene.integration_store()), vec![(None, prepared)]).is_ok());
 }
 
@@ -331,7 +377,7 @@ fn invalid_numbers_and_presentation_do_not_allocate_resources() {
 fn rejected_provisional_text_handles_never_revive_on_retry() {
     let scene = Scene::new();
     let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
-    let label = prepare(frame, Some(&[1.0]), &[], &NumberLabelOptions::default())
+    let label = prepare(frame, Some(&[1.0]), &NumberLabelOptions::default())
         .unwrap()
         .remove(0);
     let input = (label.resource, label.fonts);
@@ -368,7 +414,7 @@ fn rejected_provisional_text_handles_never_revive_on_retry() {
 fn conflicting_incoming_fonts_fail_before_any_batch_insertion() {
     let scene = Scene::new();
     let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
-    let label = prepare(frame, Some(&[1.0]), &[], &NumberLabelOptions::default())
+    let label = prepare(frame, Some(&[1.0]), &NumberLabelOptions::default())
         .unwrap()
         .remove(0);
     let face = label.resource.runs[0].font.clone();

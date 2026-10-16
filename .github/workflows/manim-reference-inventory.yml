@@ -26,12 +26,24 @@ on:
       - 'scripts/manim-array-utilities.py'
       - 'scripts/manim-user-*.py'
       - 'web/python/_manim_user_vectors.py'
+      - 'web/python/_manim_user_vector_bases.py'
       - 'web/python/test_manim_user_*.py'
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_array_utilities.py'
+      - 'web/python/_manim_plotting.py'
+      - 'web/python/test_manim_plotting.py'
       - 'web/python/_manim_namespace.py'
       - 'web/python/test_manim_namespace.py'
       - 'scripts/manim-rate-intervals.py'
+      - 'scripts/manim_easing_oracle.py'
+      - 'scripts/manim-elastic-bounce-easings.py'
+      - 'web/python/test_manim_elastic_bounce_easings.py'
+      - 'scripts/manim-back-easings.py'
+      - 'web/python/test_manim_back_easings.py'
+      - 'scripts/manim-sine-easings.py'
+      - 'scripts/manim-exponential-circular-easings.py'
+      - 'web/python/test_manim_exponential_circular_easings.py'
+      - 'web/python/test_manim_sine_easings.py'
       - 'web/python/_manim_rate_functions.py'
       - 'web/python/test_manim_rate_intervals.py'
       - 'scripts/pinned_python_helpers.py'
@@ -40,6 +52,13 @@ on:
       - 'web/python/test_manim_iterable_utilities.py'
       - 'scripts/manim-config-utilities.py'
       - 'scripts/manim-match-color.py'
+      - 'scripts/manim-angle-from-three-points.py'
+      - 'crates/noon/src/angle_authoring.rs'
+      - 'crates/noon/src/semantic_mobject.rs'
+      - 'crates/noon-web/src/authoring_geometry.rs'
+      - 'web/python/_manim_angle.py'
+      - 'web/python/test_manim_angle.py'
+      - 'compat/manim-v0.21.0.json'
       - 'web/python/noon.py'
       - 'web/python/test_paint_queries_gradients.py'
       - 'web/python/_manim_config_utils.py'
@@ -94,7 +113,19 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-polynomial-easings.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-elastic-bounce-easings.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-lingering.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_lingering.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_elastic_bounce_easings.py -v
+          array-oracle/bin/python noon/scripts/manim-back-easings.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_back_easings.py -v
+          array-oracle/bin/python noon/scripts/manim-sine-easings.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-exponential-circular-easings.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_exponential_circular_easings.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_sine_easings.py -v
           array-oracle/bin/python noon/scripts/manim-user-vectors.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-typing-namespace.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_typing_namespace.py -v
           array-oracle/bin/python noon/scripts/manim-user-intersections.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-array-normalization.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-winding.py manim-v0.21.0
@@ -102,7 +133,12 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-user-curve-operations.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-curve-subdivision.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-curve-membership.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-vector-bases.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-vector-normals.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vector_normals.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vector_bases.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_membership.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_plotting.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_subdivision.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_operations.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_bezier.py -v

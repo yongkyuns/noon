@@ -39,10 +39,87 @@ pub fn easing_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Three standard sine curves through the same retained method-target composition.
+pub fn sine_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
+        ],
+        0.65,
+        1.0,
+    )
+}
+
+/// Exponential and circular rates share the same retained target composition.
+pub fn exponential_circular_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
+        ],
+        0.45,
+        0.6,
+    )
+}
+
+/// Original overshooting back rates through retained method targets.
+pub fn back_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+        ],
+        0.65,
+        1.0,
+    )
+}
+
+/// Original elastic overshoot and piecewise bounce rates use retained Rust targets.
+pub fn elastic_bounce_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+        ],
+        0.45,
+        0.6,
+    )
+}
+
+/// Lingering's early hold and reverse Create use the same shared composition.
+pub fn lingering_session() -> Result<ExecutionSession, String> {
+    build_session_with_reverse_create(
+        &[RateFunction::Lingering, RateFunction::Lingering],
+        0.65,
+        1.0,
+        true,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
     row_step: f64,
+) -> Result<ExecutionSession, String> {
+    build_session_with_reverse_create(rates, side, row_step, false)
+}
+
+fn build_session_with_reverse_create(
+    rates: &[RateFunction],
+    side: f64,
+    row_step: f64,
+    reverse_create_last: bool,
 ) -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
@@ -62,9 +139,16 @@ fn build_session(
             shape.set_color(rgb.0, rgb.1, rgb.2, 1.0)?;
             shape.set_fill_opacity(1.0)?;
             shape.set_stroke_width(0.0)?;
-            scene.add(&shape)?;
-            let mut target = shape.target_editor()?;
-            target.shift(4.0, 0.0)?;
+            if !(reverse_create_last && index + 1 == rates.len()) {
+                scene.add(&shape)?;
+            }
+            let target = if reverse_create_last && index + 1 == rates.len() {
+                None
+            } else {
+                let mut target = shape.target_editor()?;
+                target.shift(4.0, 0.0)?;
+                Some(target)
+            };
             shapes.push(shape);
             targets.push(target);
         }
@@ -73,14 +157,16 @@ fn build_session(
             .zip(&targets)
             .zip(rates.iter().copied())
             .map(|((shape, target), rate)| {
-                AnimationCompositionRequest::TransformTo(
-                    TransformToRequest::new(
-                        shape,
-                        target,
-                        AnimationOptions::new().run_time(1.0).rate_func(rate),
-                    )
-                    .method_target(),
-                )
+                let options = AnimationOptions::new().run_time(1.0).rate_func(rate);
+                match target {
+                    Some(target) => AnimationCompositionRequest::TransformTo(
+                        TransformToRequest::new(shape, target, options).method_target(),
+                    ),
+                    None => AnimationCompositionRequest::Create {
+                        target: shape,
+                        options: options.reverse_rate_function(true),
+                    },
+                }
             })
             .collect();
         let request = AnimationCompositionRequest::Composition {
@@ -101,17 +187,19 @@ fn build_session(
 mod tests {
     use super::*;
 
-    #[test]
-    fn all_twelve_polynomial_easings_keep_identity_seek_and_forward_equal() {
-        let mut forward = easing_session().unwrap();
-        let mut sought = easing_session().unwrap();
+    fn assert_seek_matches_forward(
+        build: fn() -> Result<ExecutionSession, String>,
+        expected_count: usize,
+    ) -> ExecutionSession {
+        let mut forward = build().unwrap();
+        let mut sought = build().unwrap();
         let ids = forward
             .frame()
             .objects
             .iter()
             .map(|o| o.id)
             .collect::<Vec<_>>();
-        assert_eq!(ids.len(), 12);
+        assert_eq!(ids.len(), expected_count);
         for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
             forward.advance_to(time).unwrap();
             sought.seek(time).unwrap();
@@ -123,39 +211,86 @@ mod tests {
                 .enumerate()
             {
                 assert_eq!(left.id, ids[index]);
+                assert_eq!(left.id, right.id);
                 assert_eq!(left.transform, right.transform);
                 assert_eq!(left.style, right.style);
             }
         }
         assert_eq!(forward.effective_time(), 1.0);
+        sought
+    }
+
+    #[test]
+    fn lingering_hold_and_reverse_create_preserve_seek_and_forward_identity() {
+        let mut sought = assert_seek_matches_forward(lingering_session, 2);
+        for (time, x) in [(0.4, 0.0), (0.8, 2.0), (0.9, 2.0)] {
+            sought.seek(time).unwrap();
+            assert!((sought.frame().objects[0].transform.translation.x - x).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn elastic_bounce_rates_preserve_original_positions_and_seek_identity() {
+        let mut sought = assert_seek_matches_forward(elastic_bounce_session, 6);
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            -0.005524271728019903_f64 as f32,
+            0.9116116523516816_f64 as f32,
+            0.011969444423734044_f64 as f32,
+            0.02734375_f64 as f32,
+            0.47265625_f64 as f32,
+            0.1171875_f64 as f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn back_rates_preserve_overshoot_and_seek_forward_identity() {
+        let mut sought = assert_seek_matches_forward(back_session, 3);
+        sought.seek(0.25).unwrap();
+        assert!(sought.frame().objects[0].transform.translation.x < -2.0);
+        sought.seek(0.75).unwrap();
+        assert!(sought.frame().objects[1].transform.translation.x > 2.0);
+    }
+
+    #[test]
+    fn exponential_circular_rates_keep_original_positions_and_seek_identity() {
+        let mut sought = assert_seek_matches_forward(exponential_circular_session, 6);
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            0.005524271728019903_f64 as f32,
+            0.8232233047033631_f64 as f32,
+            0.015625_f32,
+            0.031754163448145745_f64 as f32,
+            0.6614378277661477_f64 as f32,
+            0.0669872981077807_f64 as f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn sine_rates_keep_seek_and_forward_sampling_equal_at_original_positions() {
+        let mut sought = assert_seek_matches_forward(sine_session, 3);
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            0.07612046748871326_f64 as f32,
+            0.3826834323650898_f64 as f32,
+            0.1464466094067262_f64 as f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn all_twelve_polynomial_easings_keep_identity_seek_and_forward_equal() {
+        assert_seek_matches_forward(easing_session, 12);
     }
 
     #[test]
     fn all_five_rates_preserve_identity_and_seek_matches_forward_sampling() {
-        let mut forward = session().unwrap();
-        let mut sought = session().unwrap();
-        let ids: Vec<_> = forward
-            .frame()
-            .objects
-            .iter()
-            .map(|object| object.id)
-            .collect();
-        assert_eq!(ids.len(), 5);
-        for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            forward.advance_to(time).unwrap();
-            sought.seek(time).unwrap();
-            for (index, (left, right)) in forward
-                .frame()
-                .objects
-                .iter()
-                .zip(&sought.frame().objects)
-                .enumerate()
-            {
-                assert_eq!(left.id, ids[index]);
-                assert_eq!(left.transform, right.transform);
-                assert_eq!(left.style, right.style);
-            }
-        }
+        let mut sought = assert_seek_matches_forward(session, 5);
         sought.seek(0.25).unwrap();
         let objects = &sought.frame().objects;
         assert!((objects[3].transform.translation.x - 0.6457513).abs() < 1e-6);

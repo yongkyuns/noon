@@ -201,9 +201,20 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
         | RateFunction::Smoothererstep
         | RateFunction::SlowInto
         | RateFunction::DoubleSmooth
+        | RateFunction::Lingering
+        | RateFunction::MirroredLingering
         | RateFunction::RushInto
         | RateFunction::RushFrom
         | RateFunction::EaseInOutCubic
+        | RateFunction::EaseInExpo
+        | RateFunction::EaseOutExpo
+        | RateFunction::EaseInOutExpo
+        | RateFunction::EaseInCirc
+        | RateFunction::EaseOutCirc
+        | RateFunction::EaseInOutCirc
+        | RateFunction::EaseInSine
+        | RateFunction::EaseOutSine
+        | RateFunction::EaseInOutSine
         | RateFunction::EaseInQuad
         | RateFunction::EaseOutQuad
         | RateFunction::EaseInOutQuad
@@ -218,7 +229,9 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
             if value <= 0.0 {
                 return Some(0.0);
             }
-            if value >= 1.0 {
+            // Lingering reaches its endpoint at 0.8 and then holds. Preserve
+            // the earliest boundary through the existing shared f32 search.
+            if value >= 1.0 && rate_func != RateFunction::Lingering {
                 return Some(1.0);
             }
             let mut lower = 0.0_f64;
@@ -235,7 +248,18 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
             }
             Some(upper)
         }
-        RateFunction::ThereAndBack | RateFunction::StepStart | RateFunction::StepEnd => None,
+        RateFunction::ThereAndBack
+        | RateFunction::EaseInElastic
+        | RateFunction::EaseOutElastic
+        | RateFunction::EaseInOutElastic
+        | RateFunction::EaseInBounce
+        | RateFunction::EaseOutBounce
+        | RateFunction::EaseInOutBounce
+        | RateFunction::EaseInBack
+        | RateFunction::EaseOutBack
+        | RateFunction::EaseInOutBack
+        | RateFunction::StepStart
+        | RateFunction::StepEnd => None,
     }
 }
 
@@ -500,6 +524,27 @@ mod tests {
     }
 
     #[test]
+    fn lingering_resolves_earliest_activation_before_its_endpoint_plateau() {
+        for (rate, threshold, expected) in [
+            (RateFunction::Lingering, 0.5, 0.4),
+            (RateFunction::Lingering, 1.0, 0.8),
+            (RateFunction::MirroredLingering, 0.5, 0.6),
+        ] {
+            let map = CompositionTimeMap::from_steps(vec![
+                CompositionTimeMapStep::new(0.0, 1.0, rate),
+                CompositionTimeMapStep::new(threshold, 1.0 - threshold, RateFunction::Linear),
+            ]);
+            let boundary = map.monotone_event_alpha().unwrap();
+            assert!(
+                (boundary - expected).abs() < 5e-8,
+                "{rate:?}: {boundary} versus {expected}"
+            );
+            assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
+            assert!(map.evaluate((boundary + 1e-6) as f32).begun);
+        }
+    }
+
+    #[test]
     fn nested_monotone_event_boundary_is_resolved_inside_out() {
         let map = CompositionTimeMap::from_steps(vec![
             CompositionTimeMapStep::new(0.2, 0.6, RateFunction::Smooth),
@@ -529,8 +574,17 @@ mod tests {
     }
 
     #[test]
-    fn polynomial_easings_preserve_earliest_nested_event_boundaries() {
+    fn monotone_easings_preserve_earliest_nested_event_boundaries() {
         for rate in [
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
             RateFunction::EaseInQuad,
             RateFunction::EaseOutQuad,
             RateFunction::EaseInOutQuad,
@@ -576,6 +630,15 @@ mod tests {
     fn reversing_and_discontinuous_rates_have_no_single_event_boundary() {
         for rate_func in [
             RateFunction::ThereAndBack,
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
             RateFunction::StepStart,
             RateFunction::StepEnd,
         ] {
