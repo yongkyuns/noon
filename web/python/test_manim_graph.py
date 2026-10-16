@@ -1010,13 +1010,23 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(self.context.creation_calls, [])
 
     def test_vertex_access_reuses_retained_identity_and_rejects_unknown_keys(self):
-        value = graph.Graph(["a"], [])
+        value = graph.Graph(["a", "b"], [("a", "b")])
         handle = SimpleNamespace(semanticSlot=7, semanticGeneration=2)
-        value._graph_handle.vertex = lambda key: handle if key == 0 else None
+        value._graph_handle.vertex = lambda key: (
+            handle if key == 0 else SimpleNamespace(semanticSlot=key + 7, semanticGeneration=2)
+        )
         first = value["a"]
         self.assertIs(value["a"], first)
         self.assertIs(value.vertices["a"], first)
         self.assertIs(first._semantic_handle, handle)
         self.assertIs(first._canonical_live_target_context, self.context)
-        with self.assertRaises(KeyError):
+        self.assertIs(value[("a", "b")], value.edges[("a", "b")])
+        with self.assertRaises(ValueError):
             value["missing"]
+        with self.assertRaises(ValueError):
+            value[("a", "missing")]
+
+    def test_tuple_vertex_key_takes_precedence_over_edge_tuple_indexing(self):
+        value = graph.Graph([("a", "b"), "a", "b"], [("a", "b")])
+
+        self.assertIsInstance(value[("a", "b")], graph._compat.VMobject)

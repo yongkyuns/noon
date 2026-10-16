@@ -22,7 +22,7 @@ class OrdinaryGraph(Scene):
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
         assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
-        _ = graph.edges[("a", "b")]
+        _ = graph[("a", "b")]
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
@@ -37,7 +37,7 @@ class OrdinaryGraph(Scene):
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
         assert tuple(directed.edges) == (("u", "v"), ("v", "w"), ("w", "u"))
-        _ = directed.edges[("u", "v")]
+        _ = directed[("u", "v")]
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
         directed.add_edges(
             [("w", "x")],

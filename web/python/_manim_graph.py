@@ -452,18 +452,29 @@ class _GraphBase(_compat.Group):
         return self._canonical_live_target_context
 
     def __getitem__(self, key):
-        """Resolve a vertex key to its existing shared semantic Mobject."""
-        handle = engine_call(self._graph_handle.vertex, self._graph_key_ids[key])
-        if handle is None:
-            raise KeyError(key)
-        identity = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
-        member = self._semantic_member_wrappers.get(identity)
-        if member is None:
-            member = object.__new__(_compat.VMobject)
-            _shared._attach_shared_handle(member, handle)
-            member._canonical_live_target_context = self._context()
-            self._semantic_member_wrappers[identity] = member
-        return member
+        """Resolve a vertex key or edge tuple to its retained semantic Mobject."""
+        try:
+            vertex_id = self._graph_key_ids.get(key)
+        except TypeError:
+            vertex_id = None
+        if vertex_id is not None:
+            handle = engine_call(self._graph_handle.vertex, vertex_id)
+            if handle is None:
+                raise ValueError(f"Could not find {key} in vertices or edges")
+            identity = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+            member = self._semantic_member_wrappers.get(identity)
+            if member is None:
+                member = object.__new__(_compat.VMobject)
+                _shared._attach_shared_handle(member, handle)
+                member._canonical_live_target_context = self._context()
+                self._semantic_member_wrappers[identity] = member
+            return member
+        if isinstance(key, tuple) and len(key) == 2:
+            try:
+                return self._edge_style_target(key)
+            except ValueError:
+                pass
+        raise ValueError(f"Could not find {key} in vertices or edges")
 
     @property
     def vertices(self):
