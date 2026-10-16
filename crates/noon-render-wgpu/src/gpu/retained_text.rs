@@ -4276,11 +4276,11 @@ mod tests {
                 images.get(image_handle).unwrap(),
             );
             let mut objects = vec![base_circle];
-            let mut image_index = 0;
-            let mut text_index = 0;
+            let image_index = 49usize;
+            let text_index = 66usize;
             for index in 0..96_u64 {
                 if index == 48 {
-                    image_index = objects.len();
+                    assert_eq!(objects.len(), image_index);
                     objects.push(FrameObjectState {
                         glow: None,
                         spatial: None,
@@ -4294,7 +4294,7 @@ mod tests {
                     });
                 }
                 if index == 64 {
-                    text_index = objects.len();
+                    assert_eq!(objects.len(), text_index);
                     text_object.style.opacity = 0.75;
                     objects.push(text_object.clone());
                 }
@@ -4372,7 +4372,7 @@ mod tests {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            let mut render = |renderer: &mut GpuRenderer,
+            let render = |renderer: &mut GpuRenderer,
                               state: &mut RetainedTextGpuState,
                               prepared: &PreparedRetainedGpuFrame<'_>| {
                 renderer.upload_retained(&device, &queue, prepared, state);
