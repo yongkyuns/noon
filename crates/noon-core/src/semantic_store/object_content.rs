@@ -261,6 +261,8 @@ pub enum SemanticObjectRole {
     ArrowStartTip,
     /// Scalar range of an ordinary coordinate shaft; no renderer specialization.
     NumberLine(SemanticNumberLineRole),
+    /// An ordinary retained coordinate tip, independent of sibling order.
+    CoordinateTip,
     /// Parameter interval of an ordinary sampled graph path.
     FunctionPlot(SemanticFunctionPlotRole),
     /// Nominal constructor value of an ordinary Angle arc; no renderer specialization.
@@ -285,6 +287,7 @@ impl SemanticObjectRole {
             | Self::Inset2DView(_)
             | Self::ArrowEndTip
             | Self::ArrowStartTip
+            | Self::CoordinateTip
             | Self::SampleSpaceHorizontalPart
             | Self::SampleSpaceVerticalPart => true,
         }
