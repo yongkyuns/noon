@@ -3939,9 +3939,8 @@ impl GpuRenderer {
             && text_camera_index.is_none();
         // Mixed images and glyphs remain exact painter barriers, but stable
         // unique paths between them may use the ordinary packed mega stream.
-        let batch_mixed_mega = self.inset_views.is_empty()
-            && excluded.is_empty()
-            && text_camera_index.is_none();
+        let batch_mixed_mega =
+            self.inset_views.is_empty() && excluded.is_empty() && text_camera_index.is_none();
         let pixel = Vec2::new(
             self.camera.world_size.x / self.viewport_size[0].max(1) as f32,
             self.camera.world_size.y / self.viewport_size[1].max(1) as f32,

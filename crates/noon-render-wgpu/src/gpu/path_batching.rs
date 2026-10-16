@@ -331,7 +331,10 @@ mod tests {
         let merged =
             collect_consecutive_mega_paths(first, &mut pending, &prepared, |_| false).unwrap();
         assert_eq!(merged.path_count, 3);
-        assert!(pending.next().is_none(), "contiguous source paths were coalesced");
+        assert!(
+            pending.next().is_none(),
+            "contiguous source paths were coalesced"
+        );
 
         let mut pending = items[1..].iter().peekable();
         let blocked = collect_consecutive_mega_paths(first, &mut pending, &prepared, |object| {
