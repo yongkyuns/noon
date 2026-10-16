@@ -102,9 +102,7 @@ pub fn number_labels_excluding(
         .try_reserve_exact(numbers.len())
         .map_err(|_| PlotPresentationError::AllocationFailed)?;
     for &number in numbers {
-        if (exclude_zero && number == 0.0)
-            || excluded_numbers.contains(&number)
-        {
+        if (exclude_zero && number == 0.0) || excluded_numbers.contains(&number) {
             continue;
         }
         let point = frame.number_to_point(number)?;
