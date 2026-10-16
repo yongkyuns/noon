@@ -1,4 +1,4 @@
-"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite layouts."""
+"""Graph/DiGraph topology edits and shared spring/random/tree/circular/shell/spiral/partite/spectral layouts."""
 
 from noon import BLUE, GREEN, PURPLE, RED, YELLOW, DiGraph, Graph, Scene
 
@@ -173,8 +173,19 @@ class OrdinaryGraph(Scene):
             "tree", scale=(0.65, 0.35),
             layout_config={"root_vertex": "z0"},
         )
+        spectral_graph = Graph(
+            ["g0", "g1", "g2", "g3"],
+            [("g0", "g1"), ("g1", "g2"), ("g2", "g3")],
+            layout="spectral", layout_scale=(0.35, 0.22),
+            layout_config={"center": (-5.5, 3.2)},
+            **styles,
+        )
+        spectral_graph.change_layout(
+            "spectral", scale=(0.35, 0.22),
+            layout_config={"center": (-5.5, 3.2)},
+        )
         self.add(
             graph, directed, centered, shell_graph, spiral_graph, partite_graph,
-            spring_graph, spring_digraph, random_graph, tree_graph,
+            spring_graph, spring_digraph, random_graph, tree_graph, spectral_graph,
         )
         self.wait(0.2)

@@ -260,6 +260,27 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut tree_graph = tree_graph;
     tree_graph.change_layout(&mut scene, tree_options)?;
 
+    let spectral_edges = [(0, 1), (1, 2), (2, 3)];
+    let spectral_options = crate::GraphLayoutOptions {
+        layout: crate::GraphLayout::Spectral,
+        scale: 0.35,
+        scale_y: Some(0.22),
+        center: (-5.5, 3.2),
+        ..Default::default()
+    };
+    let spectral_positions = spectral_options.positions(4, &spectral_edges)?;
+    let mut spectral_graph = scene.graph_with_options(
+        [
+            ("g0", spectral_positions[0]),
+            ("g1", spectral_positions[1]),
+            ("g2", spectral_positions[2]),
+            ("g3", spectral_positions[3]),
+        ],
+        [("g0", "g1"), ("g1", "g2"), ("g2", "g3")],
+        options.clone(),
+    )?;
+    spectral_graph.change_layout(&mut scene, spectral_options)?;
+
     let mut shells = scene.graph_with_options(
         [("s0", (0.0, 2.6)), ("s1", (0.0, 2.6)), ("s2", (0.0, 2.6))],
         [("s0", "s1"), ("s1", "s2")],
@@ -287,6 +308,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         MobjectTarget::Family(spring_digraph.family()),
         MobjectTarget::Family(random_graph.family()),
         MobjectTarget::Family(tree_graph.family()),
+        MobjectTarget::Family(spectral_graph.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -312,7 +334,8 @@ mod tests {
         // Spring and random Graphs each add two Lines + three vertices.
         // Tree Graph adds four Lines + five vertices.
         // Spring DiGraph: one Arrow shaft + tip + two vertices.
-        assert_eq!(leaves.len(), 63);
+        // Spectral Graph: three Lines + four vertices.
+        assert_eq!(leaves.len(), 70);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

@@ -56,6 +56,7 @@ pub(crate) enum GraphOperation {
     },
     Random(noon::GraphLayoutOptions),
     Spring(noon::GraphLayoutOptions),
+    Spectral(noon::GraphLayoutOptions),
     Tree(noon::GraphLayoutOptions),
     Explicit(Vec<(f64, f64)>),
 }
@@ -299,6 +300,13 @@ impl NativeGraph {
                 graph.change_layout(scene, options)?;
             }
             (Self::Directed(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout(scene, options)?;
+            }
+            (Self::Undirected(graph), GraphOperation::Spectral(options)) => {
+                graph.change_layout(scene, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Spectral(mut options)) => {
+                options.directed = true;
                 graph.change_layout(scene, options)?;
             }
             (Self::Undirected(graph), GraphOperation::Random(options)) => {
@@ -554,6 +562,13 @@ impl NativeGraph {
                 graph.change_layout_live(live, options)?;
             }
             (Self::Directed(graph), GraphOperation::Spring(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Undirected(graph), GraphOperation::Spectral(options)) => {
+                graph.change_layout_live(live, options)?;
+            }
+            (Self::Directed(graph), GraphOperation::Spectral(mut options)) => {
+                options.directed = true;
                 graph.change_layout_live(live, options)?;
             }
             (Self::Undirected(graph), GraphOperation::Random(options)) => {
@@ -913,6 +928,60 @@ impl CanonicalAuthoringSceneContext {
         .map_err(|error| {
             js_error(crate::authoring_error::AuthoringFailure::unclassified(
                 "graph.layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        self.create_live_graph(directed, vertices, edges, options.options)
+            .map(|inner| WasmGraphHandle { inner })
+            .map_err(js_error)
+    }
+
+    /// Compute a deterministic spectral layout in shared Rust before publishing.
+    #[wasm_bindgen(js_name = liveCreateSpectralGraph)]
+    pub fn live_create_spectral_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: &[u32],
+        edge_pairs: &[u32],
+        scale: f64,
+        scale_y: Option<f64>,
+        center_x: f64,
+        center_y: f64,
+        options: WasmGraphOptions,
+    ) -> Result<WasmGraphHandle, JsValue> {
+        let edges = pairs(edge_pairs, "Graph edges")?;
+        let vertex_indices = vertex_ids
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index))
+            .collect::<HashMap<_, _>>();
+        let edge_indices = edges
+            .iter()
+            .map(|&(start, end)| {
+                let start = vertex_indices
+                    .get(&start)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                let end = vertex_indices
+                    .get(&end)
+                    .copied()
+                    .ok_or_else(|| js_error("Graph edge references an unknown vertex"))?;
+                Ok((start, end))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Spectral,
+            scale,
+            scale_y,
+            center: (center_x, center_y),
+            directed,
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &edge_indices)
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.spectral_layout",
                 &error,
             ))
         })?;
@@ -1482,6 +1551,35 @@ impl CanonicalAuthoringSceneContext {
                 resolution,
                 equidistant,
             },
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = liveGraphSpectralLayout)]
+    pub fn live_graph_spectral_layout(
+        &mut self,
+        graph: &mut WasmGraphHandle,
+        scale: f64,
+        scale_y: Option<f64>,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<(), JsValue> {
+        if !scale.is_finite()
+            || scale_y.is_some_and(|value| !value.is_finite())
+            || !center_x.is_finite()
+            || !center_y.is_finite()
+        {
+            return Err(js_error("spectral Graph layout values must be finite"));
+        }
+        self.mutate_live_graph(
+            &mut graph.inner,
+            GraphOperation::Spectral(noon::GraphLayoutOptions {
+                layout: noon::GraphLayout::Spectral,
+                scale,
+                scale_y,
+                center: (center_x, center_y),
+                ..Default::default()
+            }),
         )
         .map_err(js_error)
     }

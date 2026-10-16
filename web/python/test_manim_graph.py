@@ -63,7 +63,9 @@ class _Context:
         self.shell_layout_calls = []
         self.spiral_layout_calls = []
         self.partite_layout_calls = []
+        self.explicit_layout_calls = []
         self.spring_layout_calls = []
+        self.spectral_layout_calls = []
         self.random_layout_calls = []
         self.tree_layout_calls = []
         self.add_vertex_calls = []
@@ -96,6 +98,7 @@ class _Context:
     liveCreateSpiralGraph = liveCreateGraph
     liveCreatePartiteGraph = liveCreateGraph
     liveCreateSpringGraph = liveCreateGraph
+    liveCreateSpectralGraph = liveCreateGraph
     liveCreateRandomGraph = liveCreateGraph
     liveCreateTreeGraph = liveCreateGraph
 
@@ -138,13 +141,18 @@ class _Context:
     def liveGraphSpringLayout(self, *args):
         self._call("spring")
         self.spring_layout_calls.append(args)
+    def liveGraphSpectralLayout(self, *args):
+        self._call("spectral")
+        self.spectral_layout_calls.append(args)
     def liveGraphRandomLayout(self, *args):
         self._call("random")
         self.random_layout_calls.append(args)
     def liveGraphTreeLayout(self, *args):
         self._call("tree")
         self.tree_layout_calls.append(args)
-    def liveGraphExplicitLayout(self, *args): self._call("explicit")
+    def liveGraphExplicitLayout(self, *args):
+        self._call("explicit")
+        self.explicit_layout_calls.append(args)
 
 
 class GraphFacadeTests(unittest.TestCase):
@@ -217,6 +225,50 @@ class GraphFacadeTests(unittest.TestCase):
         ]
         for actual, wanted in zip(call[3], (value for point in expected for value in point)):
             self.assertAlmostEqual(actual, wanted)
+
+    def test_spectral_constructor_routes_options_and_directed_topology_to_rust(self):
+        graph.Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="spectral", layout_scale=(1.4, 0.8),
+            layout_config={"center": (1.25, -0.75), "dim": 2, "weight": None},
+        )
+        self.assertEqual(
+            self.context.creation_calls[-1][:-1],
+            (False, [0, 1, 2, 3], [0, 1, 1, 2, 2, 3], 1.4, 0.8, 1.25, -0.75),
+        )
+
+        graph.DiGraph(
+            ["a", "b", "c"], [("a", "b"), ("c", "b")],
+            layout="spectral", layout_config={"center": (0.2, -0.4)},
+        )
+        self.assertEqual(
+            self.context.creation_calls[-1][:-1],
+            (True, [0, 1, 2], [0, 1, 2, 1], 2.0, None, 0.2, -0.4),
+        )
+
+    def test_spectral_change_layout_routes_scale_and_center_to_rust(self):
+        value = graph.Graph(
+            ["a", "b", "c"], [("a", "b"), ("b", "c")],
+            layout={"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+        )
+        value.change_layout(
+            "spectral", scale=(1.5, 0.7), layout_config={"center": (0.5, -1.0)},
+        )
+        self.assertEqual(
+            self.context.spectral_layout_calls[-1][1:],
+            (1.5, 0.7, 0.5, -1.0),
+        )
+
+    def test_spectral_layout_rejects_unqualified_config_before_graph_creation(self):
+        for config, error, message in (
+            ({"dim": 3}, NotImplementedError, "two-dimensional"),
+            ({"seed": 1}, NotImplementedError, "unsupported spectral"),
+            ({"weight": 1}, TypeError, "weight must be a string or None"),
+        ):
+            with self.subTest(config=config), self.assertRaisesRegex(error, message):
+                graph.Graph(["a", "b", "c"], [], layout="spectral", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
     def test_random_layout_uses_networkx_float32_centered_samples_and_manim_scale(self):

@@ -250,7 +250,10 @@ fn graph_mutations_reject_self_edges_without_publishing_topology() {
         GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
     ));
     assert_eq!(scene.revision(), directed_revision);
-    assert_eq!(digraph.vertex_keys().copied().collect::<Vec<_>>(), vec!["u"]);
+    assert_eq!(
+        digraph.vertex_keys().copied().collect::<Vec<_>>(),
+        vec!["u"]
+    );
     assert_eq!(digraph.topology().unwrap().edges().count(), 0);
 }
 
@@ -1080,6 +1083,55 @@ fn networkx_random_layout_uses_manim_scale_after_centered_numpy_samples() {
     .positions(1, &[])
     .unwrap();
     assert_eq!(positions, vec![(0.75, -0.25)]);
+}
+
+#[test]
+fn spectral_layout_uses_the_unnormalized_laplacian_and_stable_axis_signs() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 2.0,
+        center: (1.25, -0.75),
+        ..Default::default()
+    };
+    let undirected = options.positions(4, &[(0, 1), (1, 2), (2, 3)]).unwrap();
+    let expected_x = [2.0, 0.828_427_124_746_190_1, -0.828_427_124_746_190_1, -2.0];
+    let expected_y = [
+        1.530_733_729_460_359_8,
+        -1.530_733_729_460_359_8,
+        -1.530_733_729_460_359_8,
+        1.530_733_729_460_359_8,
+    ];
+    for (index, &(x, y)) in undirected.iter().enumerate() {
+        assert!((x - (expected_x[index] + 1.25)).abs() < 1e-10);
+        assert!((y - (expected_y[index] - 0.75)).abs() < 1e-10);
+    }
+
+    let directed = GraphLayoutOptions {
+        directed: true,
+        ..options
+    }
+    .positions(4, &[(0, 1), (2, 1), (2, 3)])
+    .unwrap();
+    for (actual, expected) in directed.iter().zip(undirected) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn spectral_layout_preserves_networkx_zero_through_two_vertex_special_cases() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 0.25,
+        center: (2.0, -1.0),
+        ..Default::default()
+    };
+    assert!(options.positions(0, &[]).unwrap().is_empty());
+    assert_eq!(options.positions(1, &[]).unwrap(), vec![(2.0, -1.0)]);
+    assert_eq!(
+        options.positions(2, &[(0, 1)]).unwrap(),
+        vec![(0.0, 0.0), (4.0, -2.0)]
+    );
 }
 
 #[test]

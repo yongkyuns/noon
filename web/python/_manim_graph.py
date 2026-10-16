@@ -205,10 +205,12 @@ class _GraphBase(_compat.Group):
     ``center``, and ``dim=2``; spiral layouts accept ``resolution``,
     ``equidistant``, ``center``, and ``dim=2``; partite layouts accept
     ``partitions``, ``align``, and ``center``; tree layouts accept
-    ``root_vertex``, ``orientation``, and ``vertex_spacing``. Other options
-    remain unsupported until their Rust semantics are qualified. Two-axis
+    ``root_vertex``, ``orientation``, and ``vertex_spacing``. Spectral layouts
+    accept NetworkX's ``weight``, ``center``, and ``dim=2`` configuration; Rust
+    computes the Laplacian eigenvectors and retains the resulting positions.
+    Other options remain unsupported until their semantics are qualified. Two-axis
     ``layout_scale`` tuples are supported for spring, random, circular, spiral,
-    partite, and tree layouts; shell layout follows NetworkX's scalar-only
+    partite, spectral, and tree layouts; shell layout follows NetworkX's scalar-only
     scale contract. Partite layouts accept ``partitions`` directly or in
     ``layout_config``; the latter takes precedence. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
@@ -249,12 +251,14 @@ class _GraphBase(_compat.Group):
         shell = isinstance(layout, str) and layout == "shell"
         spiral = isinstance(layout, str) and layout == "spiral"
         partite = isinstance(layout, str) and layout == "partite"
+        spectral = isinstance(layout, str) and layout == "spectral"
         if root_vertex is not None and not tree:
             raise NotImplementedError("root_vertex is supported only by the tree layout")
         if partitions is not None and not partite:
             raise NotImplementedError("partitions are supported only by the partite layout")
         if (explicit is None and not spring and not random_layout and not tree
-                and not circular and not shell and not spiral and not partite):
+                and not circular and not shell and not spiral and not partite
+                and not spectral):
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
         self._graph_key_ids = {}
         self._next_graph_id = 0
@@ -323,6 +327,10 @@ class _GraphBase(_compat.Group):
             center, partite_groups, align_horizontal = _partite_layout_config(
                 layout_config, layout_center, self._graph_key_ids,
                 partitions=partitions,
+            )
+        elif spectral:
+            center, scale, scale_y = _spectral_layout_config(
+                layout_config, layout_center, layout_scale,
             )
         if not spring and not random_layout and not tree:
             if shell:
@@ -403,6 +411,11 @@ class _GraphBase(_compat.Group):
                     bool(self._directed), ids, _array(edge_ids),
                     _array(partition_indices), _array(partition_sizes),
                     scale, scale_y, *center, align_horizontal,
+                )
+            elif spectral:
+                self._graph_handle = create_graph(
+                    context.liveCreateSpectralGraph, bool(self._directed), ids,
+                    _array(edge_ids), scale, scale_y, *center,
                 )
             else:
                 self._graph_handle = create_graph(
@@ -935,6 +948,16 @@ class _GraphBase(_compat.Group):
                 align_horizontal,
                 operation="Graph.partite_layout",
             )
+        elif layout == "spectral":
+            center, scale_x, scale_y = _spectral_layout_config(
+                layout_config, center, scale,
+            )
+            engine_call(
+                self._context().liveGraphSpectralLayout,
+                self._graph_handle,
+                scale_x, scale_y, *center,
+                operation="Graph.spectral_layout",
+            )
         elif layout == "explicit":
             if not isinstance(positions, Mapping):
                 raise TypeError("explicit Graph layout requires a key-to-position mapping")
@@ -949,7 +972,7 @@ class _GraphBase(_compat.Group):
                         operation="Graph.explicit_layout")
         else:
             raise NotImplementedError(
-                "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, and explicit layouts"
+                "Python Graph qualifies only spring, random, tree, circular, shell, spiral, partite, spectral, and explicit layouts"
             )
         return self
 
@@ -1059,6 +1082,36 @@ def _spring_layout_config(layout_config, fallback_center, vertex_ids, layout_sca
         center, initial_positions, fixed_indices, spring_k, int(iterations), threshold,
         rescale, scale, scale_y, fixed_is_set,
     )
+
+
+def _spectral_layout_config(layout_config, fallback_center, layout_scale):
+    """Validate the supported 2D spectral option subset for shared Rust."""
+    if layout_config is None:
+        options = {}
+    elif isinstance(layout_config, Mapping):
+        options = dict(layout_config)
+    else:
+        raise TypeError("layout_config must be a mapping")
+    supported = {"center", "dim", "weight"}
+    unknown = [key for key in options if key not in supported]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported spectral layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, Integral):
+        raise TypeError("spectral layout_config dim must be an integer")
+    if dimension != 2:
+        raise NotImplementedError("Graph currently supports only two-dimensional spectral layouts")
+    weight = options.get("weight", "weight")
+    if weight is not None and not isinstance(weight, str):
+        raise TypeError("spectral layout_config weight must be a string or None")
+    raw_center = options.get("center", fallback_center)
+    center = _point((0.0, 0.0) if raw_center is None else raw_center)
+    scale_x, scale_y = _layout_scale_pair(layout_scale)
+    return center, scale_x, scale_y
 
 
 def _random_layout_config(layout_config, fallback_center, vertex_ids, layout_scale):

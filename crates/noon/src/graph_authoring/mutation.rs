@@ -40,6 +40,7 @@ pub enum GraphLayout {
     Spiral,
     Random,
     Spring,
+    Spectral,
     Tree,
 }
 
@@ -974,7 +975,10 @@ where
     options.directed = graph.directed;
     let declaration = graph.semantic_declaration()?.clone();
     let vertices = declaration.vertices().collect::<Vec<_>>();
-    let edges = if matches!(options.layout, GraphLayout::Spring | GraphLayout::Tree) {
+    let edges = if matches!(
+        options.layout,
+        GraphLayout::Spring | GraphLayout::Spectral | GraphLayout::Tree
+    ) {
         let indices = declaration
             .topology()
             .vertices()
@@ -1067,6 +1071,9 @@ fn graph_layout(
     if options.layout == GraphLayout::Spring {
         return spring_layout(count, edges, options);
     }
+    if options.layout == GraphLayout::Spectral {
+        return spectral_layout(count, edges, options);
+    }
     if options.layout == GraphLayout::Random && options.random_positions.is_some() {
         return networkx_random_layout(count, options);
     }
@@ -1091,6 +1098,7 @@ fn graph_layout(
         GraphLayout::Partite => unreachable!("partite layout returned above"),
         GraphLayout::Spiral => unreachable!("spiral layout returned above"),
         GraphLayout::Spring => unreachable!("spring layout returned above"),
+        GraphLayout::Spectral => unreachable!("spectral layout returned above"),
         GraphLayout::Random => (0..count)
             .map(|_| (random.unit() - 0.5, random.unit() - 0.5))
             .collect::<Vec<_>>(),
@@ -1106,6 +1114,193 @@ fn graph_layout(
         ));
     }
     Ok(positions)
+}
+
+fn spectral_layout(
+    count: usize,
+    edges: &[(usize, usize)],
+    options: &GraphLayoutOptions,
+) -> Result<Vec<(f64, f64)>, GraphAuthoringError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count == 1 {
+        return Ok(vec![options.center]);
+    }
+    if count == 2 {
+        // NetworkX 3.4.2 special-cases two nodes before its scale/center pass.
+        return Ok(vec![
+            (0.0, 0.0),
+            (2.0 * options.center.0, 2.0 * options.center.1),
+        ]);
+    }
+
+    let mut adjacency = vec![0.0; count * count];
+    for &(start, end) in edges {
+        if options.directed {
+            adjacency[start * count + end] += 1.0;
+        } else {
+            adjacency[start * count + end] += 1.0;
+            adjacency[end * count + start] += 1.0;
+        }
+    }
+    if options.directed {
+        let directed_adjacency = adjacency.clone();
+        for row in 0..count {
+            for column in 0..count {
+                let forward = directed_adjacency[row * count + column];
+                let reverse = directed_adjacency[column * count + row];
+                adjacency[row * count + column] = forward + reverse;
+            }
+        }
+    }
+
+    let mut laplacian = vec![vec![0.0; count]; count];
+    for row in 0..count {
+        let degree = (0..count)
+            .map(|column| adjacency[row * count + column])
+            .sum::<f64>();
+        for column in 0..count {
+            laplacian[row][column] = if row == column {
+                degree - adjacency[row * count + column]
+            } else {
+                -adjacency[row * count + column]
+            };
+        }
+    }
+
+    let (eigenvalues, eigenvectors) = symmetric_eigenvectors(laplacian)?;
+    let mut order = (0..count).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| {
+        eigenvalues[left]
+            .total_cmp(&eigenvalues[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let x_axis = eigenvectors[order[1]].as_slice();
+    let y_axis = eigenvectors[order[2]].as_slice();
+    let mut positions = (0..count)
+        .map(|index| (x_axis[index], y_axis[index]))
+        .collect::<Vec<_>>();
+
+    // Eigenvector signs are mathematically arbitrary. Canonicalizing each axis
+    // makes Rust and browser hosts deterministic across eigensolver builds.
+    for axis in 0..2 {
+        let value = positions.iter().find_map(|position| {
+            let coordinate = if axis == 0 { position.0 } else { position.1 };
+            (coordinate.abs() > 1e-12).then_some(coordinate)
+        });
+        let Some(value) = value else { continue };
+        if value < 0.0 {
+            for position in &mut positions {
+                if axis == 0 {
+                    position.0 = -position.0;
+                } else {
+                    position.1 = -position.1;
+                }
+            }
+        }
+    }
+
+    rescale(&mut positions, layout_scales(options), options.center);
+    if positions
+        .iter()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "computed spectral coordinates are not finite",
+        ));
+    }
+    Ok(positions)
+}
+
+/// Cyclic Jacobi decomposition for the symmetric, unnormalized graph Laplacian.
+/// It is deterministic and dependency-free, which keeps layout meaning in the
+/// shared Rust graph implementation on native and browser targets.
+// Jacobi rotations update both rows and columns using the same pivot indices.
+#[allow(clippy::needless_range_loop)]
+fn symmetric_eigenvectors(
+    mut matrix: Vec<Vec<f64>>,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), GraphAuthoringError> {
+    let count = matrix.len();
+    let mut vectors = vec![vec![0.0; count]; count];
+    for (index, row) in vectors.iter_mut().enumerate() {
+        row[index] = 1.0;
+    }
+
+    let mut matrix_extent: f64 = 1.0;
+    for row in &matrix {
+        for &value in row {
+            matrix_extent = matrix_extent.max(value.abs());
+        }
+    }
+    let tolerance = 1e-14 * matrix_extent;
+    let mut converged = false;
+    for _ in 0..64 {
+        for left in 0..count {
+            for right in left + 1..count {
+                let cross = matrix[left][right];
+                if cross.abs() <= tolerance {
+                    continue;
+                }
+                let left_value = matrix[left][left];
+                let right_value = matrix[right][right];
+                let tau = (right_value - left_value) / (2.0 * cross);
+                let tangent = if tau >= 0.0 {
+                    1.0 / (tau + tau.hypot(1.0))
+                } else {
+                    -1.0 / (-tau + tau.hypot(1.0))
+                };
+                let cosine = 1.0 / (1.0 + tangent * tangent).sqrt();
+                let sine = tangent * cosine;
+
+                for index in 0..count {
+                    if index == left || index == right {
+                        continue;
+                    }
+                    let left_entry = matrix[index][left];
+                    let right_entry = matrix[index][right];
+                    let new_left = cosine * left_entry - sine * right_entry;
+                    let new_right = sine * left_entry + cosine * right_entry;
+                    matrix[index][left] = new_left;
+                    matrix[left][index] = new_left;
+                    matrix[index][right] = new_right;
+                    matrix[right][index] = new_right;
+                }
+                matrix[left][left] = left_value - tangent * cross;
+                matrix[right][right] = right_value + tangent * cross;
+                matrix[left][right] = 0.0;
+                matrix[right][left] = 0.0;
+
+                for row in &mut vectors {
+                    let left_entry = row[left];
+                    let right_entry = row[right];
+                    row[left] = cosine * left_entry - sine * right_entry;
+                    row[right] = sine * left_entry + cosine * right_entry;
+                }
+            }
+        }
+        let mut largest_off_diagonal: f64 = 0.0;
+        for (left, row) in matrix.iter().enumerate() {
+            for &value in row.iter().skip(left + 1) {
+                largest_off_diagonal = largest_off_diagonal.max(value.abs());
+            }
+        }
+        if largest_off_diagonal <= tolerance {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "spectral eigensolver did not converge",
+        ));
+    }
+
+    let eigenvalues = (0..count).map(|index| matrix[index][index]).collect();
+    let eigenvectors = (0..count)
+        .map(|column| vectors.iter().map(|row| row[column]).collect())
+        .collect();
+    Ok((eigenvalues, eigenvectors))
 }
 
 fn partite_layout(
