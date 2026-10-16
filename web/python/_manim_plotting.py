@@ -302,7 +302,8 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise ValueError(f"{name}.font_size must be positive")
     direction = _base._as_vec2(direction)
     buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
-    decimal_config = {} if decimal_config is None else decimal_config
+    infer_precision = decimal_config is None
+    decimal_config = {} if infer_precision else decimal_config
     if not isinstance(decimal_config, Mapping):
         raise TypeError(f"{name}.decimal_number_config must be a mapping")
     if any(not isinstance(key, str) for key in decimal_config):
@@ -312,7 +313,7 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise NotImplementedError(
             f"unsupported {name}.decimal_number_config option(s): " + ", ".join(unknown)
         )
-    precision = None
+    precision = None if infer_precision else 2
     if "num_decimal_places" in decimal_config:
         precision = decimal_config["num_decimal_places"]
         if not isinstance(precision, int) or isinstance(precision, bool):

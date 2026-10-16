@@ -135,9 +135,10 @@ class NumberPlane(_plot.Axes):
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
-        self._coordinate_decimal_places = (
-            _coordinate_decimal_places(None if x_range is None else x_range_values),
-            _coordinate_decimal_places(None if y_range is None else y_range_values),
+        self._coordinate_decimal_places = tuple(
+            config["decimal_places"] if config["decimal_places"] is not None
+            else _coordinate_decimal_places(axis_range)
+            for config, axis_range in ((x_options, x_range_values), (y_options, y_range_values))
         )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         x_axis = _plot._attach_number_line(

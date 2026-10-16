@@ -538,6 +538,14 @@ class PlottingAdapterTests(unittest.TestCase):
         x_axis.get_unit_size.assert_called_once_with()
         y_axis.get_unit_size.assert_called_once_with()
 
+    def test_explicit_empty_decimal_config_uses_decimal_number_default_precision(self):
+        for config, expected in ((None, None), ({}, 2), ({"num_decimal_places": 0}, 0)):
+            with self.subTest(config=config):
+                style = plotting._number_label_style(
+                    36, plotting._base.DOWN, 0.25, config, "axis"
+                )
+                self.assertEqual(style[-1], expected)
+
     def test_axes_default_and_explicit_label_steps_preserve_authored_precision(self):
         for axis_range, expected in (((), 0), ((-2, 2), 0),
                                      ((-2, 2, 1), 0), ((-2, 2, 1.0), 1)):

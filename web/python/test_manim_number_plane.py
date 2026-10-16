@@ -181,6 +181,18 @@ class NumberPlaneAdapterTests(TestCase):
                     plane.y_axis.add_numbers.call_args.kwargs["decimal_places"], expected
                 )
 
+    def test_followup_labels_remember_constructor_decimal_configuration(self):
+        for config, expected in ((None, 0), ({}, 2), ({"num_decimal_places": 3}, 3)):
+            with self.subTest(config=config):
+                plane = number_plane.NumberPlane(
+                    (-2, 2, 1), (-2, 2, 1),
+                    axis_config={"include_numbers": True, "decimal_number_config": config},
+                )
+                self.assertEqual(plane.x_axis.number_label_decimal_places, expected)
+                self.assertEqual(plane.y_axis.number_label_decimal_places, expected)
+                # add_coordinates consumes this retained constructor configuration.
+                self.assertEqual(plane._coordinate_decimal_places, (expected, expected))
+
     def test_unqualified_axis_config_fails_before_host_admission(self):
         for kwargs, message in (
             ({"axis_config": {"unknown": True}}, "unsupported axis_config"),
