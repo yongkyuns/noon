@@ -144,6 +144,16 @@ class NumberPlaneAdapterTests(TestCase):
         self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
         self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
 
+    def test_explicit_axis_stroke_color_overrides_general_color(self):
+        red, blue = number_plane._plot._base.RED, number_plane._plot._base.BLUE
+        for config, expected in (
+            ({"color": red}, red),
+            ({"color": red, "stroke_color": blue}, blue),
+        ):
+            with self.subTest(config=config):
+                self.construct(axis_config=config)
+                self.assertIs(number_plane._plot._coordinate_style.call_args.args[1], expected)
+
     def test_unqualified_axis_config_fails_before_host_admission(self):
         for kwargs, message in (
             ({"axis_config": {"unknown": True}}, "unsupported axis_config"),

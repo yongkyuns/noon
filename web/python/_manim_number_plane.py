@@ -96,7 +96,7 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
 
     style = {key: common[key] for key in ("stroke_width", "stroke_opacity", "opacity")
              if key in common}
-    color = common.get("color", common.get("stroke_color"))
+    color = common.get("stroke_color", common.get("color"))
     return axis_options[0][0], axis_options[1][0], color, style
 
 
