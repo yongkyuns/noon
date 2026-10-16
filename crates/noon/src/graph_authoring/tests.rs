@@ -718,6 +718,22 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
 }
 
 #[test]
+fn two_vertex_circular_layout_applies_scale_and_center() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Circular,
+        scale: 1.4,
+        center: (3.0, -1.0),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .unwrap();
+    assert!((positions[0].0 - 4.4).abs() < 1e-12);
+    assert!((positions[0].1 + 1.0).abs() < 1e-12);
+    assert!((positions[1].0 - 1.6).abs() < 1e-12);
+    assert!((positions[1].1 + 1.0).abs() < 1e-12);
+}
+
+#[test]
 fn graph_copy_preserves_edited_appearance_and_isolates_topology_mutations() {
     let mut scene = Scene::new();
     let graph = graph(&mut scene);

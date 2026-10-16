@@ -93,6 +93,13 @@ def _graph_style_options(vertex_config, edge_config):
 
 
 class _GraphBase(_compat.Group):
+    """Shared retained Graph/DiGraph facade.
+
+    Circular layouts accept NetworkX's ``center`` and ``dim=2`` configuration
+    through ``layout_config``. Other circular options and dimensions above two
+    remain unsupported until their Rust semantics are qualified.
+    """
+
     # This typed vector wrapper retains the shared family-paint contract.
     set_opacity = _compat.VGroup.set_opacity
     set_fill = _compat.VGroup.set_fill
@@ -101,7 +108,7 @@ class _GraphBase(_compat.Group):
     _directed = False
 
     def __init__(self, vertices, edges, layout="circular", *, layout_scale=2.0,
-                 layout_center=(0.0, 0.0), **kwargs):
+                 layout_center=(0.0, 0.0), layout_config=None, **kwargs):
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
         if kwargs:
@@ -130,7 +137,8 @@ class _GraphBase(_compat.Group):
         if explicit is not None and len(explicit) != len(self._graph_key_ids):
             raise ValueError("Graph layout must cover every vertex exactly once")
         edge_ids = self._edge_ids(edges)
-        center = _point(layout_center)
+        center = (_circular_layout_center(layout_config, layout_center)
+                  if circular else _point(layout_center))
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
@@ -251,10 +259,12 @@ class _GraphBase(_compat.Group):
         _shared._attach_shared_family(clone, engine_call(clone._graph_handle.family), self._context())
         return clone
 
-    def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0), positions=None):
+    def change_layout(self, layout="circular", *, scale=2.0, center=(0.0, 0.0),
+                      positions=None, layout_config=None):
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
         if layout == "circular":
+            center = _circular_layout_center(layout_config, center)
             engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
                         float(scale), *_point(center), operation="Graph.circular_layout")
         elif layout == "explicit":
@@ -272,6 +282,29 @@ class _GraphBase(_compat.Group):
         else:
             raise NotImplementedError("Python Graph qualifies only circular and explicit layouts")
         return self
+
+
+def _circular_layout_center(layout_config, fallback_center):
+    """Resolve the supported NetworkX circular-layout configuration subset."""
+    if layout_config is None:
+        return _point(fallback_center)
+    if not isinstance(layout_config, Mapping):
+        raise TypeError("layout_config must be a mapping")
+    options = dict(layout_config)
+    unknown = [key for key in options if key not in {"center", "dim"}]
+    if unknown:
+        raise NotImplementedError(
+            "unsupported circular layout_config option(s): "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    dimension = options.get("dim", 2)
+    if isinstance(dimension, bool) or not isinstance(dimension, int):
+        raise TypeError("circular layout_config dim must be an integer")
+    if dimension < 2:
+        raise ValueError("circular layout_config dim must be at least 2")
+    if dimension > 2:
+        raise NotImplementedError("Graph currently supports only two-dimensional layouts")
+    return _point(options.get("center", fallback_center))
 
 
 class Graph(_GraphBase):

@@ -43,9 +43,24 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     digraph.add_vertices(&mut scene, [("x", (5.0, -2.3))])?;
     digraph.add_edges(&mut scene, [("w", "x")])?;
 
+    let mut centered = scene.graph(
+        [("left", (4.4, -1.0)), ("right", (1.6, -1.0))],
+        [("left", "right")],
+    )?;
+    centered.change_layout(
+        &mut scene,
+        crate::GraphLayoutOptions {
+            layout: crate::GraphLayout::Circular,
+            scale: 1.4,
+            center: (3.0, -1.0),
+            ..Default::default()
+        },
+    )?;
+
     scene.add_many(&[
         MobjectTarget::Family(graph.family()),
         MobjectTarget::Family(digraph.family()),
+        MobjectTarget::Family(centered.family()),
     ])?;
     scene.wait(0.21)?;
     Ok(scene)
@@ -68,7 +83,7 @@ mod tests {
         // Persistent additions keep the same ordinary retained leaves.
         // Undirected: four Lines + four vertices.
         // Directed: four Arrow shafts + four tips + four vertices.
-        assert_eq!(leaves.len(), 20);
+        assert_eq!(leaves.len(), 23);
         for leaf in leaves {
             assert!(store
                 .semantic_object_state_checked(leaf)

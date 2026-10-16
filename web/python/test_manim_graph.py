@@ -41,6 +41,7 @@ class _Context:
         self.next_token = 1
         self.fail = None
         self.creation_calls = []
+        self.layout_calls = []
         self.options = []
 
     def _call(self, operation):
@@ -67,7 +68,9 @@ class _Context:
     def liveGraphAddEdges(self, *args): self._call("add_edges")
     def liveGraphRemoveVertices(self, *args): self._call("remove_vertices")
     def liveGraphRemoveEdges(self, *args): self._call("remove_edges")
-    def liveGraphCircularLayout(self, *args): self._call("circular")
+    def liveGraphCircularLayout(self, *args):
+        self._call("circular")
+        self.layout_calls.append(args)
     def liveGraphExplicitLayout(self, *args): self._call("explicit")
 
 
@@ -113,6 +116,37 @@ class GraphFacadeTests(unittest.TestCase):
         value = graph.Graph(["a", "b"], [("a", "b")], layout={"a": (0, 0), "b": (1, 2)})
         self.assertEqual(value._graph_key_ids, {"a": 0, "b": 1})
         self.assertEqual(self.context.creation_calls[0][:-1], (False, [0, 1], [0.0, 0.0, 1.0, 2.0], [0, 1]))
+
+    def test_circular_layout_config_center_and_dimension_reach_rust(self):
+        value = graph.Graph(
+            ["left", "right"], [("left", "right")], layout="circular",
+            layout_scale=1.4, layout_config={"center": (3, -1), "dim": 2},
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][:-1],
+            (False, [0, 1], [0, 1], 1.4, 3.0, -1.0),
+        )
+
+        value.change_layout(
+            "circular", scale=1.7, center=(0, 0),
+            layout_config={"center": (2, 4), "dim": 2},
+        )
+        self.assertEqual(
+            self.context.layout_calls[0][1:],
+            (1.7, 2.0, 4.0),
+        )
+
+    def test_circular_layout_config_rejects_unqualified_dimensions_and_options(self):
+        for layout_config, error, message in [
+            ({"dim": 1}, ValueError, "at least 2"),
+            ({"dim": 3}, NotImplementedError, "two-dimensional"),
+            ({"seed": 1}, NotImplementedError, "unsupported circular layout_config"),
+        ]:
+            with self.subTest(layout_config=layout_config):
+                with self.assertRaisesRegex(error, message):
+                    graph.Graph(["a", "b"], [], layout="circular",
+                                layout_config=layout_config)
+        self.assertEqual(self.context.creation_calls, [])
 
     def test_global_style_configs_are_coerced_into_one_typed_rust_options_handle(self):
         graph.DiGraph(

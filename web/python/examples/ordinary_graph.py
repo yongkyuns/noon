@@ -22,5 +22,13 @@ class OrdinaryGraph(Scene):
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **styles)
         directed.change_layout("circular", scale=1.6, center=(3.5, 0))
         directed.add_vertices({"x": (5, -2.3)}).add_edges([("w", "x")])
-        self.add(graph, directed)
+        centered = Graph(
+            ["left", "right"], [("left", "right")], layout="circular",
+            layout_scale=1.4, layout_config={"center": (3, -1), "dim": 2},
+        )
+        left = centered["left"].get_center()
+        right = centered["right"].get_center()
+        assert abs(left.x - 4.4) < 1e-6 and abs(left.y + 1.0) < 1e-6
+        assert abs(right.x - 1.6) < 1e-6 and abs(right.y + 1.0) < 1e-6
+        self.add(graph, directed, centered)
         self.wait(0.2)
