@@ -53,30 +53,24 @@ class CoordinateNumericLabels(Scene):
       console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane native numeric labels`);
       const accessorSource = `from noon import *
 
-class AxesAccessors(Scene):
+class CoordinateAccessors(Scene):
     async def construct(self):
-        axes = Axes((-2, 2, 1), (-1, 1, 0.5),
-                    x_length=4, y_length=2, tips=False)
-        assert axes.get_axes()[0] is axes.x_axis
-        assert axes.get_axis(1) is axes.y_axis
-        assert axes.get_x_axis() is axes.x_axis
-        assert axes.get_y_axis() is axes.y_axis
-        assert abs(axes.get_origin().x - axes.coords_to_point(0, 0).x) < 1e-6
-        assert abs(axes.get_x_unit_size() - axes.x_axis.get_unit_size()) < 1e-6
-        assert abs(axes.get_y_unit_size() - axes.y_axis.get_unit_size()) < 1e-6
-        self.add(axes)
-        await self.wait(0.05)
-`;
-      const accessors = await qualifyPythonPlayback(context, baseUrl, accessorSource, [0, 0.05]);
-      assert.equal(accessors.rendererBackend, expectedBackend);
-      assert.equal(accessors.presented, true);
-      assert.ok(accessors.objectCount > 0);
-      assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
-      console.log(`[PASS] ${expectedBackend}: Axes coordinate accessors`);
-      const gridLinesSource = `from noon import *
-
-class NumberPlaneGridLineAliases(Scene):
-    async def construct(self):
+        for coordinate_type in (Axes, NumberPlane, PolarPlane):
+            axes = (coordinate_type(radius_max=2, size=4) if coordinate_type is PolarPlane
+                    else coordinate_type((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2))
+            assert axes.get_axes() is axes.axes
+            assert axes.get_axes()[0] is axes.x_axis
+            assert axes.get_axis(1) is axes.y_axis
+            assert axes.get_x_axis() is axes.x_axis
+            assert axes.get_y_axis() is axes.y_axis
+            assert abs(axes.get_origin().x - axes.coords_to_point(0, 0).x) < 1e-6
+            assert abs(axes.get_x_unit_size() - axes.x_axis.get_unit_size()) < 1e-6
+            assert abs(axes.get_y_unit_size() - axes.y_axis.get_unit_size()) < 1e-6
+            clone = axes.copy().shift(RIGHT)
+            assert clone.get_axes()[0] is clone.x_axis
+            assert clone.get_axes()[1] is clone.y_axis
+            assert clone.x_axis is not axes.x_axis
+            self.add(axes, clone)
         plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
         assert plane.x_lines.submobjects
         assert plane.y_lines.submobjects
@@ -92,15 +86,21 @@ class NumberPlaneGridLineAliases(Scene):
             return abs(ax * dy - ay * dx) <= 1e-6 * ((ax * ax + ay * ay) ** 0.5) * ((dx * dx + dy * dy) ** 0.5)
         assert all(parallel_to(line, plane.x_axis) for line in plane.x_lines.submobjects)
         assert all(parallel_to(line, plane.y_axis) for line in plane.y_lines.submobjects)
-        self.add(plane)
+        clone = plane.copy().rotate(0.3)
+        assert clone.x_lines[0] is not plane.x_lines[0]
+        assert all(any(line is member for member in clone.background_lines.submobjects)
+                   for line in clone.x_lines.submobjects + clone.y_lines.submobjects)
+        self.add(plane, clone)
         await self.wait(0.05)
+        assert clone.get_x_axis() is clone.x_axis
+        assert abs(clone.get_x_unit_size() - clone.x_axis.get_unit_size()) < 1e-6
 `;
-      const gridLines = await qualifyPythonPlayback(context, baseUrl, gridLinesSource, [0, 0.05]);
-      assert.equal(gridLines.rendererBackend, expectedBackend);
-      assert.equal(gridLines.presented, true);
-      assert.ok(gridLines.objectCount > 0);
-      assert.ok(Math.abs(gridLines.authoredDuration - 0.05) < 1e-6);
-      console.log(`[PASS] ${expectedBackend}: NumberPlane x_lines/y_lines aliases`);
+      const accessors = await qualifyPythonPlayback(context, baseUrl, accessorSource, [0, 0.05]);
+      assert.equal(accessors.rendererBackend, expectedBackend);
+      assert.equal(accessors.presented, true);
+      assert.ok(accessors.objectCount > 0);
+      assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
       return lifecycle;
     } finally {
       await page.close();

@@ -455,7 +455,6 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]) as attach, \
-             patch.object(plotting._compat, "VGroup", return_value=object()), \
              patch.object(plotting, "_coordinate_family"):
             plotting.Axes(
                 axis_config={"scaling": common},
@@ -494,7 +493,6 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
-             patch.object(plotting._compat, "VGroup", return_value=object()), \
              patch.object(plotting, "_coordinate_family"):
             plotting.Axes(
                 x_range=(-2, 2, 0.5), y_range=(-1, 1, 1),

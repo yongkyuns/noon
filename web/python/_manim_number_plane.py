@@ -29,32 +29,6 @@ def _lines(handle):
                          [_plot._leaf(leaf) for leaf in engine_call(handle.directMobjects)])
 
 
-def _parallel_grid_lines(lines, axis):
-    """Select retained grid lines parallel to an axis in the current frame."""
-    axis = getattr(axis, "shaft", axis)
-    axis_start = axis.get_start()
-    axis_end = axis.get_end()
-    axis_dx = axis_end.x - axis_start.x
-    axis_dy = axis_end.y - axis_start.y
-    axis_length = math.hypot(axis_dx, axis_dy)
-    if axis_length == 0.0:
-        raise ValueError("NumberPlane axis must have nonzero length")
-
-    selected = []
-    for line in lines.submobjects:
-        start = line.get_start()
-        end = line.get_end()
-        line_dx = end.x - start.x
-        line_dy = end.y - start.y
-        line_length = math.hypot(line_dx, line_dy)
-        if line_length == 0.0:
-            continue
-        cross = axis_dx * line_dy - axis_dy * line_dx
-        if abs(cross) <= 1e-9 * axis_length * line_length:
-            selected.append(line)
-    return _plot._compat.VGroup(*selected)
-
-
 def _coordinate_decimal_places(axis_range):
     """Mirror NumberLine's formatting inference after its range becomes floats."""
     try:
@@ -183,9 +157,10 @@ class NumberPlane(_plot.Axes):
         y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
-        self.axes = _plot._compat.VGroup(x_axis, y_axis)
-        self.x_lines = _parallel_grid_lines(self.background_lines, x_axis)
-        self.y_lines = _parallel_grid_lines(self.background_lines, y_axis)
+        background = self.background_lines.submobjects
+        for name, horizontal in (("x_lines", True), ("y_lines", False)):
+            indices = engine_call(handle.numberPlaneGridLineIndices, horizontal)
+            setattr(self, name, _plot._compat.VGroup(*(background[i] for i in indices)))
         for axis_index, (axis, config, axis_range) in enumerate((
             (x_axis, x_options, x_range_values),
             (y_axis, y_options, y_range_values),

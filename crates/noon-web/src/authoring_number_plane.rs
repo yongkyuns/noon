@@ -79,6 +79,14 @@ impl WasmCoordinateOptions {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = numberPlaneGridLineIndices)]
+    pub fn number_plane_grid_line_indices(&self, horizontal: bool) -> Result<Vec<u32>, JsValue> {
+        ManimNumberPlane::from_family(self.semantic_family()?)
+            .and_then(|plane| plane.grid_line_indices(horizontal))
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
     /// Return authoritative root members in their painter order, without new IDs.
     #[wasm_bindgen(js_name = numberPlanePart)]
     pub fn number_plane_part(&self, index: u32) -> Result<Self, JsValue> {

@@ -263,6 +263,10 @@ pub enum SemanticObjectRole {
     NumberLine(SemanticNumberLineRole),
     /// An ordinary retained coordinate tip, independent of sibling order.
     CoordinateTip,
+    /// Authored axis membership of an ordinary NumberPlane grid line.
+    NumberPlaneGridLine {
+        horizontal: bool,
+    },
     /// Parameter interval of an ordinary sampled graph path.
     FunctionPlot(SemanticFunctionPlotRole),
     /// Nominal constructor value of an ordinary Angle arc; no renderer specialization.
@@ -288,6 +292,7 @@ impl SemanticObjectRole {
             | Self::ArrowEndTip
             | Self::ArrowStartTip
             | Self::CoordinateTip
+            | Self::NumberPlaneGridLine { .. }
             | Self::SampleSpaceHorizontalPart
             | Self::SampleSpaceVerticalPart => true,
         }
