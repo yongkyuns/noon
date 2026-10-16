@@ -51,6 +51,28 @@ class CoordinateNumericLabels(Scene):
       assert.ok(labels.objectCount > 0);
       assert.ok(Math.abs(labels.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane native numeric labels`);
+      const accessorSource = `from noon import *
+
+class AxesAccessors(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-1, 1, 0.5),
+                    x_length=4, y_length=2, tips=False)
+        assert axes.get_axes()[0] is axes.x_axis
+        assert axes.get_axis(1) is axes.y_axis
+        assert axes.get_x_axis() is axes.x_axis
+        assert axes.get_y_axis() is axes.y_axis
+        assert abs(axes.get_origin().x - axes.coords_to_point(0, 0).x) < 1e-6
+        assert abs(axes.get_x_unit_size() - axes.x_axis.get_unit_size()) < 1e-6
+        assert abs(axes.get_y_unit_size() - axes.y_axis.get_unit_size()) < 1e-6
+        self.add(axes)
+        await self.wait(0.05)
+`;
+      const accessors = await qualifyPythonPlayback(context, baseUrl, accessorSource, [0, 0.05]);
+      assert.equal(accessors.rendererBackend, expectedBackend);
+      assert.equal(accessors.presented, true);
+      assert.ok(accessors.objectCount > 0);
+      assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes coordinate accessors`);
       return lifecycle;
     } finally {
       await page.close();

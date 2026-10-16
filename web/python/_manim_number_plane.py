@@ -156,6 +156,7 @@ class NumberPlane(_plot.Axes):
         y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
+        self.axes = _plot._compat.VGroup(x_axis, y_axis)
         for axis_index, (axis, config, axis_range) in enumerate((
             (x_axis, x_options, x_range_values),
             (y_axis, y_options, y_range_values),

@@ -20,6 +20,7 @@ class LiveCoordinateAdapterTests(TestCase):
             numberLine=Mock(return_value=self.options),axes=Mock(return_value=self.options))).start()
         patch.object(plotting,"engine_call",side_effect=lambda fn,*args:fn(*args)).start()
         patch.object(plotting,"_coordinate_style").start()
+        patch.object(plotting._compat,"VGroup",return_value=Mock(name="axes-group")).start()
         self.attach_number_line = patch.object(
             plotting, "_attach_number_line",
             side_effect=lambda wrapper, handle, **kwargs: wrapper,
