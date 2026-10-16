@@ -51,7 +51,7 @@ pub(crate) fn regular_polygram_path(
     density: u32,
     radius: f64,
     start: Option<f64>,
-) -> Result<VectorPath, AuthoringError> {
+) -> Result<(VectorPath, f64), AuthoringError> {
     if n == 0 || density == 0 {
         return Err(AuthoringError::InvalidPolygonOptions(
             "vertex count and density must be positive",
@@ -78,7 +78,7 @@ pub(crate) fn regular_polygram_path(
                 .collect(),
         );
     }
-    polygram_path(&paths)
+    Ok((polygram_path(&paths)?, start))
 }
 
 pub(crate) fn star_path(
@@ -87,7 +87,7 @@ pub(crate) fn star_path(
     inner_radius: Option<f64>,
     density: u32,
     start: Option<f64>,
-) -> Result<VectorPath, AuthoringError> {
+) -> Result<(VectorPath, f64), AuthoringError> {
     if n == 0 {
         return Err(AuthoringError::InvalidPolygonOptions(
             "number of star points must be positive",
@@ -111,11 +111,14 @@ pub(crate) fn star_path(
     let start = start.unwrap_or(if n.is_multiple_of(2) { 0.0 } else { FRAC_PI_2 });
     let outer = vertices(n, outer_radius, start)?;
     let inner = vertices(n, inner, start + half_step)?;
-    polygram_path(&[outer
-        .into_iter()
-        .zip(inner)
-        .flat_map(|(a, b)| [a, b])
-        .collect()])
+    Ok((
+        polygram_path(&[outer
+            .into_iter()
+            .zip(inner)
+            .flat_map(|(a, b)| [a, b])
+            .collect()])?,
+        start,
+    ))
 }
 
 #[cfg(test)]
@@ -144,14 +147,26 @@ mod tests {
         assert_eq!(compound.path_query().unwrap().start_anchors().len(), 6);
         let groups = compound.path_query().unwrap().vertex_groups();
         assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 3]);
+        assert_eq!(
+            ManimGeometryOptions::regular_polygram(6, 2, 1.0, None)
+                .unwrap()
+                .resolved_start_angle(),
+            Some(FRAC_PI_2),
+        );
+        assert_eq!(
+            ManimGeometryOptions::regular_polygram(6, 1, 1.0, Some(0.3))
+                .unwrap()
+                .resolved_start_angle(),
+            Some(0.3),
+        );
     }
 
     #[test]
     fn star_uses_upstream_intersection_radius_and_explicit_radius_override() {
         let mut scene = Scene::new();
-        let star = scene
-            .geometry(ManimGeometryOptions::star(5, 1.0, None, 2, Some(FRAC_PI_2)).unwrap())
-            .unwrap();
+        let options = ManimGeometryOptions::star(5, 1.0, None, 2, Some(FRAC_PI_2)).unwrap();
+        assert_eq!(options.resolved_start_angle(), Some(FRAC_PI_2));
+        let star = scene.geometry(options).unwrap();
         let anchors = star.path_query().unwrap().start_anchors();
         assert_eq!(anchors.len(), 10);
         assert!((anchors[1].0.hypot(anchors[1].1) - 0.38196601125).abs() < 1e-6);
