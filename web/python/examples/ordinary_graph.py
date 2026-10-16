@@ -143,7 +143,7 @@ class OrdinaryGraph(Scene):
         )
         spring_digraph = DiGraph(
             ["t0", "t1"], [("t0", "t1")],
-            layout="spring", layout_scale=0.5,
+            layout_scale=0.5,
             layout_config={"seed": 7, "center": (5.5, 2.6)},
             **styles,
         )

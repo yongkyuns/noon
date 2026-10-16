@@ -200,6 +200,24 @@ class GraphFacadeTests(unittest.TestCase):
         for actual, wanted in zip(call[3], (value for point in expected for value in point)):
             self.assertAlmostEqual(actual, wanted)
 
+    @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
+    def test_default_digraph_layout_preserves_directed_edges_and_networkx_seed(self):
+        graph.DiGraph(
+            ["a", "b", "c"], [("a", "b"), ("c", "b")],
+            layout_config={"seed": 42},
+        )
+        call = self.context.creation_calls[0]
+        self.assertEqual(call[:3], (True, [0, 1, 2], [0, 1, 2, 1]))
+        self.assertEqual(call[4:8], ([], False, 2.0, None))
+        self.assertEqual(call[8:10], (0.0, 0.0))
+        expected = [
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+        ]
+        for actual, wanted in zip(call[3], (value for point in expected for value in point)):
+            self.assertAlmostEqual(actual, wanted)
+
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX random seeding requires NumPy")
     def test_random_layout_uses_networkx_float32_centered_samples_and_manim_scale(self):
         import numpy as np

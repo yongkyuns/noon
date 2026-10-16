@@ -17,19 +17,30 @@ ORACLE = ROOT / "scripts/manim-raster-semantic-reference.py"
 
 
 class RasterManifestTests(unittest.TestCase):
-    def test_graph_default_spring_fixture_uses_seeded_upstream_constructor_default(self):
+    def test_graph_and_digraph_default_spring_fixtures_use_seeded_constructor_defaults(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        fixture = next(
-            fixture for fixture in manifest["fixtures"]
-            if fixture["id"] == "graph-default-spring"
-        )
-        self.assertEqual(fixture["scene"], "GraphDefaultSpringLayout")
-        self.assertEqual(fixture["source"], "parity/manim-v0.21/core-examples/graph.py")
-        self.assertEqual(fixture["expected_duration"], 0.2)
-        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
-        self.assertIn("class GraphDefaultSpringLayout(Scene)", source)
-        self.assertIn('layout_config={"seed": 42}', source)
-        self.assertNotIn('layout="spring"', source)
+        source = None
+        for fixture_id, scene, constructor in (
+            ("graph-default-spring", "GraphDefaultSpringLayout", "Graph"),
+            ("digraph-default-spring", "DiGraphDefaultSpringLayout", "DiGraph"),
+        ):
+            with self.subTest(fixture=fixture_id):
+                fixture = next(
+                    fixture for fixture in manifest["fixtures"]
+                    if fixture["id"] == fixture_id
+                )
+                self.assertEqual(fixture["scene"], scene)
+                self.assertEqual(
+                    fixture["source"],
+                    "parity/manim-v0.21/core-examples/graph.py",
+                )
+                self.assertEqual(fixture["expected_duration"], 0.2)
+                source = source or (ROOT / fixture["source"]).read_text(encoding="utf-8")
+                self.assertIn(f"class {scene}(Scene)", source)
+                self.assertIn(f"graph = {constructor}(", source)
+                self.assertIn('layout_config={"seed": 42}', source)
+                self.assertNotIn('layout="spring"', source)
+        self.assertIn('[("a", "b"), ("c", "b")]', source)
 
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

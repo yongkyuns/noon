@@ -44,3 +44,14 @@ class GraphDefaultSpringLayout(Scene):
         )
         self.add(graph)
         self.wait(0.2)
+
+
+class DiGraphDefaultSpringLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c"],
+            [("a", "b"), ("c", "b")],
+            layout_config={"seed": 42},
+        )
+        self.add(graph)
+        self.wait(0.2)
