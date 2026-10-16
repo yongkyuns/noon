@@ -55,7 +55,7 @@ class AngleAdapters(unittest.TestCase):
 
     def test_radius_attribute_is_absent_for_parallel_empty_angles(self):
         calls=[]
-        radius_attributes=iter((0.5, None, 0.4, None))
+        radius_attributes=iter((0.5, None, 0.4, None, None))
         ffi=types.ModuleType("pyodide.ffi");ffi.to_js=lambda values:values
         def angle_candidate(*args):
             calls.append(args)
@@ -72,12 +72,14 @@ class AngleAdapters(unittest.TestCase):
             defaulted=angle.Angle(first,second)
             right=angle.RightAngle(first,second,length=0.4)
             empty=angle.Angle(first,parallel,radius=0.7)
+            empty_right=angle.RightAngle(first,parallel,length=0.4)
 
         self.assertEqual(explicit.radius,0.5)
         self.assertFalse(hasattr(defaulted,"radius"))
         self.assertEqual(right.radius,0.4)
         self.assertFalse(hasattr(empty,"radius"))
-        self.assertEqual([call[1] for call in calls],[0.5,None,0.4,0.7])
+        self.assertFalse(hasattr(empty_right,"radius"))
+        self.assertEqual([call[1] for call in calls],[0.5,None,0.4,0.7,0.4])
 
     def test_value_is_observed_from_rust_metadata(self):
         calls=[]

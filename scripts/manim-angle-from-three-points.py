@@ -6,25 +6,14 @@ import importlib
 from pathlib import Path
 
 
-def _method(tree):
+def _angle_method(tree, name):
     angle = next(
         node for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "Angle"
     )
     return next(
         node for node in angle.body
-        if isinstance(node, ast.FunctionDef) and node.name == "from_three_points"
-    )
-
-
-def _constructor(tree):
-    angle = next(
-        node for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "Angle"
-    )
-    return next(
-        node for node in angle.body
-        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        if isinstance(node, ast.FunctionDef) and node.name == name
     )
 
 
@@ -116,8 +105,8 @@ def qualify(manim_source, *, installed_manim=False):
     source = Path(manim_source) / "manim/mobject/geometry/line.py"
     data = source.read_bytes()
     tree = ast.parse(data, filename=str(source))
-    method = _method(tree)
-    constructor = _constructor(tree)
+    method = _angle_method(tree, "from_three_points")
+    constructor = _angle_method(tree, "__init__")
     decorators = [
         node.id for node in method.decorator_list if isinstance(node, ast.Name)
     ]
