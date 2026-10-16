@@ -1,3 +1,5 @@
+mod placement;
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_compile::{

@@ -10,6 +10,35 @@ class FakeLine(angle._compat.Line):
     def get_end(self): return self.endpoints[1]
 
 class AngleAdapters(unittest.TestCase):
+    def test_from_three_points_preserves_pinned_line_order_and_angle_type(self):
+        points = (object(), object(), object())
+        line_calls = []
+        angle_calls = []
+
+        def make_line(start, end):
+            line = object()
+            line_calls.append((start, end, line))
+            return line
+
+        def initialize(self, line1, line2, **kwargs):
+            angle_calls.append((type(self), line1, line2, kwargs))
+
+        with patch.object(angle._compat, "Line", side_effect=make_line), \
+             patch.object(angle.Angle, "__init__", new=initialize):
+            result = angle.Angle.from_three_points(*points, radius=0.5, other_angle=True)
+            inherited = angle.RightAngle.from_three_points(*points, length=0.4)
+
+        self.assertIs(type(result), angle.Angle)
+        self.assertIs(type(inherited), angle.Angle)
+        self.assertEqual([(start, end) for start, end, _ in line_calls],
+                         [(points[1], points[0]), (points[1], points[2])] * 2)
+        self.assertEqual(angle_calls[0],
+                         (angle.Angle, line_calls[0][2], line_calls[1][2],
+                          {"radius": 0.5, "other_angle": True}))
+        self.assertEqual(angle_calls[1],
+                         (angle.Angle, line_calls[2][2], line_calls[3][2],
+                          {"length": 0.4}))
+
     def test_defaults_and_right_angle_only_coerce_and_delegate(self):
         calls=[]
         ffi=types.ModuleType("pyodide.ffi");ffi.to_js=lambda values:values
@@ -23,6 +52,34 @@ class AngleAdapters(unittest.TestCase):
             angle.RightAngle(first,second,length=0.5,quadrant=(-1,1))
         self.assertEqual(calls[0],([-1.,0.,1.,0.,0.,-1.,0.,1.],None,1.,1.,False,False,9))
         self.assertEqual(calls[1][1:],(0.5,-1.,1.,False,True,9))
+
+    def test_radius_attribute_is_absent_for_parallel_empty_angles(self):
+        calls=[]
+        radius_attributes=iter((0.5, None, 0.4, None, None))
+        ffi=types.ModuleType("pyodide.ffi");ffi.to_js=lambda values:values
+        def angle_candidate(*args):
+            calls.append(args)
+            return types.SimpleNamespace(explicitAngleRadius=next(radius_attributes))
+
+        options=types.SimpleNamespace(angle=angle_candidate)
+        first=FakeLine((-1,0),(1,0));second=FakeLine((0,-1),(0,1))
+        parallel=FakeLine((-1,1),(1,1))
+        with patch.dict(sys.modules,{"pyodide.ffi":ffi}), \
+             patch.object(angle,"_require_geometry_host"), \
+             patch.object(angle,"_finish_candidate"), \
+             patch.object(angle._shared,"_geometry_options",options):
+            explicit=angle.Angle(first,second,radius=0.5)
+            defaulted=angle.Angle(first,second)
+            right=angle.RightAngle(first,second,length=0.4)
+            empty=angle.Angle(first,parallel,radius=0.7)
+            empty_right=angle.RightAngle(first,parallel,length=0.4)
+
+        self.assertEqual(explicit.radius,0.5)
+        self.assertFalse(hasattr(defaulted,"radius"))
+        self.assertEqual(right.radius,0.4)
+        self.assertFalse(hasattr(empty,"radius"))
+        self.assertFalse(hasattr(empty_right,"radius"))
+        self.assertEqual([call[1] for call in calls],[0.5,None,0.4,0.7,0.4])
 
     def test_value_is_observed_from_rust_metadata(self):
         calls=[]

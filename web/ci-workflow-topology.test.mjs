@@ -325,6 +325,10 @@ test("automatic glow qualification selects its retained preparation and real hos
     "crates/noon-render-wgpu/src/lib.rs",
     "crates/noon-render-wgpu/src/render_order.rs",
     "crates/noon-render-wgpu/src/path_residency.rs",
+    "crates/noon-render-wgpu/src/polygon_coverage.wgsl",
+    "crates/noon-render-wgpu/tests/polygon_fill_coverage.rs",
+    "crates/noon-render-wgpu/tests/polygon_perimeter_coverage.rs",
+    "crates/noon-render-wgpu/tests/path_shader_uniformity.rs",
     "crates/noon-native/src/lib.rs",
     "crates/noon-export/src/gpu.rs",
     "crates/noon-web/src/execution_canvas.rs",
@@ -335,6 +339,12 @@ test("automatic glow qualification selects its retained preparation and real hos
   const contracts = workflow.split("      - name: Test glow resource and kernel contracts\n")[1]?.split("      - name:")[0];
   assert.ok(contracts?.includes("cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests"),
     "dedicated raster job must run the automatic source/budget/retry contracts");
+  const numerical = workflow.split("      - name: Qualify shared polygon coverage against independent numerical oracles\n")[1]?.split("      - name:")[0];
+  assert.ok(numerical, "production polygon coverage must keep its numerical qualification");
+  assert.match(numerical, /NOON_REQUIRE_GPU_TESTS: '1'/);
+  assert.match(numerical, /cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity/);
+  assert.doesNotMatch(numerical, /continue-on-error|\|\| true/);
+  assert.match(workflow, /sudo apt-get install -y libvulkan1 mesa-vulkan-drivers/);
 });
 
 

@@ -286,7 +286,9 @@ fn running_geometry_rejects_stale_execution_before_importing_resources() {
 
     let error = scene
         .path(
-            crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None).unwrap(),
+            crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None)
+                .unwrap()
+                .0,
             SemanticStyle::default(),
         )
         .unwrap_err();
@@ -357,7 +359,9 @@ fn geometry_publication_scope_rolls_back_path_after_late_runtime_error() {
         let mut store = store_rc.borrow_mut();
         publish_geometry_options(
             ManimGeometryOptions::path(
-                crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None).unwrap(),
+                crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None)
+                    .unwrap()
+                    .0,
             )
             .unwrap(),
             &mut store,

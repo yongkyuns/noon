@@ -422,6 +422,32 @@ try {
       throw new Error(`${label} did not produce visible Rust-owned translation`);
     };
     const samples = [];
+    report.nativeInputDrag = { pointerSamples: samples };
+    await page.evaluate(async () => {
+      const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+      const original = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
+      const observed = window.__noonNativeDragTest = { pending: [], acknowledgements: [] };
+      ExecutionWorkerClient.prototype.submitBrowserPointerInput = function(input) {
+        const pending = original.call(this, input);
+        const sample = { kind: input.kind, source: input.source_id, pointer: input.pointer_id };
+        observed.acknowledgements.push(sample);
+        observed.pending.push(pending);
+        void pending.then(result => {
+          sample.accepted = result.pointerInputAccepted;
+          sample.canUndo = result.canUndoTranslationDrag;
+        }, error => { sample.error = String(error); });
+        return pending;
+      };
+    });
+    const awaitNativeInputs = async () => {
+      const acknowledgements = await page.evaluate(async () => {
+        const observed = window.__noonNativeDragTest;
+        await Promise.all(observed.pending);
+        return observed.acknowledgements;
+      });
+      report.nativeInputDrag.acknowledgements = acknowledgements;
+      return acknowledgements;
+    };
     const sendSample = async (type, x, y, buttons, button = -1) => {
       const point = touchPoint(x, y);
       samples.push({ type, pointerType: "touch", x, y, buttons });
@@ -432,13 +458,33 @@ try {
     await sendSample("pointermove", 0.72, 0.5, 1);
     await sendSample("pointermove", 0.77, 0.5, 1);
     await sendSample("pointerup", 0.82, 0.5, 0, 0);
+    const releaseAcknowledgements = await awaitNativeInputs();
+    const release = releaseAcknowledgements.findLast(sample => sample.kind === "release");
+    assert.equal(release?.accepted, true, "touch release was not acknowledged by Rust");
+    assert.equal(release.canUndo, true, "touch release did not commit a drag");
     await assertNoNativeInputError("touch release");
     await waitForPresentation(page, preReleaseFrames);
+    // Any changed frame may still be an intermediate move. Complete the real
+    // input acknowledgements and observe a quiet renderer before the baseline.
+    // The unchanged hover checks below still reject motion after release.
+    await waitForBrowserObservation(page, async () => {
+      const observed = window.__noonNativeDragTest;
+      const metrics = (await window.__noonExampleGallery.executionMetrics()).metrics;
+      if (observed.settleFrame !== metrics.presentedFrames || metrics.needsPresent || metrics.bufferedDeltas) {
+        observed.settleFrame = metrics.presentedFrames;
+        observed.settleSince = performance.now();
+        return false;
+      }
+      return performance.now() - observed.settleSince >= 250;
+    }, undefined, { timeout: 15000 });
     const released = await waitForNativeChange(nativeBaseline, "released touch drag");
     captures.nativeDragReleased = released;
     await sendSample("pointermove", 0.9, 0.6, 0);
+    await awaitNativeInputs();
     await assertSettled(page, "released touch hover");
-    assert.equal(changedPixels(released, await dragCanvas.screenshot()), 0, "released touch continued translating the rectangle");
+    const releasedHover = await dragCanvas.screenshot();
+    captures.nativeDragReleasedHover = releasedHover;
+    assert.equal(changedPixels(released, releasedHover), 0, "released touch continued translating the rectangle");
 
     const beforeCancelFrames = await presentedFrames(page);
     await sendSample("pointerdown", 0.82, 0.5, 1, 0);
@@ -447,11 +493,13 @@ try {
     const cancelTransient = await waitForNativeChange(released, "second touch drag before cancellation");
     captures.nativeDragCancelTransient = cancelTransient;
     await sendSample("pointercancel", 0.76, 0.5, 0);
+    await awaitNativeInputs();
     await assertNoNativeInputError("touch cancellation");
     const cancelled = await waitForExactPixels(dragCanvas, released, "touch cancellation rollback");
     captures.nativeDragCancelled = cancelled;
     await assertSettled(page, "cancelled native drag");
     await sendSample("pointermove", 0.58, 0.5, 1);
+    await awaitNativeInputs();
     await assertSettled(page, "cancelled touch continuation");
     assert.equal(changedPixels(cancelled, await dragCanvas.screenshot()), 0, "cancelled touch continued translating the rectangle");
 
@@ -466,6 +514,7 @@ try {
     const nativeReset = await waitForExactPixels(dragCanvas, nativeBaseline, "public Run after touch drag/cancel");
     captures.nativeDragRunReset = nativeReset;
     report.nativeInputDrag = {
+      ...report.nativeInputDrag,
       capability: nativeInputEntry.playbackCapability,
       limitation: nativeInputEntry.playbackLimitation,
       backend: nativeBackend,

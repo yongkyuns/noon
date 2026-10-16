@@ -6,6 +6,9 @@ import unittest
 
 WEB = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+# Qualified by the actual Pyodide showcase captures on both renderer backends.
+# These are bundled standard-library modules; optional packages stay excluded.
+QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array"}
 
 
 class ShowcaseSourceContract(unittest.TestCase):
@@ -52,8 +55,14 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):
-                        self.assertIn(node.module, {"noon", "math"}, "keep examples runnable in the existing browser authoring environment")
-                    self.assertNotIsInstance(node, ast.Import, "new package dependencies require explicit qualification")
+                        self.assertEqual(node.level, 0, "examples must not depend on a surrounding package")
+                        modules = {node.module}
+                    elif isinstance(node, ast.Import):
+                        modules = {alias.name for alias in node.names}
+                    else:
+                        continue
+                    self.assertLessEqual(modules, QUALIFIED_BROWSER_MODULES,
+                                         "new package dependencies require explicit browser qualification")
 
     def test_dynamic_scene_is_not_the_unchanged_regression_workload(self):
         entry = next(item for item in MANIFEST["entries"] if item.get("performance"))

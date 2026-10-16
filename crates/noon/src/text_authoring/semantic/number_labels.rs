@@ -2,7 +2,8 @@
 use super::super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 use crate::family_layout::RelativePlacement;
 use crate::plot_presentation::{
-    number_labels, NumberLabelAuthoringError as Error, NumberLabelOptions, PlotPresentationError,
+    positioned_text_labels, NumberLabelAuthoringError as Error, NumberLabelOptions,
+    PlotPresentationError,
 };
 use crate::{
     AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
@@ -27,6 +28,22 @@ fn prepare(
     numbers: Option<&[f64]>,
     options: &NumberLabelOptions,
 ) -> Result<Vec<PreparedLabel>, Error> {
+    let labels = options.prepare_values(frame, numbers)?;
+    prepare_display_labels(labels, options)
+}
+
+fn prepare_text(
+    frame: NumberLineFrame,
+    labels: &[(f64, String)],
+    options: &NumberLabelOptions,
+) -> Result<Vec<PreparedLabel>, Error> {
+    prepare_display_labels(positioned_text_labels(frame, labels)?, options)
+}
+
+fn prepare_display_labels(
+    labels: Vec<crate::plot_presentation::NumberLabel>,
+    options: &NumberLabelOptions,
+) -> Result<Vec<PreparedLabel>, Error> {
     let [dx, dy] = options.direction;
     if !dx.is_finite()
         || !dy.is_finite()
@@ -48,7 +65,6 @@ fn prepare(
     if !style.is_finite() {
         return Err(AuthoringError::NonFiniteStyle.into());
     }
-    let labels = number_labels(frame, numbers, options.decimal_places, options.exclude_zero)?;
     let mut prepared = Vec::new();
     prepared.try_reserve_exact(labels.len())?;
     for label in labels {
@@ -189,6 +205,20 @@ impl ManimNumberLine {
         Ok(publish(
             Rc::clone(self.family().integration_store()),
             vec![(Some(self.family().node_id()), labels)],
+        )?
+        .remove(0))
+    }
+
+    /// Cold-only attachment of unchanged caller strings at Rust-mapped positions.
+    pub fn add_labels(
+        &self,
+        labels: &[(f64, String)],
+        options: &NumberLabelOptions,
+    ) -> Result<MobjectFamily, Error> {
+        let prepared = prepare_text(self.authored_frame()?, labels, options)?;
+        Ok(publish(
+            Rc::clone(self.family().integration_store()),
+            vec![(Some(self.family().node_id()), prepared)],
         )?
         .remove(0))
     }

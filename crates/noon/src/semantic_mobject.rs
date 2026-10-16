@@ -56,12 +56,33 @@ pub struct ManimGeometryOptions {
     style: SemanticStyle,
     z_index: f64,
     role: noon_core::SemanticObjectRole,
+    explicit_angle_radius: Option<f64>,
+    resolved_start_angle: Option<f64>,
 }
 
 impl ManimGeometryOptions {
     /// Attach shared semantic query metadata before this inert request is published.
     pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
         self.role = role;
+    }
+
+    /// Return an explicitly supplied radius retained by an intersecting Angle.
+    ///
+    /// Parallel-line angles are empty in ManimCE and do not retain `radius`.
+    pub fn explicit_angle_radius(&self) -> Option<f64> {
+        self.explicit_angle_radius
+    }
+
+    pub(crate) fn set_explicit_angle_radius(&mut self, radius: Option<f64>) {
+        self.explicit_angle_radius = radius;
+    }
+
+    /// Return the resolved Manim start angle for regular polygon constructors.
+    ///
+    /// This is constructor metadata only; the retained Rust path remains the
+    /// authoritative geometry representation.
+    pub fn resolved_start_angle(&self) -> Option<f64> {
+        self.resolved_start_angle
     }
 
     pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
@@ -210,6 +231,8 @@ impl ManimGeometryOptions {
             style,
             z_index: 0.0,
             role: noon_core::SemanticObjectRole::Ordinary,
+            explicit_angle_radius: None,
+            resolved_start_angle: None,
         }
     }
 
@@ -390,6 +413,8 @@ impl ManimGeometryOptions {
             style,
             z_index,
             role,
+            explicit_angle_radius: _,
+            resolved_start_angle: _,
         } = self;
         match geometry {
             GeometryRef::Circle { .. }
@@ -438,6 +463,8 @@ impl ManimGeometryOptions {
             style,
             z_index,
             role,
+            explicit_angle_radius: _,
+            resolved_start_angle: _,
         } = self;
         let GeometryRef::VectorPath(path) = geometry else {
             return Err(AuthoringError::Unsupported(
@@ -684,6 +711,8 @@ impl Mobject {
                 style,
                 z_index: 0.0,
                 role: noon_core::SemanticObjectRole::Ordinary,
+                explicit_angle_radius: None,
+                resolved_start_angle: None,
             },
         )
     }

@@ -25,10 +25,12 @@ def _finish(self, method, args, kwargs):
     values = dict(kwargs)
     color = values.pop("color", None)
     candidate = engine_call(getattr(_shared._geometry_options, method), *args)
+    resolved_start_angle = getattr(candidate, "resolvedStartAngle", None)
     _shared._apply_shared_constructor_options(candidate, values)
     if color is not None:
         _shared._apply_constructor_color(candidate, _compat._as_color("color", color))
     _shared._attach_geometry_options(self, candidate, type(self).__name__)
+    return resolved_start_angle
 
 
 class Polygram(_compat.VMobject):
@@ -55,10 +57,11 @@ class Polygon(Polygram):
 
 class RegularPolygram(Polygram):
     def __init__(self, num_vertices, *, density=2, radius=1, start_angle=None, **kwargs):
-        _finish(self, "regularPolygram", (
+        resolved_start_angle = _finish(self, "regularPolygram", (
             _count("num_vertices", num_vertices), _count("density", density),
             _base._ir._finite_number("radius", radius), _optional_number("start_angle", start_angle),
         ), kwargs)
+        self.start_angle = float(resolved_start_angle)
 
 
 class RegularPolygon(RegularPolygram):
@@ -69,8 +72,9 @@ class RegularPolygon(RegularPolygram):
 class Star(Polygon):
     def __init__(self, n=5, *, outer_radius=1, inner_radius=None, density=2,
                  start_angle=_base.TAU / 4, **kwargs):
-        _finish(self, "star", (
+        resolved_start_angle = _finish(self, "star", (
             _count("n", n), _base._ir._finite_number("outer_radius", outer_radius),
             _optional_number("inner_radius", inner_radius), _count("density", density),
             _optional_number("start_angle", start_angle),
         ), kwargs)
+        self.start_angle = float(resolved_start_angle)

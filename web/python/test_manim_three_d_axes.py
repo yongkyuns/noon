@@ -22,10 +22,11 @@ class ThreeDAxesAdapterTests(TestCase):
         patch.object(plotting, "_coordinate_style").start()
         self.axes_members = []
 
-        def attach(wrapper, axis, tip):
+        def attach(wrapper, axis, tip, **kwargs):
             wrapper._test_shaft = Mock(name="shaft")
             wrapper._axis_handle = axis
             wrapper.tip = tip
+            wrapper._axis_options = kwargs
             return wrapper
 
         patch.object(plotting, "_attach_three_d_axis", side_effect=attach).start()

@@ -14,6 +14,16 @@ pub struct WasmManimGeometryOptions {
 
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
+    #[wasm_bindgen(getter, js_name = explicitAngleRadius)]
+    pub fn explicit_angle_radius(&self) -> Option<f64> {
+        self.options.explicit_angle_radius()
+    }
+
+    #[wasm_bindgen(getter, js_name = resolvedStartAngle)]
+    pub fn resolved_start_angle(&self) -> Option<f64> {
+        self.options.resolved_start_angle()
+    }
+
     #[wasm_bindgen(js_name = setZIndex)]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), JsValue> {
         self.options.set_z_index(value).map_err(js_error)

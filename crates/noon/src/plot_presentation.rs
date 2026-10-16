@@ -1,8 +1,9 @@
 //! Shared coordinate-label preparation and timestamp-aware sampled data.
 mod preparation;
 pub use preparation::{
-    number_labels, NumberLabel, PlotPresentationError, TimeSeriesPlan, TimedPlotSample,
-    MAX_PLOT_LABELS, MAX_TIMED_PLOT_SAMPLES,
+    number_labels, number_labels_excluding, positioned_text_labels, NumberLabel,
+    PlotPresentationError, TimeSeriesPlan, TimedPlotSample, MAX_PLOT_LABELS,
+    MAX_TIMED_PLOT_SAMPLES,
 };
 
 #[cfg(feature = "native-text")]

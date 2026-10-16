@@ -298,6 +298,76 @@
       "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to drag"}],
       "playback_capability": "nonreplayable-native-input",
       "playback_limitation": "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable."
+    },
+    {
+      "id": "showcase-triangle-light",
+      "title": "Light in a triangle",
+      "lesson": "Watch a pink-white ray reflect in a silver triangular mirror, reveal direction-colored paths, then fast-forward to a dense light exposure in an illustrated laboratory.",
+      "primary_feature": "specular-reflection-simulation",
+      "category": "Physics and simulation",
+      "path": "python/examples/showcase_triangle_light.py",
+      "features": [
+        "exact mirror reflections",
+        "scalene triangle",
+        "illustrated laboratory",
+        "glowing beam",
+        "direction-colored paths",
+        "ray-exposure accumulation",
+        "direction histogram"
+      ],
+      "duration": 25,
+      "thumbnail_time": 15.6,
+      "thumbnail": "thumbnails/showcase/showcase-triangle-light.png",
+      "thumbnail_alt": "An illustrated scientist in a wooden laboratory beside a large silver-framed triangular mirror, multicolored reflected rays, and a glowing yellow corner-angle arc",
+      "playback_capability": "deterministic-retained-replay",
+      "still_intervals": [
+        [
+          15,
+          16
+        ],
+        [
+          23,
+          25
+        ]
+      ],
+      "beats": [
+        {
+          "time": 0.8,
+          "label": "Introduce the illustrated mirror laboratory"
+        },
+        {
+          "time": 1.1,
+          "label": "Pink photon travels one quarter of its first full flight"
+        },
+        {
+          "time": 1.5,
+          "label": "Same uninterrupted flight halfway across the mirror"
+        },
+        {
+          "time": 1.9,
+          "label": "Light approaches its first mirror before reflecting"
+        },
+        {
+          "time": 6,
+          "label": "Pink-white moving beam and dim older paths"
+        },
+        {
+          "time": 13,
+          "label": "Direction-colored reflected paths"
+        },
+        {
+          "time": 15.6,
+          "label": "The scalene mirror and its corner angle"
+        },
+        {
+          "time": 20.5,
+          "label": "Fast-forward the accumulated ray exposure"
+        },
+        {
+          "time": 24,
+          "label": "Dense near-white exposure and rainbow direction ring"
+        }
+      ]
     }
   ]
 }

@@ -64,6 +64,17 @@ impl WasmCoordinateOptions {
 
 #[wasm_bindgen]
 impl WasmNumberLabelOptions {
+    #[wasm_bindgen(js_name = setTickRangeFlags)]
+    pub fn set_tick_range_flags(&mut self, include_tip: bool, exclude_origin_tick: bool) {
+        self.options.include_tip = include_tip;
+        self.options.exclude_origin_tick = exclude_origin_tick;
+    }
+
+    #[wasm_bindgen(js_name = setExcludedNumbers)]
+    pub fn set_excluded_numbers(&mut self, values: &[f64]) -> Result<(), JsValue> {
+        self.options.set_excluded_numbers(values).map_err(failure)
+    }
+
     #[wasm_bindgen(js_name = setDirection)]
     pub fn set_direction(&mut self, x: f64, y: f64) {
         self.options.direction = [x, y];
@@ -113,6 +124,40 @@ impl WasmAuthoringFamilyHandle {
             line.get_number_mobjects(values, &options.options)
         }
         .map_err(failure)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
+    /// Attach caller-provided labels at Rust-mapped NumberLine positions.
+    #[wasm_bindgen(js_name = numberLineCustomLabelFamily)]
+    pub fn number_line_custom_label_family(
+        &self,
+        values: &[f64],
+        texts: js_sys::Array,
+        options: WasmNumberLabelOptions,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        if texts.length() as usize != values.len() {
+            return Err(failure(
+                "custom label positions and texts must have equal lengths",
+            ));
+        }
+        if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
+            return Err(failure("number-label limit exceeded"));
+        }
+        let mut labels = Vec::new();
+        labels
+            .try_reserve_exact(values.len())
+            .map_err(|_| failure("number-label allocation failed"))?;
+        for (index, number) in values.iter().enumerate() {
+            let text = texts
+                .get(index as u32)
+                .as_string()
+                .ok_or_else(|| failure("custom number-line label text must be a string"))?;
+            labels.push((*number, text));
+        }
+        let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
+        let family = line
+            .add_labels(&labels, &options.options)
+            .map_err(failure)?;
         Ok(Self::from_semantic_family(family))
     }
 

@@ -82,6 +82,8 @@ class SampleSpace(_compat.Group):
     only Manim's public call shape and wrapper objects.
     """
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(

@@ -30,6 +30,7 @@ try {
     await wasm.default();
     const { resolveAnimationOptionsPlain } = await import("/web/animation-options.js");
     globalThis.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args);
+    globalThis.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args);
     const { loadPyodide } = await import(pyodideUrl);
     const pyodide = await loadPyodide();
     const store = new wasm.WasmAuthoringStore();

@@ -61,6 +61,36 @@ class SharedFamilyPaintTests(unittest.TestCase):
         create.assert_not_called()
         batch.assert_not_called()
 
+    def test_generic_group_fill_and_stroke_are_metadata_without_paint_dispatch(self):
+        for name in ("fill", "stroke"):
+            for backed in (False, True):
+                group = identity_only_wrapper(compat.Group, submobjects=[])
+                if backed:
+                    group._semantic_family_handle = Mock()
+                value = object()
+                setter = getattr(group, "set_" + name)
+                with self.assertWarnsRegex(DeprecationWarning, "Mobject.set"):
+                    self.assertIs(setter(value=value), group)
+                self.assertIs(getattr(group, name), value)
+                with self.assertRaises(TypeError):
+                    setter(color=compat._base.GREEN)
+                if backed:
+                    self.assertEqual(group._semantic_family_handle.method_calls, [])
+
+    def test_existing_vector_wrappers_keep_shared_fill_and_stroke_dispatch(self):
+        for cls in (compat.VGroup, compat._base.Arrow, compat._base.Graph,
+                    compat._base.SampleSpace, compat._base.NumberLine,
+                    compat._base.Axes, compat._base.ThreeDAxes,
+                    compat._base.Cube, compat._base.Prism):
+            with self.subTest(cls=cls):
+                group = identity_only_wrapper(cls, submobjects=[])
+                group._semantic_family_handle = Mock()
+                with patch.object(handles, "_group_set_fill", return_value=group) as fill, \
+                     patch.object(handles, "_group_set_stroke", return_value=group) as stroke:
+                    self.assertIs(group.set_fill(compat._base.GREEN, .75), group)
+                    self.assertIs(group.set_stroke(compat._base.YELLOW, 25, .625), group)
+                fill.assert_called_once_with(group, compat._base.GREEN, .75)
+                stroke.assert_called_once_with(group, compat._base.YELLOW, 25, .625)
 
     def test_root_only_color_uses_one_shared_root_operation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])

@@ -139,13 +139,17 @@ def _leaf(handle, kind=_compat.Line):
     return wrapper
 
 
-def _attach_number_line(wrapper, handle):
+def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
+                        exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
+    wrapper.tick_size = tick_size
+    wrapper.include_tip = include_tip
+    wrapper.exclude_origin_tick = exclude_origin_tick
     return _coordinate_family(wrapper, handle, [shaft, ticks])
 
 
@@ -240,15 +244,19 @@ def _three_d_axis_label_object(label):
 class NumberLine(_compat.Group):
     """Tipless linear number line with Rust-owned defaults, ticks and range."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, numbers_with_elongated_ticks=None,
-                 longer_tick_multiple=2, color=None, **kwargs):
+                 longer_tick_multiple=2, numbers_to_exclude=None,
+                 color=None, **kwargs):
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
+        tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
@@ -257,7 +265,7 @@ class NumberLine(_compat.Group):
             None if length is None else float(length), float(unit_size), float(rotation),
         )
         try:
-            engine_call(options.setTicks, bool(include_ticks), float(tick_size), bool(exclude_origin_tick))
+            engine_call(options.setTicks, bool(include_ticks), tick_size, bool(exclude_origin_tick))
             engine_call(options.setElongatedTicks,
                         _array(() if numbers_with_elongated_ticks is None else numbers_with_elongated_ticks),
                         float(longer_tick_multiple))
@@ -265,7 +273,16 @@ class NumberLine(_compat.Group):
         except BaseException:
             options.free()
             raise
-        _attach_number_line(self, engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options))
+        _attach_number_line(
+            self,
+            engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
+            tick_size=tick_size,
+            include_tip=False,
+            exclude_origin_tick=bool(exclude_origin_tick),
+        )
+        self.numbers_to_exclude = (
+            [] if numbers_to_exclude is None else list(numbers_to_exclude)
+        )
 
     @property
     def shaft(self):
@@ -303,19 +320,86 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
 
-    def get_number_mobjects(self, *numbers, **kwargs):
-        """Detached ordinary Text labels; no arguments selects automatic ticks."""
-        from _manim_number_labels import number_mobjects
-        return number_mobjects(self, numbers or None, attach=False, config=kwargs)
+    def get_tick_range(self):
+        """Return Manim's linear tick values through the shared Rust query."""
+        import numpy as np
+        with _owned(self._coordinate_frame()) as frame:
+            values = engine_call(
+                frame.tickValues,
+                bool(self.include_tip),
+                bool(self.exclude_origin_tick),
+            )
+            return np.asarray(tuple(float(value) for value in values), dtype=float)
 
-    def add_numbers(self, x_values=None, **kwargs):
+    def get_tick(self, x, size=None):
+        """Create one Manim-style tick using the current line orientation."""
+        x = _base._ir._finite_number("x", x)
+        size = self.tick_size if size is None else _base._ir._finite_number("size", size)
+        with _owned(self._coordinate_frame()) as frame:
+            endpoints = engine_call(frame.tickSegment, x, size)
+        tick = _compat.Line(_base.Vec2(float(endpoints[0]), float(endpoints[1])),
+                            _base.Vec2(float(endpoints[2]), float(endpoints[3])))
+        tick.match_style(self.shaft)
+        return tick
+
+    def get_tick_marks(self):
+        return self.ticks
+
+    def get_number_mobject(self, number, **kwargs):
+        """Return one detached ordinary Text label at a numeric position."""
+        from _manim_number_labels import number_mobjects
+        number = _base._ir._finite_number("number", number)
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        labels = number_mobjects(self, (number,), attach=False, config=config)
+        members = labels.submobjects
+        if len(members) != 1:
+            raise ValueError("number-label options excluded the requested number")
+        return members[0]
+
+    def get_number_mobjects(self, *numbers, **kwargs):
+        """Return detached labels; no arguments selects automatic tick values."""
+        from _manim_number_labels import number_mobjects
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        return number_mobjects(self, numbers or None, attach=False, config=config)
+
+    def add_labels(self, dict_values, direction=None, buff=None, font_size=None,
+                   label_constructor=None):
+        """Attach caller strings/numbers as positioned native Text labels.
+
+        Existing Mobject labels and TeX/custom constructors remain unsupported
+        by this native-Text profile.
+        """
+        if label_constructor is not None:
+            raise NotImplementedError(
+                "NumberLine.add_labels custom constructors require the TeX label profile"
+            )
+        from _manim_number_labels import custom_labels
+        config = {
+            "direction": getattr(self, "label_direction", _base.DOWN)
+            if direction is None else direction,
+            "buff": getattr(self, "line_to_number_buff", 0.12)
+            if buff is None else buff,
+            "font_size": getattr(self, "font_size", 18)
+            if font_size is None else font_size,
+        }
+        custom_labels(self, dict_values, config=config)
+        return self
+
+    def add_numbers(self, x_values=None, excluding=None, **kwargs):
         """Atomically append native Text labels before playback; expose .numbers.
 
         Repeated calls append another label family, rather than replacing the
         earlier one. This bounded subset does not construct DecimalNumber/TeX.
         """
         from _manim_number_labels import number_mobjects
-        number_mobjects(self, x_values, attach=True, config=kwargs)
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        if excluding is None:
+            excluding = getattr(self, "numbers_to_exclude", ())
+        number_mobjects(self, x_values, attach=True, config=config,
+                        excluding=excluding)
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):
@@ -354,10 +438,13 @@ class UnitInterval(NumberLine):
 class Axes(_compat.Group):
     """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, color=None, **kwargs):
+        tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         options = engine_call(
             _coordinate_options.axes,
@@ -367,15 +454,23 @@ class Axes(_compat.Group):
             None if y_length is None else float(y_length),
         )
         try:
-            engine_call(options.setTicks, bool(include_ticks), float(tick_size), True)
+            engine_call(options.setTicks, bool(include_ticks), tick_size, True)
             engine_call(options.setTips, bool(tips))
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
-        members = [_attach_number_line(object.__new__(NumberLine), engine_call(handle.coordinateAxis, index))
-                   for index in (0, 1)]
+        members = [
+            _attach_number_line(
+                object.__new__(NumberLine),
+                engine_call(handle.coordinateAxis, index),
+                tick_size=float(tick_size),
+                include_tip=bool(tips),
+                exclude_origin_tick=True,
+            )
+            for index in (0, 1)
+        ]
         _coordinate_family(self, handle, members)
 
     @property
@@ -612,15 +707,19 @@ class Axes(_compat.Group):
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
-def _attach_three_d_axis(wrapper, handle, tip_handle):
+def _attach_three_d_axis(wrapper, handle, tip_handle, *, tick_size=0.1,
+                         include_tip=True, exclude_origin_tick=True):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
-        object.__new__(_compat.Group),
+        object.__new__(_compat.VGroup),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
     members = [shaft, ticks]
     wrapper.tip = None
+    wrapper.tick_size = tick_size
+    wrapper.include_tip = include_tip
+    wrapper.exclude_origin_tick = exclude_origin_tick
     if tip_handle is not None:
         wrapper.tip = _leaf(tip_handle, _compat.VMobject)
         members.append(wrapper.tip)
@@ -636,6 +735,8 @@ class ThreeDAxes(_compat.Group):
     tick, and filled-tip options.
     """
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),
@@ -719,6 +820,15 @@ class ThreeDAxes(_compat.Group):
                 object.__new__(NumberLine),
                 engine_call(handle.threeDAxesAxis, index),
                 engine_call(handle.threeDAxesTip, index),
+                tick_size=_finite_axis_option(
+                    axis_configs[index].get("tick_size", global_tick_size),
+                    "tick_size",
+                    nonnegative=True,
+                ),
+                include_tip=axis_configs[index].get("include_tip", global_tips),
+                exclude_origin_tick=axis_configs[index].get(
+                    "exclude_origin_tick", global_exclude_origin
+                ),
             )
             for index in range(3)
         ]

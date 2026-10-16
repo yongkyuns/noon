@@ -611,6 +611,9 @@ assert clip(5, 10, 0) == 10
 assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
 assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
 assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})
+assert lingering(0.4) == 0.5
+assert lingering(0.9) == 1.0
+assert lingering is __import__("_manim_rate_functions").lingering
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
@@ -628,6 +631,11 @@ result = Scene()
 from noon import stretch_array_to_length as stretch, Scene
 import sys
 assert "numpy" in sys.modules
+from noon import typing as mt
+assert mt.ManimFloat is __import__("numpy").float64
+assert mt.CubicBezierPoints == mt.Point3D_Array
+assert mt.ManimTextLabel == "Text | MathTex | Typst"
+assert mt.StrPath == str | __import__("os").PathLike[str]
 array = __import__("numpy").array([[1, 2], [3, 4]])
 stretched = stretch(array, 3)
 assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
@@ -646,9 +654,16 @@ quaternion = [1, 2, 3, 4]
 assert quaternion_mult(quaternion) is quaternion
 assert quaternion_conjugate(quaternion).tolist() == [1, -2, -3, -4]
 assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
+from noon import get_unit_normal
+assert get_unit_normal([1, 0, 0], [0, 1, 0]).tolist() == [0, 0, 1]
+assert get_unit_normal([0, 0, 0], [0, 0, 0]).tolist() == [0, -1, 0]
 assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 from noon import line_intersection, find_intersection
 np = __import__("numpy")
+from noon import NumberLine
+_ticks = NumberLine([-2, 2]).get_tick_range()
+assert isinstance(_ticks, np.ndarray) and _ticks.dtype == np.dtype(float)
+assert (_ticks + 1).tolist() == [-1, 0, 1, 2, 3]
 assert line_intersection([[0, 0, 0], [2, 2, 0]], [[0, 2, 0], [2, 0, 0]]).tolist() == [1, 1, 0]
 assert find_intersection(np.array([[0, 0, 0]]), np.array([[1, 0, 0]]),
                          np.array([[1, 2, 3]]), np.array([[0, 1, 0]]))[0].tolist() == [1, 0, 0]
@@ -674,6 +689,19 @@ assert calls == [0, 0.5, 1]
 assert logistic(np.array([0, 1], dtype=np.float32)).dtype == np.float32
 result = Scene()
 `);
+      const angleNamespace = await client.run(`
+from noon import Angle, Scene
+angle = Angle.from_three_points((1, 0, 0), (0, 0, 0), (0, 1, 0))
+assert isinstance(angle, Angle)
+assert angle.lines[0].get_start().x == 0
+assert angle.lines[0].get_start().y == 0
+assert angle.lines[0].get_end().x == 1
+assert angle.lines[0].get_end().y == 0
+assert angle.lines[1].get_end().x == 0
+assert angle.lines[1].get_end().y == 1
+assert abs(angle.get_value(degrees=True) - 90) < 1e-9
+result = Scene()
+`);
       const numpyNamespace = await client.run(`
 from noon import *
 import sys
@@ -691,6 +719,7 @@ result = Scene()
         coldNamespace: Boolean(coldNamespace.semanticExecution),
         arrayNamespace: Boolean(arrayNamespace.semanticExecution),
         numericalNamespace: Boolean(numericalNamespace.semanticExecution),
+        angleNamespace: Boolean(angleNamespace.semanticExecution),
         numpyNamespace: Boolean(numpyNamespace.semanticExecution),
         sharedScene: Boolean(result.semanticExecution),
         terminated: client.terminated,
@@ -703,6 +732,7 @@ result = Scene()
   assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
   assert.equal(sceneOnlyAuthoring.arrayNamespace, true, "aliased array helper loads NumPy before the real Python worker call");
   assert.equal(sceneOnlyAuthoring.numericalNamespace, true, "user numerical helpers execute in the actual worker");
+  assert.equal(sceneOnlyAuthoring.angleNamespace, true, "Angle.from_three_points executes through shared geometry");
   assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
@@ -1027,7 +1057,7 @@ result = Scene()
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, Angle.from_three_points, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

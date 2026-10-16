@@ -23,17 +23,30 @@ class Angle(_compat.VMobject):
         points = [line1.get_start(), line1.get_end(), line2.get_start(), line2.get_end()]
         values = dict(kwargs)
         components = _sector_component_count(values.pop("num_components", 9))
+        coordinates = to_js([coordinate for point in points for coordinate in point])
+        radius_value = (
+            None if radius is None else _base._ir._finite_number("radius", radius)
+        )
         candidate = engine_call(_shared._geometry_options.angle,
-            to_js([coordinate for point in points for coordinate in point]),
-            None if radius is None else _base._ir._finite_number("radius", radius),
+            coordinates,
+            radius_value,
             _base._ir._finite_number("quadrant[0]", quadrant[0]),
             _base._ir._finite_number("quadrant[1]", quadrant[1]),
             bool(other_angle), bool(elbow), components)
+        explicit_radius_attribute = getattr(candidate, "explicitAngleRadius", None)
         _finish_candidate(self, candidate, type(self).__name__, values)
+        if explicit_radius_attribute is not None:
+            # Rust omits this when parallel lines produce Manim's empty Angle.
+            self.radius = float(explicit_radius_attribute)
         self.lines = (line1, line2)
         self.quadrant = quadrant
         self.elbow = bool(elbow)
         self.dot_distance = dot_distance
+
+    @staticmethod
+    def from_three_points(A, B, C, **kwargs):
+        """Construct the angle ABC through shared Line and Angle semantics."""
+        return Angle(_compat.Line(B, A), _compat.Line(B, C), **kwargs)
 
     def get_lines(self):
         return _compat.VGroup(*self.lines)
