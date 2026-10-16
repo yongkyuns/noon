@@ -354,7 +354,6 @@ fn axes_log_scale_maps_coordinate_queries_and_keeps_the_log_origin_tick() {
     let mut scene = Scene::new();
     let mut options = ManimAxesOptions::new([0.0, 4.0, 1.0], [-2.0, 2.0, 1.0], 8.0, 4.0);
     options.y_scale = noon_core::SemanticNumberLineScale::log(10.0);
-    options.y_exclude_origin_tick = Some(false);
     let axes = scene.axes(&options).unwrap();
     let frame = axes.authored_frame().unwrap();
 

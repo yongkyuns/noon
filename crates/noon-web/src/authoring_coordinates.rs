@@ -34,6 +34,18 @@ pub(crate) enum CoordinateRequest {
     ThreeDAxes(ManimThreeDAxesOptions),
 }
 
+fn coordinate_scale(kind: &str, parameter: f64) -> Result<SemanticNumberLineScale, JsValue> {
+    let scale = match kind {
+        "linear" => SemanticNumberLineScale::linear(parameter),
+        "log" => SemanticNumberLineScale::log(parameter),
+        _ => return Err(js_error("unsupported coordinate scale kind")),
+    };
+    if !scale.is_valid() {
+        return Err(js_error("invalid coordinate scale parameter"));
+    }
+    Ok(scale)
+}
+
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
     let [start, end, step] = values else {
         return Err(js_error(AuthoringFailure::new(
@@ -249,15 +261,7 @@ impl WasmCoordinateOptions {
         let CoordinateRequest::NumberLine(options) = &mut self.request else {
             return Err(js_error("scale settings require a NumberLine"));
         };
-        let scale = match kind {
-            "linear" => SemanticNumberLineScale::linear(parameter),
-            "log" => SemanticNumberLineScale::log(parameter),
-            _ => return Err(js_error("unsupported NumberLine scale kind")),
-        };
-        if !scale.is_valid() {
-            return Err(js_error("invalid NumberLine scale parameter"));
-        }
-        options.scale = scale;
+        options.scale = coordinate_scale(kind, parameter)?;
         Ok(())
     }
 
@@ -266,23 +270,10 @@ impl WasmCoordinateOptions {
         let CoordinateRequest::Axes(options) = &mut self.request else {
             return Err(js_error("scale settings require Axes"));
         };
-        let (scale, exclude_origin_tick) = match kind {
-            "linear" => (SemanticNumberLineScale::linear(parameter), true),
-            "log" => (SemanticNumberLineScale::log(parameter), false),
-            _ => return Err(js_error("unsupported Axes scale kind")),
-        };
-        if !scale.is_valid() {
-            return Err(js_error("invalid Axes scale parameter"));
-        }
+        let scale = coordinate_scale(kind, parameter)?;
         match axis {
-            0 => {
-                options.x_scale = scale;
-                options.x_exclude_origin_tick = Some(exclude_origin_tick);
-            }
-            1 => {
-                options.y_scale = scale;
-                options.y_exclude_origin_tick = Some(exclude_origin_tick);
-            }
+            0 => options.x_scale = scale,
+            1 => options.y_scale = scale,
             _ => return Err(js_error("Axes axis index must be 0 or 1")),
         }
         Ok(())

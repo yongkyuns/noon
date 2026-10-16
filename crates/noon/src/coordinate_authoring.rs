@@ -1058,13 +1058,15 @@ pub(crate) fn prepare_axes(
     }
     let prepare_axis = |axis: NumberLineFrame, exclude_origin: Option<bool>| {
         let ticks = CoordinateTicks {
-            exclude_origin: exclude_origin.unwrap_or(options.ticks.exclude_origin),
+            // A logarithmic axis's exponent-zero tick represents one, not the
+            // crossing axis. Apply the same default for every host.
+            exclude_origin: exclude_origin
+                .unwrap_or(options.ticks.exclude_origin && axis.scale().base().is_none()),
             ..options.ticks
         };
         if options.tips {
-            let mut states = prepare_line_with_elongated_ticks(
-                axis, ticks, &options.style, &[], 2.0, true,
-            )?;
+            let mut states =
+                prepare_line_with_elongated_ticks(axis, ticks, &options.style, &[], 2.0, true)?;
             shorten_coordinate_shaft(&mut states, axis, options.tip_length)?;
             Ok(states)
         } else {

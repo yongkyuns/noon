@@ -71,11 +71,9 @@ impl NumberLineFrame {
         validate_coordinate_range(range)?;
         finite_point(start)?;
         finite_point(end)?;
-        if !scale.is_valid()
-            || scale.map(range[0]).is_none()
-            || scale.map(range[1]).is_none()
-            || scale.map(range[0]) == scale.map(range[1])
-        {
+        let mapped_start = scale.map(range[0]);
+        let mapped_end = scale.map(range[1]);
+        if mapped_start.is_none() || mapped_end.is_none() || mapped_start == mapped_end {
             return Err(CoordinateError::InvalidRange);
         }
         let length = (end[0] - start[0]).hypot(end[1] - start[1]);

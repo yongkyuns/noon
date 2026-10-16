@@ -6,7 +6,7 @@
 /// Reversible scalar mapping for an ordinary NumberLine coordinate axis.
 ///
 /// The compact tagged representation keeps the coordinate definition copyable
-/// with semantic object state while leaving mapping math to shared geometry.
+/// with semantic object state for shared geometry and semantic admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SemanticNumberLineScale {
     kind: u8,

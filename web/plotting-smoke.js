@@ -90,6 +90,17 @@ function qualifyExactRiemannPlan() {
 function directWasmPreparation() {
   implicitPrecisionPreparation();
   qualifyExactRiemannPlan();
+  const scaledStore = new WasmAuthoringStore();
+  let scaledAxes, scaledFrame;
+  try {
+    const options = WasmCoordinateOptions.axes([0, 4, 1], [-2, 2, 1], 8, 4);
+    options.setAxesScale(1, "log", 10);
+    options.setTips(true);
+    scaledAxes = scaledStore.createCoordinates(options);
+    scaledFrame = scaledAxes.axesFrame();
+    near(Array.from(scaledFrame.coordsToPoint(2, 10)), [0, 1], "scaled tipped Axes");
+    near(Array.from(scaledFrame.pointToCoords(0, 1)), [2, 10], "scaled Axes inverse");
+  } finally { scaledFrame?.free(); scaledAxes?.free(); scaledStore.free(); }
   const store = new WasmAuthoringStore();
   const axes = store.createCoordinates(WasmCoordinateOptions.axes([2, 6, 1], [-6, -2, 1], 8, 4));
   const frame = axes.axesFrame();
@@ -380,6 +391,16 @@ class PlottingQualification(Scene):
         near(copied_line.n2p(4), (1, 0))
         near(line.n2p(4), (0, 0))
 
+        log_line = NumberLine([-2, 2, 1], length=4, include_tip=True,
+                              scaling=LogBase(custom_labels=False))
+        near(log_line.n2p(100), (2, 0))
+        near(log_line.n2p(10), (1, 0))
+        assert abs(log_line.p2n((1, 0)) - 10) < 2e-5
+        log_axes = Axes([0, 4, 1], [-2, 2, 1], x_length=8, y_length=4,
+                        y_axis_config={"scaling": LogBase(custom_labels=False)})
+        near(log_axes.c2p(2, 10), (0, 1))
+        assert len(log_axes.y_axis.ticks.submobjects) == 4  # tip removes the endpoint
+
         axes = Axes([-2, 2, 1], [-1, 1, 0.5], x_length=6, y_length=3)
         axes.scale(0.8).rotate(0.25).shift(LEFT)
         for point in [(0, 0), (1, 0.5), (-3, 2)]:
@@ -495,7 +516,8 @@ class PlottingQualification(Scene):
                 raise AssertionError("invalid live axis length was accepted")
         fresh = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2)
         fresh.shift(LEFT)
-        line = NumberLine([0, 2, 1], length=2).shift(DOWN)
+        line = NumberLine([0, 2, 1], length=2, include_tip=True,
+                          scaling=LogBase(custom_labels=False)).shift(DOWN)
         for observe in (lambda: fresh.c2p(0, 0), lambda: line.n2p(1)):
             try:
                 observe()
@@ -507,6 +529,7 @@ class PlottingQualification(Scene):
         near(fresh.c2p(0, 0), LEFT)
         near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
         assert abs(line.p2n(line.n2p(1)) - 1) < 2e-5
+        near(line.n2p(100), (1, -1))
         self.play(fresh.animate.shift(UP), run_time=0.2, rate_func=linear)
         near(fresh.c2p(0, 0), LEFT + UP)
         self.remove(fresh, line)
