@@ -1446,6 +1446,24 @@
       "expected_duration": 0.2
     },
     {
+      "id": "plot-example-upstream",
+      "scene": "PlotExample",
+      "source": "parity/manim-v0.21/upstream-examples/plot_example.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 57,
+      "sample_times": [
+        0.0
+      ],
+      "raster_tolerance": {
+        "max_duration_delta_seconds": 0.034,
+        "max_background_channel_delta_sum": 0,
+        "max_bounds_delta_px": 2,
+        "max_differing_ratio": 0.006,
+        "max_mean_absolute_channel_error": 0.5
+      },
+      "notes": "Literal pinned ManimCE v0.21 CoordinateSystem.plot PlotExample. The Noon worker may replace only the wildcard import; it runs the same copied/placed Axes, implicit np.log, default and unsmoothed sampling, explicit 0.001 sample step, and pure curve colors. Static raster comparison at time zero uses the unchanged strict manifest ratchets on WebGPU and WebGL2."
+    },
+    {
       "id": "paint-fade",
       "scene": "PaintFade",
       "source": "parity/manim-v0.21/core-examples/paint_fade.py",

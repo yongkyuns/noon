@@ -101,6 +101,37 @@ test("zero-duration terminal state resolves only against one independently obser
   ]) assert.throws(() => resolveRasterReferenceSamples([], [0], options));
 });
 
+test("literal upstream PlotExample is enrolled under the strict static raster ratchet", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const fixture = manifest.fixtures.find(row => row.id === "plot-example-upstream");
+  assert.ok(fixture);
+  assert.equal(fixture.scene, "PlotExample");
+  assert.equal(fixture.source, "parity/manim-v0.21/upstream-examples/plot_example.py");
+  assert.equal(fixture.expected_duration, 0);
+  assert.equal(fixture.expected_object_count, 57);
+  assert.deepEqual(fixture.sample_times, [0]);
+  assert.deepEqual(fixture.raster_tolerance, manifest.policy.raster_tolerance,
+    "the exact-source plot keeps the existing strict duration, background, bounds, and pixel ratchets");
+  assert.equal(fixture.noon_source, undefined,
+    "the browser worker must execute the same pinned source rather than a Noon-only replacement");
+  assert.equal(fixture.direct_factory, undefined,
+    "the source-equivalent Python call path is qualified against the independent Manim raster");
+  const source = await readFile(path.join(repoRoot, fixture.source), "utf8");
+  assert.equal(source.split("from manim import *").length - 1, 1);
+  assert.match(source, /class PlotExample\(Scene\)/);
+  assert.match(source, /ax_2 = ax_1\.copy\(\)/);
+  assert.match(source, /np\.log\(x\)/);
+  assert.match(source, /use_smoothing=False/);
+  assert.match(source, /x_range=\(0\.001, 6, 0\.001\)/);
+  assert.ok(rasterWorkflowIncludes(workflow, fixture.source),
+    "editing the pinned upstream fixture must trigger raster qualification");
+});
+
 test("fraction sampling remains the default and records requested and materialized times", () => {
   const samples = resolveRasterReferenceSamples(referenceTimes, undefined, {
     logicalDuration: 65 / 30, terminalState: { time: 65 / 30 },

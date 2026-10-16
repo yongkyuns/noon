@@ -73,6 +73,7 @@ on:
       - "parity/manim-v0.21/vector_space.py"
       - "parity/manim-v0.21/vector_space_features.py"
       - "parity/manim-v0.21/core-examples/**"
+      - "parity/manim-v0.21/upstream-examples/**"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
       - "scripts/semantic-preview-*"
