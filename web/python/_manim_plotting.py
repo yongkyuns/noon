@@ -139,13 +139,17 @@ def _leaf(handle, kind=_compat.Line):
     return wrapper
 
 
-def _attach_number_line(wrapper, handle):
+def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
+                        exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
         object.__new__(_compat.Group),
         engine_call(handle.coordinateTicks),
         [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
     )
+    wrapper.tick_size = tick_size
+    wrapper.include_tip = include_tip
+    wrapper.exclude_origin_tick = exclude_origin_tick
     return _coordinate_family(wrapper, handle, [shaft, ticks])
 
 
@@ -249,6 +253,7 @@ class NumberLine(_compat.Group):
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
+        tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
@@ -257,7 +262,7 @@ class NumberLine(_compat.Group):
             None if length is None else float(length), float(unit_size), float(rotation),
         )
         try:
-            engine_call(options.setTicks, bool(include_ticks), float(tick_size), bool(exclude_origin_tick))
+            engine_call(options.setTicks, bool(include_ticks), tick_size, bool(exclude_origin_tick))
             engine_call(options.setElongatedTicks,
                         _array(() if numbers_with_elongated_ticks is None else numbers_with_elongated_ticks),
                         float(longer_tick_multiple))
@@ -265,9 +270,13 @@ class NumberLine(_compat.Group):
         except BaseException:
             options.free()
             raise
-        _attach_number_line(self, engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options))
-        self.include_tip = False
-        self.exclude_origin_tick = bool(exclude_origin_tick)
+        _attach_number_line(
+            self,
+            engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
+            tick_size=tick_size,
+            include_tip=False,
+            exclude_origin_tick=bool(exclude_origin_tick),
+        )
 
     @property
     def shaft(self):
@@ -314,6 +323,20 @@ class NumberLine(_compat.Group):
                 bool(self.exclude_origin_tick),
             )
             return tuple(float(value) for value in values)
+
+    def get_tick(self, x, size=None):
+        """Create one Manim-style tick using the current line orientation."""
+        x = _base._ir._finite_number("x", x)
+        size = self.tick_size if size is None else _base._ir._finite_number("size", size)
+        with _owned(self._coordinate_frame()) as frame:
+            endpoints = engine_call(frame.tickSegment, x, size)
+        tick = _compat.Line(_base.Vec2(float(endpoints[0]), float(endpoints[1])),
+                            _base.Vec2(float(endpoints[2]), float(endpoints[3])))
+        tick.match_style(self.shaft)
+        return tick
+
+    def get_tick_marks(self):
+        return self.ticks
 
     def get_number_mobjects(self, *numbers, **kwargs):
         """Detached ordinary Text labels; no arguments selects automatic ticks."""
@@ -370,6 +393,7 @@ class Axes(_compat.Group):
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, color=None, **kwargs):
+        tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         options = engine_call(
             _coordinate_options.axes,
@@ -379,15 +403,23 @@ class Axes(_compat.Group):
             None if y_length is None else float(y_length),
         )
         try:
-            engine_call(options.setTicks, bool(include_ticks), float(tick_size), True)
+            engine_call(options.setTicks, bool(include_ticks), tick_size, True)
             engine_call(options.setTips, bool(tips))
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
-        members = [_attach_number_line(object.__new__(NumberLine), engine_call(handle.coordinateAxis, index))
-                   for index in (0, 1)]
+        members = [
+            _attach_number_line(
+                object.__new__(NumberLine),
+                engine_call(handle.coordinateAxis, index),
+                tick_size=float(tick_size),
+                include_tip=bool(tips),
+                exclude_origin_tick=True,
+            )
+            for index in (0, 1)
+        ]
         _coordinate_family(self, handle, members)
 
     @property
@@ -624,7 +656,8 @@ class Axes(_compat.Group):
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
 
-def _attach_three_d_axis(wrapper, handle, tip_handle):
+def _attach_three_d_axis(wrapper, handle, tip_handle, *, tick_size=0.1,
+                         include_tip=True, exclude_origin_tick=True):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
         object.__new__(_compat.Group),
@@ -633,6 +666,9 @@ def _attach_three_d_axis(wrapper, handle, tip_handle):
     )
     members = [shaft, ticks]
     wrapper.tip = None
+    wrapper.tick_size = tick_size
+    wrapper.include_tip = include_tip
+    wrapper.exclude_origin_tick = exclude_origin_tick
     if tip_handle is not None:
         wrapper.tip = _leaf(tip_handle, _compat.VMobject)
         members.append(wrapper.tip)
@@ -731,6 +767,15 @@ class ThreeDAxes(_compat.Group):
                 object.__new__(NumberLine),
                 engine_call(handle.threeDAxesAxis, index),
                 engine_call(handle.threeDAxesTip, index),
+                tick_size=_finite_axis_option(
+                    axis_configs[index].get("tick_size", global_tick_size),
+                    "tick_size",
+                    nonnegative=True,
+                ),
+                include_tip=axis_configs[index].get("include_tip", global_tips),
+                exclude_origin_tick=axis_configs[index].get(
+                    "exclude_origin_tick", global_exclude_origin
+                ),
             )
             for index in range(3)
         ]
