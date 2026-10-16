@@ -72,6 +72,9 @@ pub struct GraphLayoutOptions {
     pub align_horizontal: bool,
     /// Optional Fruchterman-Reingold optimal distance; `None` uses `1 / sqrt(n)`.
     pub spring_k: Option<f64>,
+    /// Optional per-edge numeric weights, in the supplied edge order.
+    /// `None` gives each edge the NetworkX default weight of one.
+    pub edge_weights: Option<Vec<f64>>,
     /// Prepared NumPy-compatible initial positions for NetworkX spring layout.
     pub spring_positions: Option<Vec<(f64, f64)>>,
     /// Optional ordered all-pairs distances for Kamada-Kawai layout.
@@ -111,6 +114,7 @@ impl Default for GraphLayoutOptions {
             partitions: Vec::new(),
             align_horizontal: false,
             spring_k: None,
+            edge_weights: None,
             spring_positions: None,
             kamada_kawai_distances: None,
             kamada_kawai_positions: None,
@@ -1147,13 +1151,15 @@ fn spectral_layout(
         ]);
     }
 
+    let weights = resolved_edge_weights(options, edges.len())?;
     let mut adjacency = vec![0.0; count * count];
-    for &(start, end) in edges {
+    for (edge_index, &(start, end)) in edges.iter().enumerate() {
+        let weight = weights[edge_index];
         if options.directed {
-            adjacency[start * count + end] += 1.0;
+            adjacency[start * count + end] += weight;
         } else {
-            adjacency[start * count + end] += 1.0;
-            adjacency[end * count + start] += 1.0;
+            adjacency[start * count + end] += weight;
+            adjacency[end * count + start] += weight;
         }
     }
     if options.directed {
@@ -1350,10 +1356,17 @@ fn kamada_kawai_layout(
         for index in 0..count {
             distances[index * count + index] = 0.0;
         }
-        for &(start, end) in edges {
-            distances[start * count + end] = 1.0;
+        let weights = resolved_edge_weights(options, edges.len())?;
+        if weights.iter().any(|weight| *weight <= 0.0) {
+            return Err(GraphAuthoringError::InvalidLayout(
+                "Kamada-Kawai edge weights must be positive",
+            ));
+        }
+        for (edge_index, &(start, end)) in edges.iter().enumerate() {
+            let weight = weights[edge_index];
+            distances[start * count + end] = weight;
             if !options.directed {
-                distances[end * count + start] = 1.0;
+                distances[end * count + start] = weight;
             }
         }
         for via in 0..count {
@@ -1829,16 +1842,17 @@ fn spring_layout(
             "spring k must be finite and non-zero",
         ));
     }
+    let weights = resolved_edge_weights(options, edges.len())?;
     let mut adjacency = vec![0.0; count * count];
-    for &(start, end) in edges {
+    for (edge_index, &(start, end)) in edges.iter().enumerate() {
         if start >= count || end >= count {
             return Err(GraphAuthoringError::InvalidLayout(
                 "layout edge endpoints must reference existing vertices",
             ));
         }
-        adjacency[start * count + end] = 1.0;
+        adjacency[start * count + end] = weights[edge_index];
         if !options.directed {
-            adjacency[end * count + start] = 1.0;
+            adjacency[end * count + start] = weights[edge_index];
         }
     }
 
@@ -1909,6 +1923,22 @@ fn spring_layout(
         ));
     }
     Ok(points)
+}
+
+fn resolved_edge_weights(
+    options: &GraphLayoutOptions,
+    edge_count: usize,
+) -> Result<Vec<f64>, GraphAuthoringError> {
+    let weights = options
+        .edge_weights
+        .clone()
+        .unwrap_or_else(|| vec![1.0; edge_count]);
+    if weights.len() != edge_count || weights.iter().any(|weight| !weight.is_finite()) {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "edge weights must be finite and match the graph edge count",
+        ));
+    }
+    Ok(weights)
 }
 
 fn networkx_random_layout(

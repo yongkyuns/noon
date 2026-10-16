@@ -173,6 +173,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         scale_y: Some(0.35),
         center: (-3.5, 2.6),
         spring_k: Some(1.0 / 3.0_f64.sqrt()),
+        edge_weights: Some(vec![2.0, 0.75]),
         spring_positions: Some(vec![
             (0.3745401188473625, 0.9507143064099162),
             (0.7319939418114051, 0.5986584841970366),
@@ -181,7 +182,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let spring_positions = spring_options.positions(3, &[(0, 1), (1, 2)])?;
-    let spring = scene.graph_with_options(
+    let mut spring = scene.graph_with_options(
         [
             ("r0", spring_positions[0]),
             ("r1", spring_positions[1]),
@@ -190,6 +191,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("r0", "r1"), ("r1", "r2")],
         options.clone(),
     )?;
+    spring.change_layout(&mut scene, spring_options)?;
     let spring_digraph_options = crate::GraphLayoutOptions {
         layout: crate::GraphLayout::Spring,
         scale: 0.5,
@@ -266,6 +268,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         scale: 0.35,
         scale_y: Some(0.22),
         center: (-5.5, 3.2),
+        edge_weights: Some(vec![2.0, 0.75, 1.5]),
         ..Default::default()
     };
     let spectral_positions = spectral_options.positions(4, &spectral_edges)?;
@@ -287,6 +290,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         scale: 0.35,
         scale_y: Some(0.22),
         center: (-5.5, -2.6),
+        edge_weights: Some(vec![2.0, 0.75]),
         ..Default::default()
     };
     let kamada_kawai_positions = kamada_kawai_options.positions(3, &kamada_kawai_edges)?;
@@ -305,6 +309,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         layout: crate::GraphLayout::KamadaKawai,
         scale: 0.3,
         center: (5.5, -2.6),
+        edge_weights: Some(vec![1.75]),
         directed: true,
         ..Default::default()
     };

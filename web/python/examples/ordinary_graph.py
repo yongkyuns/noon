@@ -141,10 +141,15 @@ class OrdinaryGraph(Scene):
             },
         )
         spring_graph = Graph(
-            ["r0", "r1", "r2"], [("r0", "r1"), ("r1", "r2")],
+            ["r0", "r1", "r2"],
+            [("r0", "r1", {"weight": 2.0}), ("r1", "r2", {"weight": 0.75})],
             layout="spring", layout_scale=(0.65, 0.35),
-            layout_config={"seed": 42, "center": (-3.5, 2.6)},
+            layout_config={"seed": 42, "center": (-3.5, 2.6), "weight": "weight"},
             **styles,
+        )
+        spring_graph.change_layout(
+            "spring", scale=(0.65, 0.35),
+            layout_config={"seed": 42, "center": (-3.5, 2.6), "weight": "weight"},
         )
         spring_digraph = DiGraph(
             ["t0", "t1"], [("t0", "t1")],
@@ -175,34 +180,39 @@ class OrdinaryGraph(Scene):
         )
         spectral_graph = Graph(
             ["g0", "g1", "g2", "g3"],
-            [("g0", "g1"), ("g1", "g2"), ("g2", "g3")],
+            [
+                ("g0", "g1", {"weight": 2.0}),
+                ("g1", "g2", {"weight": 0.75}),
+                ("g2", "g3", {"weight": 1.5}),
+            ],
             layout="spectral", layout_scale=(0.35, 0.22),
-            layout_config={"center": (-5.5, 3.2)},
+            layout_config={"center": (-5.5, 3.2), "weight": "weight"},
             **styles,
         )
         spectral_graph.change_layout(
             "spectral", scale=(0.35, 0.22),
-            layout_config={"center": (-5.5, 3.2)},
+            layout_config={"center": (-5.5, 3.2), "weight": "weight"},
         )
         kamada_kawai_graph = Graph(
-            ["k0", "k1", "k2"], [("k0", "k1"), ("k1", "k2")],
+            ["k0", "k1", "k2"],
+            [("k0", "k1", {"weight": 2.0}), ("k1", "k2", {"weight": 0.75})],
             layout="kamada_kawai", layout_scale=(0.35, 0.22),
-            layout_config={"center": (-5.5, -2.6)},
+            layout_config={"center": (-5.5, -2.6), "weight": "weight"},
             **styles,
         )
         kamada_kawai_graph.change_layout(
             "kamada_kawai", scale=(0.35, 0.22),
-            layout_config={"center": (-5.5, -2.6)},
+            layout_config={"center": (-5.5, -2.6), "weight": "weight"},
         )
         kamada_kawai_digraph = DiGraph(
-            ["du", "dv"], [("du", "dv")],
+            ["du", "dv"], [("du", "dv", {"weight": 1.75})],
             layout="kamada_kawai", layout_scale=0.3,
-            layout_config={"center": (5.5, -2.6)},
+            layout_config={"center": (5.5, -2.6), "weight": "weight"},
             **styles,
         )
         kamada_kawai_digraph.change_layout(
             "kamada_kawai", scale=0.3,
-            layout_config={"center": (5.5, -2.6)},
+            layout_config={"center": (5.5, -2.6), "weight": "weight"},
         )
         self.add(
             graph, directed, centered, shell_graph, spiral_graph, partite_graph,

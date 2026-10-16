@@ -201,16 +201,17 @@ class GraphFacadeTests(unittest.TestCase):
         graph.Graph(["a", "b", "c"], [("a", "b")], layout_config={"seed": 42})
         call = self.context.creation_calls[0]
         self.assertEqual(call[:3], (False, [0, 1, 2], [0, 1]))
-        self.assertEqual(call[4:8], ([], False, 2.0, None))
-        self.assertEqual(call[8:10], (0.0, 0.0))
-        self.assertIsNone(call[10])
-        self.assertEqual(call[11:], (50, 1e-4, True, self.context.options[0]))
+        self.assertEqual(call[3], [1.0])
+        self.assertEqual(call[5:9], ([], False, 2.0, None))
+        self.assertEqual(call[9:11], (0.0, 0.0))
+        self.assertIsNone(call[11])
+        self.assertEqual(call[12:], (50, 1e-4, True, self.context.options[0]))
         expected = [
             (0.3745401188473625, 0.9507143064099162),
             (0.7319939418114051, 0.5986584841970366),
             (0.15601864044243652, 0.15599452033620265),
         ]
-        for actual, wanted in zip(call[3], (value for point in expected for value in point)):
+        for actual, wanted in zip(call[4], (value for point in expected for value in point)):
             self.assertAlmostEqual(actual, wanted)
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
@@ -221,14 +222,15 @@ class GraphFacadeTests(unittest.TestCase):
         )
         call = self.context.creation_calls[0]
         self.assertEqual(call[:3], (True, [0, 1, 2], [0, 1, 2, 1]))
-        self.assertEqual(call[4:8], ([], False, 2.0, None))
-        self.assertEqual(call[8:10], (0.0, 0.0))
+        self.assertEqual(call[3], [1.0, 1.0])
+        self.assertEqual(call[5:9], ([], False, 2.0, None))
+        self.assertEqual(call[9:11], (0.0, 0.0))
         expected = [
             (0.3745401188473625, 0.9507143064099162),
             (0.7319939418114051, 0.5986584841970366),
             (0.15601864044243652, 0.15599452033620265),
         ]
-        for actual, wanted in zip(call[3], (value for point in expected for value in point)):
+        for actual, wanted in zip(call[4], (value for point in expected for value in point)):
             self.assertAlmostEqual(actual, wanted)
 
     def test_spectral_constructor_routes_options_and_directed_topology_to_rust(self):
@@ -240,7 +242,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[-1][:-1],
-            (False, [0, 1, 2, 3], [0, 1, 1, 2, 2, 3], 1.4, 0.8, 1.25, -0.75),
+            (False, [0, 1, 2, 3], [0, 1, 1, 2, 2, 3], [1.0, 1.0, 1.0], 1.4, 0.8, 1.25, -0.75),
         )
 
         graph.DiGraph(
@@ -249,7 +251,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[-1][:-1],
-            (True, [0, 1, 2], [0, 1, 2, 1], 2.0, None, 0.2, -0.4),
+            (True, [0, 1, 2], [0, 1, 2, 1], [1.0, 1.0], 2.0, None, 0.2, -0.4),
         )
 
     def test_spectral_change_layout_routes_scale_and_center_to_rust(self):
@@ -262,7 +264,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.spectral_layout_calls[-1][1:],
-            (1.5, 0.7, 0.5, -1.0),
+            ([1.0, 1.0], 1.5, 0.7, 0.5, -1.0),
         )
 
     def test_spectral_layout_rejects_unqualified_config_before_graph_creation(self):
@@ -273,6 +275,38 @@ class GraphFacadeTests(unittest.TestCase):
         ):
             with self.subTest(config=config), self.assertRaisesRegex(error, message):
                 graph.Graph(["a", "b", "c"], [], layout="spectral", layout_config=config)
+        self.assertEqual(self.context.creation_calls, [])
+
+    def test_networkx_edge_attributes_feed_weighted_layouts_and_survive_copy_and_removal(self):
+        value = graph.Graph(
+            ["a", "b", "c"],
+            [
+                ("a", "b", {"weight": 2.5, "length": 7.0}),
+                ("b", "c", {"length": 4.0}),
+            ],
+            layout="spring", layout_config={"seed": 42, "weight": "weight"},
+        )
+        self.assertEqual(self.context.creation_calls[0][3], [2.5, 1.0])
+
+        value.change_layout("spectral", layout_config={"weight": "length"})
+        self.assertEqual(self.context.spectral_layout_calls[-1][1], [7.0, 4.0])
+        value.change_layout("kamada_kawai", layout_config={"weight": "length"})
+        self.assertEqual(self.context.kamada_kawai_layout_calls[-1][1], [7.0, 4.0])
+
+        copied = value.copy()
+        copied.change_layout("spring", layout_config={"weight": "length", "seed": 7})
+        self.assertEqual(self.context.spring_layout_calls[-1][1], [7.0, 4.0])
+        value.remove_edges(("a", "b"))
+        value.change_layout("spring", layout_config={"weight": "length", "seed": 9})
+        self.assertEqual(self.context.spring_layout_calls[-1][1], [4.0])
+
+    def test_networkx_edge_weight_selector_and_edge_data_fail_before_publication(self):
+        with self.assertRaisesRegex(TypeError, "edge data 'weight'"):
+            graph.Graph(["a", "b"], [("a", "b", {"weight": "heavy"})])
+        with self.assertRaisesRegex(TypeError, "attributes must be a mapping"):
+            graph.Graph(["a", "b"], [("a", "b", "not a mapping")])
+        with self.assertRaisesRegex(ValueError, "two endpoints and optional attributes"):
+            graph.Graph(["a", "b"], [("a", "b", {}, "extra")])
         self.assertEqual(self.context.creation_calls, [])
 
     def test_kamada_kawai_constructor_flattens_networkx_distances_and_initial_positions(self):
@@ -288,7 +322,7 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(
             self.context.creation_calls[-1][:-1],
             (
-                False, [0, 1, 2], [0, 1, 1, 2],
+                False, [0, 1, 2], [0, 1, 1, 2], [1.0, 1.0],
                 [1e6, 2.0, 1e6, 1e6, 1e6, 1.0, 1e6, 1e6, 1e6],
                 [0.0, 0.0, 1.0, 2.0, 3.0, 1.0],
                 1.4, 0.8, 1.25, -0.75,
@@ -301,7 +335,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.creation_calls[-1][:-1],
-            (True, [0, 1], [0, 1], [], [], 2.0, None, 2.0, -1.0),
+            (True, [0, 1], [0, 1], [1.0], [], [], 2.0, None, 2.0, -1.0),
         )
 
     def test_kamada_kawai_change_layout_routes_optional_inputs_to_rust(self):
@@ -315,7 +349,7 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.context.kamada_kawai_layout_calls[-1][1:],
-            ([], [2.0, 3.0, -1.0, 4.0], 1.5, 0.7, 0.5, -1.0),
+            ([1.0], [], [2.0, 3.0, -1.0, 4.0], 1.5, 0.7, 0.5, -1.0),
         )
 
         sparse_ids = graph.Graph(
@@ -331,8 +365,8 @@ class GraphFacadeTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            self.context.kamada_kawai_layout_calls[-1][1:3],
-            ([1e6, 1.0, 1.0, 1e6], [0.0, 0.0, 2.0, 0.0]),
+            self.context.kamada_kawai_layout_calls[-1][1:4],
+            ([], [1e6, 1.0, 1.0, 1e6], [0.0, 0.0, 2.0, 0.0]),
         )
 
     def test_kamada_kawai_rejects_unqualified_or_incomplete_configuration(self):
@@ -385,7 +419,7 @@ class GraphFacadeTests(unittest.TestCase):
             ["a", "b"], [("a", "b")], layout="partite", layout_scale=scale,
             layout_config={"partitions": [["a"], ["b"]]},
         )
-        self.assertEqual(self.context.creation_calls[0][6:8], scale)
+        self.assertEqual(self.context.creation_calls[0][7:9], scale)
         self.assertEqual(self.context.creation_calls[1][4:6], scale)
         self.assertEqual(self.context.creation_calls[2][7:9], scale)
         self.assertEqual(self.context.creation_calls[3][3:5], scale)
@@ -399,7 +433,7 @@ class GraphFacadeTests(unittest.TestCase):
         value.change_layout("circular", scale=scale)
         value.change_layout("spiral", scale=scale)
         value.change_layout("partite", scale=scale, layout_config={"partitions": [["a"], ["b"]]})
-        self.assertEqual(self.context.spring_layout_calls[0][4:6], scale)
+        self.assertEqual(self.context.spring_layout_calls[0][5:7], scale)
         self.assertEqual(self.context.random_layout_calls[0][2:4], scale)
         self.assertEqual(self.context.tree_layout_calls[0][5:7], scale)
         self.assertEqual(self.context.layout_calls[0][1:3], scale)
@@ -573,11 +607,11 @@ class GraphFacadeTests(unittest.TestCase):
             layout_scale=None,
         )
         call = self.context.creation_calls[0]
-        self.assertEqual(call[4:8], ([0], True, 1.0, None))
-        self.assertEqual(call[8:10], (3.0, -2.0))
-        self.assertAlmostEqual(call[10], 2 / (3 ** 0.5))
-        self.assertEqual(call[11:14], (12, 0.0, False))
-        self.assertEqual(call[3][:2], [1.0, 0.0])
+        self.assertEqual(call[5:9], ([0], True, 1.0, None))
+        self.assertEqual(call[9:11], (3.0, -2.0))
+        self.assertAlmostEqual(call[11], 2 / (3 ** 0.5))
+        self.assertEqual(call[12:15], (12, 0.0, False))
+        self.assertEqual(call[4][:2], [1.0, 0.0])
         self.assertIsNotNone(value._graph_handle)
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
@@ -589,10 +623,12 @@ class GraphFacadeTests(unittest.TestCase):
         )
         call = self.context.spring_layout_calls[0]
         self.assertIs(call[0], value._graph_handle)
-        self.assertEqual(call[2:6], ([], True, 1.0, None))
-        self.assertEqual(call[6:8], (0.0, 0.0))
-        self.assertAlmostEqual(call[8], 2 / (2 ** 0.5))
-        self.assertEqual(call[9:12], (50, 1e-4, False))
+        self.assertEqual(call[1], [1.0])
+        self.assertEqual(call[2][:2], [2.0, 1.0])
+        self.assertEqual(call[3:7], ([], True, 1.0, None))
+        self.assertEqual(call[7:9], (0.0, 0.0))
+        self.assertAlmostEqual(call[9], 2 / (2 ** 0.5))
+        self.assertEqual(call[10:13], (50, 1e-4, False))
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_fixed_nodes_outside_the_graph_are_ignored_by_networkx(self):
@@ -604,9 +640,9 @@ class GraphFacadeTests(unittest.TestCase):
             },
         )
         call = self.context.creation_calls[0]
-        self.assertEqual(call[4:6], ([], True))
-        self.assertAlmostEqual(call[10], 4 / (2 ** 0.5))
-        self.assertFalse(call[13])
+        self.assertEqual(call[5:7], ([], True))
+        self.assertAlmostEqual(call[11], 4 / (2 ** 0.5))
+        self.assertFalse(call[14])
 
     @unittest.skipUnless(_HAS_NUMPY, "NetworkX spring seeding requires NumPy")
     def test_spring_layout_rejects_unsupported_configuration_before_publication(self):

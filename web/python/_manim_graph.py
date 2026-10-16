@@ -193,6 +193,30 @@ def _edge_style_override_rows(edges, keyed_config):
     return rows
 
 
+def _coerce_graph_edges(edges):
+    """Split NetworkX-style edge tuples from their retained topology keys."""
+    topology, attributes = [], []
+    for index, edge in enumerate(edges):
+        if isinstance(edge, (str, bytes)):
+            raise TypeError(f"Graph edge {index} must be a two- or three-item sequence")
+        try:
+            row = tuple(edge)
+        except TypeError as error:
+            raise TypeError(f"Graph edge {index} must be a two- or three-item sequence") from error
+        if len(row) == 2:
+            endpoints, data = row, {}
+        elif len(row) == 3:
+            endpoints = row[:2]
+            if not isinstance(row[2], Mapping):
+                raise TypeError(f"Graph edge {index} attributes must be a mapping")
+            data = dict(row[2])
+        else:
+            raise ValueError(f"Graph edge {index} must contain two endpoints and optional attributes")
+        topology.append(tuple(endpoints))
+        attributes.append(data)
+    return topology, attributes
+
+
 class _GraphBase(_compat.Group):
     """Shared retained Graph/DiGraph facade.
 
@@ -242,7 +266,7 @@ class _GraphBase(_compat.Group):
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
         vertex_mapping = vertices if isinstance(vertices, Mapping) else None
         vertices = tuple(vertices)
-        edges = list(edges)
+        edges, edge_data = _coerce_graph_edges(edges)
         explicit = layout if isinstance(layout, Mapping) else (
             vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
         )
@@ -281,6 +305,7 @@ class _GraphBase(_compat.Group):
         if explicit is not None and len(explicit) != len(self._graph_key_ids):
             raise ValueError("Graph layout must cover every vertex exactly once")
         self._graph_edges = [tuple(edge) for edge in edges]
+        self._graph_edge_data = edge_data
         edge_ids = self._edge_ids(edges)
         global_vertex_config, keyed_vertex_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids),
@@ -310,6 +335,7 @@ class _GraphBase(_compat.Group):
              scale, scale_y, spring_fixed_is_set) = _spring_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
             )
+            spring_edge_weights = self._layout_edge_weights(layout_config)
         elif random_layout:
             center, random_positions, scale, scale_y = _random_layout_config(
                 layout_config, layout_center, self._graph_key_ids, layout_scale
@@ -336,9 +362,13 @@ class _GraphBase(_compat.Group):
             center, scale, scale_y = _spectral_layout_config(
                 layout_config, layout_center, layout_scale,
             )
+            spectral_edge_weights = self._layout_edge_weights(layout_config)
         elif kamada_kawai:
             center, kamada_kawai_distances, kamada_kawai_positions = _kamada_kawai_layout_config(
                 layout_config, layout_center, self._graph_key_ids,
+            )
+            kamada_kawai_edge_weights = self._layout_edge_weights(
+                layout_config, use_weight=not kamada_kawai_distances
             )
         if not spring and not random_layout and not tree:
             if shell:
@@ -375,6 +405,7 @@ class _GraphBase(_compat.Group):
                 self._graph_handle = create_graph(
                     context.liveCreateSpringGraph,
                     bool(self._directed), ids, _array(edge_ids),
+                    _array(spring_edge_weights),
                     _array(value for point in spring_positions for value in point),
                     _array(fixed_indices), spring_fixed_is_set,
                     scale, scale_y, *center, spring_k, spring_iterations, spring_threshold,
@@ -423,12 +454,13 @@ class _GraphBase(_compat.Group):
             elif spectral:
                 self._graph_handle = create_graph(
                     context.liveCreateSpectralGraph, bool(self._directed), ids,
-                    _array(edge_ids), scale, scale_y, *center,
+                    _array(edge_ids), _array(spectral_edge_weights), scale, scale_y, *center,
                 )
             elif kamada_kawai:
                 self._graph_handle = create_graph(
                     context.liveCreateKamadaKawaiGraph,
                     bool(self._directed), ids, _array(edge_ids),
+                    _array(kamada_kawai_edge_weights),
                     _array(kamada_kawai_distances),
                     _array(value for point in kamada_kawai_positions for value in point),
                     scale, scale_y, *center,
@@ -459,6 +491,20 @@ class _GraphBase(_compat.Group):
             except KeyError as error:
                 raise ValueError("Graph edge references an unknown vertex key") from error
         return values
+
+    def _layout_edge_weights(self, layout_config, *, use_weight=True):
+        if not use_weight:
+            return [1.0] * len(self._graph_edges)
+        options = {} if layout_config is None else layout_config
+        weight = options.get("weight", "weight")
+        if weight is None:
+            return [1.0] * len(self._graph_edges)
+        return [
+            _shared._ir._finite_number(
+                f"edge data {weight!r}", attributes.get(weight, 1.0)
+            )
+            for attributes in self._graph_edge_data
+        ]
 
     def _edge_style_target(self, edge):
         if len(edge) != 2:
@@ -748,6 +794,7 @@ class _GraphBase(_compat.Group):
         self._graph_key_ids.update(zip(new_vertices, vertex_ids))
         self._next_graph_id = next_id + len(new_vertices)
         self._graph_edges.extend(edges)
+        self._graph_edge_data.extend({} for _ in edges)
         self._edge_mapping = None
         added_mobjects = [self[key] for key in new_vertices]
         added_mobjects.extend(self._edge_style_target(edge) for edge in edges)
@@ -790,10 +837,13 @@ class _GraphBase(_compat.Group):
         removed = set(keys)
         for key in keys:
             del self._graph_key_ids[key]
-        self._graph_edges = [
-            edge for edge in self._graph_edges
+        kept_edges = [
+            (edge, attributes)
+            for edge, attributes in zip(self._graph_edges, self._graph_edge_data)
             if edge[0] not in removed and edge[1] not in removed
         ]
+        self._graph_edges = [edge for edge, _ in kept_edges]
+        self._graph_edge_data = [attributes for _, attributes in kept_edges]
         self._edge_wrappers = {
             edge: wrapper for edge, wrapper in self._edge_wrappers.items()
             if edge[0] not in removed and edge[1] not in removed
@@ -842,7 +892,13 @@ class _GraphBase(_compat.Group):
         removed = set(edges)
         if not self._directed:
             removed.update((end, start) for start, end in edges)
-        self._graph_edges = [edge for edge in self._graph_edges if edge not in removed]
+        kept_edges = [
+            (edge, attributes)
+            for edge, attributes in zip(self._graph_edges, self._graph_edge_data)
+            if edge not in removed
+        ]
+        self._graph_edges = [edge for edge, _ in kept_edges]
+        self._graph_edge_data = [attributes for _, attributes in kept_edges]
         for start, end in edges:
             cache_key = (start, end)
             if not self._directed and self._graph_key_ids[start] > self._graph_key_ids[end]:
@@ -857,6 +913,7 @@ class _GraphBase(_compat.Group):
         clone._directed = self._directed
         clone._graph_key_ids = dict(self._graph_key_ids)
         clone._graph_edges = list(self._graph_edges)
+        clone._graph_edge_data = [dict(attributes) for attributes in self._graph_edge_data]
         clone._edge_wrappers = {}
         clone._edge_mapping = None
         clone._next_graph_id = self._next_graph_id
@@ -885,9 +942,11 @@ class _GraphBase(_compat.Group):
              iterations, threshold, rescale, scale, scale_y, fixed_is_set) = _spring_layout_config(
                 layout_config, center, self._graph_key_ids, scale
             )
+            edge_weights = self._layout_edge_weights(layout_config)
             engine_call(
                 self._context().liveGraphSpringLayout,
                 self._graph_handle,
+                _array(edge_weights),
                 _array(value for point in initial_positions for value in point),
                 _array(fixed_indices), fixed_is_set,
                 scale, scale_y, *center, spring_k, iterations, threshold, rescale,
@@ -968,9 +1027,11 @@ class _GraphBase(_compat.Group):
             center, scale_x, scale_y = _spectral_layout_config(
                 layout_config, center, scale,
             )
+            edge_weights = self._layout_edge_weights(layout_config)
             engine_call(
                 self._context().liveGraphSpectralLayout,
                 self._graph_handle,
+                _array(edge_weights),
                 scale_x, scale_y, *center,
                 operation="Graph.spectral_layout",
             )
@@ -979,10 +1040,14 @@ class _GraphBase(_compat.Group):
             center, distances, initial_positions = _kamada_kawai_layout_config(
                 layout_config, center, vertex_order,
             )
+            edge_weights = self._layout_edge_weights(
+                layout_config, use_weight=not distances
+            )
             scale_x, scale_y = _layout_scale_pair(scale)
             engine_call(
                 self._context().liveGraphKamadaKawaiLayout,
                 self._graph_handle,
+                _array(edge_weights),
                 _array(distances),
                 _array(value for point in initial_positions for value in point),
                 scale_x, scale_y, *center,

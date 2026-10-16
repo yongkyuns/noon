@@ -975,6 +975,7 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         partitions: Vec::new(),
         align_horizontal: false,
         spring_k: None,
+        edge_weights: None,
         spring_positions: None,
         kamada_kawai_distances: None,
         kamada_kawai_positions: None,
@@ -1484,6 +1485,189 @@ fn networkx_spring_layout_matches_seeded_reference_coordinates() {
         assert!((actual.0 - expected.0).abs() < 1e-10);
         assert!((actual.1 - expected.1).abs() < 1e-10);
     }
+}
+
+#[test]
+fn networkx_spring_layout_matches_pinned_multivertex_and_digraph_coordinates() {
+    // Pinned NetworkX 3.4.2 `spring_layout` references using the NumPy
+    // RandomState initial positions for seeds 42 and 7, respectively.
+    let path = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 2.0,
+        scale_y: Some(1.25),
+        center: (1.0, -2.0),
+        iterations: 50,
+        threshold: 1e-4,
+        spring_positions: Some(vec![
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+            (0.05808361216819946, 0.8661761457749352),
+            (0.6011150117432088, 0.7080725777960455),
+        ]),
+        ..Default::default()
+    }
+    .positions(5, &[(0, 1), (1, 2), (2, 3), (3, 4)])
+    .unwrap();
+    let path_reference = [
+        (3.0, -1.9453931433601155),
+        (2.06361978791608, -1.9758266129423419),
+        (0.9985033322178558, -2.006092893623233),
+        (-0.06357397532063591, -2.028_462_903_362_837),
+        (-0.9985491448133004, -2.0442244467114725),
+    ];
+    for (actual, expected) in path.iter().zip(path_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+
+    let directed = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        directed: true,
+        scale: 1.7,
+        center: (-0.5, 0.75),
+        spring_k: Some(0.63),
+        iterations: 73,
+        threshold: 0.0,
+        spring_positions: Some(vec![
+            (0.07630828937395717, 0.7799187922401146),
+            (0.4384092314408935, 0.7234651778309412),
+            (0.9779895119966027, 0.5384958704104337),
+            (0.5011204636599379, 0.07205113335976154),
+        ]),
+        ..Default::default()
+    }
+    .positions(4, &[(0, 1), (0, 2), (2, 1), (2, 3), (3, 0)])
+    .unwrap();
+    let directed_reference = [
+        (-0.3059420956467281, 1.1902530786888847),
+        (1.0806868557705473, 1.0077426406959196),
+        (-0.5747447601238205, 0.2588213071066179),
+        (-2.2, 0.5431829735085794),
+    ];
+    for (actual, expected) in directed.iter().zip(directed_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn weighted_networkx_layouts_use_selected_edge_data_in_shared_rust() {
+    let edges = [(0, 1), (1, 2), (2, 3)];
+    let weights = vec![2.5, 4.0, 1.25];
+    let spring = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 1.5,
+        scale_y: Some(0.8),
+        center: (0.5, -1.0),
+        iterations: 60,
+        threshold: 0.0,
+        spring_k: None,
+        edge_weights: Some(weights.clone()),
+        spring_positions: Some(vec![
+            (0.5172978838465893, 0.9469626038148141),
+            (0.7654597593969069, 0.2823958439671127),
+            (0.22104536326165258, 0.6862220852374669),
+            (0.16713920310005626, 0.39244246646503067),
+        ]),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    let spring_reference = [
+        (1.8672682556016835, -0.464_641_451_848_663),
+        (0.9700694905218645, -0.8159430284538818),
+        (0.1626622538764519, -1.132_086_010_750_578),
+        (-1.0, -1.5873295089468775),
+    ];
+    for (actual, expected) in spring.iter().zip(spring_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+
+    let spectral = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 1.4,
+        center: (0.25, -0.5),
+        edge_weights: Some(weights.clone()),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    // The x eigenvector sign is arbitrary in NetworkX's LAPACK path. Rust
+    // canonicalizes it to make native/WASM output deterministic, reflecting
+    // the centered NetworkX coordinates across the selected axis.
+    let spectral_reference = [
+        (1.1749289665469258, 0.6140386707421335),
+        (0.7062459650299819, -1.0674666301091018),
+        (0.2688250684230923, -1.5830814645392155),
+        (-1.15, 0.03650942390618395),
+    ];
+    for (actual, expected) in spectral.iter().zip(spectral_reference) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-10,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.1 - expected.1).abs() < 1e-10,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    let kamada_kawai = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        scale: 1.5,
+        scale_y: Some(0.8),
+        center: (0.5, -1.0),
+        edge_weights: Some(weights),
+        kamada_kawai_positions: Some(vec![(-1.0, 0.0), (0.0, 1.0), (1.0, 0.0), (0.0, -1.0)]),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    let kamada_kawai_reference = [
+        (-1.0, -0.3334610669043988),
+        (-0.1140510979850262, -0.7375262912463174),
+        (1.3261118081841214, -1.3696891976564902),
+        (1.787939289800905, -1.5593234441927935),
+    ];
+    for (actual, expected) in kamada_kawai.iter().zip(kamada_kawai_reference) {
+        assert!(
+            (actual.0 - expected.0).abs() < 0.025,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.1 - expected.1).abs() < 0.025,
+            "{actual:?} != {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn weighted_networkx_layouts_reject_invalid_shared_edge_weights() {
+    for layout in [
+        GraphLayout::Spring,
+        GraphLayout::Spectral,
+        GraphLayout::KamadaKawai,
+    ] {
+        for edge_weights in [vec![], vec![f64::INFINITY]] {
+            assert!(GraphLayoutOptions {
+                layout,
+                edge_weights: Some(edge_weights),
+                ..Default::default()
+            }
+            .positions(3, &[(0, 1), (1, 2)])
+            .is_err());
+        }
+    }
+
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        edge_weights: Some(vec![0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .is_err());
 }
 
 #[test]

@@ -959,6 +959,7 @@ impl CanonicalAuthoringSceneContext {
         directed: bool,
         vertex_ids: &[u32],
         edge_pairs: &[u32],
+        edge_weights: &[f64],
         scale: f64,
         scale_y: Option<f64>,
         center_x: f64,
@@ -991,6 +992,7 @@ impl CanonicalAuthoringSceneContext {
             scale_y,
             center: (center_x, center_y),
             directed,
+            edge_weights: Some(edge_weights.to_vec()),
             ..Default::default()
         }
         .positions(vertex_ids.len(), &edge_indices)
@@ -1013,6 +1015,7 @@ impl CanonicalAuthoringSceneContext {
         directed: bool,
         vertex_ids: &[u32],
         edge_pairs: &[u32],
+        edge_weights: &[f64],
         distances: &[f64],
         initial_positions: &[f64],
         scale: f64,
@@ -1059,6 +1062,7 @@ impl CanonicalAuthoringSceneContext {
             scale_y,
             center: (center_x, center_y),
             directed,
+            edge_weights: Some(edge_weights.to_vec()),
             kamada_kawai_distances: distances,
             kamada_kawai_positions: initial_positions,
             ..Default::default()
@@ -1305,6 +1309,7 @@ impl CanonicalAuthoringSceneContext {
         directed: bool,
         vertex_ids: &[u32],
         edge_pairs: &[u32],
+        edge_weights: &[f64],
         initial_positions: &[f64],
         fixed_vertex_indices: &[u32],
         fixed_is_set: bool,
@@ -1365,6 +1370,7 @@ impl CanonicalAuthoringSceneContext {
             iterations: iterations as usize,
             threshold,
             spring_k: k,
+            edge_weights: Some(edge_weights.to_vec()),
             spring_positions: Some(initial_positions),
             spring_fixed,
             spring_rescale: rescale,
@@ -1644,6 +1650,7 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_graph_spectral_layout(
         &mut self,
         graph: &mut WasmGraphHandle,
+        edge_weights: &[f64],
         scale: f64,
         scale_y: Option<f64>,
         center_x: f64,
@@ -1663,6 +1670,7 @@ impl CanonicalAuthoringSceneContext {
                 scale,
                 scale_y,
                 center: (center_x, center_y),
+                edge_weights: Some(edge_weights.to_vec()),
                 ..Default::default()
             }),
         )
@@ -1673,6 +1681,7 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_graph_kamada_kawai_layout(
         &mut self,
         graph: &mut WasmGraphHandle,
+        edge_weights: &[f64],
         distances: &[f64],
         initial_positions: &[f64],
         scale: f64,
@@ -1710,6 +1719,7 @@ impl CanonicalAuthoringSceneContext {
                 scale_y,
                 center: (center_x, center_y),
                 directed,
+                edge_weights: Some(edge_weights.to_vec()),
                 kamada_kawai_distances: distances,
                 kamada_kawai_positions: initial_positions,
                 ..Default::default()
@@ -1722,6 +1732,7 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_graph_spring_layout(
         &mut self,
         graph: &mut WasmGraphHandle,
+        edge_weights: &[f64],
         initial_positions: &[f64],
         fixed_vertex_indices: &[u32],
         fixed_is_set: bool,
@@ -1763,6 +1774,7 @@ impl CanonicalAuthoringSceneContext {
                 iterations: iterations as usize,
                 threshold,
                 spring_k: k,
+                edge_weights: Some(edge_weights.to_vec()),
                 spring_positions: Some(initial_positions),
                 spring_fixed,
                 spring_rescale: rescale,
