@@ -176,10 +176,12 @@ fn number_line_tip_identity_survives_labels_copy_and_reordering() {
         copied_tip.node_id(),
         copied.mobject(&tip).unwrap().node_id()
     );
-    copy.family()
-        .apply_matrix(&[1.0, 0.25, 0.0, 1.0], 2, 2, 0.0, 0.0)
-        .unwrap();
+    copy.family().shift(3.0, 4.0).unwrap();
     assert_eq!(copy.tip().unwrap().unwrap().node_id(), copied_tip.node_id());
+    near(
+        copy.authored_frame().unwrap().number_to_point(2.0).unwrap(),
+        [5.0, 4.0],
+    );
 }
 
 #[test]
