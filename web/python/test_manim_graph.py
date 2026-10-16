@@ -13,7 +13,15 @@ class _Family:
 class _Handle:
     def __init__(self, token):
         self.token = token
+        self.semanticSlot = token
+        self.semanticGeneration = 1
         self.family = lambda: _Family()
+
+    def vertex(self, key):
+        return _Handle(key + 100)
+
+    def edge(self, start, end):
+        return _Family()
 
 
 class _GraphOptions:
@@ -177,9 +185,27 @@ class GraphFacadeTests(unittest.TestCase):
             ],
         )
 
-    def test_per_key_and_unsupported_style_configs_fail_before_graph_publication(self):
-        with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config"):
-            graph.Graph(["a"], [], vertex_config={"a": {"fill_color": "#ffffff"}})
+    def test_per_key_vertex_and_edge_style_configs_apply_after_publication(self):
+        with patch.object(graph, "_apply_key_style") as apply_style:
+            graph.Graph(
+                ["a", "b"], [("a", "b")],
+                vertex_config={"a": {"fill_color": "#112233"}},
+                edge_config={("a", "b"): {"color": "#445566", "stroke_width": 2}},
+            )
+        self.assertEqual(apply_style.call_count, 2)
+        vertex_style = apply_style.call_args_list[0].args[1]
+        edge_style = apply_style.call_args_list[1].args[1]
+        self.assertEqual(vertex_style["fill_color"], graph._compat._as_color("color", "#112233"))
+        self.assertEqual(edge_style["color"], graph._compat._as_color("color", "#445566"))
+        self.assertEqual(edge_style["stroke_width"], 2)
+        self.assertEqual(graph._compat._manim_stroke_width(edge_style["stroke_width"]), 0.02)
+        self.assertEqual(len(self.context.creation_calls), 1)
+
+    def test_invalid_per_key_and_unsupported_style_configs_fail_before_publication(self):
+        with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config key 0"):
+            graph.Graph(["a"], [], vertex_config={0: {"fill_color": "#ffffff"}})
+        with self.assertRaisesRegex(NotImplementedError, "unsupported per-key vertex_config"):
+            graph.Graph(["a"], [], vertex_config={"a": {"radius": 0.2}})
         with self.assertRaisesRegex(NotImplementedError, "per-key vertex_config"):
             graph.Graph(["a"], [], vertex_config={0: "#ffffff"})
         with self.assertRaisesRegex(TypeError, "unsupported edge_config"):

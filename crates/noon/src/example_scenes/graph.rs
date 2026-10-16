@@ -1,6 +1,9 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
-use crate::{ExecutionSession, GraphOptions, MobjectTarget, Scene, BLUE, GREEN, RED};
+use crate::{
+    ExecutionSession, GraphOptions, MobjectTarget, Scene, StyleUpdate, BLUE, GREEN, PURPLE, RED,
+    YELLOW,
+};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -24,12 +27,42 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     graph.change_layout_positions(&mut scene, &[(-5.0, -1.0), (-3.5, 1.2), (-2.0, -1.0)])?;
     graph.add_vertices(&mut scene, [("d", (-3.5, -2.4))])?;
     graph.add_edges(&mut scene, [("a", "d")])?;
+    graph.vertex(&"b").unwrap().clone().set_style(StyleUpdate {
+        fill_color: Some(YELLOW),
+        ..Default::default()
+    })?;
+    graph
+        .edge(&"a", &"b")
+        .unwrap()
+        .family()
+        .set_style(StyleUpdate {
+            fill_color: Some(PURPLE),
+            stroke_color: Some(PURPLE),
+            ..Default::default()
+        })?;
 
     let mut digraph = scene.digraph_with_options(
         [("u", (2.0, -1.0)), ("v", (3.5, 1.2)), ("w", (5.0, -1.0))],
         [("u", "v"), ("v", "w"), ("w", "u")],
         options,
     )?;
+    digraph
+        .vertex(&"v")
+        .unwrap()
+        .clone()
+        .set_style(StyleUpdate {
+            fill_color: Some(YELLOW),
+            ..Default::default()
+        })?;
+    digraph
+        .edge(&"v", &"w")
+        .unwrap()
+        .family()
+        .set_style(StyleUpdate {
+            fill_color: Some(PURPLE),
+            stroke_color: Some(PURPLE),
+            ..Default::default()
+        })?;
 
     digraph.change_layout(
         &mut scene,

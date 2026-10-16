@@ -38,21 +38,58 @@ _VERTEX_CONFIG_KEYS = frozenset(
 _EDGE_CONFIG_KEYS = frozenset({"color", "stroke_color", "stroke_width"})
 
 
-def _global_style_config(name, value, supported):
+def _split_style_config(name, value, supported, entity_keys):
     if value is None:
-        return {}
+        return {}, {}
     if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping of global style options")
-    values = dict(value)
-    unknown = [key for key in values if key not in supported]
+        raise TypeError(f"{name} must be a mapping")
+    global_values, per_key = {}, {}
+    for key, option in dict(value).items():
+        if key in entity_keys:
+            if not isinstance(option, Mapping):
+                raise TypeError(f"{name}[{key!r}] must be a mapping of style options")
+            per_key[key] = _validated_key_style(name, option)
+        elif isinstance(key, str) and key in supported:
+            global_values[key] = option
+        elif isinstance(key, tuple) and name == "edge_config":
+            raise ValueError(f"edge_config references unknown edge {key!r}")
+        elif not isinstance(key, str):
+            raise NotImplementedError(f"per-key {name} key {key!r} is not present in this graph")
+        else:
+            raise TypeError(f"unsupported {name} option: {key}")
+    return global_values, per_key
+
+
+def _validated_key_style(name, value):
+    supported = {"color", "fill_color", "stroke_color", "fill_opacity", "stroke_width"}
+    unknown = [key for key in value if key not in supported]
     if unknown:
-        if (any(not isinstance(key, str) for key in unknown)
-                or any(isinstance(candidate, Mapping) for candidate in values.values())):
-            raise NotImplementedError(f"per-key {name} is not supported")
-        raise TypeError(
-            f"unsupported {name} option(s): " + ", ".join(sorted(map(str, unknown)))
+        raise NotImplementedError(
+            f"unsupported per-key {name} style option(s): "
+            + ", ".join(sorted(map(str, unknown)))
         )
-    return values
+    result = dict(value)
+    for key in ("color", "fill_color", "stroke_color"):
+        if key in result:
+            result[key] = _compat._as_color(f"{name}.{key}", result[key])
+    if "fill_opacity" in result:
+        result["fill_opacity"] = _compat._opacity(f"{name}.fill_opacity", result["fill_opacity"])
+    if "stroke_width" in result:
+        _compat._manim_stroke_width(result["stroke_width"])
+    return result
+
+
+def _apply_key_style(target, values):
+    fill_color = values.get("fill_color")
+    stroke_color = values.get("stroke_color")
+    if "color" in values:
+        fill_color = stroke_color = values["color"]
+    target.set_style(
+        fill_color=fill_color,
+        fill_opacity=values.get("fill_opacity"),
+        stroke_color=stroke_color,
+        stroke_width=values.get("stroke_width"),
+    )
 
 
 def _set_color(method, name, value):
@@ -64,8 +101,8 @@ def _set_color(method, name, value):
 def _graph_style_options(vertex_config, edge_config):
     if _graph_options is None:
         raise RuntimeError("Graph requires the shared Rust authoring host")
-    vertices = _global_style_config("vertex_config", vertex_config, _VERTEX_CONFIG_KEYS)
-    edges = _global_style_config("edge_config", edge_config, _EDGE_CONFIG_KEYS)
+    vertices = vertex_config
+    edges = edge_config
     options = engine_call(_graph_options, operation="Graph.style")
     try:
         if "color" in vertices:
@@ -97,7 +134,10 @@ class _GraphBase(_compat.Group):
 
     Circular layouts accept NetworkX's ``center`` and ``dim=2`` configuration
     through ``layout_config``. Other circular options and dimensions above two
-    remain unsupported until their Rust semantics are qualified.
+    remain unsupported until their Rust semantics are qualified. Constructor
+    ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
+    fill-opacity, and stroke-width overrides for vertices and edges present at
+    construction time; other per-key constructor options remain unsupported.
     """
 
     # This typed vector wrapper retains the shared family-paint contract.
@@ -113,8 +153,11 @@ class _GraphBase(_compat.Group):
         edge_config = kwargs.pop("edge_config", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
+        vertex_mapping = vertices if isinstance(vertices, Mapping) else None
+        vertices = tuple(vertices)
+        edges = list(edges)
         explicit = layout if isinstance(layout, Mapping) else (
-            vertices if layout in {None, "explicit"} and isinstance(vertices, Mapping) else None
+            vertex_mapping if layout in {None, "explicit"} and vertex_mapping is not None else None
         )
         circular = isinstance(layout, str) and layout == "circular"
         if explicit is None and not circular:
@@ -137,13 +180,19 @@ class _GraphBase(_compat.Group):
         if explicit is not None and len(explicit) != len(self._graph_key_ids):
             raise ValueError("Graph layout must cover every vertex exactly once")
         edge_ids = self._edge_ids(edges)
+        global_vertex_config, keyed_vertex_config = _split_style_config(
+            "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids)
+        )
+        global_edge_config, keyed_edge_config = _split_style_config(
+            "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
+        )
         center = (_circular_layout_center(layout_config, layout_center)
                   if circular else _point(layout_center))
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
         context = _shared._live_constructor_context("Graph", allow_unstarted=True)
         if context is None:
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
-        options = _graph_style_options(vertex_config, edge_config)
+        options = _graph_style_options(global_vertex_config, global_edge_config)
         ids = _array(self._graph_key_ids.values())
         try:
             if circular:
@@ -161,6 +210,10 @@ class _GraphBase(_compat.Group):
             raise
         _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
         self._canonical_live_target_context = context
+        for key, style in keyed_vertex_config.items():
+            _apply_key_style(self[key], style)
+        for edge, style in keyed_edge_config.items():
+            _apply_key_style(self._edge_style_target(edge), style)
 
     def _edge_ids(self, edges):
         values = []
@@ -170,6 +223,21 @@ class _GraphBase(_compat.Group):
             except KeyError as error:
                 raise ValueError("Graph edge references an unknown vertex key") from error
         return values
+
+    def _edge_style_target(self, edge):
+        if len(edge) != 2:
+            raise ValueError("edge_config keys must be two-vertex tuples")
+        try:
+            start, end = (self._graph_key_ids[key] for key in edge)
+        except KeyError as error:
+            raise ValueError(f"edge_config references unknown vertex {error.args[0]!r}") from error
+        family = engine_call(self._graph_handle.edge, start, end, operation="Graph.edge")
+        if family is None:
+            raise ValueError(f"edge_config references unknown edge {edge!r}")
+        target = object.__new__(_compat.Group)
+        _shared._attach_shared_family(target, family, self._context())
+        target._canonical_live_target_context = self._context()
+        return target
 
     def _refresh_semantic_members(self):
         _shared._attach_shared_family(self, self._semantic_family_handle, self._context())

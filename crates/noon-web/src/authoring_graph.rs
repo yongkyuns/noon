@@ -325,6 +325,18 @@ impl WasmGraphHandle {
             vertex.clone(),
         ))
     }
+
+    /// Resolve one edge to its retained semantic family, including arrow tips.
+    #[wasm_bindgen(js_name = edge)]
+    pub fn edge(&self, start: u32, end: u32) -> Option<crate::WasmAuthoringFamilyHandle> {
+        let edge = match &self.inner {
+            NativeGraph::Undirected(graph) => graph.edge(&start, &end),
+            NativeGraph::Directed(graph) => graph.edge(&start, &end),
+        }?;
+        Some(crate::WasmAuthoringFamilyHandle::from_semantic_family(
+            edge.family().clone(),
+        ))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
