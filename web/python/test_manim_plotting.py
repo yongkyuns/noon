@@ -60,6 +60,73 @@ class PlottingAdapterTests(unittest.TestCase):
                     plotting.NumberLine(values)
             context.assert_not_called()
 
+    def test_number_line_constructor_attaches_requested_numeric_labels(self):
+        for include_numbers, numbers_to_include, expected in (
+            (True, None, None),
+            (False, [1.0, -1.0], [1.0, -1.0]),
+            (False, None, None),
+        ):
+            with self.subTest(expected=expected), \
+                 patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+                 patch.object(plotting, "_coordinate_options") as factory, \
+                 patch.object(plotting, "_array", side_effect=list), \
+                 patch.object(plotting, "_create_coordinates", return_value=object()), \
+                 patch.object(plotting, "_attach_number_line"), \
+                 patch.object(plotting.NumberLine, "add_numbers") as add_numbers:
+                line = plotting.NumberLine(
+                    [-2, 2, 1], include_numbers=include_numbers,
+                    numbers_to_include=numbers_to_include,
+                    numbers_to_exclude=[0], font_size=30,
+                    label_direction=plotting._base.UP,
+                    line_to_number_buff=0.4,
+                )
+                if include_numbers or numbers_to_include is not None:
+                    add_numbers.assert_called_once_with(
+                        x_values=expected, excluding=[0]
+                    )
+                    self.assertEqual(line.font_size, 30)
+                    self.assertEqual(line.label_direction, plotting._base.UP)
+                    self.assertEqual(line.line_to_number_buff, 0.4)
+                else:
+                    add_numbers.assert_not_called()
+
+    def test_number_line_rejects_unavailable_label_constructors_and_configs_early(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context:
+            with self.assertRaises(NotImplementedError):
+                plotting.NumberLine(label_constructor=object)
+            with self.assertRaises(NotImplementedError):
+                plotting.NumberLine(decimal_number_config={"group_with_commas": True})
+            with self.assertRaises(TypeError):
+                plotting.NumberLine(decimal_number_config=1)
+            context.assert_not_called()
+
+    def test_number_line_decimal_precision_uses_step_or_explicit_config(self):
+        for step, config, expected in (
+            (0.25, None, 2),
+            (0.1, {"num_decimal_places": 3}, 3),
+        ):
+            with self.subTest(step=step, config=config), \
+                 patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+                 patch.object(plotting, "_coordinate_options"), \
+                 patch.object(plotting, "_array", side_effect=list), \
+                 patch.object(plotting, "_create_coordinates", return_value=object()), \
+                 patch.object(plotting, "_attach_number_line"), \
+                 patch("_manim_number_labels.number_mobjects") as build:
+                line = plotting.NumberLine(
+                    [-2, 2, step], include_numbers=True,
+                    decimal_number_config=config,
+                )
+                self.assertEqual(line.decimal_number_config,
+                                 {"num_decimal_places": expected})
+                build.assert_called_once()
+                self.assertEqual(build.call_args.kwargs["config"]["decimal_places"],
+                                 expected)
+
+        with self.assertRaises(TypeError):
+            plotting.NumberLine(decimal_number_config={"num_decimal_places": True})
+        with self.assertRaises(ValueError):
+            plotting.NumberLine(decimal_number_config={"num_decimal_places": 13})
+
     def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
         frame = SimpleNamespace(
             tickValues=Mock(return_value=[-2.0, -1.0, 1.0]),
@@ -125,13 +192,25 @@ class PlottingAdapterTests(unittest.TestCase):
         with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
             self.assertIs(line.get_number_mobject(0), expected)
         build.assert_called_once_with(line, (0.0,), attach=False,
-                                      config={"exclude_zero": False})
+                config={
+                    "direction": plotting._base.DOWN,
+                    "buff": plotting._base.MED_SMALL_BUFF,
+                    "font_size": 36,
+                    "decimal_places": 0,
+                    "exclude_zero": False,
+                })
 
         family = object()
         with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
             self.assertIs(line.get_number_mobjects(0, 1), family)
             build.assert_called_once_with(line, (0, 1), attach=False,
-                                         config={"exclude_zero": False})
+                                         config={
+                                             "direction": plotting._base.DOWN,
+                                             "buff": plotting._base.MED_SMALL_BUFF,
+                                             "font_size": 36,
+                                             "decimal_places": 0,
+                                             "exclude_zero": False,
+                                         })
 
         with patch.object(plotting.NumberLine, "get_number_mobjects", return_value=family) as get:
             self.assertIs(line.get_labels(), family)
@@ -142,16 +221,34 @@ class PlottingAdapterTests(unittest.TestCase):
         with patch("_manim_number_labels.number_mobjects") as build:
             self.assertIs(line.add_numbers((0, 1)), line)
             build.assert_called_once_with(line, (0, 1), attach=True,
-                                         config={"exclude_zero": False}, excluding=())
+                                         config={
+                                             "direction": plotting._base.DOWN,
+                                             "buff": plotting._base.MED_SMALL_BUFF,
+                                             "font_size": 36,
+                                             "decimal_places": 0,
+                                             "exclude_zero": False,
+                                         }, excluding=())
         with patch("_manim_number_labels.number_mobjects") as build:
             line.numbers_to_exclude = (0,)
             self.assertIs(line.add_numbers(), line)
             build.assert_called_once_with(line, None, attach=True,
-                                         config={"exclude_zero": False}, excluding=(0,))
+                                         config={
+                                             "direction": plotting._base.DOWN,
+                                             "buff": plotting._base.MED_SMALL_BUFF,
+                                             "font_size": 36,
+                                             "decimal_places": 0,
+                                             "exclude_zero": False,
+                                         }, excluding=(0,))
         with patch("_manim_number_labels.number_mobjects") as build:
             self.assertIs(line.add_numbers((0, 1), excluding=(), exclude_zero=True), line)
             build.assert_called_once_with(line, (0, 1), attach=True,
-                                         config={"exclude_zero": True}, excluding=())
+                                         config={
+                                             "direction": plotting._base.DOWN,
+                                             "buff": plotting._base.MED_SMALL_BUFF,
+                                             "font_size": 36,
+                                             "decimal_places": 0,
+                                             "exclude_zero": True,
+                                         }, excluding=())
 
     def test_number_line_add_labels_uses_native_text_subset_and_returns_self(self):
         line = object.__new__(plotting.NumberLine)
@@ -160,8 +257,9 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertIs(line.add_labels(labels), line)
         build.assert_called_once_with(line, labels, config={
             "direction": plotting._base.DOWN,
-            "buff": 0.12,
-            "font_size": 18,
+            "buff": plotting._base.MED_SMALL_BUFF,
+            "font_size": 36,
+            "decimal_places": 0,
         })
         with patch("_manim_number_labels.custom_labels") as build:
             with self.assertRaises(NotImplementedError):

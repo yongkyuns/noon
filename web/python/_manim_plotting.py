@@ -198,6 +198,11 @@ def _finite_axis_option(value, name, *, nonnegative=False):
     return value
 
 
+def _decimal_places_from_step(step):
+    step_text = str(step)
+    return len(step_text.split(".")[-1]) if "." in step_text else 0
+
+
 def _apply_three_d_axis_config(options, index, config):
     setters = {
         "include_tip": "setAxisTips",
@@ -249,12 +254,59 @@ class NumberLine(_compat.Group):
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, numbers_with_elongated_ticks=None,
-                 longer_tick_multiple=2, numbers_to_exclude=None,
+                 longer_tick_multiple=2, include_numbers=False,
+                 numbers_to_exclude=None, numbers_to_include=None,
+                 font_size=36, label_direction=None,
+                 line_to_number_buff=None, label_constructor=None,
+                 decimal_number_config=None,
                  color=None, **kwargs):
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
+        font_size = _finite_axis_option(font_size, "font_size")
+        if font_size <= 0:
+            raise ValueError("font_size must be positive")
+        label_direction = _base.DOWN if label_direction is None else label_direction
+        label_direction = _base._as_vec2(label_direction)
+        if line_to_number_buff is None:
+            line_to_number_buff = _base.MED_SMALL_BUFF
+        line_to_number_buff = _finite_axis_option(
+            line_to_number_buff, "line_to_number_buff"
+        )
+        if label_constructor is not None:
+            raise NotImplementedError(
+                "NumberLine constructor label_constructor requires the TeX label profile"
+            )
+        decimal_number_config = (
+            {} if decimal_number_config is None else decimal_number_config
+        )
+        if not isinstance(decimal_number_config, Mapping):
+            raise TypeError("decimal_number_config must be a mapping")
+        if any(not isinstance(key, str) for key in decimal_number_config):
+            raise TypeError("decimal_number_config keys must be strings")
+        unknown_decimal_options = sorted(
+            set(decimal_number_config) - {"num_decimal_places"}
+        )
+        if unknown_decimal_options:
+            raise NotImplementedError(
+                "unsupported NumberLine decimal_number_config option(s): "
+                + ", ".join(unknown_decimal_options)
+            )
+        if "num_decimal_places" in decimal_number_config:
+            decimal_places = decimal_number_config["num_decimal_places"]
+            if not isinstance(decimal_places, int) or isinstance(decimal_places, bool):
+                raise TypeError("num_decimal_places must be an integer")
+            if not 0 <= decimal_places <= 12:
+                raise ValueError("num_decimal_places must be between 0 and 12")
+        else:
+            decimal_places = None
+        numbers_to_include = (
+            None if numbers_to_include is None else list(numbers_to_include)
+        )
+        numbers_to_exclude = (
+            [] if numbers_to_exclude is None else list(numbers_to_exclude)
+        )
         context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
@@ -278,9 +330,22 @@ class NumberLine(_compat.Group):
             include_tip=False,
             exclude_origin_tick=bool(exclude_origin_tick),
         )
-        self.numbers_to_exclude = (
-            [] if numbers_to_exclude is None else list(numbers_to_exclude)
-        )
+        self.include_numbers = bool(include_numbers)
+        self.numbers_to_include = numbers_to_include
+        self.numbers_to_exclude = numbers_to_exclude
+        self.font_size = font_size
+        self.label_direction = label_direction
+        self.line_to_number_buff = line_to_number_buff
+        if decimal_places is None:
+            step = float(values[2]) if len(values) == 3 else 1.0
+            decimal_places = _decimal_places_from_step(step)
+        self.decimal_number_config = {"num_decimal_places": decimal_places}
+        self.number_label_decimal_places = decimal_places
+        if self.include_numbers or numbers_to_include is not None:
+            self.add_numbers(
+                x_values=numbers_to_include,
+                excluding=numbers_to_exclude,
+            )
 
     @property
     def shaft(self):
@@ -346,7 +411,7 @@ class NumberLine(_compat.Group):
         """Return one detached ordinary Text label at a numeric position."""
         from _manim_number_labels import number_mobjects
         number = _base._ir._finite_number("number", number)
-        config = dict(kwargs)
+        config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         labels = number_mobjects(self, (number,), attach=False, config=config)
         members = labels.submobjects
@@ -357,13 +422,25 @@ class NumberLine(_compat.Group):
     def get_number_mobjects(self, *numbers, **kwargs):
         """Return detached labels; no arguments selects automatic tick values."""
         from _manim_number_labels import number_mobjects
-        config = dict(kwargs)
+        config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         return number_mobjects(self, numbers or None, attach=False, config=config)
 
     def get_labels(self):
         """Return detached labels for the automatically selected tick values."""
         return self.get_number_mobjects()
+
+    def _number_label_config(self, values):
+        config = dict(values)
+        config.setdefault("direction", getattr(self, "label_direction", _base.DOWN))
+        config.setdefault(
+            "buff", getattr(self, "line_to_number_buff", _base.MED_SMALL_BUFF)
+        )
+        config.setdefault("font_size", getattr(self, "font_size", 36))
+        config.setdefault(
+            "decimal_places", getattr(self, "number_label_decimal_places", 0)
+        )
+        return config
 
     def add_labels(self, dict_values, direction=None, buff=None, font_size=None,
                    label_constructor=None):
@@ -377,14 +454,13 @@ class NumberLine(_compat.Group):
                 "NumberLine.add_labels custom constructors require the TeX label profile"
             )
         from _manim_number_labels import custom_labels
-        config = {
-            "direction": getattr(self, "label_direction", _base.DOWN)
-            if direction is None else direction,
-            "buff": getattr(self, "line_to_number_buff", 0.12)
-            if buff is None else buff,
-            "font_size": getattr(self, "font_size", 18)
-            if font_size is None else font_size,
-        }
+        config = self._number_label_config({})
+        if direction is not None:
+            config["direction"] = direction
+        if buff is not None:
+            config["buff"] = buff
+        if font_size is not None:
+            config["font_size"] = font_size
         custom_labels(self, dict_values, config=config)
         return self
 
@@ -395,7 +471,7 @@ class NumberLine(_compat.Group):
         earlier one. This bounded subset does not construct DecimalNumber/TeX.
         """
         from _manim_number_labels import number_mobjects
-        config = dict(kwargs)
+        config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         if excluding is None:
             excluding = getattr(self, "numbers_to_exclude", ())
