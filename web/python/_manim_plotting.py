@@ -338,10 +338,28 @@ class NumberLine(_compat.Group):
     def get_tick_marks(self):
         return self.ticks
 
-    def get_number_mobjects(self, *numbers, **kwargs):
-        """Detached ordinary Text labels; no arguments selects automatic ticks."""
+    def get_number_mobject(self, number, **kwargs):
+        """Return one detached ordinary Text label at a numeric position."""
         from _manim_number_labels import number_mobjects
-        return number_mobjects(self, numbers or None, attach=False, config=kwargs)
+        number = _base._ir._finite_number("number", number)
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        labels = number_mobjects(self, (number,), attach=False, config=config)
+        members = labels.submobjects
+        if len(members) != 1:
+            raise ValueError("number-label options excluded the requested number")
+        return members[0]
+
+    def get_number_mobjects(self, *numbers, **kwargs):
+        """Return detached labels; no arguments selects automatic tick values."""
+        from _manim_number_labels import number_mobjects
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        return number_mobjects(self, numbers or None, attach=False, config=config)
+
+    def get_labels(self):
+        """Return detached labels for the automatically selected tick values."""
+        return self.get_number_mobjects()
 
     def add_numbers(self, x_values=None, **kwargs):
         """Atomically append native Text labels before playback; expose .numbers.
@@ -350,7 +368,9 @@ class NumberLine(_compat.Group):
         earlier one. This bounded subset does not construct DecimalNumber/TeX.
         """
         from _manim_number_labels import number_mobjects
-        number_mobjects(self, x_values, attach=True, config=kwargs)
+        config = dict(kwargs)
+        config.setdefault("exclude_zero", False)
+        number_mobjects(self, x_values, attach=True, config=config)
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):

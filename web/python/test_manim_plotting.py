@@ -118,6 +118,40 @@ class PlottingAdapterTests(unittest.TestCase):
                     line.get_tick(*args)
             frame.assert_not_called()
 
+    def test_number_line_single_and_group_label_accessors_keep_zero_semantics(self):
+        line = object.__new__(plotting.NumberLine)
+        expected = object()
+        family = SimpleNamespace(submobjects=[expected])
+        with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
+            self.assertIs(line.get_number_mobject(0), expected)
+        build.assert_called_once_with(line, (0.0,), attach=False,
+                                      config={"exclude_zero": False})
+
+        family = object()
+        with patch("_manim_number_labels.number_mobjects", return_value=family) as build:
+            self.assertIs(line.get_number_mobjects(0, 1), family)
+            build.assert_called_once_with(line, (0, 1), attach=False,
+                                         config={"exclude_zero": False})
+
+        with patch.object(plotting.NumberLine, "get_number_mobjects", return_value=family) as get:
+            self.assertIs(line.get_labels(), family)
+        get.assert_called_once_with()
+
+    def test_number_line_number_labels_preserve_zero_unless_explicitly_excluded(self):
+        line = object.__new__(plotting.NumberLine)
+        with patch("_manim_number_labels.number_mobjects") as build:
+            self.assertIs(line.add_numbers((0, 1)), line)
+            build.assert_called_once_with(line, (0, 1), attach=True,
+                                         config={"exclude_zero": False})
+        with patch("_manim_number_labels.number_mobjects") as build:
+            self.assertIs(line.add_numbers(), line)
+            build.assert_called_once_with(line, None, attach=True,
+                                         config={"exclude_zero": False})
+        with patch("_manim_number_labels.number_mobjects") as build:
+            self.assertIs(line.add_numbers((0, 1), exclude_zero=True), line)
+            build.assert_called_once_with(line, (0, 1), attach=True,
+                                         config={"exclude_zero": True})
+
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (
             "plot",
