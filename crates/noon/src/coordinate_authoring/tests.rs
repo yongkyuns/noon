@@ -293,6 +293,44 @@ fn number_line_constructor_defaults_and_partial_ranges_are_shared() {
 }
 
 #[test]
+fn number_line_log_scale_is_retained_with_current_coordinate_queries() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.length = Some(4.0);
+    options.scale = noon_core::SemanticNumberLineScale::log(10.0);
+    let line = scene.number_line(&options).unwrap();
+    let frame = line.authored_frame().unwrap();
+
+    assert_eq!(line.range().unwrap(), [-2.0, 2.0, 1.0]);
+    near(frame.number_to_point(1.0).unwrap(), [0.0, 0.0]);
+    near(frame.number_to_point(10.0).unwrap(), [1.0, 0.0]);
+    assert!((frame.point_to_number([1.0, 0.0]).unwrap() - 10.0).abs() < 1.0e-10);
+    assert_eq!(
+        frame.scale().base(),
+        Some(10.0),
+        "scale metadata survives semantic publication"
+    );
+    assert!(frame.number_to_point(0.0).is_err());
+    let tick_values = frame.tick_values(false, false, 10).unwrap();
+    assert_eq!(tick_values.len(), 5);
+    for (actual, expected) in tick_values.into_iter().zip([0.01, 0.1, 1.0, 10.0, 100.0]) {
+        assert!((actual - expected).abs() < 1.0e-12);
+    }
+}
+
+#[test]
+fn invalid_log_number_line_domain_fails_before_semantic_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimNumberLineOptions::new([-400.0, -300.0, 1.0]);
+    options.scale = noon_core::SemanticNumberLineScale::log(10.0);
+
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn axes_positive_negative_ranges_use_numerical_midpoints() {
     let mut scene = Scene::new();
     let axes = scene
@@ -309,6 +347,50 @@ fn axes_positive_negative_ranges_use_numerical_midpoints() {
     near(frame.point_to_coords([4.0, 2.0]).unwrap(), [6.0, -2.0]);
     near(frame.x().start(), [-4.0, 2.0]);
     near(frame.y().start(), [-4.0, -2.0]);
+}
+
+#[test]
+fn axes_log_scale_maps_coordinate_queries_and_keeps_the_log_origin_tick() {
+    let mut scene = Scene::new();
+    let mut options = ManimAxesOptions::new([0.0, 4.0, 1.0], [-2.0, 2.0, 1.0], 8.0, 4.0);
+    options.y_scale = noon_core::SemanticNumberLineScale::log(10.0);
+    let axes = scene.axes(&options).unwrap();
+    let frame = axes.authored_frame().unwrap();
+
+    near(frame.coords_to_point(2.0, 10.0).unwrap(), [0.0, 1.0]);
+    near(
+        frame
+            .point_to_coords(frame.coords_to_point(2.0, 10.0).unwrap())
+            .unwrap(),
+        [2.0, 10.0],
+    );
+    assert_eq!(frame.y().origin_value().unwrap(), 0.01);
+    assert_eq!(
+        frame.y().tick_values(false, false, 10).unwrap(),
+        [0.01, 0.1, 1.0, 10.0, 100.0]
+    );
+    let log_ticks = axes.y_axis().unwrap().ticks().unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(log_ticks.node_id())
+            .unwrap()
+            .len(),
+        5
+    );
+}
+
+#[test]
+fn axes_invalid_log_domain_fails_before_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimAxesOptions::new([-2.0, 2.0, 1.0], [-400.0, 2.0, 1.0], 4.0, 2.0);
+    options.y_scale = noon_core::SemanticNumberLineScale::log(10.0);
+
+    assert!(scene.axes(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
 }
 
 #[test]

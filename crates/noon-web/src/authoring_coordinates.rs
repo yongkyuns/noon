@@ -10,6 +10,7 @@ use noon::{
     ManimThreeDAxesFrame, ManimThreeDAxesOptions, NumberLineFrame, PlotSamplingOptions,
     RiemannRectangleOptions, RiemannSample,
 };
+use noon_core::SemanticNumberLineScale;
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::{js_error, AuthoringFailure};
@@ -31,6 +32,18 @@ pub(crate) enum CoordinateRequest {
     NumberPlane(noon::ManimNumberPlaneOptions),
     PolarPlane(noon::ManimPolarPlaneOptions),
     ThreeDAxes(ManimThreeDAxesOptions),
+}
+
+fn coordinate_scale(kind: &str, parameter: f64) -> Result<SemanticNumberLineScale, JsValue> {
+    let scale = match kind {
+        "linear" => SemanticNumberLineScale::linear(parameter),
+        "log" => SemanticNumberLineScale::log(parameter),
+        _ => return Err(js_error("unsupported coordinate scale kind")),
+    };
+    if !scale.is_valid() {
+        return Err(js_error("invalid coordinate scale parameter"));
+    }
+    Ok(scale)
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -240,6 +253,29 @@ impl WasmCoordinateOptions {
         }
         options.tip_width = width;
         options.tip_height = height;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setNumberLineScale)]
+    pub fn set_number_line_scale(&mut self, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberLine(options) = &mut self.request else {
+            return Err(js_error("scale settings require a NumberLine"));
+        };
+        options.scale = coordinate_scale(kind, parameter)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxesScale)]
+    pub fn set_axes_scale(&mut self, axis: u32, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::Axes(options) = &mut self.request else {
+            return Err(js_error("scale settings require Axes"));
+        };
+        let scale = coordinate_scale(kind, parameter)?;
+        match axis {
+            0 => options.x_scale = scale,
+            1 => options.y_scale = scale,
+            _ => return Err(js_error("Axes axis index must be 0 or 1")),
+        }
         Ok(())
     }
 

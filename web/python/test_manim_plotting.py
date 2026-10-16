@@ -10,6 +10,7 @@ except ImportError:
     np = None
 
 import _manim_plotting as plotting
+import noon as public_api
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
 
 
@@ -111,6 +112,37 @@ class PlottingAdapterTests(unittest.TestCase):
             0.35,
         )
         self.assertTrue(attach.call_args.kwargs["include_tip"])
+
+    def test_number_line_constructor_forwards_logarithmic_scale_to_rust(self):
+        scaling = plotting.LogBase(base=2, custom_labels=False)
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line"):
+            line = plotting.NumberLine((-2, 2, 1), scaling=scaling)
+
+        factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 2.0)
+        self.assertIs(line.scaling, scaling)
+
+    def test_number_line_rejects_unqualified_scale_labels_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context, \
+             patch.object(plotting, "_coordinate_options") as factory:
+            with self.assertRaisesRegex(NotImplementedError, "custom labels"):
+                plotting.NumberLine((-2, 2, 1), scaling=plotting.LogBase(), include_numbers=True)
+            with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
+                plotting.NumberLine((-2, 2, 1), scaling=object())
+            context.assert_not_called()
+            factory.numberLine.assert_not_called()
+
+    def test_builtin_number_line_scale_helpers_preserve_scalar_and_sequence_semantics(self):
+        self.assertIs(public_api.LinearBase, plotting.LinearBase)
+        self.assertIs(public_api.LogBase, plotting.LogBase)
+        self.assertEqual(plotting.LinearBase(2).function((-1, 0, 1)), [-2.0, 0.0, 2.0])
+        self.assertEqual(plotting.LogBase(10).function((-1, 0, 1)), [0.1, 1.0, 10.0])
+        self.assertAlmostEqual(plotting.LogBase(10).inverse_function(100), 2.0)
+        with self.assertRaises(ValueError):
+            plotting.LogBase().inverse_function(0)
 
     def test_unit_interval_inherits_retained_number_line_tip_support(self):
         with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
@@ -394,6 +426,42 @@ class PlottingAdapterTests(unittest.TestCase):
             with self.subTest(method=name):
                 self.assertTrue(callable(getattr(plotting.Axes, name, None)))
         self.assertFalse(hasattr(plotting.ThreeDAxes, "plot_samples"))
+
+    def test_axes_forward_common_and_per_axis_scales_to_rust(self):
+        common = plotting.LogBase(base=2, custom_labels=False)
+        y_scale = plotting.LinearBase(scale_factor=3)
+        x_axis = SimpleNamespace()
+        y_axis = SimpleNamespace()
+        handle = SimpleNamespace(coordinateAxis=Mock(side_effect=["x-axis", "y-axis"]))
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=handle), \
+             patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]) as attach, \
+             patch.object(plotting, "_coordinate_family"):
+            plotting.Axes(
+                axis_config={"scaling": common},
+                y_axis_config={"scaling": y_scale},
+            )
+
+        options = factory.axes.return_value
+        options.setAxesScale.assert_any_call(0, "log", 2.0)
+        options.setAxesScale.assert_any_call(1, "linear", 3.0)
+        self.assertIs(x_axis.scaling, common)
+        self.assertIs(y_axis.scaling, y_scale)
+        self.assertFalse(attach.call_args_list[0].kwargs["exclude_origin_tick"])
+        self.assertTrue(attach.call_args_list[1].kwargs["exclude_origin_tick"])
+        self.assertEqual([call.args[1] for call in attach.call_args_list], ["x-axis", "y-axis"])
+
+    def test_axes_reject_unqualified_axis_config_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context, \
+             patch.object(plotting, "_coordinate_options") as factory:
+            with self.assertRaisesRegex(NotImplementedError, "include_numbers"):
+                plotting.Axes(axis_config={"include_numbers": True})
+            with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
+                plotting.Axes(x_axis_config={"scaling": object()})
+            context.assert_not_called()
+            factory.axes.assert_not_called()
 
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf

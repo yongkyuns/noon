@@ -1,4 +1,5 @@
 use super::*;
+use noon_core::SemanticNumberLineScale;
 
 fn frame() -> AxesFrame {
     AxesFrame::centered([0.0, 10.0, 2.0], [0.0, 2.0, 0.5], 10.0, 4.0).unwrap()
@@ -35,6 +36,32 @@ fn tick_labels_use_the_shared_range_and_real_numeric_values() {
     );
     near(labels[0].point, [-3.0, -2.0]);
     near(labels[4].point, [5.0, -2.0]);
+}
+
+#[test]
+fn logarithmic_labels_exclude_numeric_zero_without_dropping_the_unit_tick() {
+    let line = NumberLineFrame::centered_with_scale(
+        [-2.0, 2.0, 1.0],
+        4.0,
+        0.0,
+        SemanticNumberLineScale::log(10.0),
+    )
+    .unwrap();
+    let labels = number_labels(line, None, 2, true).unwrap();
+    for (actual, expected) in labels
+        .iter()
+        .map(|label| label.number)
+        .zip([0.01, 0.1, 1.0, 10.0, 100.0])
+    {
+        assert!((actual - expected).abs() < 1.0e-12);
+    }
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<Vec<_>>(),
+        ["0.01", "0.10", "1.00", "10.00", "100.00"]
+    );
 }
 
 #[test]

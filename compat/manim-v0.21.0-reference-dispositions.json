@@ -4800,7 +4800,7 @@
     {
       "id": "reference-32ccd9416c553cdc",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks LogBase. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "LogBase numeric coordinate mapping now works on Axes, but this fixture requests numeric labels through axis_config and TeX custom labels. Axes numeric-label config and TeX custom labels remain unqualified; the map/query subset does not qualify this source.",
       "owners": [
         "#85",
         "#89",
@@ -4814,10 +4814,7 @@
         "name": "LogScalingExample",
         "source_sha256": "2e782f8956ae973849648208a0dc6cf10458d398d137afd9dd8555a68e07604b"
       },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "LogBase"
-      ]
+      "blocker_kind": "behavior"
     },
     {
       "id": "reference-bf421ad3bee7f499",

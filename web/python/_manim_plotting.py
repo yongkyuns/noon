@@ -1,4 +1,4 @@
-"""Linear coordinate families and preparation-only plots over shared Rust handles.
+"""Scaled coordinate families and preparation-only plots over shared Rust handles.
 
 The 2D Axes wrapper accepts Manim-style two- or three-value ranges and delegates
 range normalization, defaults, ticks, and retained filled tips to Rust. The
@@ -181,6 +181,112 @@ _THREE_D_AXIS_CONFIG_KEYS = {
 _DEFAULT_NUMBER_LINE_TIP_SIZE = 0.35
 
 
+class LinearBase:
+    """Linear NumberLine scale description; mapping is evaluated in Rust."""
+
+    custom_labels = False
+
+    def __init__(self, scale_factor=1.0):
+        scale_factor = _finite_axis_option(scale_factor, "scale_factor")
+        if scale_factor == 0:
+            raise ValueError("LinearBase scale_factor must be non-zero")
+        self.scale_factor = scale_factor
+
+    def function(self, value):
+        return _map_scale_values(value, lambda item: self.scale_factor * item)
+
+    def inverse_function(self, value):
+        return _map_scale_values(value, lambda item: item / self.scale_factor)
+
+
+class LogBase:
+    """Logarithmic NumberLine scale description; mapping is evaluated in Rust."""
+
+    def __init__(self, base=10, custom_labels=True):
+        base = _finite_axis_option(base, "base")
+        if base <= 0 or base == 1:
+            raise ValueError("LogBase base must be positive and not equal to one")
+        if not isinstance(custom_labels, bool):
+            raise TypeError("custom_labels must be a bool")
+        self.base = base
+        self.custom_labels = custom_labels
+
+    def function(self, value):
+        return _map_scale_values(value, lambda item: self.base ** item)
+
+    def inverse_function(self, value):
+        def inverse(item):
+            if item <= 0:
+                raise ValueError("logarithmic scale values must be positive")
+            return math.log(item, self.base)
+        return _map_scale_values(value, inverse)
+
+    def get_custom_labels(self, values, **kwargs):
+        raise NotImplementedError(
+            "LogBase custom labels require the TeX label profile"
+        )
+
+
+def _map_scale_values(value, function):
+    try:
+        scalar = float(value)
+    except (TypeError, ValueError):
+        try:
+            return [function(float(item)) for item in value]
+        except TypeError:
+            raise TypeError("scale value must be a number or iterable of numbers") from None
+    return function(scalar)
+
+
+def _number_line_scale(scaling):
+    if scaling is None:
+        return "linear", 1.0, False
+    if isinstance(scaling, LinearBase):
+        return "linear", scaling.scale_factor, False
+    if isinstance(scaling, LogBase):
+        return "log", scaling.base, scaling.custom_labels
+    if type(scaling).__name__ == "LinearBase" and hasattr(scaling, "scale_factor"):
+        factor = _finite_axis_option(scaling.scale_factor, "scale_factor")
+        if factor == 0:
+            raise ValueError("LinearBase scale_factor must be non-zero")
+        return "linear", factor, bool(getattr(scaling, "custom_labels", False))
+    if type(scaling).__name__ == "LogBase" and hasattr(scaling, "base"):
+        base = _finite_axis_option(scaling.base, "base")
+        if base <= 0 or base == 1:
+            raise ValueError("LogBase base must be positive and not equal to one")
+        return "log", base, bool(getattr(scaling, "custom_labels", True))
+    raise NotImplementedError("NumberLine scaling supports LinearBase and LogBase")
+
+
+def _axes_scale_config(config, name):
+    if config is None:
+        return {}
+    if not isinstance(config, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    if any(not isinstance(key, str) for key in config):
+        raise TypeError(f"{name} keys must be strings")
+    unknown = sorted(set(config) - {"scaling"})
+    if unknown:
+        raise NotImplementedError(
+            f"unsupported {name} option(s): " + ", ".join(unknown)
+        )
+    return dict(config)
+
+
+def _axes_scalings(axis_config, x_axis_config, y_axis_config):
+    common = _axes_scale_config(axis_config, "axis_config")
+    x_config = {**common, **_axes_scale_config(x_axis_config, "x_axis_config")}
+    y_config = {**common, **_axes_scale_config(y_axis_config, "y_axis_config")}
+    try:
+        x_scale = _number_line_scale(x_config.get("scaling"))
+        y_scale = _number_line_scale(y_config.get("scaling"))
+    except NotImplementedError as error:
+        raise NotImplementedError(
+            "Axes scaling supports LinearBase and LogBase"
+        ) from error
+    return x_config.get("scaling"), x_scale, y_config.get("scaling"), y_scale
+
+
 def _three_d_axis_config(value, name):
     if value is None:
         return {}
@@ -252,13 +358,14 @@ def _three_d_axis_label_object(label):
 
 
 class NumberLine(_compat.Group):
-    """Linear number line with Rust-owned defaults, ticks, and optional tip."""
+    """Linear or LogBase number line with shared Rust queries and retained ticks."""
     set_opacity = _compat.VGroup.set_opacity
     set_fill = _compat.VGroup.set_fill
     set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
+                 scaling=None,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, numbers_with_elongated_ticks=None,
                  longer_tick_multiple=2, include_numbers=False,
@@ -271,6 +378,11 @@ class NumberLine(_compat.Group):
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
+        scale_kind, scale_parameter, custom_scale_labels = _number_line_scale(scaling)
+        if custom_scale_labels and (include_numbers or numbers_to_include is not None):
+            raise NotImplementedError(
+                "NumberLine LogBase custom labels require the TeX label profile"
+            )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         font_size = _finite_axis_option(font_size, "font_size")
         if font_size <= 0:
@@ -334,6 +446,7 @@ class NumberLine(_compat.Group):
             engine_call(options.setTicks, bool(include_ticks), tick_size, bool(exclude_origin_tick))
             engine_call(options.setTips, bool(include_tip))
             engine_call(options.setNumberLineTipDimensions, tip_width, tip_height)
+            engine_call(options.setNumberLineScale, scale_kind, scale_parameter)
             engine_call(options.setElongatedTicks,
                         _array(() if numbers_with_elongated_ticks is None else numbers_with_elongated_ticks),
                         float(longer_tick_multiple))
@@ -350,6 +463,7 @@ class NumberLine(_compat.Group):
         )
         self.tip_width = tip_width
         self.tip_height = tip_height
+        self.scaling = scaling if scaling is not None else LinearBase()
         self.include_numbers = bool(include_numbers)
         self.numbers_to_include = numbers_to_include
         self.numbers_to_exclude = numbers_to_exclude
@@ -561,14 +675,18 @@ class UnitInterval(NumberLine):
 
 
 class Axes(_compat.Group):
-    """Linear 2D axes with Manim v0.21 ranges, dimensions, and filled tips."""
+    """2D axes with Manim v0.21 ranges, dimensions, filled tips, and scales."""
     set_opacity = _compat.VGroup.set_opacity
     set_fill = _compat.VGroup.set_fill
     set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
-                 include_ticks=True, tick_size=0.1, color=None, **kwargs):
+                 include_ticks=True, tick_size=0.1, axis_config=None,
+                 x_axis_config=None, y_axis_config=None, color=None, **kwargs):
+        x_scaling, x_scale, y_scaling, y_scale = _axes_scalings(
+            axis_config, x_axis_config, y_axis_config
+        )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         context = _coordinate_constructor_context()
         options = engine_call(
@@ -581,21 +699,27 @@ class Axes(_compat.Group):
         try:
             engine_call(options.setTicks, bool(include_ticks), tick_size, True)
             engine_call(options.setTips, bool(tips))
+            engine_call(options.setAxesScale, 0, x_scale[0], x_scale[1])
+            engine_call(options.setAxesScale, 1, y_scale[0], y_scale[1])
             _coordinate_style(options, color, kwargs)
         except BaseException:
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
-        members = [
-            _attach_number_line(
+        members = []
+        for index, (scaling, scale, exclude_origin) in enumerate((
+            (x_scaling, x_scale, x_scale[0] != "log"),
+            (y_scaling, y_scale, y_scale[0] != "log"),
+        )):
+            axis = _attach_number_line(
                 object.__new__(NumberLine),
                 engine_call(handle.coordinateAxis, index),
                 tick_size=float(tick_size),
                 include_tip=bool(tips),
-                exclude_origin_tick=True,
+                exclude_origin_tick=exclude_origin,
             )
-            for index in (0, 1)
-        ]
+            axis.scaling = scaling if scaling is not None else LinearBase()
+            members.append(axis)
         _coordinate_family(self, handle, members)
 
     @property
