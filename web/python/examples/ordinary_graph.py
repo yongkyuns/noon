@@ -63,19 +63,18 @@ class OrdinaryGraph(Scene):
                 "resolution": 0.35, "equidistant": True, "center": (0, -2.6),
             },
         )
+        partitions = [["q0"], ["q1", "q2"]]
         partite_graph = Graph(
             ["q0", "q1", "q2"], [("q0", "q1"), ("q1", "q2")],
-            layout="partite", layout_scale=(0.9, 0.55),
+            layout="partite", layout_scale=(0.9, 0.55), partitions=partitions,
             layout_config={
-                "partitions": [["q0"], ["q1", "q2"]],
                 "align": "horizontal", "center": (3.5, 2.6),
             },
             **styles,
         )
         partite_graph.change_layout(
-            "partite", scale=(0.9, 0.55),
+            "partite", scale=(0.9, 0.55), partitions=partitions,
             layout_config={
-                "partitions": [["q0"], ["q1", "q2"]],
                 "align": "horizontal", "center": (3.5, 2.6),
             },
         )

@@ -635,6 +635,48 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertTrue(self.context.creation_calls[1][0])
 
+    def test_partitions_argument_matches_manim_constructor_and_change_precedence(self):
+        value = graph.Graph(
+            ["a", "b", "c", "d"], [], layout="partite",
+            partitions=[["c", "a"], ["b"]],
+        )
+        self.assertEqual(
+            self.context.creation_calls[0][3:6],
+            ([0, 2, 1, 3], [2, 1, 1], 2.0),
+        )
+
+        value.change_layout(
+            "partite", partitions=[["b"], ["a"]],
+            layout_config={"partitions": [["c"], ["b", "a"]], "align": "horizontal"},
+        )
+        self.assertEqual(
+            self.context.partite_layout_calls[0][1:4],
+            ([2, 0, 1, 3], [1, 2, 1], 2.0),
+        )
+        self.assertTrue(self.context.partite_layout_calls[0][-1])
+
+        configured = graph.Graph(
+            ["a", "b", "c"], [], layout="partite",
+            partitions=[["a"], ["b", "c"]],
+            layout_config={"partitions": [["c"], ["a"]]},
+        )
+        self.assertEqual(
+            self.context.creation_calls[1][3:5],
+            ([2, 0, 1], [1, 1, 1]),
+        )
+        self.assertIsNotNone(configured._graph_handle)
+
+    def test_partitions_argument_rejects_unknown_vertices_and_wrong_layouts(self):
+        with self.assertRaisesRegex(ValueError, "unknown vertex"):
+            graph.Graph(["a", "b"], [], layout="partite", partitions=[["missing"]])
+        with self.assertRaisesRegex(NotImplementedError, "only by the partite layout"):
+            graph.Graph(["a"], [], partitions=[["a"]])
+        value = graph.Graph({"a": (0, 0)}, [])
+        with self.assertRaisesRegex(NotImplementedError, "only by the partite layout"):
+            value.change_layout("circular", partitions=[["a"]])
+        self.assertEqual(len(self.context.creation_calls), 1)
+        self.assertEqual(self.context.partite_layout_calls, [])
+
     def test_partite_layout_rejects_missing_or_unsupported_configuration(self):
         invalid = [
             ({}, ValueError, "requires a non-empty partitions"),

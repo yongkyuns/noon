@@ -1,8 +1,6 @@
 //! Opaque Graph/DiGraph handles. Python maps its arbitrary keys to `u32`; this
 //! module never interprets graph JSON or owns endpoint/layout geometry.
 
-use std::collections::HashMap;
-
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 

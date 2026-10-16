@@ -156,7 +156,8 @@ class _GraphBase(_compat.Group):
     remain unsupported until their Rust semantics are qualified. Two-axis
     ``layout_scale`` tuples are supported for spring, random, circular, spiral,
     partite, and tree layouts; shell layout follows NetworkX's scalar-only
-    scale contract. Constructor
+    scale contract. Partite layouts accept ``partitions`` directly or in
+    ``layout_config``; the latter takes precedence. Constructor
     ``vertex_config`` and ``edge_config`` accept per-key color, fill, stroke,
     fill-opacity, and stroke-width overrides for vertices and edges present at
     construction time; other per-key constructor options remain unsupported.
@@ -174,6 +175,7 @@ class _GraphBase(_compat.Group):
         vertex_config = kwargs.pop("vertex_config", None)
         edge_config = kwargs.pop("edge_config", None)
         root_vertex = kwargs.pop("root_vertex", None)
+        partitions = kwargs.pop("partitions", None)
         if kwargs:
             raise TypeError("unsupported Graph option(s): " + ", ".join(sorted(kwargs)))
         vertex_mapping = vertices if isinstance(vertices, Mapping) else None
@@ -191,6 +193,8 @@ class _GraphBase(_compat.Group):
         partite = isinstance(layout, str) and layout == "partite"
         if root_vertex is not None and not tree:
             raise NotImplementedError("root_vertex is supported only by the tree layout")
+        if partitions is not None and not partite:
+            raise NotImplementedError("partitions are supported only by the partite layout")
         if (explicit is None and not spring and not random_layout and not tree
                 and not circular and not shell and not spiral and not partite):
             raise NotImplementedError("Graph requires a qualified layout or a complete position mapping")
@@ -223,7 +227,7 @@ class _GraphBase(_compat.Group):
             center = _circular_layout_center(layout_config, layout_center)
         shell_groups, rotate = ([], None)
         resolution, equidistant = (0.35, False)
-        partitions, align_horizontal = ([], False)
+        partite_groups, align_horizontal = ([], False)
         spring_positions, fixed_indices, spring_k = ([], [], None)
         random_positions = []
         tree_root, tree_orientation_up, tree_spacing = (None, False, None)
@@ -254,8 +258,9 @@ class _GraphBase(_compat.Group):
                 layout_config, layout_center, len(self._graph_key_ids)
             )
         elif partite:
-            center, partitions, align_horizontal = _partite_layout_config(
-                layout_config, layout_center, self._graph_key_ids
+            center, partite_groups, align_horizontal = _partite_layout_config(
+                layout_config, layout_center, self._graph_key_ids,
+                partitions=partitions,
             )
         if not spring and not random_layout and not tree:
             if shell:
@@ -314,7 +319,7 @@ class _GraphBase(_compat.Group):
                     resolution, equidistant, options, operation="Graph.create",
                 )
             elif partite:
-                partition_indices, partition_sizes = _flatten_groups(partitions)
+                partition_indices, partition_sizes = _flatten_groups(partite_groups)
                 self._graph_handle = engine_call(
                     context.liveCreatePartiteGraph,
                     bool(self._directed), ids, _array(edge_ids),
@@ -450,11 +455,14 @@ class _GraphBase(_compat.Group):
         return clone
 
     def change_layout(self, layout="spring", *, scale=2.0, center=(0.0, 0.0),
-                      positions=None, layout_config=None, root_vertex=None):
+                      positions=None, layout_config=None, root_vertex=None,
+                      partitions=None):
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
         if root_vertex is not None and layout != "tree":
             raise NotImplementedError("root_vertex is supported only by the tree layout")
+        if partitions is not None and layout != "partite":
+            raise NotImplementedError("partitions are supported only by the partite layout")
         if layout == "spring":
             (center, initial_positions, fixed_indices, spring_k,
              iterations, threshold, rescale, scale, scale_y, fixed_is_set) = _spring_layout_config(
@@ -526,7 +534,8 @@ class _GraphBase(_compat.Group):
             )
         elif layout == "partite":
             center, partitions, align_horizontal = _partite_layout_config(
-                layout_config, center, self._graph_key_ids
+                layout_config, center, self._graph_key_ids,
+                partitions=partitions,
             )
             partition_indices, partition_sizes = _flatten_groups(partitions)
             scale_x, scale_y = _layout_scale_pair(scale)
@@ -877,7 +886,7 @@ def _spiral_layout_config(layout_config, fallback_center, vertex_count):
     return center, resolution, equidistant
 
 
-def _partite_layout_config(layout_config, fallback_center, vertex_ids):
+def _partite_layout_config(layout_config, fallback_center, vertex_ids, *, partitions=None):
     """Resolve Manim's partition assignment and qualified NetworkX align options."""
     if layout_config is None:
         options = {}
@@ -895,7 +904,7 @@ def _partite_layout_config(layout_config, fallback_center, vertex_ids):
     align = options.get("align", "vertical")
     if align not in ("vertical", "horizontal"):
         raise ValueError("partite layout_config align must be 'vertical' or 'horizontal'")
-    specifications = options.get("partitions")
+    specifications = options.get("partitions", partitions)
     if specifications is None or isinstance(specifications, (str, bytes)) or not isinstance(specifications, Sequence):
         raise ValueError("partite layout requires a non-empty partitions sequence")
     if not specifications:
