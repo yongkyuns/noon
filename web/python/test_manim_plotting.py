@@ -626,6 +626,7 @@ class PlottingAdapterTests(unittest.TestCase):
         edge = plotting._base.Vec2(1, -1)
         direction = plotting._base.Vec2(1, 0.5)
         label = Mock()
+        label.get_edge_center.return_value = plotting._base.Vec2(0.0, 0.0)
         layout = SimpleNamespace(
             criticalX=Mock(return_value=4.0),
             criticalY=Mock(return_value=-3.0),
@@ -644,6 +645,56 @@ class PlottingAdapterTests(unittest.TestCase):
         layout.criticalY.assert_called_once_with(1.0, -1.0)
         label.next_to.assert_called_once_with(
             plotting._base.Vec2(4.0, -3.0), direction=direction, buff=0.25,
+        )
+        label.to_edge.assert_not_called()
+
+    def test_axis_label_screen_correction_matches_cardinal_edge_order_and_buffer(self):
+        class Label:
+            def __init__(self):
+                self.center = plotting._base.Vec2(7.0, 4.0)
+                self.width = 2.0
+                self.height = 1.0
+                self.edges = []
+
+            def get_edge_center(self, direction):
+                return plotting._base.Vec2(
+                    self.center.x + direction.x * self.width * 0.5,
+                    self.center.y + direction.y * self.height * 0.5,
+                )
+
+            def to_edge(self, direction, *, buff):
+                self.edges.append((direction, buff))
+                if direction.x:
+                    self.center = plotting._base.Vec2(
+                        direction.x * (plotting._base.DEFAULT_FRAME_WIDTH * 0.5
+                                       - buff - self.width * 0.5),
+                        self.center.y,
+                    )
+                else:
+                    self.center = plotting._base.Vec2(
+                        self.center.x,
+                        direction.y * (plotting._base.DEFAULT_FRAME_HEIGHT * 0.5
+                                       - buff - self.height * 0.5),
+                    )
+
+        label = Label()
+        self.assertIs(
+            plotting._shift_axis_label_onto_screen(label, buff=0.25), label
+        )
+        self.assertEqual(
+            label.edges,
+            [
+                (plotting._base.UP, 0.25),
+                (plotting._base.RIGHT, 0.25),
+            ],
+        )
+        self.assertAlmostEqual(
+            label.get_edge_center(plotting._base.UP).y,
+            plotting._base.DEFAULT_FRAME_HEIGHT * 0.5 - 0.25,
+        )
+        self.assertAlmostEqual(
+            label.get_edge_center(plotting._base.RIGHT).x,
+            plotting._base.DEFAULT_FRAME_WIDTH * 0.5 - 0.25,
         )
 
     def test_axes_label_numbers_reuse_mathtex_label_path(self):

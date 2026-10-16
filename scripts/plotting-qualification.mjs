@@ -368,7 +368,15 @@ class AxesLabels(Scene):
         plane_labels = plane.get_axis_labels(Text("u"), "v")
         assert plane.axis_labels is plane_labels
         assert len(plane_labels.submobjects) == 2
-        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels)
+
+        edge_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        edge_axes.shift(RIGHT * 6.5 + UP * 3.5)
+        edge_label = edge_axes.get_x_axis_label("edge", edge=UR, direction=UR, buff=0.1)
+        assert edge_label.get_right().x <= DEFAULT_FRAME_WIDTH / 2 - MED_SMALL_BUFF + 1e-6
+        assert edge_label.get_top().y <= DEFAULT_FRAME_HEIGHT / 2 - MED_SMALL_BUFF + 1e-6
+
+        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels,
+                 edge_axes, edge_label)
         await self.wait(0.05)
 `;
       const axisLabels = await qualifyPythonPlayback(context, baseUrl, axisLabelsSource, [0, 0.05]);

@@ -488,6 +488,22 @@ def _axis_edge_center(axis, edge):
     )
 
 
+def _shift_axis_label_onto_screen(label, *, buff):
+    """Mirror Manim's cardinal-edge shift using Noon's default frame bounds."""
+    half_extents = (
+        float(_base.DEFAULT_FRAME_WIDTH) * 0.5,
+        float(_base.DEFAULT_FRAME_HEIGHT) * 0.5,
+    )
+    directions = (_base.UP, _base.DOWN, _base.LEFT, _base.RIGHT)
+    for direction in directions:
+        dim = 0 if abs(direction.x) > abs(direction.y) else 1
+        edge = label.get_edge_center(direction)
+        projection = edge.x * direction.x + edge.y * direction.y
+        if projection > half_extents[dim] - buff:
+            label.to_edge(direction, buff=buff)
+    return label
+
+
 class NumberLine(_compat.Group):
     """Linear or LogBase number line with shared Rust queries and retained ticks."""
     set_opacity = _compat.VGroup.set_opacity
@@ -948,7 +964,7 @@ class Axes(_compat.Group):
         direction = _base._as_vec2(direction)
         buff = _finite_axis_option(buff, "buff", nonnegative=True)
         label.next_to(_axis_edge_center(axis, edge), direction=direction, buff=buff)
-        return label
+        return _shift_axis_label_onto_screen(label, buff=_base.MED_SMALL_BUFF)
 
     def get_x_axis_label(self, label, edge=_base.UR, direction=_base.UR,
                          buff=_base.SMALL_BUFF, **kwargs):
