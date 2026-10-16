@@ -40,5 +40,9 @@ jobs:
         run: cargo test -p noon-render-wgpu --lib gpu::retained_text::tests -- --nocapture
       - name: Compile and lint renderer
         run: cargo clippy -p noon-render-wgpu --all-targets -- -D warnings
+      - name: Install the same software Vulkan driver as Native Host Smoke
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
       - name: Native software Vulkan exact mixed pixel parity and draw counts
         run: cargo test -p noon-render-wgpu --lib gpu::retained_text::tests::mixed_mega_native_exact_pixels_against_individual_paths -- --ignored --exact --nocapture
