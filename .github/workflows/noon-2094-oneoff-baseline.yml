@@ -1,0 +1,76 @@
+# One-off #2094 diagnostic only. Branch-local push trigger, never merged to master.
+# Does not alter routine CI, pixel thresholds, renderer code, or #2057's gallery.
+name: Research 2094 frozen-scene baseline
+
+on:
+  push:
+    branches:
+      - codex/2094-oneoff-baseline
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-2094-oneoff-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Uncached authoring/render-worker baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 32
+    steps:
+      - name: Checkout baseline harness only
+        uses: actions/checkout@v4
+
+      - name: Download the already successful, pinned production Pages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          run-id: 38818274666
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/production-pages-zip
+
+      - name: Extract the matching immutable web package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/noon-2094-site"
+          tar -xf "${RUNNER_TEMP}/production-pages-zip/artifact.tar" \
+            -C "${RUNNER_TEMP}/noon-2094-site"
+          test -f "${RUNNER_TEMP}/noon-2094-site/runtime-build-identity.json"
+          test -f "${RUNNER_TEMP}/noon-2094-site/index.html"
+
+      - name: Recover the SHA-frozen scene without altering authored source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            'https://raw.githubusercontent.com/yongkyuns/noon/bf2dbd9fce11742065ccbb5bc2125a038c71c05f/tests/visual-effects/fixtures/showcase_triangle_light_vector_ending.py' \
+            --output "${RUNNER_TEMP}/noon-2094-frozen.py"
+          echo '32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e  '"${RUNNER_TEMP}/noon-2094-frozen.py" | sha256sum --check
+
+      - name: Install Chromium test runtime
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      - name: Run bounded original-scene baseline without caching
+        env:
+          NOON_BASELINE_SITE: ${{ runner.temp }}/noon-2094-site
+          NOON_BASELINE_SCENE: ${{ runner.temp }}/noon-2094-frozen.py
+          NOON_BASELINE_OUTPUT: ${{ github.workspace }}/noon-2094-evidence
+          NOON_BASELINE_REVISION: f6663ba3aa7a8c0a476a532ac2c6ef7ebcb24fb9
+        run: node experiments/2094/baseline.mjs
+
+      - name: Retain every successful or partial attempt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noon-2094-source-baseline-raw
+          path: |
+            noon-2094-evidence/
+            experiments/2094/baseline.mjs
+          if-no-files-found: error
+          retention-days: 7
