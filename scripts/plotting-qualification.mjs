@@ -25,6 +25,37 @@ assert.equal(
 );
 const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
 
+async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
+  const page = await context.newPage();
+  try {
+    page.setDefaultTimeout(90_000);
+    await page.goto(`${baseUrl}/web/manim-raster-host.html`);
+    await page.waitForFunction(() => window.noonHostRaster);
+    const loaded = await page.evaluate(
+      source => window.noonHostRaster.load(source, 1),
+      plotExampleSource,
+    );
+    assert.equal(loaded.kind, "semantic_execution");
+    assert.equal(loaded.duration, 0);
+    assert.equal(loaded.objectCount, 57);
+    assert.equal(loaded.rendererBackend, expectedBackend);
+    const metrics = await page.evaluate(
+      () => window.noonHostRaster.renderThrough(0, [0]),
+    );
+    assert.equal(metrics.error, null);
+    assert.equal(metrics.presented, true);
+    assert.equal(metrics.time, 0);
+    assert.equal(metrics.objectCount, 57);
+    const frame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+    assert.equal(frame.time, 0);
+    assert.equal(frame.objects.length, 57);
+    assert.ok(frame.objects.every(object => object.present));
+    console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample raster-host frame`);
+  } finally {
+    await page.close();
+  }
+}
+
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_PLOTTING_ARTIFACTS ?? "plotting-artifacts",
   cases: [
@@ -82,6 +113,7 @@ await qualifyPairedAuthoring({
       assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
         "each upstream log curve must retain two-dimensional sampled bounds");
       console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
+      await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *
 
 class CoordinateNumericLabels(Scene):
