@@ -462,7 +462,48 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertIsNot(copied._graph_handle, original._graph_handle)
         self.assertIsNot(copied._semantic_family_handle, original._semantic_family_handle)
         self.assertEqual(copied._graph_key_ids, original._graph_key_ids)
+        self.assertEqual(copied.edges.keys(), original.edges.keys())
+        self.assertIsNot(copied.edges[("a", "b")], original.edges[("a", "b")])
         self.assertEqual(copied._default_edge_config, original._default_edge_config)
+
+    def test_edges_mapping_tracks_constructor_add_and_remove_operations(self):
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+            [("c", "b"), ("a", "b")],
+        )
+        self.assertEqual(list(value.edges), [("a", "b"), ("b", "c")])
+        self.assertIsInstance(value.edges[("b", "c")], graph._compat.Group)
+        wrapper = value.edges[("b", "c")]
+        self.assertIs(wrapper, value.edges[("b", "c")])
+        self.assertIs(wrapper, value._edge_style_target(("c", "b")))
+
+        value.add_edges([("a", "c")])
+        self.assertEqual(list(value.edges), [("a", "b"), ("a", "c"), ("b", "c")])
+        value.remove_edges([("c", "a")])
+        self.assertEqual(list(value.edges), [("a", "b"), ("b", "c")])
+
+        value.add_edges([("a", "c")])
+        value.remove_vertices(["b"])
+        self.assertEqual(list(value.edges), [("a", "c")])
+
+        directed = graph.DiGraph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+            [("c", "b"), ("a", "b"), ("a", "c")],
+        )
+        self.assertEqual(list(directed.edges), [("a", "b"), ("a", "c"), ("c", "b")])
+
+    def test_edges_mapping_changes_only_after_successful_mutation(self):
+        value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
+        before = list(value.edges)
+        self.context.fail = "add_edges"
+        with self.assertRaisesRegex(RuntimeError, "add_edges"):
+            value.add_edges([("b", "a")])
+        self.assertEqual(list(value.edges), before)
+
+        self.context.fail = "remove_edges"
+        with self.assertRaisesRegex(RuntimeError, "remove_edges"):
+            value.remove_edges([("a", "b")])
+        self.assertEqual(list(value.edges), before)
 
     def test_failed_publication_does_not_change_key_dictionary(self):
         value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])

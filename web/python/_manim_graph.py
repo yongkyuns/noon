@@ -234,6 +234,7 @@ class _GraphBase(_compat.Group):
                     raise ValueError("Graph layout must cover every vertex exactly once") from error
         if explicit is not None and len(explicit) != len(self._graph_key_ids):
             raise ValueError("Graph layout must cover every vertex exactly once")
+        self._graph_edges = [tuple(edge) for edge in edges]
         edge_ids = self._edge_ids(edges)
         global_vertex_config, keyed_vertex_config = _split_style_config(
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids),
@@ -365,6 +366,8 @@ class _GraphBase(_compat.Group):
         except BaseException:
             options.free()
             raise
+        self._edge_wrappers = {}
+        self._edge_mapping = None
         _shared._attach_shared_family(self, engine_call(self._graph_handle.family), context)
         self._canonical_live_target_context = context
         for key, style in keyed_vertex_config.items():
@@ -388,12 +391,19 @@ class _GraphBase(_compat.Group):
             start, end = (self._graph_key_ids[key] for key in edge)
         except KeyError as error:
             raise ValueError(f"edge_config references unknown vertex {error.args[0]!r}") from error
+        cache_key = tuple(edge)
+        if not self._directed and start > end:
+            cache_key = (edge[1], edge[0])
+        cached = self._edge_wrappers.get(cache_key)
+        if cached is not None:
+            return cached
         family = engine_call(self._graph_handle.edge, start, end, operation="Graph.edge")
         if family is None:
             raise ValueError(f"edge_config references unknown edge {edge!r}")
         target = object.__new__(_compat.Group)
         _shared._attach_shared_family(target, family, self._context())
         target._canonical_live_target_context = self._context()
+        self._edge_wrappers[cache_key] = target
         return target
 
     def _refresh_semantic_members(self):
@@ -419,6 +429,31 @@ class _GraphBase(_compat.Group):
     @property
     def vertices(self):
         return {key: self[key] for key in self._graph_key_ids}
+
+    @property
+    def edges(self):
+        """Resolve graph edge keys to wrappers around their retained families."""
+        if self._edge_mapping is not None:
+            return self._edge_mapping
+        adjacency = {key: [] for key in self._graph_key_ids}
+        for start, end in self._graph_edges:
+            adjacency[start].append(end)
+            if not self._directed:
+                adjacency[end].append(start)
+        ordered = []
+        seen_undirected = set()
+        for start, neighbors in adjacency.items():
+            for end in neighbors:
+                if not self._directed:
+                    undirected_key = frozenset((start, end))
+                    if undirected_key in seen_undirected:
+                        continue
+                    seen_undirected.add(undirected_key)
+                ordered.append((start, end))
+        self._edge_mapping = {
+            edge: self._edge_style_target(edge) for edge in ordered
+        }
+        return self._edge_mapping
 
     def add_vertices(self, vertices, *, vertex_config=None):
         """Append explicitly positioned vertices, optionally with per-key styles.
@@ -539,6 +574,8 @@ class _GraphBase(_compat.Group):
         except BaseException:
             options.free()
             raise
+        self._graph_edges.extend(tuple(edge) for edge in edges)
+        self._edge_mapping = None
         return self
 
     def remove_vertices(self, vertices):
@@ -549,13 +586,34 @@ class _GraphBase(_compat.Group):
             raise ValueError("unknown Graph vertex key") from error
         engine_call(self._context().liveGraphRemoveVertices, self._graph_handle,
                     _array(ids), operation="Graph.remove_vertices")
+        removed = set(keys)
         for key in keys:
             del self._graph_key_ids[key]
+        self._graph_edges = [
+            edge for edge in self._graph_edges
+            if edge[0] not in removed and edge[1] not in removed
+        ]
+        self._edge_wrappers = {
+            edge: wrapper for edge, wrapper in self._edge_wrappers.items()
+            if edge[0] not in removed and edge[1] not in removed
+        }
+        self._edge_mapping = None
         return self
 
     def remove_edges(self, edges):
+        edges = [tuple(edge) for edge in edges]
         engine_call(self._context().liveGraphRemoveEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.remove_edges")
+        removed = set(edges)
+        if not self._directed:
+            removed.update((end, start) for start, end in edges)
+        self._graph_edges = [edge for edge in self._graph_edges if edge not in removed]
+        for start, end in edges:
+            cache_key = (start, end)
+            if not self._directed and self._graph_key_ids[start] > self._graph_key_ids[end]:
+                cache_key = (end, start)
+            self._edge_wrappers.pop(cache_key, None)
+        self._edge_mapping = None
         return self
 
     def copy(self):
@@ -563,6 +621,9 @@ class _GraphBase(_compat.Group):
         clone = object.__new__(type(self))
         clone._directed = self._directed
         clone._graph_key_ids = dict(self._graph_key_ids)
+        clone._graph_edges = list(self._graph_edges)
+        clone._edge_wrappers = {}
+        clone._edge_mapping = None
         clone._next_graph_id = self._next_graph_id
         clone._default_vertex_config = dict(self._default_vertex_config)
         clone._default_edge_config = dict(self._default_edge_config)

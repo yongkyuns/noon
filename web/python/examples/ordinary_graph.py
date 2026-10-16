@@ -21,6 +21,8 @@ class OrdinaryGraph(Scene):
         )
         graph = Graph({"a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1)},
                       [("a", "b"), ("b", "c"), ("c", "a")], layout="explicit", **graph_styles)
+        assert tuple(graph.edges) == (("a", "b"), ("a", "c"), ("b", "c"))
+        _ = graph.edges[("a", "b")]
         graph.change_layout("explicit", positions={
             "a": (-5, -1), "b": (-3.5, 1.2), "c": (-2, -1),
         })
@@ -31,9 +33,12 @@ class OrdinaryGraph(Scene):
             [("a", "d")],
             edge_config={("a", "d"): {"color": PURPLE, "stroke_width": 3}},
         )
+        assert ("a", "d") in graph.edges
 
         directed = DiGraph({"u": (2, -1), "v": (3.5, 1.2), "w": (5, -1)},
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **directed_styles)
+        assert tuple(directed.edges) == (("u", "v"), ("v", "w"), ("w", "u"))
+        _ = directed.edges[("u", "v")]
         directed.change_layout("circular", scale=(1.6, 1.0), center=(3.5, 0))
         directed.add_vertices(
             {"x": (5, -2.3)}, vertex_config={"x": {"color": YELLOW}}
@@ -41,6 +46,7 @@ class OrdinaryGraph(Scene):
             [("w", "x")],
             edge_config={("w", "x"): {"color": PURPLE, "stroke_width": 3}},
         )
+        assert ("w", "x") in directed.edges
         centered = Graph(
             ["left", "right"], [("left", "right")], layout="circular",
             layout_scale=(1.4, 0.8), layout_config={"center": (3, -1), "dim": 2},
