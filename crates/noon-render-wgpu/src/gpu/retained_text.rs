@@ -4250,9 +4250,9 @@ mod tests {
                 Some(2),
             ]
         );
-        for index in 0..8 {
+        for (index, actual) in lookup.iter().enumerate() {
             assert_eq!(
-                lookup[index],
+                *actual,
                 batches
                     .iter()
                     .position(|batch| batch.instance_range.contains(&(index as u32)))
