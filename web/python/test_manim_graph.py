@@ -49,6 +49,11 @@ class _GraphOptions:
     def setEdgeStrokeWidth(self, value): self._record("edge_width", value)
 
 
+class _ResultGroup:
+    def __init__(self, *members):
+        self.submobjects = members
+
+
 class _Context:
     def __init__(self):
         self.next_token = 1
@@ -141,6 +146,7 @@ class GraphFacadeTests(unittest.TestCase):
             patch.object(graph._shared, "_live_constructor_context", return_value=self.context),
             patch.object(graph, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
             patch.object(graph._compat.Group, "get_center", return_value=(0, 0, 0)),
+            patch.object(graph._compat, "VGroup", side_effect=_ResultGroup),
         ]
         if not _HAS_NUMPY:
             # These tests exercise facade operations unrelated to NetworkX
@@ -596,15 +602,30 @@ class GraphFacadeTests(unittest.TestCase):
     def test_add_edges_accepts_single_and_variadic_edge_tuples(self):
         value = graph.Graph({"a": (0, 0)}, [])
 
-        value.add_edges(("a", "b"), ("b", "c"))
+        result = value.add_edges(("a", "b"), ("b", "c"))
 
         self.assertEqual(value._graph_edges, [("a", "b"), ("b", "c")])
         self.assertEqual(list(value._graph_key_ids), ["a", "b", "c"])
         self.assertEqual(len(self.context.compound_add_calls), 1)
+        self.assertEqual(
+            result.submobjects,
+            (value["b"], value["c"], value.edges[("a", "b")], value.edges[("b", "c")]),
+        )
 
         directed = graph.DiGraph({"u": (0, 0), "v": (1, 0)}, [])
-        directed.add_edges(("u", "v"))
+        result = directed.add_edges(("u", "v"))
         self.assertEqual(directed._graph_edges, [("u", "v")])
+        self.assertEqual(result.submobjects, (directed.edges[("u", "v")],))
+
+    def test_add_edges_without_arguments_returns_an_empty_group(self):
+        value = graph.Graph({"a": (0, 0)}, [])
+
+        result = value.add_edges()
+
+        self.assertIsInstance(result, _ResultGroup)
+        self.assertEqual(result.submobjects, ())
+        self.assertEqual(value._graph_edges, [])
+        self.assertEqual(self.context.add_edge_calls, [])
 
     def test_add_edges_atomically_creates_styled_vertices_and_edges(self):
         value = graph.Graph({"a": (1, 1)}, [])
@@ -618,7 +639,7 @@ class GraphFacadeTests(unittest.TestCase):
             },
         )
 
-        self.assertIs(result, value)
+        self.assertIsInstance(result, _ResultGroup)
         self.assertEqual(list(value._graph_key_ids), ["a", "b", "c"])
         self.assertEqual(set(value._graph_key_ids), {"a", "b", "c"})
         self.assertEqual(len(value._graph_edges), 2)
@@ -643,6 +664,10 @@ class GraphFacadeTests(unittest.TestCase):
         )
         self.assertEqual(call[6][0:4], [170 / 255, 187 / 255, 204 / 255, 1.0])
         self.assertTrue(math.isnan(call[6][4]))
+        self.assertEqual(
+            result.submobjects,
+            (value["b"], value["c"], value.edges[("a", "b")], value.edges[("b", "c")]),
+        )
 
         directed = graph.DiGraph({"u": (0, 0)}, [])
         directed.add_edges([("u", "v")], positions={"v": (1, 2)})
@@ -679,7 +704,7 @@ class GraphFacadeTests(unittest.TestCase):
             },
         )
 
-        self.assertIs(result, value)
+        self.assertIsInstance(result, _ResultGroup)
         self.assertEqual(self.context.add_vertex_calls, [])
         self.assertEqual(self.context.add_edge_calls, [])
         self.assertEqual(len(self.context.add_edge_options_calls), 1)
@@ -696,6 +721,10 @@ class GraphFacadeTests(unittest.TestCase):
                 ("edge_color", (171 / 255, 205 / 255, 239 / 255, 1.0)),
                 ("edge_width", (4.0,)),
             ],
+        )
+        self.assertEqual(
+            result.submobjects,
+            (value.edges[("a", "b")], value.edges[("b", "c")]),
         )
 
     def test_invalid_added_edge_config_is_rejected_before_topology_publication(self):

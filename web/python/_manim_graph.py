@@ -574,7 +574,7 @@ class _GraphBase(_compat.Group):
         inherit graph defaults and accept per-edge overrides.
         """
         if not edges:
-            return self
+            return _compat.VGroup()
         if len(edges) == 1:
             argument = edges[0]
             edge_batch = (
@@ -690,7 +690,9 @@ class _GraphBase(_compat.Group):
         self._next_graph_id = next_id + len(new_vertices)
         self._graph_edges.extend(edges)
         self._edge_mapping = None
-        return self
+        added_mobjects = [self[key] for key in new_vertices]
+        added_mobjects.extend(self._edge_style_target(edge) for edge in edges)
+        return _compat.VGroup(*added_mobjects)
 
     def remove_vertices(self, vertices):
         keys = list(vertices)
