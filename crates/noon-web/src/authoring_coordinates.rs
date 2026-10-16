@@ -494,6 +494,10 @@ impl WasmNumberLineFrame {
         self.frame.angle()
     }
 
+    pub fn slope(&self) -> f64 {
+        self.frame.slope()
+    }
+
     #[wasm_bindgen(js_name = projectPoint)]
     pub fn project_point(&self, x: f64, y: f64) -> Result<Vec<f64>, JsValue> {
         self.frame

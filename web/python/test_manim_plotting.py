@@ -280,6 +280,7 @@ class PlottingAdapterTests(unittest.TestCase):
             vector=Mock(return_value=[4.0, 0.0]),
             length=Mock(return_value=4.0),
             angle=Mock(return_value=0.0),
+            slope=Mock(return_value=0.0),
             projectPoint=Mock(return_value=[3.0, 2.0]),
             free=Mock(),
         )
@@ -291,6 +292,7 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertEqual(line.get_vector(), plotting._base.Vec2(4.0, 0.0))
             self.assertEqual(line.get_length(), 4.0)
             self.assertEqual(line.get_angle(), 0.0)
+            self.assertEqual(line.get_slope(), 0.0)
             self.assertEqual(line.get_projection((3.0, 8.0)), plotting._base.Vec2(3.0, 2.0))
 
         frame.start.assert_called_once_with()
@@ -298,8 +300,29 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.vector.assert_called_once_with()
         frame.length.assert_called_once_with()
         frame.angle.assert_called_once_with()
+        frame.slope.assert_called_once_with()
         frame.projectPoint.assert_called_once_with(3.0, 8.0)
-        self.assertEqual(frame.free.call_count, 5)
+        self.assertEqual(frame.free.call_count, 6)
+
+    def test_number_line_line_mutators_reuse_shared_rotate_and_scale(self):
+        line = object.__new__(plotting.NumberLine)
+        start = plotting._base.Vec2(-2.0, 3.0)
+        about = plotting._base.Vec2(1.0, 2.0)
+        line.get_start = Mock(return_value=start)
+        line.get_angle = Mock(return_value=0.25)
+        line.rotate = Mock(return_value=line)
+        line.get_length = Mock(return_value=4.0)
+        line.scale = Mock(return_value=line)
+
+        self.assertIs(line.set_angle(1.25), line)
+        line.rotate.assert_called_once_with(1.0, about_point=start)
+
+        line.rotate.reset_mock()
+        self.assertIs(line.set_angle(0.5, about_point=about), line)
+        line.rotate.assert_called_once_with(0.25, about_point=about)
+
+        self.assertIs(line.set_length(10), line)
+        line.scale.assert_called_once_with(2.5)
 
     def test_number_line_rotation_helpers_use_the_requested_data_anchor(self):
         line = object.__new__(plotting.NumberLine)

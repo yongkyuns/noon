@@ -175,6 +175,14 @@ class NumberLineLineObservations(Scene):
         assert abs(line.get_angle() - PI / 2) < 1e-6
         projected = line.get_projection((3.5, 1.0))
         assert abs(projected.x - 0.5) < 1e-6 and abs(projected.y - 1.0) < 1e-6
+        line.set_length(6)
+        assert abs(line.get_length() - 6.0) < 1e-6
+        line.set_angle(PI / 4)
+        assert abs(line.get_angle() - PI / 4) < 1e-6
+        assert abs(line.get_slope() - 1.0) < 1e-6
+        line.set_angle(0, about_point=ORIGIN)
+        assert abs(line.get_angle()) < 1e-6
+        assert abs(line.get_length() - 6.0) < 1e-6
 
         axes = Axes((-2, 2, 1), (-2, 2, 1), x_length=4, y_length=4,
                     x_axis_config={"scaling": LogBase(base=10)}, tips=False)
