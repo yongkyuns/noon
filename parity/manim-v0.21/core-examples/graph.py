@@ -64,12 +64,16 @@ class GraphWeightedSpringLayout(Scene):
     def construct(self):
         graph = Graph(
             ["a", "b", "c"],
-            [
-                ("a", "b", {"strength": 3.0}),
-                ("b", "c", {"strength": 0.4}),
-            ],
-            layout_config={"seed": 42, "weight": "strength"},
+            [("a", "b"), ("b", "c")],
+            layout_config={"seed": 42},
         )
+        # ManimCE 0.21.0 later hashes each two-item edge as an edge_config key,
+        # so three-item NetworkX edge rows containing dicts fail in its Graph
+        # constructor. Seed the owned NetworkX graph, then exercise its public
+        # layout entry point with the selected attribute weight.
+        graph._graph["a"]["b"]["strength"] = 3.0
+        graph._graph["b"]["c"]["strength"] = 0.4
+        graph.change_layout(layout="spring", layout_config={"seed": 42, "weight": "strength"})
         self.add(graph)
         self.wait(0.2)
 
@@ -78,12 +82,12 @@ class DiGraphWeightedSpringLayout(Scene):
     def construct(self):
         graph = DiGraph(
             ["a", "b", "c"],
-            [
-                ("a", "b", {"strength": 2.5}),
-                ("c", "b", {"strength": 0.6}),
-            ],
-            layout_config={"seed": 42, "weight": "strength"},
+            [("a", "b"), ("c", "b")],
+            layout_config={"seed": 42},
         )
+        graph._graph["a"]["b"]["strength"] = 2.5
+        graph._graph["c"]["b"]["strength"] = 0.6
+        graph.change_layout(layout="spring", layout_config={"seed": 42, "weight": "strength"})
         self.add(graph)
         self.wait(0.2)
 

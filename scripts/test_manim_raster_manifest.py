@@ -65,13 +65,15 @@ class RasterManifestTests(unittest.TestCase):
         for fixture_id, scene, constructor, *edges in (
             (
                 "graph-weighted-spring", "GraphWeightedSpringLayout", "Graph",
-                '("a", "b", {"strength": 3.0})',
-                '("b", "c", {"strength": 0.4})',
+                '[("a", "b"), ("b", "c")]',
+                'graph._graph["a"]["b"]["strength"] = 3.0',
+                'graph._graph["b"]["c"]["strength"] = 0.4',
             ),
             (
                 "digraph-weighted-spring", "DiGraphWeightedSpringLayout", "DiGraph",
-                '("a", "b", {"strength": 2.5})',
-                '("c", "b", {"strength": 0.6})',
+                '[("a", "b"), ("c", "b")]',
+                'graph._graph["a"]["b"]["strength"] = 2.5',
+                'graph._graph["c"]["b"]["strength"] = 0.6',
             ),
         ):
             with self.subTest(fixture=fixture_id):
@@ -88,7 +90,10 @@ class RasterManifestTests(unittest.TestCase):
                 self.assertIn(f"class {scene}(Scene)", source)
                 scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
                 self.assertIn(f"graph = {constructor}(", scene_source)
-                self.assertIn('{"seed": 42, "weight": "strength"}', scene_source)
+                self.assertIn(
+                    'layout_config={"seed": 42, "weight": "strength"}',
+                    scene_source,
+                )
                 for edge in edges:
                     self.assertIn(edge, scene_source)
 
