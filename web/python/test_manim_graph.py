@@ -490,11 +490,19 @@ class GraphFacadeTests(unittest.TestCase):
 
         value.add_edges([("a", "c")])
         self.assertEqual(list(value.edges), [("a", "b"), ("a", "c"), ("b", "c")])
-        value.remove_edges([("c", "a")])
+        edge_ac = value.edges[("a", "c")]
+        removed_edges = value.remove_edges([("c", "a")])
+        self.assertEqual(removed_edges.submobjects, (edge_ac,))
         self.assertEqual(list(value.edges), [("a", "b"), ("b", "c")])
 
         value.add_edges([("a", "c")])
-        value.remove_vertices(["b"])
+        remaining_edges = value.edges
+        vertex_b = value["b"]
+        removed_vertices = value.remove_vertices(["b"])
+        self.assertEqual(
+            removed_vertices.submobjects,
+            (remaining_edges[("a", "b")], remaining_edges[("b", "c")], vertex_b),
+        )
         self.assertEqual(list(value.edges), [("a", "c")])
 
         directed = graph.DiGraph(
@@ -502,6 +510,44 @@ class GraphFacadeTests(unittest.TestCase):
             [("c", "b"), ("a", "b"), ("a", "c")],
         )
         self.assertEqual(list(directed.edges), [("a", "b"), ("a", "c"), ("c", "b")])
+
+    def test_remove_methods_accept_variadic_arguments_and_return_removed_objects(self):
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+            [("b", "c"), ("a", "b"), ("a", "c")],
+        )
+        edge_objects = value.edges
+        removed = value.remove_edges(("c", "a"), ("b", "c"))
+        self.assertEqual(
+            removed.submobjects,
+            (edge_objects[("a", "c")], edge_objects[("b", "c")]),
+        )
+        self.assertEqual(list(value.edges), [("a", "b")])
+
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0)},
+            [("b", "c"), ("a", "b"), ("a", "c")],
+        )
+        edge_objects = value.edges
+        vertex_b = value["b"]
+        vertex_c = value["c"]
+        removed = value.remove_vertices("b", "c")
+        self.assertEqual(
+            removed.submobjects,
+            (
+                edge_objects[("a", "b")], edge_objects[("b", "c")], vertex_b,
+                edge_objects[("a", "c")], vertex_c,
+            ),
+        )
+        self.assertEqual(list(value.vertices), ["a"])
+        self.assertEqual(list(value.edges), [])
+
+        empty = value.remove_edges()
+        self.assertIsInstance(empty, _ResultGroup)
+        self.assertEqual(empty.submobjects, ())
+        empty = value.remove_vertices()
+        self.assertIsInstance(empty, _ResultGroup)
+        self.assertEqual(empty.submobjects, ())
 
     def test_edges_mapping_changes_only_after_successful_mutation(self):
         value = graph.Graph({"a": (0, 0), "b": (1, 0)}, [("a", "b")])
@@ -514,6 +560,10 @@ class GraphFacadeTests(unittest.TestCase):
         self.context.fail = "remove_edges"
         with self.assertRaisesRegex(RuntimeError, "remove_edges"):
             value.remove_edges([("a", "b")])
+        self.assertEqual(list(value.edges), before)
+        self.context.fail = None
+        with self.assertRaisesRegex(ValueError, "does not contain a edge"):
+            value.remove_edges(("a", "b"), ("b", "a"))
         self.assertEqual(list(value.edges), before)
 
     def test_failed_publication_does_not_change_key_dictionary(self):

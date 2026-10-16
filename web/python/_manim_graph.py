@@ -694,12 +694,38 @@ class _GraphBase(_compat.Group):
         added_mobjects.extend(self._edge_style_target(edge) for edge in edges)
         return _compat.VGroup(*added_mobjects)
 
-    def remove_vertices(self, vertices):
+    def remove_vertices(self, *vertices):
+        """Remove vertices and return their former edges and vertices in a VGroup."""
+        if len(vertices) == 1:
+            try:
+                hash(vertices[0])
+            except TypeError:
+                vertices = tuple(vertices[0])
         keys = list(vertices)
-        try:
-            ids = [self._graph_key_ids[key] for key in keys]
-        except KeyError as error:
-            raise ValueError("unknown Graph vertex key") from error
+        if not keys:
+            return _compat.VGroup()
+
+        ids, removed_mobjects = [], []
+        remaining_keys = set(self._graph_key_ids)
+        remaining_edges = list(self.edges)
+        for key in keys:
+            try:
+                vertex_id = self._graph_key_ids[key]
+            except (KeyError, TypeError) as error:
+                raise ValueError(
+                    f"The graph does not contain a vertex with identifier '{key}'"
+                ) from error
+            if key not in remaining_keys:
+                raise ValueError(
+                    f"The graph does not contain a vertex with identifier '{key}'"
+                )
+            ids.append(vertex_id)
+            incident_edges = [edge for edge in remaining_edges if key in edge]
+            removed_mobjects.extend(self._edge_style_target(edge) for edge in incident_edges)
+            remaining_edges = [edge for edge in remaining_edges if edge not in incident_edges]
+            removed_mobjects.append(self[key])
+            remaining_keys.remove(key)
+
         engine_call(self._context().liveGraphRemoveVertices, self._graph_handle,
                     _array(ids), operation="Graph.remove_vertices")
         removed = set(keys)
@@ -714,10 +740,44 @@ class _GraphBase(_compat.Group):
             if edge[0] not in removed and edge[1] not in removed
         }
         self._edge_mapping = None
-        return self
+        return _compat.VGroup(*removed_mobjects)
 
-    def remove_edges(self, edges):
+    def remove_edges(self, *edges):
+        """Remove edges and return their former edge objects in a VGroup."""
+        if len(edges) == 1:
+            argument = edges[0]
+            edge_batch = (
+                isinstance(argument, tuple)
+                and len(argument) == 2
+                and all(isinstance(edge, (tuple, list)) and len(edge) == 2 for edge in argument)
+            )
+            if edge_batch:
+                try:
+                    edge_is_existing_vertex_pair = all(
+                        endpoint in self._graph_key_ids for endpoint in argument
+                    )
+                except TypeError:
+                    edge_is_existing_vertex_pair = False
+                edges = (argument,) if edge_is_existing_vertex_pair else argument
+            elif isinstance(argument, tuple) and len(argument) == 2:
+                edges = (argument,)
+            else:
+                edges = argument
         edges = [tuple(edge) for edge in edges]
+        if any(len(edge) != 2 for edge in edges):
+            raise ValueError("Graph edges must contain two vertex keys")
+        if not edges:
+            return _compat.VGroup()
+        removed_mobjects, seen = [], set()
+        for edge in edges:
+            try:
+                mobject = self._edge_style_target(edge)
+            except ValueError as error:
+                raise ValueError(f"The graph does not contain a edge '{edge}'") from error
+            if id(mobject) in seen:
+                raise ValueError(f"The graph does not contain a edge '{edge}'")
+            seen.add(id(mobject))
+            removed_mobjects.append(mobject)
         engine_call(self._context().liveGraphRemoveEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.remove_edges")
         removed = set(edges)
@@ -730,7 +790,7 @@ class _GraphBase(_compat.Group):
                 cache_key = (end, start)
             self._edge_wrappers.pop(cache_key, None)
         self._edge_mapping = None
-        return self
+        return _compat.VGroup(*removed_mobjects)
 
     def copy(self):
         """Copy the retained family, including appearance and endpoint bindings."""
