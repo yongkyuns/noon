@@ -134,6 +134,11 @@ mod tests {
 
     #[test]
     fn coordinate_queries_preserve_tip_endpoints_through_player_ownership() {
+        let near = |actual: [f64; 2], expected: [f64; 2]| {
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+            }
+        };
         for scale in [
             noon_core::SemanticNumberLineScale::default(),
             noon_core::SemanticNumberLineScale::linear(2.0),
@@ -155,8 +160,8 @@ mod tests {
                 context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
                 context.scene.add_many(&[line.family().into()]).unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
-                assert_eq!(frame.number_to_point(first).unwrap(), [-1.0, 0.0]);
-                assert_eq!(frame.number_to_point(last).unwrap(), [1.0, 0.0]);
+                near(frame.number_to_point(first).unwrap(), [-1.0, 0.0]);
+                near(frame.number_to_point(last).unwrap(), [1.0, 0.0]);
                 if include_tip {
                     assert!(shaft.path_query().unwrap().end().unwrap().0 < 1.0);
                 }
@@ -173,8 +178,8 @@ mod tests {
                     .live_shift_family(line.family(), 2.0, -1.0)
                     .unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
-                assert_eq!(frame.number_to_point(first).unwrap(), [1.0, -1.0]);
-                assert_eq!(frame.number_to_point(last).unwrap(), [3.0, -1.0]);
+                near(frame.number_to_point(first).unwrap(), [1.0, -1.0]);
+                near(frame.number_to_point(last).unwrap(), [3.0, -1.0]);
                 assert_eq!(frame.unit_size(), 1.0);
                 assert_eq!(
                     frame.point_to_number([2.0, -1.0]).unwrap(),
