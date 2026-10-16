@@ -266,7 +266,12 @@ pub struct ManimAxesOptions {
     pub y_range: [f64; 3],
     pub x_length: f64,
     pub y_length: f64,
+    pub x_scale: SemanticNumberLineScale,
+    pub y_scale: SemanticNumberLineScale,
     pub ticks: CoordinateTicks,
+    /// Per-axis Manim defaults override the shared tick option when set.
+    pub x_exclude_origin_tick: Option<bool>,
+    pub y_exclude_origin_tick: Option<bool>,
     /// Match Manim Axes' default filled triangular arrowheads.
     pub tips: bool,
     pub tip_length: f64,
@@ -280,10 +285,14 @@ impl ManimAxesOptions {
             y_range,
             x_length,
             y_length,
+            x_scale: SemanticNumberLineScale::default(),
+            y_scale: SemanticNumberLineScale::default(),
             ticks: CoordinateTicks {
                 exclude_origin: true,
                 ..CoordinateTicks::default()
             },
+            x_exclude_origin_tick: None,
+            y_exclude_origin_tick: None,
             tips: false,
             tip_length: 0.35,
             style: default_axis_style(),
@@ -1010,11 +1019,13 @@ pub(crate) fn publish_prepared_number_line(
 pub(crate) fn prepare_axes(
     options: &ManimAxesOptions,
 ) -> Result<PreparedAxes, CoordinateAuthoringError> {
-    let frame = AxesFrame::centered(
+    let frame = AxesFrame::centered_with_scales(
         options.x_range,
         options.y_range,
         options.x_length,
         options.y_length,
+        options.x_scale,
+        options.y_scale,
     )?;
     if options.tips
         && (!options.tip_length.is_finite()
@@ -1025,14 +1036,21 @@ pub(crate) fn prepare_axes(
             "invalid Axes tip dimensions or tip color",
         ));
     }
-    let prepare_axis = |axis: NumberLineFrame| {
+    let prepare_axis = |axis: NumberLineFrame, exclude_origin: Option<bool>| {
+        let ticks = CoordinateTicks {
+            exclude_origin: exclude_origin.unwrap_or(options.ticks.exclude_origin),
+            ..options.ticks
+        };
         if options.tips {
-            prepare_line_with_elongated_ticks(axis, options.ticks, &options.style, &[], 2.0, true)
+            prepare_line_with_elongated_ticks(axis, ticks, &options.style, &[], 2.0, true)
         } else {
-            prepare_line(axis, options.ticks, &options.style)
+            prepare_line(axis, ticks, &options.style)
         }
     };
-    let axes = [prepare_axis(frame.x())?, prepare_axis(frame.y())?];
+    let axes = [
+        prepare_axis(frame.x(), options.x_exclude_origin_tick)?,
+        prepare_axis(frame.y(), options.y_exclude_origin_tick)?,
+    ];
     let tip_paths = if options.tips {
         let direction = |axis: NumberLineFrame| {
             let start = axis.start();

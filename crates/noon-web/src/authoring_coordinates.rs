@@ -261,6 +261,33 @@ impl WasmCoordinateOptions {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setAxesScale)]
+    pub fn set_axes_scale(&mut self, axis: u32, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::Axes(options) = &mut self.request else {
+            return Err(js_error("scale settings require Axes"));
+        };
+        let (scale, exclude_origin_tick) = match kind {
+            "linear" => (SemanticNumberLineScale::linear(parameter), true),
+            "log" => (SemanticNumberLineScale::log(parameter), false),
+            _ => return Err(js_error("unsupported Axes scale kind")),
+        };
+        if !scale.is_valid() {
+            return Err(js_error("invalid Axes scale parameter"));
+        }
+        match axis {
+            0 => {
+                options.x_scale = scale;
+                options.x_exclude_origin_tick = Some(exclude_origin_tick);
+            }
+            1 => {
+                options.y_scale = scale;
+                options.y_exclude_origin_tick = Some(exclude_origin_tick);
+            }
+            _ => return Err(js_error("Axes axis index must be 0 or 1")),
+        }
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setTipLength)]
     pub fn set_tip_length(&mut self, length: f64) -> Result<(), JsValue> {
         let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {

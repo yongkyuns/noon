@@ -4800,7 +4800,7 @@
     {
       "id": "reference-32ccd9416c553cdc",
       "status": "blocked",
-      "reason": "LogBase is now public and NumberLine supports its numeric mapping, but this fixture applies LogBase to an Axes y-axis and requests TeX custom labels. Axes scaling and those labels remain behavior-blocked; the NumberLine subset does not qualify this source.",
+      "reason": "LogBase numeric coordinate mapping now works on Axes, but this fixture requests numeric labels through axis_config and TeX custom labels. Axes numeric-label config and TeX custom labels remain unqualified; the map/query subset does not qualify this source.",
       "owners": [
         "#85",
         "#89",
