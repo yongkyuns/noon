@@ -126,3 +126,163 @@ class DiGraphSeededRandomLayout(Scene):
         )
         self.add(graph)
         self.wait(0.2)
+
+
+class GraphCircularLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="circular",
+            layout_config={"center": (0.35, -0.2), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphCircularLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("c", "b"), ("c", "d")],
+            layout="circular",
+            layout_config={"center": (-0.25, 0.4), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphShellLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="shell",
+            layout_config={"nlist": [["a", "b"], ["c", "d"]], "rotate": 0.3,
+                           "center": (0.2, -0.3), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphShellLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("c", "b"), ("c", "d")],
+            layout="shell",
+            layout_config={"nlist": [["a", "c"], ["b", "d"]], "rotate": -0.2,
+                           "center": (-0.3, 0.25), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphSpiralLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="spiral",
+            layout_config={"resolution": 0.5, "equidistant": True,
+                           "center": (0.3, -0.25), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphSpiralLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("c", "b"), ("c", "d")],
+            layout="spiral",
+            layout_config={"resolution": 0.4, "equidistant": False,
+                           "center": (-0.2, 0.3), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphPartiteLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "c"), ("a", "d"), ("b", "c")],
+            layout="partite", partitions=[["a", "b"], ["c", "d"]],
+            layout_config={"align": "horizontal", "center": (0.25, -0.2), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphPartiteLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "c"), ("b", "c"), ("b", "d")],
+            layout="partite", partitions=[["a", "b"], ["c", "d"]],
+            layout_config={"align": "vertical", "center": (-0.2, 0.25), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphSpectralLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="spectral",
+            layout_config={"weight": None, "center": (0.3, -0.25), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphSpectralLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("c", "b"), ("c", "d")],
+            layout="spectral",
+            layout_config={"weight": None, "center": (-0.25, 0.3), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphKamadaKawaiLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("b", "c"), ("c", "d")],
+            layout="kamada_kawai",
+            layout_config={"weight": None, "center": (0.25, -0.3), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class DiGraphKamadaKawaiLayout(Scene):
+    def construct(self):
+        graph = DiGraph(
+            ["a", "b", "c", "d"],
+            [("a", "b"), ("c", "b"), ("c", "d")],
+            layout="kamada_kawai",
+            layout_config={"weight": None, "center": (-0.3, 0.25), "dim": 2},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphTreeLayout(Scene):
+    def construct(self):
+        graph = Graph(
+            ["root", "left", "right", "leaf"],
+            [("root", "left"), ("root", "right"), ("left", "leaf")],
+            layout="tree", root_vertex="root",
+            layout_config={"orientation": "down", "vertex_spacing": (1.1, 0.8)},
+        )
+        self.add(graph)
+        self.wait(0.2)

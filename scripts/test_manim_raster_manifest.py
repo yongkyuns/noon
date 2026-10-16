@@ -144,6 +144,37 @@ class RasterManifestTests(unittest.TestCase):
                 self.assertIn('{"seed": 42}', scene_source)
                 self.assertIn(edges, scene_source)
 
+    def test_implemented_graph_layouts_have_pinned_upstream_raster_fixtures(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        expected = {
+            "graph-circular-layout": "GraphCircularLayout",
+            "digraph-circular-layout": "DiGraphCircularLayout",
+            "graph-shell-layout": "GraphShellLayout",
+            "digraph-shell-layout": "DiGraphShellLayout",
+            "graph-spiral-layout": "GraphSpiralLayout",
+            "digraph-spiral-layout": "DiGraphSpiralLayout",
+            "graph-partite-layout": "GraphPartiteLayout",
+            "digraph-partite-layout": "DiGraphPartiteLayout",
+            "graph-spectral-layout": "GraphSpectralLayout",
+            "digraph-spectral-layout": "DiGraphSpectralLayout",
+            "graph-kamada-kawai-layout": "GraphKamadaKawaiLayout",
+            "digraph-kamada-kawai-layout": "DiGraphKamadaKawaiLayout",
+            "graph-tree-layout": "GraphTreeLayout",
+        }
+        fixtures = {fixture["id"]: fixture for fixture in manifest["fixtures"]}
+        source = (ROOT / "parity/manim-v0.21/core-examples/graph.py").read_text(
+            encoding="utf-8"
+        )
+        for fixture_id, scene in expected.items():
+            with self.subTest(fixture=fixture_id):
+                fixture = fixtures[fixture_id]
+                self.assertEqual(fixture["scene"], scene)
+                self.assertEqual(
+                    fixture["source"], "parity/manim-v0.21/core-examples/graph.py"
+                )
+                self.assertEqual(fixture["expected_duration"], 0.2)
+                self.assertIn(f"class {scene}(Scene)", source)
+
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         fixture = next(fixture for fixture in manifest["fixtures"] if fixture["id"] == "polynomial-easings")

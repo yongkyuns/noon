@@ -204,6 +204,97 @@
       "notes": "Seeded ManimCE v0.21.0 random DiGraph layout with asymmetric edges, compared with the pinned Cairo raster to verify reproducible directed graph sampling."
     },
     {
+      "id": "graph-circular-layout",
+      "scene": "GraphCircularLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph circular-layout raster with non-origin center and 2D configuration."
+    },
+    {
+      "id": "digraph-circular-layout",
+      "scene": "DiGraphCircularLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph circular-layout raster with asymmetric edges and non-origin center."
+    },
+    {
+      "id": "graph-shell-layout",
+      "scene": "GraphShellLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph shell-layout raster for keyed shell membership, rotation, center and 2D options."
+    },
+    {
+      "id": "digraph-shell-layout",
+      "scene": "DiGraphShellLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph shell-layout raster for keyed shell membership, rotation, center and 2D options."
+    },
+    {
+      "id": "graph-spiral-layout",
+      "scene": "GraphSpiralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph spiral-layout raster for resolution, equidistant sampling, center and 2D options."
+    },
+    {
+      "id": "digraph-spiral-layout",
+      "scene": "DiGraphSpiralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph spiral-layout raster for resolution, equidistant sampling, center and 2D options."
+    },
+    {
+      "id": "graph-partite-layout",
+      "scene": "GraphPartiteLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph partite-layout raster for horizontal partition alignment and non-origin center."
+    },
+    {
+      "id": "digraph-partite-layout",
+      "scene": "DiGraphPartiteLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph partite-layout raster for vertical partition alignment and non-origin center."
+    },
+    {
+      "id": "graph-spectral-layout",
+      "scene": "GraphSpectralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph spectral-layout raster for non-default center and 2D options."
+    },
+    {
+      "id": "digraph-spectral-layout",
+      "scene": "DiGraphSpectralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph spectral-layout raster for asymmetric edges and non-default center."
+    },
+    {
+      "id": "graph-kamada-kawai-layout",
+      "scene": "GraphKamadaKawaiLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph Kamada-Kawai-layout raster for unweighted shortest-path placement and non-default center."
+    },
+    {
+      "id": "digraph-kamada-kawai-layout",
+      "scene": "DiGraphKamadaKawaiLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph Kamada-Kawai-layout raster for unweighted directed shortest-path placement and non-default center."
+    },
+    {
+      "id": "graph-tree-layout",
+      "scene": "GraphTreeLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph tree-layout raster for root, orientation and two-axis vertex spacing."
+    },
+    {
       "id": "area-helpers",
       "scene": "RetainedAreaHelpers",
       "source": "parity/manim-v0.21/core-examples/area_helpers.py",
