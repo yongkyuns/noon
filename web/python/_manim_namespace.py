@@ -23,6 +23,7 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "get_tick_range": "numpy",
     "rate_functions": "numpy",
     "get_winding_number": "numpy",
     "bezier": "numpy",

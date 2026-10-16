@@ -1,5 +1,10 @@
 """Adapter lifetime/error tests; real numerical/renderer proof is browser CI."""
 import unittest
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -60,6 +65,7 @@ class PlottingAdapterTests(unittest.TestCase):
                     plotting.NumberLine(values)
             context.assert_not_called()
 
+    @unittest.skipIf(np is None, "NumPy protocol runs in the pinned reference lane")
     def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
         frame = SimpleNamespace(
             tickValues=Mock(return_value=[-2.0, -1.0, 1.0]),
@@ -69,7 +75,12 @@ class PlottingAdapterTests(unittest.TestCase):
         line.include_tip = False
         line.exclude_origin_tick = True
         with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame):
-            self.assertEqual(line.get_tick_range(), (-2.0, -1.0, 1.0))
+            values = line.get_tick_range()
+        self.assertIsInstance(values, np.ndarray)
+        self.assertEqual(values.dtype, np.dtype(float))
+        self.assertEqual(values.shape, (3,))
+        np.testing.assert_array_equal(values, [-2.0, -1.0, 1.0])
+        np.testing.assert_array_equal(values + 1, [-1.0, 0.0, 2.0])
         frame.tickValues.assert_called_once_with(False, True)
         frame.free.assert_called_once_with()
 

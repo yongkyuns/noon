@@ -649,6 +649,10 @@ assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
 assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 from noon import line_intersection, find_intersection
 np = __import__("numpy")
+from noon import NumberLine
+_ticks = NumberLine([-2, 2]).get_tick_range()
+assert isinstance(_ticks, np.ndarray) and _ticks.dtype == np.dtype(float)
+assert (_ticks + 1).tolist() == [-1, 0, 1, 2, 3]
 assert line_intersection([[0, 0, 0], [2, 2, 0]], [[0, 2, 0], [2, 0, 0]]).tolist() == [1, 1, 0]
 assert find_intersection(np.array([[0, 0, 0]]), np.array([[1, 0, 0]]),
                          np.array([[1, 2, 3]]), np.array([[0, 1, 0]]))[0].tolist() == [1, 0, 0]
