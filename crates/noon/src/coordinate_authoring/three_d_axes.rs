@@ -1030,7 +1030,7 @@ mod tests {
             object_opacity: 0.8,
         };
 
-        let tip = tip_style(&style).unwrap();
+        let tip = filled_tip_style(&style).unwrap();
         assert_eq!(tip.stroke_width, 2.0);
         assert_eq!(tip.stroke_width_mode, style.stroke_width_mode);
         assert_eq!(tip.stroke_join, style.stroke_join);
