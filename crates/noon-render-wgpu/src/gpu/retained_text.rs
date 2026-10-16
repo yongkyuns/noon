@@ -3110,6 +3110,30 @@ fn resolve_geometry_ref(
     Ok(GeometryRef::VectorPath(path.as_ref().clone()))
 }
 
+/// Invert packed instance ranges once for a structural mixed-painter rebuild.
+///
+/// The previous per-source `path_batches.iter().find(..)` visited every prior
+/// unique path batch for each ray (quadratic for appended unique paths).
+/// Keep the first matching batch, exactly as that ordered search did, while
+/// preserving stable scratch IDs and the existing individual-path draw policy.
+fn path_batch_index_by_instance(
+    instance_count: usize,
+    batches: &[crate::PathBatch],
+) -> Vec<Option<usize>> {
+    let mut lookup = vec![None; instance_count];
+    for (batch_index, batch) in batches.iter().enumerate() {
+        let start = (batch.instance_range.start as usize).min(instance_count);
+        let end = (batch.instance_range.end as usize).min(instance_count);
+        if start >= end {
+            continue;
+        }
+        for slot in &mut lookup[start..end] {
+            slot.get_or_insert(batch_index);
+        }
+    }
+    lookup
+}
+
 fn rebuild_mixed_order(
     output: &mut Vec<RetainedRenderItem>,
     sources: &[SourceItem],
@@ -3131,6 +3155,8 @@ fn rebuild_mixed_order(
     for (index, id) in geometry.path_ids.iter().copied().enumerate() {
         path_indices.insert(id, index);
     }
+    let path_batches_by_instance =
+        path_batch_index_by_instance(geometry.path_ids.len(), geometry.path_batches);
 
     for source in sources {
         match source {
@@ -3157,12 +3183,7 @@ fn rebuild_mixed_order(
                 // from the primitive that was actually prepared rather than from the
                 // source geometry kind captured before preparation.
                 if let Some(&index) = path_indices.get(scratch_id) {
-                    if let Some((batch, _)) = geometry
-                        .path_batches
-                        .iter()
-                        .enumerate()
-                        .find(|(_, batch)| batch.instance_range.contains(&(index as u32)))
-                    {
+                    if let Some(batch) = path_batches_by_instance.get(index).copied().flatten() {
                         push_geometry_item(
                             output,
                             *object_id,
@@ -4196,6 +4217,66 @@ fn retained_sample_count(items: &[RetainedRenderItem], spatial_paths: bool) -> u
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mixed_path_batch_lookup_preserves_first_match_and_sparse_ranges() {
+        let batches = vec![
+            crate::PathBatch {
+                index_range: 0..6,
+                instance_range: 0..2,
+                coverage: crate::PathCoverage::Tessellated,
+            },
+            crate::PathBatch {
+                index_range: 6..12,
+                instance_range: 1..4,
+                coverage: crate::PathCoverage::Tessellated,
+            },
+            crate::PathBatch {
+                index_range: 12..18,
+                instance_range: 6..10,
+                coverage: crate::PathCoverage::Tessellated,
+            },
+        ];
+        let lookup = path_batch_index_by_instance(8, &batches);
+        assert_eq!(
+            lookup,
+            vec![
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(2),
+                Some(2),
+            ]
+        );
+        for index in 0..8 {
+            assert_eq!(
+                lookup[index],
+                batches
+                    .iter()
+                    .position(|batch| batch.instance_range.contains(&(index as u32)))
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_path_batch_lookup_handles_ten_thousand_unique_ray_paths() {
+        const RAYS: u32 = 10_000;
+        let batches = (0..RAYS)
+            .map(|index| crate::PathBatch {
+                index_range: index * 6..(index + 1) * 6,
+                instance_range: index..index + 1,
+                coverage: crate::PathCoverage::Tessellated,
+            })
+            .collect::<Vec<_>>();
+        let lookup = path_batch_index_by_instance(RAYS as usize, &batches);
+        assert_eq!(lookup.len(), RAYS as usize);
+        for (index, batch) in lookup.iter().enumerate() {
+            assert_eq!(*batch, Some(index));
+        }
+    }
+
     #[test]
     fn zero_contribution_mixed_camera_draw_restores_without_rebuilding_text_or_order() {
         let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
