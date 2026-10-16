@@ -474,6 +474,35 @@ impl WasmNumberLineFrame {
         self.frame.range().to_vec()
     }
 
+    pub fn start(&self) -> Vec<f64> {
+        self.frame.start().to_vec()
+    }
+
+    pub fn end(&self) -> Vec<f64> {
+        self.frame.end().to_vec()
+    }
+
+    pub fn vector(&self) -> Vec<f64> {
+        self.frame.vector().to_vec()
+    }
+
+    pub fn length(&self) -> f64 {
+        self.frame.length()
+    }
+
+    pub fn angle(&self) -> f64 {
+        self.frame.angle()
+    }
+
+    #[wasm_bindgen(js_name = projectPoint)]
+    pub fn project_point(&self, x: f64, y: f64) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .project_point([x, y])
+            .map(|point| point.to_vec())
+            .map_err(coordinate_math_failure)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = tickValues)]
     pub fn tick_values(
         &self,

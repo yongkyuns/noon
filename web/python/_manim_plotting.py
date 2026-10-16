@@ -663,6 +663,36 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return _base.Vec2(*engine_call(frame.unitVector))
 
+    def get_start(self):
+        return self.get_start_and_end()[0]
+
+    def get_end(self):
+        return self.get_start_and_end()[1]
+
+    def get_start_and_end(self):
+        with _owned(self._coordinate_frame()) as frame:
+            start = engine_call(frame.start)
+            end = engine_call(frame.end)
+        return _base.Vec2(*start), _base.Vec2(*end)
+
+    def get_vector(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return _base.Vec2(*engine_call(frame.vector))
+
+    def get_length(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.length))
+
+    def get_angle(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.angle))
+
+    def get_projection(self, point):
+        point = _base._as_vec2(point)
+        with _owned(self._coordinate_frame()) as frame:
+            projected = engine_call(frame.projectPoint, point.x, point.y)
+        return _base.Vec2(*projected)
+
     def rotate_about_zero(self, angle, axis=_base.OUT, **kwargs):
         return self.rotate(
             angle,
@@ -955,7 +985,7 @@ class Axes(_compat.Group):
 
         point = _base._as_vec2(point)
         axis = self.get_axis(index)
-        axis_point = axis.number_to_point(axis.point_to_number(point))
+        axis_point = axis.get_projection(point)
         options["color"] = _compat._as_color(
             "line color", _base.WHITE if color is None else color
         )

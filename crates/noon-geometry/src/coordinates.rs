@@ -135,6 +135,44 @@ impl NumberLineFrame {
         self.scale
     }
 
+    /// Geometric vector from the current line start to its end.
+    pub fn vector(self) -> [f64; 2] {
+        [self.end[0] - self.start[0], self.end[1] - self.start[1]]
+    }
+
+    /// Euclidean distance between the current line endpoints.
+    pub fn length(self) -> f64 {
+        let [dx, dy] = self.vector();
+        dx.hypot(dy)
+    }
+
+    /// Orientation of the current line in the XY plane.
+    pub fn angle(self) -> f64 {
+        let [dx, dy] = self.vector();
+        dy.atan2(dx)
+    }
+
+    /// Orthogonally project a point onto the infinite line through this frame.
+    /// A degenerate line projects every finite point to its sole endpoint, as
+    /// Manim's zero-vector normalization does for `Line.get_projection`.
+    pub fn project_point(self, point: [f64; 2]) -> Result<[f64; 2], CoordinateError> {
+        finite_point(point)?;
+        let [dx, dy] = self.vector();
+        let length = dx.hypot(dy);
+        if length == 0.0 {
+            return Ok(self.start);
+        }
+        if !length.is_finite() {
+            return Err(CoordinateError::InvalidPoint);
+        }
+        let unit = [dx / length, dy / length];
+        let distance = (point[0] - self.start[0]) * unit[0] + (point[1] - self.start[1]) * unit[1];
+        finite_point([
+            self.start[0] + distance * unit[0],
+            self.start[1] + distance * unit[1],
+        ])
+    }
+
     pub fn scaled_range_start(self) -> Result<f64, CoordinateError> {
         self.scale
             .map(self.range[0])
@@ -683,6 +721,32 @@ mod tests {
         let vector = frame.unit_vector();
         assert!(vector[0].abs() < 1e-12);
         assert!((vector[1] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn number_line_frame_exposes_geometric_line_observations() {
+        let frame = NumberLineFrame::with_scale(
+            [-2.0, 2.0, 1.0],
+            [1.0, 2.0],
+            [5.0, 2.0],
+            SemanticNumberLineScale::log(10.0),
+        )
+        .unwrap();
+        assert_eq!(frame.vector(), [4.0, 0.0]);
+        assert_eq!(frame.length(), 4.0);
+        assert_eq!(frame.angle(), 0.0);
+        near(frame.project_point([3.0, 6.0]).unwrap(), [3.0, 2.0]);
+
+        let vertical = NumberLineFrame::new([-2.0, 2.0, 1.0], [0.0, 0.0], [0.0, 4.0]).unwrap();
+        assert!((vertical.angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        near(vertical.project_point([3.0, 2.0]).unwrap(), [0.0, 2.0]);
+
+        let collapsed = NumberLineFrame::new([0.0, 1.0, 0.1], [2.0, 3.0], [2.0, 3.0]).unwrap();
+        near(collapsed.project_point([8.0, -4.0]).unwrap(), [2.0, 3.0]);
+        assert_eq!(
+            collapsed.project_point([f64::NAN, 0.0]),
+            Err(CoordinateError::InvalidPoint)
+        );
     }
 
     #[test]

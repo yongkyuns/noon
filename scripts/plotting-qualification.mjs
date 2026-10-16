@@ -159,6 +159,43 @@ class AxesGuideLines(Scene):
       assert.ok(guideLines.objectCount > 0);
       assert.ok(Math.abs(guideLines.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes line-to-point guides`);
+      const lineObservationsSource = `from noon import *
+
+class NumberLineLineObservations(Scene):
+    async def construct(self):
+        line = NumberLine((-2, 2, 1), length=4, rotation=PI / 2,
+                          scaling=LogBase(base=10), include_ticks=False)
+        line.shift(RIGHT * 0.5)
+        start, end = line.get_start_and_end()
+        vector = line.get_vector()
+        assert abs(start.x - 0.5) < 1e-6 and abs(start.y + 2.0) < 1e-6
+        assert abs(end.x - 0.5) < 1e-6 and abs(end.y - 2.0) < 1e-6
+        assert abs(vector.x) < 1e-6 and abs(vector.y - 4.0) < 1e-6
+        assert abs(line.get_length() - 4.0) < 1e-6
+        assert abs(line.get_angle() - PI / 2) < 1e-6
+        projected = line.get_projection((3.5, 1.0))
+        assert abs(projected.x - 0.5) < 1e-6 and abs(projected.y - 1.0) < 1e-6
+
+        axes = Axes((-2, 2, 1), (-2, 2, 1), x_length=4, y_length=4,
+                    x_axis_config={"scaling": LogBase(base=10)}, tips=False)
+        axes.shift(UP * 0.25)
+        point = axes.c2p(1, 1)
+        guide = axes.get_vertical_line(point, line_func=Line)
+        expected = axes.c2p(1, 0)
+        actual = guide.get_start()
+        assert abs(actual.x - expected.x) < 1e-6
+        assert abs(actual.y - expected.y) < 1e-6
+        self.add(line, axes, guide)
+        await self.wait(0.05)
+`;
+      const observations = await qualifyPythonPlayback(
+        context, baseUrl, lineObservationsSource, [0, 0.05],
+      );
+      assert.equal(observations.rendererBackend, expectedBackend);
+      assert.equal(observations.presented, true);
+      assert.ok(observations.objectCount > 0);
+      assert.ok(Math.abs(observations.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberLine line observations`);
       return lifecycle;
     } finally {
       await page.close();
