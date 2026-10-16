@@ -263,6 +263,17 @@ async function initializePyodide() {
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
+  self.noonNumberPlaneDecimalCoordinateLabelFamily = (
+    plane, axisIndex, values, automatic, options,
+  ) => {
+    if (!latexCompiler) {
+      options.free();
+      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+    }
+    return plane.numberPlaneDecimalCoordinateLabelFamily(
+      axisIndex, values, automatic, options, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);

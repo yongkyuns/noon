@@ -237,6 +237,29 @@ impl WasmAuthoringFamilyHandle {
         Ok(label_family_handles(families))
     }
 
+    /// Construct and attach DecimalNumber coordinate labels to one plane axis.
+    #[wasm_bindgen(js_name = numberPlaneDecimalCoordinateLabelFamily)]
+    pub fn number_plane_decimal_coordinate_label_family(
+        &self,
+        axis_index: u32,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let plane = ManimNumberPlane::from_family(self.semantic_family()?).map_err(failure)?;
+        let axis = match axis_index {
+            0 => plane.x_axis(),
+            1 => plane.y_axis(),
+            _ => return Err(failure("NumberPlane axis index must be 0 or 1")),
+        }
+        .map_err(failure)?;
+        let family = axis
+            .add_decimal_numbers(compiler, numbers(values, automatic)?, &options.options)
+            .map_err(failure)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
     /// Materialize wrappers for this newly returned label family only. Source
     /// strings are ordinary Text wrapper metadata, not layout or semantic state.
     #[wasm_bindgen(js_name = numberLabelMembers)]

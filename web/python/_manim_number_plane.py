@@ -231,7 +231,17 @@ class NumberPlane(_plot.Axes):
             return engine_call(context.queryNumberPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
 
-    def add_coordinates(self, x_values=None, y_values=None, **kwargs):
+    def add_coordinates(self, *axes_numbers,
+                        x_values=_plot._COORDINATE_ARGUMENT_UNSET,
+                        y_values=_plot._COORDINATE_ARGUMENT_UNSET, **kwargs):
+        if (x_values is not _plot._COORDINATE_ARGUMENT_UNSET
+                or y_values is not _plot._COORDINATE_ARGUMENT_UNSET):
+            if axes_numbers:
+                raise TypeError("use positional axis values or x_values/y_values, not both")
+            axes_numbers = (
+                None if x_values is _plot._COORDINATE_ARGUMENT_UNSET else x_values,
+                None if y_values is _plot._COORDINATE_ARGUMENT_UNSET else y_values,
+            )
         from _manim_number_labels import add_number_plane_coordinates
         x_config = dict(kwargs.pop("x_config", None) or {})
         y_config = dict(kwargs.pop("y_config", None) or {})
@@ -242,8 +252,7 @@ class NumberPlane(_plot.Axes):
         kwargs.setdefault("buff", _base.SMALL_BUFF)
         return add_number_plane_coordinates(
             self,
-            x_values,
-            y_values,
+            *axes_numbers,
             x_config=x_config,
             y_config=y_config,
             config=kwargs,
