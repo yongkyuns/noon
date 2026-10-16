@@ -1,4 +1,6 @@
 //! Immutable authored family observations and atomic relative placement.
+
+mod placement;
 use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
@@ -572,37 +574,7 @@ pub(crate) fn placement_authored_transform(
     execution: &ExecutionSession,
     object: &Mobject,
 ) -> Result<Transform2D, AuthoringError> {
-    if !Rc::ptr_eq(store, object.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    let authored = object.state()?;
-    let authored_transform = Transform2D {
-        translation: authored.transform.translation.lower_xy_f32()?,
-        rotation: authoring_render_f64(
-            "move_to authored rotation",
-            authored
-                .transform
-                .planar_rotation()
-                .ok_or(AuthoringError::NonFiniteObjectState)?,
-        )? as f32,
-        scale: authored.transform.scale.lower_xy_f32()?,
-    };
-    let store_ref = store.borrow();
-    match execution.effective_semantic_object(&store_ref, object.node_id()) {
-        Ok(observed) if !observed.authored_content_layout_applicable() => {
-            return Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
-            ));
-        }
-        Ok(observed) if observed.object.transform != authored_transform => {
-            return Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
-            ));
-        }
-        Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
-        Err(error) => return Err(error.into()),
-    }
-    Ok(authored_transform)
+    placement::transform(store, execution, object, false).map(|(transform, _)| transform)
 }
 
 fn effective_member_center(
@@ -837,8 +809,13 @@ fn publish_layout_translation(
     }
     let transaction =
         FamilyTranslation::from_members(leaves, delta.0, delta.1)?.transaction(&store.borrow())?;
-    crate::Scene::publish_running_transaction(store, root, execution, transaction)
-        .map_err(AuthoringError::from)
+    let callback_time = execution.frame().time;
+    let callback_publication = execution.publication_context();
+    let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)
+        .map_err(AuthoringError::from)?;
+    execution
+        .carry_settled_callback_through_layout_translation(callback_time, callback_publication);
+    Ok(result)
 }
 
 pub(crate) fn publish_shift_family(
@@ -932,13 +909,34 @@ pub(crate) fn publish_move_to(
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let transform = placement_authored_transform(store, execution, object)?;
+    let (transform, callback_owned) = placement::transform(store, execution, object, true)?;
     let bounds = object.boundary_bounds_at(transform)?.unwrap_or_else(|| {
         Bounds2D64::point(
             f64::from(transform.translation.x),
             f64::from(transform.translation.y),
         )
     });
+    if callback_owned {
+        let delta = RelativePlacement::Move { edge, mask }.delta(Some(bounds), |x, y| {
+            live_target_point(store, execution, target, x, y)
+        })?;
+        let position = authoring_xy_f64(
+            f64::from(transform.translation.x) + delta.0,
+            f64::from(transform.translation.y) + delta.1,
+        )?;
+        let mut translation = object.state()?.transform.translation;
+        translation.x = position.x;
+        translation.y = position.y;
+        return execution
+            .publish_settled_callback_translation(
+                &mut store.borrow_mut(),
+                root,
+                object.node_id(),
+                translation,
+                transform,
+            )
+            .map_err(AuthoringError::from);
+    }
     publish_layout_translation(
         store,
         root,
@@ -1051,3 +1049,6 @@ pub(crate) fn publish_next_layout_to_aligned(
         RelativePlacement::Next(args),
     )
 }
+
+#[cfg(test)]
+mod placement_callback_tests;

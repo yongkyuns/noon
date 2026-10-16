@@ -10,6 +10,43 @@
     "source": "parity/manim-v0.21/quickstart.py"
   },
   "fixtures": [
+    {"id": "lingering", "scene": "LingeringRate", "source": "parity/manim-v0.21/core-examples/lingering.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.9666666666666667], "notes": "Original lingering early hold and reverse Create through one shared composition. 120fps represents unchanged sample times exactly; no arbitrary Python playback claim."},
+    {"id": "back-easings", "scene": "BackEasings", "source": "parity/manim-v0.21/core-examples/back_easings.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.125, 0.25, 0.375, 0.5, 0.75, 0.9666666666666667], "notes": "Three unchanged original back easings preserve negative and above-one overshoot. Existing requested sampling and tolerances are unchanged."},
+    {"id": "elastic-bounce-easings", "scene": "ElasticBounceEasings", "source": "parity/manim-v0.21/core-examples/elastic_bounce_easings.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.125, 0.25, 0.375, 0.5, 0.75, 0.9666666666666667], "notes": "Six original elastic and bounce rates preserve overshoot, exact endpoints and piecewise curves through shared Rust. Sampling and tolerances are unchanged."},
+    {
+      "id": "exponential-circular-easings",
+      "scene": "ExponentialCircularEasings",
+      "source": "parity/manim-v0.21/core-examples/exponential_circular_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Six original exponential/circular rates through shared method targets. 120fps reference represents all unchanged requested times exactly; no tolerance relaxation."
+    },
+    {
+      "id": "sine-easings",
+      "scene": "SineEasings",
+      "source": "parity/manim-v0.21/core-examples/sine_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Three standard sine rates through shared method targets. 120fps original reference represents every unchanged requested time exactly; no tolerance relaxation."
+    },
     {
       "id": "polynomial-easings",
       "reference_frame_rate": 120,

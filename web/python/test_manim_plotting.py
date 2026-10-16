@@ -1,12 +1,13 @@
 """Adapter lifetime/error tests; real numerical/renderer proof is browser CI."""
 import unittest
 
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
 try:
     import numpy as np
 except ImportError:
     np = None
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
 
 import _manim_plotting as plotting
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT

@@ -122,6 +122,7 @@ impl ManimGeometryOptions {
             )?;
             value = Some(sweep);
         }
+        geometry.set_explicit_angle_radius(options.radius);
         geometry.set_semantic_role(SemanticObjectRole::Angle(SemanticAngleRole::new(value)));
         Ok(geometry)
     }
@@ -174,6 +175,31 @@ mod tests {
             angle.shift(2.0, 1.0).unwrap();
             assert_eq!(angle.angle_value(false).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn explicit_radius_attribute_is_omitted_for_parallel_empty_angles() {
+        let explicit = ManimGeometryOptions::angle_from_endpoints(
+            HORIZONTAL,
+            VERTICAL,
+            ManimAngleOptions {
+                radius: Some(0.5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(explicit.explicit_angle_radius(), Some(0.5));
+
+        let parallel = ManimGeometryOptions::angle_from_endpoints(
+            HORIZONTAL,
+            [(-1.0, 1.0), (1.0, 1.0)],
+            ManimAngleOptions {
+                radius: Some(0.7),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(parallel.explicit_angle_radius(), None);
     }
 
     #[test]

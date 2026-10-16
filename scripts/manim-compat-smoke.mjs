@@ -611,6 +611,9 @@ assert clip(5, 10, 0) == 10
 assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
 assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
 assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})
+assert lingering(0.4) == 0.5
+assert lingering(0.9) == 1.0
+assert lingering is __import__("_manim_rate_functions").lingering
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
@@ -628,6 +631,11 @@ result = Scene()
 from noon import stretch_array_to_length as stretch, Scene
 import sys
 assert "numpy" in sys.modules
+from noon import typing as mt
+assert mt.ManimFloat is __import__("numpy").float64
+assert mt.CubicBezierPoints == mt.Point3D_Array
+assert mt.ManimTextLabel == "Text | MathTex | Typst"
+assert mt.StrPath == str | __import__("os").PathLike[str]
 array = __import__("numpy").array([[1, 2], [3, 4]])
 stretched = stretch(array, 3)
 assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
@@ -646,6 +654,9 @@ quaternion = [1, 2, 3, 4]
 assert quaternion_mult(quaternion) is quaternion
 assert quaternion_conjugate(quaternion).tolist() == [1, -2, -3, -4]
 assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
+from noon import get_unit_normal
+assert get_unit_normal([1, 0, 0], [0, 1, 0]).tolist() == [0, 0, 1]
+assert get_unit_normal([0, 0, 0], [0, 0, 0]).tolist() == [0, -1, 0]
 assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 from noon import line_intersection, find_intersection
 np = __import__("numpy")
