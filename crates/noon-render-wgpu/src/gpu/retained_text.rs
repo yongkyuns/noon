@@ -4290,6 +4290,8 @@ mod tests {
                         text_bounds: None,
                         transform: Transform2D::IDENTITY,
                         style: Style {
+                            fill: Some(Color::WHITE),
+                            stroke_width: 0.0,
                             opacity: 0.8,
                             ..Style::default()
                         },
