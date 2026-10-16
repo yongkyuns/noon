@@ -35,7 +35,6 @@ impl NumberLabelOptions {
                     group_with_commas: self.group_with_commas,
                     show_ellipsis: self.show_ellipsis,
                     unit: self.unit.clone(),
-                    ..Default::default()
                 },
             ));
         };
@@ -64,7 +63,6 @@ impl NumberLabelOptions {
                 group_with_commas: self.group_with_commas,
                 show_ellipsis: self.show_ellipsis,
                 unit: Some(format!("^{{{exponent}}}")),
-                ..Default::default()
             },
         ))
     }

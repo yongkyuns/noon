@@ -5,6 +5,10 @@ use crate::{ExecutionSession, ManimNumberPlaneOptions, Scene, SemanticPaint, BLU
 use crate::Text;
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
+    scene_with_tips(true)
+}
+
+pub(super) fn scene_with_tips(include_tips: bool) -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let mut options = ManimNumberPlaneOptions {
         x_range: [-3.0, 3.0, 1.0],
@@ -14,8 +18,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         faded_line_ratio: 2,
         ..Default::default()
     };
-    options.x_include_tip = true;
-    options.y_include_tip = true;
+    options.x_include_tip = include_tips;
+    options.y_include_tip = include_tips;
     options.y_tip_width = 0.45;
     options.y_tip_height = 0.3;
     options.background_line_style.stroke = Some(SemanticPaint::Solid(GREEN));

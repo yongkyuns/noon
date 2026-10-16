@@ -64,7 +64,7 @@ await qualifyPairedAuthoring({
     { id: "graph-queries", file: "graph_queries.py", factory: "createGraphQueriesRenderer", objectCount: 15 },
     { id: "polar-plane", file: "polar_plane.py", factory: "createPolarPlaneRenderer", objectCount: 34 },
     { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 26 },
-    { id: "complex-plane", file: "complex_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
+    { id: "complex-plane", file: "complex_plane.py", factory: "createComplexPlaneRenderer", objectCount: 24 },
     { id: "area", file: "area_helpers.py", factory: "createAreaHelpersRenderer", objectCount: 26 },
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
