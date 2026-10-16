@@ -29,6 +29,7 @@ class PolarPlaneAdapterTests(TestCase):
         lines = patch.object(polar_plane, "_lines", side_effect=self.members[:2]).start()
         axes = patch.object(polar_plane._plot, "_attach_number_line", side_effect=self.members[2:]).start()
         patch.object(polar_plane._plot, "_family", side_effect=self._family).start()
+        patch.object(polar_plane._plot._compat, "VGroup", side_effect=lambda *members: members).start()
         patch.object(polar_plane.PolarPlane, "submobjects", new_callable=lambda: property(lambda value: value._members)).start()
 
     def _family(self, wrapper, handle, members):
@@ -55,6 +56,13 @@ class PolarPlaneAdapterTests(TestCase):
     def test_units_only_select_the_shared_default_azimuth_step(self):
         polar_plane.PolarPlane(azimuth_units="degrees")
         self.assertEqual(polar_plane._plot._coordinate_options.polarPlane.call_args.args[3], 36)
+
+    def test_inherited_axis_accessors_select_only_radius_and_azimuth_axes(self):
+        plane = polar_plane.PolarPlane()
+        x_axis, y_axis = self.members[2:]
+        self.assertEqual(plane.get_axes(), (x_axis, y_axis))
+        self.assertIs(plane.get_axis(0), x_axis)
+        self.assertIs(plane.get_axis(1), y_axis)
 
     def test_invalid_direction_rejects_before_shared_option_creation(self):
         with self.assertRaisesRegex(ValueError, "azimuth_direction"):

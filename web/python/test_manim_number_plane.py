@@ -51,6 +51,7 @@ class NumberPlaneAdapterTests(TestCase):
             side_effect=lambda wrapper, handle: self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
         ).start()
         self.family = patch.object(number_plane._plot, "_family", side_effect=self._family).start()
+        patch.object(number_plane._plot._compat, "VGroup", side_effect=lambda *members: members).start()
         patch.object(
             number_plane.NumberPlane,
             "submobjects",
@@ -192,6 +193,15 @@ class NumberPlaneAdapterTests(TestCase):
         self.context.queryNumberPlaneFrame.assert_called_once_with(
             plane._semantic_family_handle
         )
+
+    def test_inherited_axis_accessors_exclude_grid_line_siblings(self):
+        plane = self.construct()
+        x_axis, y_axis = plane.x_axis, plane.y_axis
+        self.assertEqual(plane.get_axes(), (x_axis, y_axis))
+        self.assertIs(plane.get_axis(0), x_axis)
+        self.assertIs(plane.get_axis(1), y_axis)
+        self.assertIs(plane.get_x_axis(), x_axis)
+        self.assertIs(plane.get_y_axis(), y_axis)
 
     def test_group_members_preserve_authoritative_part_identity_and_order(self):
         plane = self.construct()

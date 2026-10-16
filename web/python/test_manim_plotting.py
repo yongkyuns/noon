@@ -433,6 +433,7 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]) as attach, \
+             patch.object(plotting._compat, "VGroup", return_value=object()), \
              patch.object(plotting, "_coordinate_family"):
             plotting.Axes(
                 axis_config={"scaling": common},
@@ -471,6 +472,7 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
+             patch.object(plotting._compat, "VGroup", return_value=object()), \
              patch.object(plotting, "_coordinate_family"):
             plotting.Axes(
                 x_range=(-2, 2, 0.5), y_range=(-1, 1, 1),
@@ -497,6 +499,36 @@ class PlottingAdapterTests(unittest.TestCase):
         self.assertFalse(y_axis.include_numbers)
         self.assertEqual(x_axis.number_label_decimal_places, 1)
         self.assertEqual(y_axis.number_label_decimal_places, 2)
+
+    def test_axes_accessors_preserve_axis_identity_and_current_frame_queries(self):
+        x_axis = SimpleNamespace(get_unit_size=Mock(return_value=2.5))
+        y_axis = SimpleNamespace(get_unit_size=Mock(return_value=1.25))
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (x_axis, y_axis)
+        origin = plotting._base.Vec2(3, -2)
+        with patch.object(axes, "c2p", return_value=origin) as coords_to_point:
+            self.assertEqual(axes.get_origin(), origin)
+        coords_to_point.assert_called_once_with(0.0, 0.0)
+        self.assertIs(axes.get_axes()[0], x_axis)
+        self.assertIs(axes.get_axis(1), y_axis)
+        self.assertIs(axes.get_x_axis(), x_axis)
+        self.assertIs(axes.get_y_axis(), y_axis)
+        self.assertEqual(axes.get_x_unit_size(), 2.5)
+        self.assertEqual(axes.get_y_unit_size(), 1.25)
+        x_axis.get_unit_size.assert_called_once_with()
+        y_axis.get_unit_size.assert_called_once_with()
+
+    def test_axes_get_axes_builds_one_retained_group_on_first_access(self):
+        x_axis, y_axis, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        with patch.object(plotting.Axes, "x_axis", new_callable=PropertyMock,
+                          return_value=x_axis), \
+             patch.object(plotting.Axes, "y_axis", new_callable=PropertyMock,
+                          return_value=y_axis), \
+             patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            self.assertIs(axes.get_axes(), group)
+            self.assertIs(axes.get_axes(), group)
+        make_group.assert_called_once_with(x_axis, y_axis)
 
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf

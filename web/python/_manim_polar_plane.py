@@ -74,6 +74,7 @@ class PolarPlane(_plot.Axes):
         members = [_lines(engine_call(handle.polarPlanePart, i)) for i in (0, 1)]
         members.extend(_plot._attach_number_line(object.__new__(_plot.NumberLine), engine_call(handle.polarPlanePart, i)) for i in (2, 3))
         _plot._family(self, handle, members)
+        self.axes = _plot._compat.VGroup(members[2], members[3])
         self.azimuth_units = azimuth_units
         self.azimuth_compact_fraction = bool(azimuth_compact_fraction)
         self.azimuth_label_buff = float(azimuth_label_buff)
