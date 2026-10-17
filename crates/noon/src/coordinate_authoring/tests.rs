@@ -36,6 +36,62 @@ fn resources(scene: &Scene) -> usize {
 }
 
 #[test]
+fn number_plane_grid_aliases_keep_authored_membership_without_geometry_inference() {
+    // Complete pinned Manim observations include arange rounding at ratio three.
+    for (ratio, x_indices, y_indices) in [
+        (0, vec![0], vec![1, 2, 3]),
+        (1, vec![0], vec![1, 2, 3]),
+        (2, vec![], vec![0, 1]),
+        (3, vec![0, 1], vec![2, 3, 4, 5]),
+    ] {
+        let mut scene = Scene::new();
+        let plane = scene
+            .number_plane(&ManimNumberPlaneOptions {
+                x_range: [-2.0, 2.0, 1.0],
+                y_range: [-1.0, 1.0, 1.0],
+                faded_line_ratio: ratio,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(plane.grid_line_indices(true).unwrap(), x_indices);
+        assert_eq!(plane.grid_line_indices(false).unwrap(), y_indices);
+        let background = plane.background_lines().unwrap();
+        let members = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(background.node_id())
+            .unwrap();
+        let mut line = Mobject::from_node(
+            Rc::clone(scene.integration_store()),
+            members[y_indices[0] as usize],
+        )
+        .unwrap();
+        line.rotate(0.4).unwrap();
+        plane
+            .x_axis()
+            .unwrap()
+            .family()
+            .rotate(0.7, ManimRotationPivot::Center)
+            .unwrap();
+        // Unrelated appended geometry is never enrolled merely for being parallel.
+        let noise = scene
+            .number_line(&ManimNumberLineOptions::default())
+            .unwrap()
+            .shaft()
+            .unwrap();
+        background.add((&noise).into()).unwrap();
+        assert_eq!(plane.grid_line_indices(true).unwrap(), x_indices);
+        assert_eq!(plane.grid_line_indices(false).unwrap(), y_indices);
+        let copied = plane.family().copy_family().unwrap();
+        let clone = ManimNumberPlane::from_family(copied.root().clone()).unwrap();
+        clone.family().shift(3.0, 2.0).unwrap();
+        assert_eq!(clone.grid_line_indices(true).unwrap(), x_indices);
+        assert_eq!(clone.grid_line_indices(false).unwrap(), y_indices);
+        assert_ne!(copied.mobject(&line).unwrap().node_id(), line.node_id());
+    }
+}
+
+#[test]
 fn polar_plane_reuses_cartesian_frame_with_decorative_azimuth() {
     let mut scene = Scene::new();
     let plane = scene.polar_plane(&polar_options()).unwrap();

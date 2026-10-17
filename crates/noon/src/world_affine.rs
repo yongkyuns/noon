@@ -157,7 +157,8 @@ fn validate_spatial_leaf(
         SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D => Ok(()),
         SemanticObjectRole::Ordinary
         | SemanticObjectRole::NumberLine(_)
-        | SemanticObjectRole::CoordinateTip => match state.content {
+        | SemanticObjectRole::CoordinateTip
+        | SemanticObjectRole::NumberPlaneGridLine { .. } => match state.content {
             noon_core::SemanticObjectContent::Image(_) => Err(unsupported_spatial_path()),
             noon_core::SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => store
                 .geometry_resources()
@@ -192,7 +193,8 @@ fn union_world_bounds(
             }
             SemanticObjectRole::Ordinary
             | SemanticObjectRole::NumberLine(_)
-            | SemanticObjectRole::CoordinateTip => {
+            | SemanticObjectRole::CoordinateTip
+            | SemanticObjectRole::NumberPlaneGridLine { .. } => {
                 let (local_min, local_max) = match pose.state.content.geometry() {
                     Some(StoredGeometry::Resource(handle))
                         if matches!(

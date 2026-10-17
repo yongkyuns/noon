@@ -3,6 +3,7 @@ name: Manim raster differential
 on:
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - "crates/noon/src/diagnostics.rs"
       - "crates/noon/src/example_scenes/following_graph_camera.rs"
       - "web/python/examples/manim_example_following_graph_camera.py"
@@ -166,7 +167,7 @@ jobs:
             dvisvgm
       - name: Install pinned ManimCE reference
         run: |
-          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "manimpango==0.6.1" "typst==0.15.0"
+          python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt "manim[typst]==0.21.0" "manimpango==0.6.1" "typst==0.15.0"
           python -m pip show manimpango
           latex --version
           dvisvgm --version

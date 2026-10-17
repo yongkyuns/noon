@@ -302,7 +302,8 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise ValueError(f"{name}.font_size must be positive")
     direction = _base._as_vec2(direction)
     buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
-    decimal_config = {} if decimal_config is None else decimal_config
+    infer_precision = decimal_config is None
+    decimal_config = {} if infer_precision else decimal_config
     if not isinstance(decimal_config, Mapping):
         raise TypeError(f"{name}.decimal_number_config must be a mapping")
     if any(not isinstance(key, str) for key in decimal_config):
@@ -312,7 +313,7 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise NotImplementedError(
             f"unsupported {name}.decimal_number_config option(s): " + ", ".join(unknown)
         )
-    precision = None
+    precision = None if infer_precision else 2
     if "num_decimal_places" in decimal_config:
         precision = decimal_config["num_decimal_places"]
         if not isinstance(precision, int) or isinstance(precision, bool):
@@ -368,7 +369,7 @@ def _axes_number_values(values, name, default):
 
 
 def _configure_axes_numeric_labels(axis, config, range_values):
-    step = range_values[2] if len(range_values) == 3 else 1.0
+    step = range_values[2] if len(range_values) == 3 else 1
     places = config["decimal_places"]
     if places is None:
         places = _decimal_places_from_step(step)
@@ -801,6 +802,38 @@ class Axes(_compat.Group):
         _coordinate_family(self, handle, members)
         for axis, (_, config, _, range_values) in zip(members, axis_setups):
             _configure_axes_numeric_labels(axis, config, range_values)
+
+    @property
+    def axes(self):
+        axes = getattr(self, "_axes_group", None)
+        if axes is None:
+            axes = _compat.VGroup(self.x_axis, self.y_axis)
+            self._axes_group = axes
+        return axes
+
+    @axes.setter
+    def axes(self, value):
+        self._axes_group = value
+
+    def get_axes(self):
+        """Return a retained family grouping the two coordinate axes."""
+        return self.axes
+
+    def get_axis(self, index):
+        """Return one axis by its Manim index (x=0, y=1)."""
+        return self.get_axes()[index]
+
+    def get_x_axis(self):
+        return self.get_axis(0)
+
+    def get_y_axis(self):
+        return self.get_axis(1)
+
+    def get_x_unit_size(self):
+        return self.get_x_axis().get_unit_size()
+
+    def get_y_unit_size(self):
+        return self.get_y_axis().get_unit_size()
 
     @property
     def x_axis(self):

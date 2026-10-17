@@ -2,6 +2,7 @@ name: Image raster qualification
 on:
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - "scripts/ci-setup-rust.sh"
       - "scripts/test_ci_setup_rust.py"
       - 'crates/**'
@@ -46,7 +47,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config mesa-vulkan-drivers
-          python -m pip install --disable-pip-version-check manim==0.21.0
+          python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt manim==0.21.0
       - name: Rust target
         run: |
           python3 scripts/test_ci_setup_rust.py

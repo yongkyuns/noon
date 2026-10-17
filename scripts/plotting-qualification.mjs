@@ -28,21 +28,26 @@ await qualifyPairedAuthoring({
 
 class CoordinateNumericLabels(Scene):
     async def construct(self):
-        for coordinate_type in (Axes, NumberPlane):
-            plane = coordinate_type(
-                x_range=(-2, 2, 0.5), y_range=(-1, 1, 0.5),
-                axis_config={"include_numbers": True, "numbers_to_exclude": [0],
-                             "font_size": 20, "line_to_number_buff": 0.12},
-                x_axis_config={"numbers_to_include": [-1, 1]},
-                y_axis_config={"include_numbers": False,
-                               "numbers_to_include": [-0.5, 0.5],
-                               "decimal_number_config": {"num_decimal_places": 1}},
-            )
-            assert len(plane.x_axis.numbers.submobjects) == 2
-            assert len(plane.y_axis.numbers.submobjects) == 2
-            assert plane.x_axis.number_label_decimal_places == 1
-            assert plane.y_axis.number_label_decimal_places == 1
-            self.add(plane)
+        for decimal_config, places, expected_text in (
+            (None, 0, ("-1", "1")), ({}, 2, ("-1.00", "1.00")),
+        ):
+            for coordinate_type in (Axes, NumberPlane):
+                plane = coordinate_type(
+                    x_range=(-2, 2, 1), y_range=(-1, 1, 0.5),
+                    axis_config={"include_numbers": True, "numbers_to_exclude": [0],
+                                 "font_size": 20, "line_to_number_buff": 0.12},
+                    x_axis_config={"numbers_to_include": [-1, 1],
+                                   "decimal_number_config": decimal_config},
+                    y_axis_config={"include_numbers": False,
+                                   "numbers_to_include": [-0.5, 0.5],
+                                   "decimal_number_config": {"num_decimal_places": 1}},
+                )
+                assert len(plane.x_axis.numbers.submobjects) == 2
+                assert len(plane.y_axis.numbers.submobjects) == 2
+                assert tuple(label.source for label in plane.x_axis.numbers) == expected_text
+                assert plane.x_axis.number_label_decimal_places == places
+                assert plane.y_axis.number_label_decimal_places == 1
+                self.add(plane)
         await self.wait(0.05)
 `;
       const labels = await qualifyPythonPlayback(context, baseUrl, labelSource, [0, 0.05]);
@@ -51,6 +56,57 @@ class CoordinateNumericLabels(Scene):
       assert.ok(labels.objectCount > 0);
       assert.ok(Math.abs(labels.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane native numeric labels`);
+      const accessorSource = `from noon import *
+
+class CoordinateAccessors(Scene):
+    async def construct(self):
+        for coordinate_type in (Axes, NumberPlane, PolarPlane):
+            axes = (coordinate_type(radius_max=2, size=4) if coordinate_type is PolarPlane
+                    else coordinate_type((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2))
+            assert axes.get_axes() is axes.axes
+            assert axes.get_axes()[0] is axes.x_axis
+            assert axes.get_axis(1) is axes.y_axis
+            assert axes.get_x_axis() is axes.x_axis
+            assert axes.get_y_axis() is axes.y_axis
+            assert abs(axes.get_origin().x - axes.coords_to_point(0, 0).x) < 1e-6
+            assert abs(axes.get_x_unit_size() - axes.x_axis.get_unit_size()) < 1e-6
+            assert abs(axes.get_y_unit_size() - axes.y_axis.get_unit_size()) < 1e-6
+            clone = axes.copy().shift(RIGHT)
+            assert clone.get_axes()[0] is clone.x_axis
+            assert clone.get_axes()[1] is clone.y_axis
+            assert clone.x_axis is not axes.x_axis
+            self.add(axes, clone)
+        plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
+        assert plane.x_lines.submobjects
+        assert plane.y_lines.submobjects
+        assert all(any(line is member for member in plane.background_lines.submobjects)
+                   for line in plane.x_lines.submobjects)
+        assert all(any(line is member for member in plane.background_lines.submobjects)
+                   for line in plane.y_lines.submobjects)
+        def parallel_to(line, axis):
+            start, end = line.get_start(), line.get_end()
+            axis_start, axis_end = axis.shaft.get_start(), axis.shaft.get_end()
+            dx, dy = end.x - start.x, end.y - start.y
+            ax, ay = axis_end.x - axis_start.x, axis_end.y - axis_start.y
+            return abs(ax * dy - ay * dx) <= 1e-6 * ((ax * ax + ay * ay) ** 0.5) * ((dx * dx + dy * dy) ** 0.5)
+        assert all(parallel_to(line, plane.x_axis) for line in plane.x_lines.submobjects)
+        assert all(parallel_to(line, plane.y_axis) for line in plane.y_lines.submobjects)
+        clone = plane.copy().rotate(0.3)
+        assert clone.x_lines[0] is not plane.x_lines[0]
+        assert all(any(line is member for member in clone.background_lines.submobjects)
+                   for line in clone.x_lines.submobjects + clone.y_lines.submobjects)
+        self.add(plane, clone)
+        await self.wait(0.025)
+        assert clone.get_x_axis() is clone.x_axis
+        assert abs(clone.get_x_unit_size() - clone.x_axis.get_unit_size()) < 1e-6
+        await self.wait(0.025)
+`;
+      const accessors = await qualifyPythonPlayback(context, baseUrl, accessorSource, [0, 0.05]);
+      assert.equal(accessors.rendererBackend, expectedBackend);
+      assert.equal(accessors.presented, true);
+      assert.ok(accessors.objectCount > 0);
+      assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
       return lifecycle;
     } finally {
       await page.close();

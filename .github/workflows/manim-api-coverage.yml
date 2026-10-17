@@ -8,6 +8,7 @@ on:
       - "crates/**/tests/**"
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - '.github/workflows/manim-api-coverage.yml'
       - 'compat/manim-v0.21.0.json'
       - 'scripts/manim-api-coverage.py'
@@ -67,7 +68,7 @@ jobs:
             pkg-config
 
       - name: Install pinned ManimCE reference
-        run: python -m pip install --disable-pip-version-check "manim==0.21.0"
+        run: python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt "manim==0.21.0"
 
       - name: Checkout pinned ManimCE source
         uses: actions/checkout@v7

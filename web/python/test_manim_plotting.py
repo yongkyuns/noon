@@ -520,6 +520,55 @@ class PlottingAdapterTests(unittest.TestCase):
         self.assertEqual(x_axis.number_label_decimal_places, 1)
         self.assertEqual(y_axis.number_label_decimal_places, 2)
 
+    def test_axes_accessors_preserve_axis_identity_and_current_frame_queries(self):
+        x_axis = SimpleNamespace(get_unit_size=Mock(return_value=2.5))
+        y_axis = SimpleNamespace(get_unit_size=Mock(return_value=1.25))
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (x_axis, y_axis)
+        origin = plotting._base.Vec2(3, -2)
+        with patch.object(axes, "c2p", return_value=origin) as coords_to_point:
+            self.assertEqual(axes.get_origin(), origin)
+        coords_to_point.assert_called_once_with(0.0, 0.0)
+        self.assertIs(axes.get_axes()[0], x_axis)
+        self.assertIs(axes.get_axis(1), y_axis)
+        self.assertIs(axes.get_x_axis(), x_axis)
+        self.assertIs(axes.get_y_axis(), y_axis)
+        self.assertEqual(axes.get_x_unit_size(), 2.5)
+        self.assertEqual(axes.get_y_unit_size(), 1.25)
+        x_axis.get_unit_size.assert_called_once_with()
+        y_axis.get_unit_size.assert_called_once_with()
+
+    def test_explicit_empty_decimal_config_uses_decimal_number_default_precision(self):
+        for config, expected in ((None, None), ({}, 2), ({"num_decimal_places": 0}, 0)):
+            with self.subTest(config=config):
+                style = plotting._number_label_style(
+                    36, plotting._base.DOWN, 0.25, config, "axis"
+                )
+                self.assertEqual(style[-1], expected)
+
+    def test_axes_default_and_explicit_label_steps_preserve_authored_precision(self):
+        for axis_range, expected in (((), 0), ((-2, 2), 0),
+                                     ((-2, 2, 1), 0), ((-2, 2, 1.0), 1)):
+            with self.subTest(axis_range=axis_range):
+                axis = SimpleNamespace(add_numbers=Mock())
+                config = plotting._axes_label_options(
+                    {}, ("linear", 1.0, False), "axis", plotting._base.DOWN
+                )
+                plotting._configure_axes_numeric_labels(axis, config, axis_range)
+                self.assertEqual(axis.number_label_decimal_places, expected)
+
+    def test_axes_get_axes_builds_one_retained_group_on_first_access(self):
+        x_axis, y_axis, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        with patch.object(plotting.Axes, "x_axis", new_callable=PropertyMock,
+                          return_value=x_axis), \
+             patch.object(plotting.Axes, "y_axis", new_callable=PropertyMock,
+                          return_value=y_axis), \
+             patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            self.assertIs(axes.get_axes(), group)
+            self.assertIs(axes.get_axes(), group)
+        make_group.assert_called_once_with(x_axis, y_axis)
+
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf
 

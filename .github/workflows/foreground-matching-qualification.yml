@@ -3,6 +3,7 @@ name: Foreground matching qualification
 on:
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - 'crates/noon*/**'
       - 'web/python/**'
       - 'web/*semantic*'
@@ -61,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
-          python -m pip install --disable-pip-version-check 'manim==0.21.0'
+          python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt 'manim==0.21.0'
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Capture pinned Manim and real Python-worker overlap frames
