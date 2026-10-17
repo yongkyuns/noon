@@ -104,16 +104,8 @@ def _remember(axis, labels, *, attribute="numbers"):
     setattr(axis, attribute, labels)
 
 
-def number_mobjects(axis, values, *, attach, config, excluding=None,
-                    log_base=None, number_class=None, attribute="numbers"):
-    _cold_labels()
-    native_text = "font" in config
-    if native_text and log_base is not None:
-        raise NotImplementedError("LogBase custom labels require the DecimalNumber profile")
-    values_js = _plot._array(() if values is None else values)
-    options, size, color = _options(
-        config, excluding=() if excluding is None else excluding, log_base=log_base,
-    )
+def _axis_options(axis, config, *, excluding=(), log_base=None):
+    options, size, color = _options(config, excluding=excluding, log_base=log_base)
     try:
         engine_call(options.setTickRangeFlags,
                     bool(getattr(axis, "include_tip", False)),
@@ -121,6 +113,19 @@ def number_mobjects(axis, values, *, attach, config, excluding=None,
     except BaseException:
         options.free()
         raise
+    return options, size, color
+
+
+def number_mobjects(axis, values, *, attach, config, excluding=None,
+                    log_base=None, number_class=None, attribute="numbers"):
+    _cold_labels()
+    native_text = "font" in config
+    if native_text and log_base is not None:
+        raise NotImplementedError("LogBase custom labels require the DecimalNumber profile")
+    values_js = _plot._array(() if values is None else values)
+    options, size, color = _axis_options(
+        axis, config, excluding=() if excluding is None else excluding, log_base=log_base,
+    )
     if native_text:
         handle = engine_call(axis._semantic_family_handle.numberLabelFamily,
                              values_js, values is None, options, bool(attach))
@@ -336,9 +341,9 @@ def _add_decimal_coordinate_labels(
     for settings in (x_settings, y_settings):
         settings.pop("excluding", None)
         settings.setdefault("exclude_zero", False)
-    x_options, _, x_color = _options(x_settings, excluding=excluded_numbers[0])
+    x_options, _, x_color = _axis_options(owner.x_axis, x_settings, excluding=excluded_numbers[0])
     try:
-        y_options, _, y_color = _options(y_settings, excluding=excluded_numbers[1])
+        y_options, _, y_color = _axis_options(owner.y_axis, y_settings, excluding=excluded_numbers[1])
     except BaseException:
         x_options.free()
         raise
@@ -368,9 +373,9 @@ def _add_coordinate_labels(
     for settings in (x_settings, y_settings):
         settings.pop("excluding", None)
         settings.setdefault("exclude_zero", False)
-    x_options, x_size, x_color = _options(x_settings, excluding=excluded_numbers[0])
+    x_options, x_size, x_color = _axis_options(x_axis, x_settings, excluding=excluded_numbers[0])
     try:
-        y_options, y_size, y_color = _options(y_settings, excluding=excluded_numbers[1])
+        y_options, y_size, y_color = _axis_options(y_axis, y_settings, excluding=excluded_numbers[1])
     except BaseException:
         x_options.free()
         raise

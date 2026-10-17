@@ -322,6 +322,20 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(axes.x_axis.numbers, x_family)
         self.assertIs(axes.y_axis.numbers, y_family)
 
+    def test_atomic_axis_labels_forward_tip_and_origin_policy_for_both_profiles(self):
+        for config in ({}, {"font": "Fixture Sans"}):
+            axes = self.axes()
+            axes.x_axis.include_tip = True
+            axes.x_axis.exclude_origin_tick = True
+            axes.y_axis.include_tip = False
+            axes.y_axis.exclude_origin_tick = False
+            with self.subTest(config=config), patch.object(
+                labels, "_axes_decimal_labels", return_value=(Owned(), Owned())
+            ), patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle):
+                labels.add_coordinates(axes, config=config)
+            self.assertEqual([option.tick_range_flags for option in self.options[-2:]],
+                             [(True, True), (False, False)])
+
     def test_axes_constructor_decimal_formatting_is_preserved_per_axis(self):
         axes = self.axes()
         axes.x_axis.decimal_number_config = {

@@ -233,6 +233,8 @@ class ManimVectorSpaceTests(unittest.TestCase):
             class Options:
                 def __init__(self, name): self.name, self.freed = name, False
                 def free(self): self.freed = True
+                def setTickRangeFlags(self, include_tip, exclude_origin_tick):
+                    self.tick_range_flags = (include_tip, exclude_origin_tick)
             x_axis, y_axis = SimpleNamespace(), SimpleNamespace()
             class Handle:
                 def numberPlaneCoordinateLabelFamilies(self, *args):
@@ -247,7 +249,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
             labels._plot._array = lambda values: tuple(values)
             labels._compat.VGroup = lambda *members: tuple(members)
             options = []
-            def make_options(config, *, excluding=()):
+            def make_options(config, *, excluding=(), log_base=None):
                 token = Options(len(options))
                 options.append((token, config, tuple(excluding)))
                 return token, 18.0, "white"

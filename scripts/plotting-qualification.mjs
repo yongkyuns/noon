@@ -138,6 +138,8 @@ class AxesLogBaseLabels(Scene):
         assert tuple(label.get_value() for label in x_labels) == (2, 2, 2, 2, 2)
         for label, coordinate in zip(x_labels, (0.25, 0.5, 1, 2, 4)):
             assert abs(label.get_center().x - axes.x_axis.number_to_point(coordinate).x) < 1e-6
+        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 1)
+        axes.y_axis.add_numbers((-1, 0, 1))
         assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 0, 1)
         coordinate_axes = Axes(
             x_range=(-2, 2, 1), y_range=(-1, 1, 1),
