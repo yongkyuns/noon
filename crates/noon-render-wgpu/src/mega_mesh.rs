@@ -691,8 +691,14 @@ mod tests {
         assert_eq!(appended.stats.geometry_cache_misses, 1);
         assert_eq!(appended.stats.path_vertices_repacked, appended_range.len());
         assert_eq!(appended.stats.mega_path_count, 2);
-        assert_eq!(appended.mega_path_vertex_instances.len(), appended_range.end);
-        assert_eq!(&appended.mega_path_vertex_instances[..prefix.len()], &prefix);
+        assert_eq!(
+            appended.mega_path_vertex_instances.len(),
+            appended_range.end
+        );
+        assert_eq!(
+            &appended.mega_path_vertex_instances[..prefix.len()],
+            &prefix
+        );
         assert_eq!(
             appended.mega_path_instance_dirty_ranges,
             std::slice::from_ref(&appended_range)
@@ -712,7 +718,10 @@ mod tests {
         frame.presences[1] = true;
         let reentered = preparer.prepare(&frame);
         assert_eq!(reentered.stats.mega_path_count, 2);
-        assert_eq!(reentered.mega_path_vertex_instances.len(), appended_range.end);
+        assert_eq!(
+            reentered.mega_path_vertex_instances.len(),
+            appended_range.end
+        );
         let retained = reentered.mega_path_vertex_instances.to_vec();
         frame.objects[0].style.opacity = 0.25;
         let changed = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
