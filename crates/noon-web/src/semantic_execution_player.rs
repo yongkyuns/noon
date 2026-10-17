@@ -1903,6 +1903,19 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_path_boundary_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_extremum_along_dim(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -1915,6 +1928,27 @@ impl SemanticExecutionPlayer {
             .ok_or("execution player has no live semantic store")?;
         noon::integration::effective_extremum_along_dim(&semantics, &self.session, target, dim, key)
             .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_path_boundary_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_extremum_along_dim(
+            &semantics,
+            &self.session,
+            target,
+            dim,
+            key,
+        )
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1975,6 +2009,27 @@ impl SemanticExecutionPlayer {
             .clone()
             .ok_or("execution player has no live semantic store")?;
         noon::integration::effective_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_path_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_point(
             &semantics,
             &self.session,
             target,

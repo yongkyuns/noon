@@ -1839,6 +1839,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = pathBoundaryPoints)]
+        pub fn path_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryExtremumAlongDim)]
+        pub fn path_boundary_extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = lengthOverDim)]
         pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
             noon::MobjectTarget::from(&self.handle)
@@ -1873,6 +1888,18 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             noon::MobjectTarget::from(&self.handle)
                 .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoint)]
+        pub fn path_boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_point(direction_x, direction_y)
                 .map(|(x, y)| vec![x, y])
                 .map_err(js_error)
         }

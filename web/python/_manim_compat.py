@@ -106,6 +106,10 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
+    def get_points_defining_boundary(self):
+        from _manim_path_queries import boundary_points
+        return boundary_points(self)
+
     def __init__(self, *, color=_base.WHITE, **kwargs):
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)

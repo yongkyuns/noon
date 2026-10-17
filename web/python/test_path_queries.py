@@ -23,14 +23,20 @@ class PathQueryTests(unittest.TestCase):
             queries,
             "_all_points_observation",
             return_value=[0., 0., 1., 0., 2., 0., 3., 0.],
-        ) as observe:
+        ) as observe, patch.object(
+            queries,
+            "_path_boundary_points_observation",
+            return_value=[0., 0., 3., 0.],
+        ) as boundary_observe:
             points = value.get_all_points()
             self.assertIsInstance(points, np.ndarray)
             self.assertEqual(points.shape, (4, 2))
             np.testing.assert_array_equal(points, [[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
             boundary = value.get_points_defining_boundary()
-            self.assertEqual(boundary.shape, (4, 2))
-        self.assertEqual(observe.call_count, 2)
+            self.assertEqual(boundary.shape, (2, 2))
+            np.testing.assert_array_equal(boundary, [[0., 0.], [3., 0.]])
+        self.assertEqual(observe.call_count, 1)
+        boundary_observe.assert_called_once_with(value)
 
     def test_all_points_uses_vec2_list_when_numpy_is_unavailable(self):
         import noon
@@ -146,7 +152,7 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
         handle.centerOfMass.return_value = [1.0, 2.0]
-        handle.boundaryPoint.return_value = [3.0, 4.0]
+        handle.pathBoundaryPoint.return_value = [3.0, 4.0]
         handle.lengthOverDim.return_value = 2.5
         value._semantic_handle = handle
         value._semantic_handle_fresh = True
@@ -157,12 +163,14 @@ class PathQueryTests(unittest.TestCase):
         )
         self.assertEqual(semantic_handles._length_over_dim_observation(value, 0), 2.5)
         handle.centerOfMass.assert_called_once_with()
-        handle.boundaryPoint.assert_called_once_with(0.0, 1.0)
+        handle.pathBoundaryPoint.assert_called_once_with(0.0, 1.0)
         handle.lengthOverDim.assert_called_once_with(0)
 
         context = Mock()
         context.queryMobjectCenterOfMass.return_value = [5.0, 6.0]
-        context.queryMobjectBoundaryPoint.return_value = [7.0, 8.0]
+        context.queryMobjectPathBoundaryPoint.return_value = [7.0, 8.0]
+        context.queryMobjectPathBoundaryExtremumAlongDim.return_value = 9.0
+        context.queryMobjectPathBoundaryPoints.return_value = [0.0, 0.0, 1.0, 1.0]
         context.queryMobjectLengthOverDim.return_value = 4.5
         scene = Mock()
         scene._canonical_authoring_context = context
@@ -173,9 +181,19 @@ class PathQueryTests(unittest.TestCase):
             semantic_handles._boundary_point_observation(value, 0.0, 1.0),
             [7.0, 8.0],
         )
+        self.assertEqual(
+            semantic_handles._extremum_along_dim_observation(value, 1, 1.0),
+            9.0,
+        )
+        self.assertEqual(
+            semantic_handles._path_boundary_points_observation(value),
+            [0.0, 0.0, 1.0, 1.0],
+        )
         self.assertEqual(semantic_handles._length_over_dim_observation(value, 2), 4.5)
         context.queryMobjectCenterOfMass.assert_called_once_with(handle)
-        context.queryMobjectBoundaryPoint.assert_called_once_with(handle, 0.0, 1.0)
+        context.queryMobjectPathBoundaryPoint.assert_called_once_with(handle, 0.0, 1.0)
+        context.queryMobjectPathBoundaryExtremumAlongDim.assert_called_once_with(handle, 1, 1.0)
+        context.queryMobjectPathBoundaryPoints.assert_called_once_with(handle)
         context.queryMobjectLengthOverDim.assert_called_once_with(handle, 2)
 
     def test_length_over_dim_uses_rust_and_accepts_negative_dimensions(self):
@@ -220,6 +238,25 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(
             [call.kwargs for call in extremum.call_args_list],
             [{"dim": 0, "key": -1.0}, {"dim": 1, "key": 1.0}],
+        )
+
+    def test_vmobject_critical_point_uses_anchor_extrema(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_num_points = Mock(return_value=4)
+        with patch.object(
+            semantic_handles,
+            "_path_boundary_extremum_along_dim_observation",
+            side_effect=[-2.0, 3.0],
+        ) as observe:
+            self.assertEqual(
+                semantic_handles._get_critical_point(value, (-1.0, 1.0)),
+                noon.Vec2(-2.0, 3.0),
+            )
+        self.assertEqual(
+            [call.args for call in observe.call_args_list],
+            [(value, 0, -1.0), (value, 1, 1.0)],
         )
 
     def test_extremum_along_dim_routes_default_points_to_rust(self):

@@ -917,6 +917,20 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_path_boundary_points(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).path_boundary_points(),
+            |player, handle| {
+                player.live_effective_path_boundary_points(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_extremum_along_dim(
         &mut self,
         handle: &noon::Mobject,
@@ -928,6 +942,26 @@ impl CanonicalAuthoringScene {
             |handle| noon::MobjectTarget::from(handle).extremum_along_dim(dim, key),
             |player, handle| {
                 player.live_effective_extremum_along_dim(
+                    noon::MobjectTarget::from(handle),
+                    dim,
+                    key,
+                )
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_path_boundary_extremum_along_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).path_boundary_extremum_along_dim(dim, key),
+            |player, handle| {
+                player.live_effective_path_boundary_extremum_along_dim(
                     noon::MobjectTarget::from(handle),
                     dim,
                     key,
@@ -977,6 +1011,28 @@ impl CanonicalAuthoringScene {
             |handle| noon::MobjectTarget::from(handle).boundary_point(direction_x, direction_y),
             |player, handle| {
                 player.live_effective_boundary_point(
+                    noon::MobjectTarget::from(handle),
+                    direction_x,
+                    direction_y,
+                )
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_path_boundary_point(
+        &mut self,
+        handle: &noon::Mobject,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| {
+                noon::MobjectTarget::from(handle).path_boundary_point(direction_x, direction_y)
+            },
+            |player, handle| {
+                player.live_effective_path_boundary_point(
                     noon::MobjectTarget::from(handle),
                     direction_x,
                     direction_y,
@@ -7513,6 +7569,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryPoints)]
+        pub fn query_mobject_path_boundary_points(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_path_boundary_points(handle.semantic_mobject())
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectExtremumAlongDim)]
         pub fn query_mobject_extremum_along_dim(
             &mut self,
@@ -7522,6 +7589,22 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .mobject_extremum_along_dim(handle.semantic_mobject(), dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryExtremumAlongDim)]
+        pub fn query_mobject_path_boundary_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_path_boundary_extremum_along_dim(
+                    handle.semantic_mobject(),
+                    dim as usize,
+                    key,
+                )
                 .map_err(typed_js_error)
         }
 
@@ -7556,6 +7639,19 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             self.inner
                 .mobject_boundary_point(handle.semantic_mobject(), direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryPoint)]
+        pub fn query_mobject_path_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_path_boundary_point(handle.semantic_mobject(), direction_x, direction_y)
                 .map(|(x, y)| vec![x, y])
                 .map_err(typed_js_error)
         }

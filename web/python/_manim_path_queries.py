@@ -11,6 +11,7 @@ from _manim_semantic_handles import (
     _extremum_from_points_observation,
     _family_point_count_observation,
     _length_over_dim_observation,
+    _path_boundary_points_observation,
     _typed_manim_observation,
 )
 
@@ -90,6 +91,19 @@ def all_points(value):
     coordinates = _all_points_observation(value)
     if coordinates is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
+    return _format_points(coordinates)
+
+
+def boundary_points(value):
+    coordinates = _path_boundary_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError(
+            "get_points_defining_boundary requires a valid shared Rust handle"
+        )
+    return _format_points(coordinates)
+
+
+def _format_points(coordinates):
     try:
         import numpy as np
     except ImportError:

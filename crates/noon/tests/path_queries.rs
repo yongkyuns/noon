@@ -176,6 +176,35 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
 }
 
 #[test]
+fn vector_path_boundaries_use_curve_anchors_while_base_queries_keep_all_points() {
+    let mut scene = Scene::new();
+    let object = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(10., 0.),
+                Vec2::new(10., 0.),
+                Vec2::new(1., 0.),
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    let target = MobjectTarget::from(&object);
+
+    assert_eq!(target.all_points().unwrap().len(), 4);
+    assert_eq!(target.path_boundary_points().unwrap(), [(0., 0.), (1., 0.)]);
+    assert_eq!(target.extremum_along_dim(0, 1.).unwrap(), 10.);
+    assert_eq!(target.path_boundary_extremum_along_dim(0, 1.).unwrap(), 1.);
+    assert_eq!(target.boundary_point(1., 0.).unwrap(), (10., 0.));
+    assert_eq!(target.path_boundary_point(1., 0.).unwrap(), (1., 0.));
+    assert_eq!(target.length_over_dim(0).unwrap(), 10.);
+
+    let family = scene.family(&[(&object).into()]).unwrap();
+    let group_target = MobjectTarget::from(&family);
+    assert_eq!(group_target.path_boundary_points().unwrap().len(), 4);
+    assert_eq!(group_target.extremum_along_dim(0, 1.).unwrap(), 10.);
+}
+
+#[test]
 fn point_extremum_reducer_matches_manim_key_selection() {
     let coordinates = [-2., 3., 4., -1.];
     assert_eq!(
@@ -454,6 +483,18 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
             .points()
             .unwrap();
     assert_eq!(points, expected);
+    let effective_path =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
+    assert_eq!(
+        noon::integration::effective_path_boundary_points(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&object),
+        )
+        .unwrap(),
+        effective_path.anchors()
+    );
     assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
     let expected_center = (
         points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64,

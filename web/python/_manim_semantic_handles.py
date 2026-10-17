@@ -675,6 +675,13 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
+    if isinstance(self, _compat.VMobject):
+        if self.get_num_points() == 0:
+            return _base.ORIGIN
+        return _base.Vec2(
+            _path_boundary_extremum_along_dim_observation(self, 0, axis.x),
+            _path_boundary_extremum_along_dim_observation(self, 1, axis.y),
+        )
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
@@ -1870,6 +1877,13 @@ def _family_point_count_observation(value: _base.Mobject) -> int | None:
 
 
 def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
+    if isinstance(value, _compat.VMobject):
+        return _point_query_observation(
+            value,
+            "PathBoundaryExtremumAlongDim",
+            dim,
+            key,
+        )
     if _is_shared_family(value):
         family = value._semantic_family_handle
         context = _group_live_layout_context(value)
@@ -1937,11 +1951,35 @@ def _boundary_point_observation(
     direction_x: float,
     direction_y: float,
 ):
+    if isinstance(value, _compat.VMobject):
+        return _point_query_observation(
+            value,
+            "PathBoundaryPoint",
+            direction_x,
+            direction_y,
+        )
     return _point_query_observation(
         value,
         "BoundaryPoint",
         direction_x,
         direction_y,
+    )
+
+
+def _path_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "PathBoundaryPoints")
+
+
+def _path_boundary_extremum_along_dim_observation(
+    value: _base.Mobject,
+    dim: int,
+    key: float,
+):
+    return _point_query_observation(
+        value,
+        "PathBoundaryExtremumAlongDim",
+        dim,
+        key,
     )
 
 

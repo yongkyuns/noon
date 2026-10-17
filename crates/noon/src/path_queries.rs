@@ -507,6 +507,33 @@ impl MobjectTarget<'_> {
         authored_points_for_occurrences(&store, &occurrences)
     }
 
+    /// Return vector-path boundary anchors for one object, or the ordinary
+    /// recursive point array for a non-vector family target.
+    pub fn path_boundary_points(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        match self {
+            Self::Object(object) => Ok(object.path_query()?.anchors()),
+            Self::Family(_) => self.all_points(),
+        }
+    }
+
+    /// Return Manim's extrema over vector-path anchors for this object.
+    pub fn path_boundary_extremum_along_dim(
+        &self,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringError> {
+        extremum_for_xy_points(&self.path_boundary_points()?, dim, key)
+    }
+
+    /// Return the vector-path boundary anchor with the greatest projection.
+    pub fn path_boundary_point(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        boundary_point_for_xy_points(&self.path_boundary_points()?, direction_x, direction_y)
+    }
+
     /// Return a Manim-style min, midpoint, or max coordinate across this
     /// object's or family's boundary points.
     pub fn extremum_along_dim(&self, dim: usize, key: f64) -> Result<f64, AuthoringError> {
@@ -555,6 +582,51 @@ pub fn effective_all_points(
         result.extend(effective_path_query(store, execution, &object)?.points()?);
     }
     Ok(result)
+}
+
+/// Observe effective vector-path boundary anchors for an object. Family targets
+/// keep Mobject's base behavior and return their recursive point arrays.
+pub fn effective_path_boundary_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<Vec<(f64, f64)>, AuthoringError> {
+    match target {
+        MobjectTarget::Object(object) => {
+            Ok(effective_path_query(store, execution, object)?.anchors())
+        }
+        MobjectTarget::Family(_) => effective_all_points(store, execution, target),
+    }
+}
+
+/// Observe one dimension's vector-path anchor extremum in the current execution.
+pub fn effective_path_boundary_extremum_along_dim(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    dim: usize,
+    key: f64,
+) -> Result<f64, AuthoringError> {
+    extremum_for_xy_points(
+        &effective_path_boundary_points(store, execution, target)?,
+        dim,
+        key,
+    )
+}
+
+/// Observe the effective vector-path boundary anchor farthest along a direction.
+pub fn effective_path_boundary_point(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    direction_x: f64,
+    direction_y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    boundary_point_for_xy_points(
+        &effective_path_boundary_points(store, execution, target)?,
+        direction_x,
+        direction_y,
+    )
 }
 
 /// Observe one dimension's Manim-style extremum from the current execution.
