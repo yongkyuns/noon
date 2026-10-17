@@ -12,6 +12,7 @@ class TableLineConfigExample(Scene):
             line_config={"color": RED, "stroke_width": 6, "stroke_opacity": 0.6,
                          "joint_type": LineJointType.BEVEL,
                          "cap_style": CapStyleType.SQUARE},
+            arrange_in_grid_config={"cell_alignment": LEFT + UP},
         )
         self.add(table)
         self.wait(0.2)

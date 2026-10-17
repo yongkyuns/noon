@@ -80,6 +80,13 @@ impl WasmTableOptions {
         };
         Ok(())
     }
+
+    /// Apply the qualified arrange-in-grid cell-alignment directions.
+    #[wasm_bindgen(js_name = setCellAlignment)]
+    pub fn set_cell_alignment(&mut self, x: f64, y: f64) {
+        self.options.cell_alignment_x = x;
+        self.options.cell_alignment_y = y;
+    }
 }
 
 #[wasm_bindgen]

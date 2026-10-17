@@ -318,7 +318,7 @@ class TableFacadeTests(unittest.TestCase):
         handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
         def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines,
-                   red, green, blue, alpha, width, opacity, join, cap, _context):
+                   red, green, blue, alpha, width, opacity, join, cap, align_x, align_y, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
             self.assertEqual(row_labels, [row_label._semantic_family_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
@@ -327,6 +327,7 @@ class TableFacadeTests(unittest.TestCase):
             self.assertTrue(inner_lines)
             self.assertEqual((red, green, blue, alpha, width, opacity), (1.0, 1.0, 1.0, 1.0, .04, 1.0))
             self.assertEqual((join, cap), ("miter", "butt"))
+            self.assertEqual((align_x, align_y), (0.0, 0.0))
             return handle
 
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -482,13 +483,15 @@ class TableFacadeTests(unittest.TestCase):
         calls = []
 
         def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff,
-                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, join, cap, _context):
+                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, join, cap,
+                   align_x, align_y, _context):
             calls.append((rows, row_labels, column_labels, top_left_entries))
             self.assertEqual(rows, [["a"]])
             self.assertEqual(row_labels, [row_label._semantic_handle])
             self.assertEqual(column_labels, [column_label._semantic_family_handle])
             self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
             self.assertEqual((v_buff, h_buff, outer_lines, inner_lines), (0.8, 1.3, False, True))
+            self.assertEqual((align_x, align_y), (0.0, 0.0))
             return self.handle
 
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -541,11 +544,11 @@ class TableFacadeTests(unittest.TestCase):
     def test_include_inner_lines_is_forwarded_and_defaults_to_manimce_true(self):
         self.assertEqual(
             table._options({}),
-            (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt"),
+            (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt", 0.0, 0.0),
         )
         self.assertEqual(
             table._options({"include_outer_lines": True, "include_inner_lines": False}),
-            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt"),
+            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt", 0.0, 0.0),
         )
 
     def test_line_config_stroke_subset_is_forwarded_with_manim_width_units(self):
@@ -562,11 +565,11 @@ class TableFacadeTests(unittest.TestCase):
             table._options({"line_config": {
                 "joint_type": LineJointType.BEVEL,
                 "cap_style": CapStyleType.SQUARE,
-            }})[-2:],
+            }})[-4:-2],
             ("bevel", "square"),
         )
         self.assertEqual(
-            table._options({"line_config": {"joint_type": "auto", "cap_style": "auto"}})[-2:],
+            table._options({"line_config": {"joint_type": "auto", "cap_style": "auto"}})[-4:-2],
             ("miter", "butt"),
         )
         with self.assertRaisesRegex(ValueError, "joint_type"):
@@ -577,6 +580,25 @@ class TableFacadeTests(unittest.TestCase):
     def test_unqualified_line_config_options_remain_explicit(self):
         with self.assertRaisesRegex(NotImplementedError, "background_stroke_width"):
             table.Table([["a"]], line_config={"background_stroke_width": 1})
+
+    def test_cell_alignment_subset_is_forwarded_and_other_grid_options_stay_explicit(self):
+        table.Table(
+            [["a"]],
+            arrange_in_grid_config={"cell_alignment": table._base.LEFT + table._base.UP},
+        )
+        self.assertEqual(self.context.calls[0][1][-3:-1], (-1.0, 1.0))
+        self.assertEqual(
+            table._options({"arrange_in_grid_config": {"cell_alignment": table._base.LEFT + table._base.UP}})[-2:],
+            (-1.0, 1.0),
+        )
+        self.assertEqual(
+            table._options({"arrange_in_grid_config": {"cell_alignment": (1, -1, 0)}})[-2:],
+            (1.0, -1.0),
+        )
+        with self.assertRaisesRegex(NotImplementedError, "flow_order"):
+            table._options({"arrange_in_grid_config": {"flow_order": "dr"}})
+        with self.assertRaisesRegex(ValueError, "2 or 3 coordinates"):
+            table._options({"arrange_in_grid_config": {"cell_alignment": (1,)}})
 
 
 if __name__ == "__main__":

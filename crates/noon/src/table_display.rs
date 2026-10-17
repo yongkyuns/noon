@@ -43,6 +43,10 @@ pub struct TableOptions {
     pub line_stroke_opacity: f64,
     pub line_stroke_join: StrokeJoin,
     pub line_stroke_cap: StrokeCap,
+    /// Manim arrange-in-grid cell alignment directions; magnitudes follow
+    /// Mobject critical-point semantics and therefore affect only the sign.
+    pub cell_alignment_x: f64,
+    pub cell_alignment_y: f64,
 }
 
 impl Default for TableOptions {
@@ -58,6 +62,8 @@ impl Default for TableOptions {
             line_stroke_opacity: 1.0,
             line_stroke_join: StrokeJoin::Miter,
             line_stroke_cap: StrokeCap::Butt,
+            cell_alignment_x: 0.0,
+            cell_alignment_y: 0.0,
         }
     }
 }
@@ -88,6 +94,20 @@ impl TableOptions {
             ),
         ] {
             if !value.is_finite() || value < 0.0 {
+                return Err(TableAuthoringError::InvalidOption { name, value });
+            }
+        }
+        for (name, value) in [
+            (
+                "arrange_in_grid_config.cell_alignment.x",
+                self.cell_alignment_x,
+            ),
+            (
+                "arrange_in_grid_config.cell_alignment.y",
+                self.cell_alignment_y,
+            ),
+        ] {
+            if !value.is_finite() {
                 return Err(TableAuthoringError::InvalidOption { name, value });
             }
         }
@@ -263,6 +283,8 @@ impl Table {
                 line_stroke_opacity: layout.line_stroke_opacity(),
                 line_stroke_join: layout.line_stroke_join(),
                 line_stroke_cap: layout.line_stroke_cap(),
+                cell_alignment_x: layout.cell_alignment_x(),
+                cell_alignment_y: layout.cell_alignment_y(),
             })
             .ok_or(TableAuthoringError::InvalidStructure)
     }
@@ -1247,6 +1269,50 @@ mod tests {
     }
 
     #[test]
+    fn arrange_in_grid_cell_alignment_places_unequal_entries_on_requested_edges() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entries = vec![
+            circle(&store, 1.0),
+            circle(&store, 0.5),
+            circle(&store, 0.5),
+            circle(&store, 1.0),
+        ];
+        let table = MobjectTable::from_rows_with_options(
+            &mut scene,
+            vec![
+                vec![entries[0].clone(), entries[1].clone()],
+                vec![entries[2].clone(), entries[3].clone()],
+            ],
+            TableOptions {
+                cell_alignment_x: -1.0,
+                cell_alignment_y: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rows = table.rows().unwrap();
+        let bounds = |entry: &TableEntry| match entry {
+            TableEntry::Mobject(object) => object.layout_bounds().unwrap().unwrap(),
+            TableEntry::Family(family) => family.layout_bounds().unwrap().unwrap(),
+        };
+        let center = |bounds: Bounds2D64| {
+            (
+                (bounds.min_x + bounds.max_x) * 0.5,
+                (bounds.min_y + bounds.max_y) * 0.5,
+            )
+        };
+        let first = center(bounds(&rows[0][0]));
+        let small = center(bounds(&rows[0][1]));
+        let lower_small = center(bounds(&rows[1][0]));
+        let lower_large = center(bounds(&rows[1][1]));
+        assert!((small.0 - lower_large.0 + 0.5).abs() < 1e-6);
+        assert!((small.1 - first.1 - 0.5).abs() < 1e-6);
+        assert!((lower_small.0 - first.0 + 0.5).abs() < 1e-6);
+        assert!((lower_small.1 - lower_large.1 - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
     fn mobject_table_keeps_entries_and_exposes_row_column_and_cell_families() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
@@ -1401,6 +1467,8 @@ mod tests {
                 line_stroke_opacity: 0.35,
                 line_stroke_join: StrokeJoin::Bevel,
                 line_stroke_cap: StrokeCap::Square,
+                cell_alignment_x: -1.0,
+                cell_alignment_y: 1.0,
                 ..Default::default()
             },
         )
@@ -1444,6 +1512,8 @@ mod tests {
         assert_eq!(options.line_stroke_opacity, 0.35);
         assert_eq!(options.line_stroke_join, StrokeJoin::Bevel);
         assert_eq!(options.line_stroke_cap, StrokeCap::Square);
+        assert_eq!(options.cell_alignment_x, -1.0);
+        assert_eq!(options.cell_alignment_y, 1.0);
     }
 
     #[test]

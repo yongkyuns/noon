@@ -163,7 +163,7 @@
       "source": "parity/manim-v0.21/core-examples/table.py",
       "noon_source": "web/python/examples/table_line_config.py",
       "expected_duration": 0.2,
-      "notes": "Qualifies line_config color, stroke_width, stroke_opacity, joint_type, and cap_style through ManimCE's line constructor on a retained MobjectTable. Paired Rust/WASM and Python-worker captures are pixel-identical; strict pinned Cairo passes unchanged thresholds on both backends with exact duration and 0.22% worst differing pixels."
+      "notes": "Qualifies line_config color, stroke_width, stroke_opacity, joint_type, and cap_style through ManimCE's line constructor, plus arrange_in_grid_config.cell_alignment=LEFT+UP on a retained MobjectTable. Paired Rust/WASM and Python-worker captures are pixel-identical in WebGPU and WebGL2; strict pinned Cairo passes unchanged thresholds on both backends with exact duration and 0.20% worst differing pixels."
     },
     {
       "id": "table-highlights",

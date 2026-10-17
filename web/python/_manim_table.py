@@ -1,5 +1,6 @@
 """Thin Table facades over Noon’s retained Rust table families."""
 from operator import index as _index
+from math import isfinite as _isfinite
 
 from _noon_errors import engine_call
 import noon as _base
@@ -30,7 +31,10 @@ except ImportError:
     _highlight_table = _get_highlighted_table = _table_cell = None
 
 
-_OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines", "line_config"}
+_OPTION_NAMES = {
+    "v_buff", "h_buff", "include_outer_lines", "include_inner_lines",
+    "line_config", "arrange_in_grid_config",
+}
 _LINE_CONFIG_NAMES = {
     "color", "stroke_color", "stroke_width", "stroke_opacity", "joint_type", "cap_style"
 }
@@ -68,6 +72,26 @@ def _options(kwargs):
         "line_config.cap_style", line_config.get("cap_style", "auto"),
         {"auto", "round", "butt", "square"}, "butt",
     )
+    grid_config = kwargs.get("arrange_in_grid_config", {})
+    if not isinstance(grid_config, dict):
+        raise TypeError("arrange_in_grid_config must be a dict")
+    unknown_grid_config = set(grid_config) - {"cell_alignment"}
+    if unknown_grid_config:
+        raise NotImplementedError(
+            "unsupported Table arrange_in_grid_config option(s): "
+            + ", ".join(sorted(unknown_grid_config))
+        )
+    alignment = grid_config.get("cell_alignment", _base.ORIGIN)
+    if isinstance(alignment, (str, bytes, dict)):
+        raise TypeError("arrange_in_grid_config.cell_alignment must be a 2D or 3D vector")
+    try:
+        alignment = tuple(float(value) for value in alignment)
+    except (TypeError, ValueError) as error:
+        raise TypeError("arrange_in_grid_config.cell_alignment must be a 2D or 3D vector") from error
+    if len(alignment) not in (2, 3):
+        raise ValueError("arrange_in_grid_config.cell_alignment must have 2 or 3 coordinates")
+    if not all(_isfinite(value) for value in alignment):
+        raise ValueError("arrange_in_grid_config.cell_alignment coordinates must be finite")
     return (
         kwargs.get("v_buff", .8),
         kwargs.get("h_buff", 1.3),
@@ -81,6 +105,8 @@ def _options(kwargs):
         line_opacity,
         line_join,
         line_cap,
+        alignment[0],
+        alignment[1],
     )
 
 

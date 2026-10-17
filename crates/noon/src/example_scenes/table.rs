@@ -136,6 +136,8 @@ pub fn line_config_session() -> Result<ExecutionSession, String> {
             line_stroke_opacity: 0.6,
             line_stroke_join: StrokeJoin::Bevel,
             line_stroke_cap: StrokeCap::Square,
+            cell_alignment_x: -1.0,
+            cell_alignment_y: 1.0,
             ..Default::default()
         },
     )

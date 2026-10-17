@@ -14,6 +14,8 @@ pub struct SemanticTableLayout {
     line_stroke_opacity: f64,
     line_stroke_join: StrokeJoin,
     line_stroke_cap: StrokeCap,
+    cell_alignment_x: f64,
+    cell_alignment_y: f64,
 }
 impl SemanticTableLayout {
     pub const fn new(h_buff: f64, v_buff: f64, label_buff: f64, include_outer_lines: bool) -> Self {
@@ -28,6 +30,8 @@ impl SemanticTableLayout {
             line_stroke_opacity: 1.0,
             line_stroke_join: StrokeJoin::Miter,
             line_stroke_cap: StrokeCap::Butt,
+            cell_alignment_x: 0.0,
+            cell_alignment_y: 0.0,
         }
     }
     pub const fn with_inner_lines(mut self, include_inner_lines: bool) -> Self {
@@ -43,6 +47,11 @@ impl SemanticTableLayout {
     pub const fn with_line_geometry(mut self, join: StrokeJoin, cap: StrokeCap) -> Self {
         self.line_stroke_join = join;
         self.line_stroke_cap = cap;
+        self
+    }
+    pub const fn with_cell_alignment(mut self, x: f64, y: f64) -> Self {
+        self.cell_alignment_x = x;
+        self.cell_alignment_y = y;
         self
     }
     pub const fn h_buff(self) -> f64 {
@@ -75,6 +84,12 @@ impl SemanticTableLayout {
     pub const fn line_stroke_cap(self) -> StrokeCap {
         self.line_stroke_cap
     }
+    pub const fn cell_alignment_x(self) -> f64 {
+        self.cell_alignment_x
+    }
+    pub const fn cell_alignment_y(self) -> f64 {
+        self.cell_alignment_y
+    }
     /// Apply the world-axis factors from a direct Table family scale.
     ///
     /// This declaration follows Manim's `Table.scale`: horizontal and vertical
@@ -101,6 +116,8 @@ impl SemanticTableLayout {
         ]
         .into_iter()
         .all(|v| v.is_finite() && v >= 0.0)
+            && self.cell_alignment_x.is_finite()
+            && self.cell_alignment_y.is_finite()
             && self.line_stroke_opacity <= 1.0
             && self.line_stroke_color.red <= 1.0
             && self.line_stroke_color.green <= 1.0
@@ -119,6 +136,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let original = SemanticTableLayout::new(1.0, 1.0, 0.5, false);
         let changed = SemanticTableLayout::new(2.0, 0.5, 0.25, true).with_inner_lines(false);
+        let changed = changed.with_cell_alignment(-1.0, 1.0);
         let mut tx = SemanticMutationTransaction::new();
         let root = tx.create_node(SemanticNodeCreation::family());
         tx.set_table_layout(root, original);
@@ -134,6 +152,9 @@ mod tests {
         tx.set_table_layout(root, changed);
         tx.apply(&mut store).unwrap();
         assert_eq!(store.semantic_table_layout(root).unwrap(), Some(changed));
+        let retained = store.semantic_table_layout(root).unwrap().unwrap();
+        assert_eq!(retained.cell_alignment_x(), -1.0);
+        assert_eq!(retained.cell_alignment_y(), 1.0);
     }
 
     #[test]

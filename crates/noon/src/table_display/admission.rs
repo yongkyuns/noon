@@ -165,6 +165,8 @@ fn prepare_native_text(source: String) -> Result<PreparedTextCell, TableAuthorin
 struct GridLayout {
     widths: Vec<f64>,
     heights: Vec<f64>,
+    x_centers: Vec<f64>,
+    y_centers: Vec<f64>,
     row_offset: usize,
     column_offset: usize,
     options: TableOptions,
@@ -231,9 +233,13 @@ impl GridLayout {
             widths[0] = widths[0].max(bounds.width());
             heights[0] = heights[0].max(bounds.height());
         }
+        let x_centers = Self::centers(&widths, options.h_buff, false);
+        let y_centers = Self::centers(&heights, options.v_buff, true);
         Ok(Self {
             widths,
             heights,
+            x_centers,
+            y_centers,
             row_offset,
             column_offset,
             options,
@@ -261,8 +267,8 @@ impl GridLayout {
             .collect()
     }
     fn line_states(&self) -> Vec<SemanticObjectState> {
-        let xs = Self::centers(&self.widths, self.options.h_buff, false);
-        let ys = Self::centers(&self.heights, self.options.v_buff, true);
+        let xs = &self.x_centers;
+        let ys = &self.y_centers;
         let min_x = xs[0] - self.widths[0] / 2.0 - self.options.h_buff / 2.0;
         let max_x =
             xs.last().unwrap() + self.widths.last().unwrap() / 2.0 + self.options.h_buff / 2.0;
@@ -311,6 +317,31 @@ impl GridLayout {
             }
         }
         output
+    }
+    /// Return the Manim-aligned center for an object's measured bounds in one
+    /// cell. Positive and negative components select the corresponding edge;
+    /// zero centers the object, matching Mobject.get_critical_point semantics.
+    fn aligned_center(&self, bounds: Bounds2D64, row: usize, column: usize) -> (f64, f64) {
+        let x_slack = (self.widths[column] - bounds.width()).max(0.0) * 0.5;
+        let y_slack = (self.heights[row] - bounds.height()).max(0.0) * 0.5;
+        let x_offset = if self.options.cell_alignment_x > 0.0 {
+            x_slack
+        } else if self.options.cell_alignment_x < 0.0 {
+            -x_slack
+        } else {
+            0.0
+        };
+        let y_offset = if self.options.cell_alignment_y > 0.0 {
+            y_slack
+        } else if self.options.cell_alignment_y < 0.0 {
+            -y_slack
+        } else {
+            0.0
+        };
+        (
+            self.x_centers[column] + x_offset,
+            self.y_centers[row] + y_offset,
+        )
     }
 }
 fn line_style() -> SemanticStyle {
@@ -474,7 +505,8 @@ fn stage(
             options.line_stroke_width,
             options.line_stroke_opacity,
         )
-        .with_line_geometry(options.line_stroke_join, options.line_stroke_cap),
+        .with_line_geometry(options.line_stroke_join, options.line_stroke_cap)
+        .with_cell_alignment(options.cell_alignment_x, options.cell_alignment_y),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);
@@ -651,17 +683,18 @@ fn commit_composite(
         },
         options,
     )?;
-    let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
-    let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
     let mut translations = entries
         .iter()
         .zip(&entry_bounds)
         .enumerate()
         .flat_map(|(index, (entry, bounds))| {
-            let dx = xs[index % shape.columns + layout.column_offset]
-                - (bounds.min_x + bounds.max_x) * 0.5;
-            let dy =
-                ys[index / shape.columns + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
+            let (x, y) = layout.aligned_center(
+                *bounds,
+                index / shape.columns + layout.row_offset,
+                index % shape.columns + layout.column_offset,
+            );
+            let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
             entry.leaves().iter().map(move |(leaf, state)| {
                 let mut translation = state.transform.translation;
                 translation.x += dx;
@@ -672,8 +705,9 @@ fn commit_composite(
         .collect::<Vec<_>>();
     if let (Some(labels), Some(bounds)) = (row_entries.as_deref(), row_bounds.as_deref()) {
         for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
-            let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
-            let dy = ys[index + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
+            let (x, y) = layout.aligned_center(*bounds, index + layout.row_offset, 0);
+            let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
             translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
                 translation.x += dx;
@@ -683,8 +717,9 @@ fn commit_composite(
         }
     }
     if let (Some(entry), Some(bounds)) = (top_left_entry.as_ref(), top_left_bounds) {
-        let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
-        let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+        let (x, y) = layout.aligned_center(bounds, 0, 0);
+        let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+        let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
         translations.extend(entry.leaves().iter().map(|(leaf, state)| {
             let mut translation = state.transform.translation;
             translation.x += dx;
@@ -694,8 +729,9 @@ fn commit_composite(
     }
     if let (Some(labels), Some(bounds)) = (column_entries.as_deref(), column_bounds.as_deref()) {
         for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
-            let dx = xs[index + layout.column_offset] - (bounds.min_x + bounds.max_x) * 0.5;
-            let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+            let (x, y) = layout.aligned_center(*bounds, 0, index + layout.column_offset);
+            let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
             translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
                 translation.x += dx;
@@ -939,19 +975,21 @@ fn publish_prepared_text_table(
         },
         options,
     )?;
-    let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
-    let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
     for (index, (bound, transform)) in entry_bounds.iter().zip(&mut transforms).enumerate() {
-        transform.translation.x +=
-            xs[index % shape.columns + layout.column_offset] - (bound.min_x + bound.max_x) * 0.5;
-        transform.translation.y +=
-            ys[index / shape.columns + layout.row_offset] - (bound.min_y + bound.max_y) * 0.5;
+        let (x, y) = layout.aligned_center(
+            *bound,
+            index / shape.columns + layout.row_offset,
+            index % shape.columns + layout.column_offset,
+        );
+        transform.translation.x += x - (bound.min_x + bound.max_x) * 0.5;
+        transform.translation.y += y - (bound.min_y + bound.max_y) * 0.5;
     }
     let mut label_translations = Vec::new();
     if let (Some(labels), Some(bounds)) = (row_entries.as_deref(), row_bounds.as_deref()) {
         for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
-            let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
-            let dy = ys[index + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
+            let (x, y) = layout.aligned_center(*bounds, index + layout.row_offset, 0);
+            let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
             label_translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
                 translation.x += dx;
@@ -962,8 +1000,9 @@ fn publish_prepared_text_table(
     }
     if let (Some(labels), Some(bounds)) = (column_entries.as_deref(), column_bounds.as_deref()) {
         for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
-            let dx = xs[index + layout.column_offset] - (bounds.min_x + bounds.max_x) * 0.5;
-            let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+            let (x, y) = layout.aligned_center(*bounds, 0, index + layout.column_offset);
+            let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
             label_translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
                 translation.x += dx;
@@ -973,8 +1012,9 @@ fn publish_prepared_text_table(
         }
     }
     if let (Some(entry), Some(bounds)) = (top_left_entry.as_ref(), top_left_bounds) {
-        let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
-        let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+        let (x, y) = layout.aligned_center(bounds, 0, 0);
+        let dx = x - (bounds.min_x + bounds.max_x) * 0.5;
+        let dy = y - (bounds.min_y + bounds.max_y) * 0.5;
         label_translations.extend(entry.leaves().iter().map(|(leaf, state)| {
             let mut translation = state.transform.translation;
             translation.x += dx;
@@ -1203,8 +1243,6 @@ pub(super) fn publish_numeric_table(
                     options,
                 )
                 .expect("validated nonempty table shape and label counts produce a grid");
-                let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
-                let ys = GridLayout::centers(&layout.heights, options.v_buff, true);
                 let mut tx = SemanticMutationTransaction::new();
                 let leaves = prepared
                     .iter()
@@ -1213,10 +1251,13 @@ pub(super) fn publish_numeric_table(
                     .enumerate()
                     .map(|(index, ((item, handle), bound))| {
                         let mut transform = SemanticTransform2_5D::default();
-                        transform.translation.x = xs[index % shape.columns + layout.column_offset]
-                            - (bound.min_x + bound.max_x) * 0.5;
-                        transform.translation.y = ys[index / shape.columns + layout.row_offset]
-                            - (bound.min_y + bound.max_y) * 0.5;
+                        let (x, y) = layout.aligned_center(
+                            bound,
+                            index / shape.columns + layout.row_offset,
+                            index % shape.columns + layout.column_offset,
+                        );
+                        transform.translation.x = x - (bound.min_x + bound.max_x) * 0.5;
+                        transform.translation.y = y - (bound.min_y + bound.max_y) * 0.5;
                         let state = item.decimal_state(semantic, *handle, transform)?;
                         Ok(tx.create_node(SemanticNodeCreation::object(state)))
                     })
