@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog manifest currently lists twenty-two authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-four authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -35,6 +35,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 |---|---|---|
 | Your first scene | Construction, layout, motion | Every primitive/API variant |
 | A field in motion | Dense multi-sequence composition | A hardware-maximum claim |
+| One Extra Column | CUDA transpose bank conflicts illustrated by 32-lane shared-memory reads, source-linked highlights, and one padding column | GPU speedup numbers or a captured instruction timeline |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
 | Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal/re-ignition, and simultaneous path/math reveal with glow edits | A separate Python renderer or implied hardware benchmark |
@@ -129,3 +130,27 @@ The twenty-one curated lessons are intentionally not exhaustive. Current master 
 Consolidate the public learning experience, not canonical fixtures. The 49-entry audit's source-preservation rule still applies. Its former suggestion to move the dynamic scene out of the showcase is superseded: keep the polished dynamic composition featured, while retaining the unchanged five-second stress workload for regression and profiling comparability.
 
 The default-catalog change must be qualified with actual animation and responsive-layout evidence before merging. A compiling source or generated contact sheet alone is insufficient.
+
+## CUDA transpose lesson publication
+
+**One Extra Column** reuses the single validated implementation in
+`web/python/examples/cuda_transpose_banks.py` rather than copying a second
+scene. Its 76.14-second authored timeline compares unpadded stride 32 and
+padded stride 33. The viewer shows one deterministic educational model; CUDA
+recorder output remains independent test evidence, never a playback input.
+
+The initial representative poster is a genuine 1280 × 720 WebGPU frame from
+the source-bound successful browser fidelity run, at authored time
+64.0499998399999, showing one padded read per bank. The renderer, scene hash,
+tested configuration, published time, run ID, and PNG digest are pinned in
+`web/thumbnails/showcase/cuda-transpose-capture-evidence.json`.
+This provenance belongs to the CUDA poster only; the prior 23 curated posters
+retain their original distinct, source-bound capture batch and build identity.
+Do not rewrite the earlier poster evidence to falsely attribute this PNG to
+another renderer build. The ordinary full-showcase capture script can later
+recapture the entire updated catalog under one new build identity.
+
+The portable gallery browser matrix exercises the actual lesson, including
+non-JSPI Chromium and WebKit, and the existing CUDA pixel/semantic fidelity
+suite remains the algorithm/visual oracle. Neither capture nor sample timing
+proves actual CUDA hardware execution, hardware bank-service order, or FPS.
