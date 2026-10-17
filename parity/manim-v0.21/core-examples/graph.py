@@ -40,14 +40,17 @@ class GraphStyleExample(Scene):
                          "stroke_opacity": 0.55,
                          ("a", "b"): {"stroke_opacity": 0.3}},
         )
+        left = Graph(vertices, edges, layout={
+            "a": [-5, -1, 0], "b": [-3.5, 1.2, 0], "c": [-2, -1, 0],
+        }, **options)
+        # Keep each supplied label owned by one graph. Reusing the same
+        # Mobject instances in both constructors makes Manim's later graph
+        # move the shared labels while the earlier graph still retains them.
         labels = {
             "a": _graph_fixture_text("a", BLACK),
             "b": _graph_fixture_text("b", BLACK),
             "c": _graph_fixture_text("c", BLACK),
         }
-        left = Graph(vertices, edges, labels=labels, layout={
-            "a": [-5, -1, 0], "b": [-3.5, 1.2, 0], "c": [-2, -1, 0],
-        }, **options)
         right = DiGraph(vertices, edges, labels=labels, layout={
             "a": [2, -1, 0], "b": [3.5, 1.2, 0], "c": [5, -1, 0],
         }, **options)
