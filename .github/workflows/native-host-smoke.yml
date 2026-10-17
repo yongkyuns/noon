@@ -77,6 +77,14 @@ jobs:
             software_vulkan_keeps_submitted_paths_alive_across_resident_compaction \
             -- --ignored --nocapture --test-threads=1
 
+      - name: Verify exact image/text/path pixels and all four MSAA samples after batching
+        run: |
+          # A small fail-closed native raster test, not the old heavyweight
+          # framebuffer-cache research harness. This machine already has Vulkan.
+          cargo test -p noon-render-wgpu --lib \
+            gpu::retained_text::tests::mixed_mega_native_exact_pixels_against_individual_paths \
+            -- --ignored --exact --nocapture --test-threads=1
+
       - name: Qualify native agent temporal rendering
         run: |
           cargo test -p noon --all-features --test agent_temporal_qualification \

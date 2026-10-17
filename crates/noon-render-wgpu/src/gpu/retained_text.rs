@@ -1110,7 +1110,7 @@ impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
             images: RasterImageFramePreparer::default(),
-            geometry: FramePreparer::for_individual_path_draws(),
+            geometry: FramePreparer::for_mixed_retained_path_draws(),
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
@@ -1265,7 +1265,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_individual_path_draws();
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1295,7 +1295,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_individual_path_draws();
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -3958,6 +3958,10 @@ impl GpuRenderer {
             && self.inset_views.is_empty()
             && excluded.is_empty()
             && text_camera_index.is_none();
+        // Mixed images and glyphs remain exact painter barriers, but stable
+        // unique paths between them may use the ordinary packed mega stream.
+        let batch_mixed_mega =
+            self.inset_views.is_empty() && excluded.is_empty() && text_camera_index.is_none();
         let pixel = Vec2::new(
             self.camera.world_size.x / self.viewport_size[0].max(1) as f32,
             self.camera.world_size.y / self.viewport_size[1].max(1) as f32,
@@ -4031,6 +4035,47 @@ impl GpuRenderer {
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     pass.set_bind_group(0, camera, &[]);
+                    if batch_mixed_mega {
+                        // A later image at an intervening painter rank stops the
+                        // batch *before* its geometry. Glyph/analytic items break
+                        // the actual source iterator and glow sources are
+                        // independent painter anchors, never gathered across.
+                        let next_image_rank = images.peek().map(|(rank, _)| **rank);
+                        let mega = super::path_batching::collect_consecutive_mega_paths(
+                            batch,
+                            &mut items,
+                            &prepared.geometry,
+                            |object| {
+                                if self.has_draw_source_glow(object) {
+                                    return true;
+                                }
+                                let rank = prepared
+                                    .object_indices
+                                    .get(&object)
+                                    .and_then(|index| prepared.painter_ranks.get(*index))
+                                    .copied()
+                                    .unwrap_or(usize::MAX);
+                                next_image_rank.is_some_and(|image_rank| image_rank < rank)
+                            },
+                        );
+                        if let Some(mega) = mega {
+                            stats.geometry += self.draw_resolved_ordered_batch(
+                                pass,
+                                &prepared.geometry,
+                                &super::ResolvedOrderedBatch {
+                                    batch: OrderedRenderBatch {
+                                        primitive: RenderPrimitive::MegaPath { batch: 0 },
+                                        instance_range: 0..u32::try_from(mega.path_count)
+                                            .expect("mixed mega path count exceeds u32 limits"),
+                                    },
+                                    mega: Some(mega),
+                                },
+                                sample_count == 1,
+                                &mut binding,
+                            );
+                            continue;
+                        }
+                    }
                     let groups = super::path_batching::RetainedGeometryBatches::collect(
                         batch,
                         &mut items,
@@ -4275,6 +4320,498 @@ mod tests {
         for (index, batch) in lookup.iter().enumerate() {
             assert_eq!(*batch, Some(index));
         }
+    }
+
+    #[test]
+    #[ignore = "requires software Vulkan; branch-only mixed batching raster admission"]
+    fn mixed_mega_native_exact_pixels_against_individual_paths() {
+        pollster::block_on(async {
+            const WIDTH: u32 = 128;
+            const HEIGHT: u32 = 64;
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::VULKAN,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                })
+                .await
+                .expect("mixed mega parity requires a native software Vulkan adapter");
+            eprintln!("mixed mega native raster adapter: {:?}", adapter.get_info());
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .unwrap();
+
+            let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+            let base_circle = frame.objects[0].clone();
+            let mut text_object = frame.objects[1].clone();
+            let mut images = noon_core::RasterImageResourceArena::new();
+            let image_handle = images
+                .intern_rgba8(8, 8, [46, 173, 237, 148].repeat(64))
+                .unwrap();
+            let image_content = noon_core::RasterImageContentRef::from_resource(
+                noon_core::SemanticImageContent::new(image_handle),
+                images.get(image_handle).unwrap(),
+            );
+            let mut objects = vec![base_circle];
+            let image_index = 49usize;
+            let text_index = 66usize;
+            for index in 0..96_u64 {
+                if index == 48 {
+                    assert_eq!(objects.len(), image_index);
+                    objects.push(FrameObjectState {
+                        glow: None,
+                        spatial: None,
+                        z_index: 0.0,
+                        id: ObjectId::new(500),
+                        content: ObjectContentRef::Image(image_content),
+                        text_bounds: None,
+                        transform: Transform2D::IDENTITY,
+                        style: Style {
+                            fill: Some(Color::WHITE),
+                            stroke_width: 0.0,
+                            opacity: 0.8,
+                            ..Style::default()
+                        },
+                        appearance: 1.0,
+                    });
+                }
+                if index == 64 {
+                    assert_eq!(objects.len(), text_index);
+                    text_object.style.opacity = 0.75;
+                    objects.push(text_object.clone());
+                }
+                let x = index as f32;
+                let path = VectorPath::new()
+                    .move_to(Vec2::new(
+                        -1.9 + (index % 12) as f32 * 0.13,
+                        -0.75 + x * 0.006,
+                    ))
+                    .line_to(Vec2::new(
+                        1.45 - (index % 10) as f32 * 0.09,
+                        0.65 - x * 0.005,
+                    ));
+                objects.push(FrameObjectState {
+                    glow: None,
+                    spatial: None,
+                    z_index: 0.0,
+                    id: ObjectId::new(1000 + index),
+                    content: ObjectContentRef::Geometry(GeometryRef::path(path)),
+                    text_bounds: None,
+                    transform: Transform2D::IDENTITY,
+                    style: Style {
+                        fill: None,
+                        stroke: Some(Color::rgba(
+                            0.2 + (index % 5) as f32 * 0.13,
+                            0.35,
+                            0.9,
+                            0.55,
+                        )),
+                        stroke_width: 0.045,
+                        opacity: 0.85,
+                        ..Style::default()
+                    },
+                    appearance: 1.0,
+                });
+            }
+            assert_eq!(objects.len(), 99);
+            frame.objects = objects;
+            frame.presences = vec![true; frame.objects.len()];
+            frame.reveals = vec![1.0; frame.objects.len()];
+            frame.morphs = vec![0.0; frame.objects.len()];
+            frame.render_geometries = vec![None; frame.objects.len()];
+            frame.render_transforms = vec![None; frame.objects.len()];
+
+            let mut old_preparer = RetainedFramePreparer::new();
+            old_preparer.geometry = FramePreparer::for_individual_path_draws();
+            let mut packed_preparer = RetainedFramePreparer::new();
+            let painter_order = (0..frame.objects.len() as u32).collect::<Vec<_>>();
+            old_preparer.set_painter_order(&painter_order);
+            packed_preparer.set_painter_order(&painter_order);
+            let metrics = TextDeviceMetrics::uniform(32.0)
+                .unwrap()
+                .with_world_origin_pixels(Vec2::new(64.0, 32.0))
+                .unwrap();
+            let setup = |renderer: &mut GpuRenderer| {
+                renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+                renderer.set_camera(
+                    &queue,
+                    Camera2D::new(Vec2::ZERO, Vec2::new(4.0, 2.0)).unwrap(),
+                );
+            };
+            let mut old_renderer =
+                GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            let mut packed_renderer =
+                GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            setup(&mut old_renderer);
+            setup(&mut packed_renderer);
+            let mut old_text = old_renderer.create_retained_text_state(&device, &queue);
+            let mut packed_text = packed_renderer.create_retained_text_state(&device, &queue);
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mixed mega native exact comparison"),
+                size: wgpu::Extent3d {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mixed mega exact RGBA readback"),
+                size: u64::from(WIDTH * HEIGHT * 4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let render = |renderer: &mut GpuRenderer,
+                          state: &mut RetainedTextGpuState,
+                          prepared: &PreparedRetainedGpuFrame<'_>| {
+                renderer.upload_retained(&device, &queue, prepared, state);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let draws = renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        prepared,
+                        state,
+                        wgpu::Color::TRANSPARENT,
+                        None,
+                    )
+                    .unwrap();
+                encoder.copy_texture_to_buffer(
+                    texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &readback,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(WIDTH * 4),
+                            rows_per_image: Some(HEIGHT),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: WIDTH,
+                        height: HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                queue.submit([encoder.finish()]);
+                let (sender, receiver) = std::sync::mpsc::channel();
+                readback
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        sender.send(result).unwrap();
+                    });
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                receiver.recv().unwrap().unwrap();
+                let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
+                readback.unmap();
+                (pixels, draws)
+            };
+            // A resolved 4x MSAA pixel may hide changes to individual coverage
+            // samples. Export each sample separately through a test-only
+            // multisampled texture read (not a resolve, and not production code).
+            const SAMPLE_EXTRACT: &str = r#"
+                @group(0) @binding(0)
+                var samples: texture_multisampled_2d<f32>;
+                @vertex
+                fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+                    let vertices = array<vec2<f32>, 3>(
+                        vec2<f32>(-1.0, -1.0),
+                        vec2<f32>(3.0, -1.0),
+                        vec2<f32>(-1.0, 3.0)
+                    );
+                    return vec4<f32>(vertices[index], 0.0, 1.0);
+                }
+                @fragment
+                fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+                    let x = u32(p.x);
+                    return textureLoad(
+                        samples, vec2<i32>(i32(x / 4u), i32(p.y)), i32(x % 4u)
+                    );
+                }
+            "#;
+            let extract_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("mixed mega test-only individual MSAA sample extraction"),
+                source: wgpu::ShaderSource::Wgsl(SAMPLE_EXTRACT.into()),
+            });
+            let extract_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mixed mega exact per-sample extraction"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &extract_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &extract_shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let raw_msaa = |renderer: &GpuRenderer,
+                            state: &RetainedTextGpuState,
+                            prepared: &PreparedRetainedGpuFrame<'_>| {
+                let multisampled = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("mixed mega test-only four-sample draw"),
+                    size: wgpu::Extent3d {
+                        width: WIDTH,
+                        height: HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 4,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let msaa_view = multisampled.create_view(&Default::default());
+                let mut encoder = device.create_command_encoder(&Default::default());
+                {
+                    let attachments = [Some(wgpu::RenderPassColorAttachment {
+                        view: &msaa_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })];
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("mixed mega raw four-sample draw"),
+                        color_attachments: &attachments,
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    let stats = renderer
+                        .draw_retained_items(
+                            &mut pass,
+                            prepared,
+                            state,
+                            4,
+                            &renderer.camera_bind_group,
+                            None,
+                            &std::collections::HashSet::new(),
+                            false,
+                            &mut std::collections::HashSet::new(),
+                        )
+                        .unwrap();
+                    assert_eq!(stats.images, 1, "four-sample image draw was omitted");
+                    assert!(
+                        stats.text.draw_calls > 0,
+                        "four-sample text draw was omitted"
+                    );
+                }
+                queue.submit([encoder.finish()]);
+                let extracted = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("mixed mega test-only unaveraged sample dump"),
+                    size: wgpu::Extent3d {
+                        width: WIDTH * 4,
+                        height: HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("mixed mega test-only MSAA sample binding"),
+                    layout: &extract_pipeline.get_bind_group_layout(0),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&msaa_view),
+                    }],
+                });
+                let extract_view = extracted.create_view(&Default::default());
+                let mut encoder = device.create_command_encoder(&Default::default());
+                {
+                    let attachments = [Some(wgpu::RenderPassColorAttachment {
+                        view: &extract_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })];
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("mixed mega individual sample extraction"),
+                        color_attachments: &attachments,
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&extract_pipeline);
+                    pass.set_bind_group(0, &group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                // 128*4 pixels * 4 bytes = 2048-byte rows, aligned to 256.
+                let row_bytes = WIDTH * 4 * 4;
+                assert_eq!(row_bytes % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+                let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("mixed mega raw MSAA sample readback"),
+                    size: u64::from(row_bytes * HEIGHT),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_texture_to_buffer(
+                    extracted.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &readback,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(row_bytes),
+                            rows_per_image: Some(HEIGHT),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: WIDTH * 4,
+                        height: HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                queue.submit([encoder.finish()]);
+                let (sender, receiver) = std::sync::mpsc::channel();
+                readback
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        sender.send(result).unwrap();
+                    });
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                receiver.recv().unwrap().unwrap();
+                let result = readback.slice(..).get_mapped_range().unwrap().to_vec();
+                readback.unmap();
+                result
+            };
+            for step in 0..4 {
+                let changes = match step {
+                    0 => FrameChanges::all(),
+                    1 => {
+                        frame.objects[17].style.opacity = 0.33;
+                        FrameChanges::objects(vec![17])
+                    }
+                    2 => {
+                        frame.objects[image_index].transform.translation.x += 0.15;
+                        FrameChanges::objects(vec![image_index])
+                    }
+                    _ => {
+                        frame.objects[text_index].style.opacity = 0.3;
+                        FrameChanges::objects(vec![text_index])
+                    }
+                };
+                let old = old_preparer
+                    .prepare_with_image_resources(
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                let (reference_pixels, reference_draws) =
+                    render(&mut old_renderer, &mut old_text, &old);
+                let reference_samples = raw_msaa(&old_renderer, &old_text, &old);
+                let packed = packed_preparer
+                    .prepare_with_image_resources(
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                let (packed_pixels, packed_draws) =
+                    render(&mut packed_renderer, &mut packed_text, &packed);
+                let packed_samples = raw_msaa(&packed_renderer, &packed_text, &packed);
+                assert_eq!(reference_samples.len(), (WIDTH * HEIGHT * 4 * 4) as usize);
+                if reference_samples != packed_samples {
+                    let byte = reference_samples
+                        .iter()
+                        .zip(&packed_samples)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    panic!(
+                        "step {step}: raw 4x MSAA sample mismatch at byte {byte}: {} != {}",
+                        reference_samples[byte], packed_samples[byte]
+                    );
+                }
+                // Prevent a vacant or sample-averaged test from being accepted:
+                // at least one pixel must have distinct sample coverage.
+                assert!(
+                    reference_samples.as_chunks::<16>().0.iter().any(|samples| {
+                        samples[0..4] != samples[4..8]
+                            || samples[0..4] != samples[8..12]
+                            || samples[0..4] != samples[12..16]
+                    }),
+                    "step {step}: no individual MSAA coverage witness"
+                );
+                assert_eq!(
+                    reference_draws.images, 1,
+                    "the original mixed scene must show its image"
+                );
+                assert_eq!(
+                    packed_draws.images, 1,
+                    "the packed mixed scene must show its image"
+                );
+                assert!(reference_draws.text.draw_calls > 0 && packed_draws.text.draw_calls > 0);
+                assert!(
+                    reference_draws.geometry.draw_calls > packed_draws.geometry.draw_calls + 32,
+                    "step {step}: packing failed to reduce draw submissions: {} -> {}",
+                    reference_draws.geometry.draw_calls,
+                    packed_draws.geometry.draw_calls,
+                );
+                if reference_pixels != packed_pixels {
+                    let mismatch = reference_pixels
+                        .iter()
+                        .zip(&packed_pixels)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    panic!(
+                        "step {step}: native mixed packed raster differs at byte {mismatch}: {} != {}",
+                        reference_pixels[mismatch], packed_pixels[mismatch],
+                    );
+                }
+                assert!(reference_pixels.iter().any(|&channel| channel != 0));
+                eprintln!(
+                    "MIXED_MEGA_NATIVE_EXACT step={step} draws={} packed={} bytes={}",
+                    reference_draws.geometry.draw_calls,
+                    packed_draws.geometry.draw_calls,
+                    reference_pixels.len(),
+                );
+            }
+        });
     }
 
     #[test]
