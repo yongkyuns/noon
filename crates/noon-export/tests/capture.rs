@@ -355,3 +355,94 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
         );
     }
 }
+
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+#[test]
+#[ignore = "requires software Vulkan and bundled fonts; run by Native Host Smoke"]
+fn native_capture_preserves_diagram_composition_and_seek_replay() {
+    const WIDTH: usize = 640;
+    const HEIGHT: usize = 360;
+    let mut session = noon::example_scenes::diagram_composition::session().unwrap();
+    let mut capture =
+        noon_export::SessionCapture::new(&session, software(WIDTH as u32, HEIGHT as u32)).unwrap();
+    let samples = [
+        (0.0, 0.0, 1.4),
+        (0.75, 0.375, 1.4),
+        (1.25, 0.75, 1.4),
+        (2.0, 0.75, 1.9),
+        (2.5, 0.75, 2.4),
+        (3.0, 0.75, 2.4),
+    ];
+    let mut forward = Vec::new();
+    for (index, &(time, y, right_x)) in samples.iter().enumerate() {
+        session.advance_to(time).unwrap();
+        let frame = capture.capture(&mut session).unwrap();
+        assert_eq!(frame.receipt.published_time, time);
+        assert_eq!(frame.rgba.len(), WIDTH * HEIGHT * 4);
+        assert!(frame.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+
+        // Check visible content in independent scene-space regions. These broad
+        // pixel thresholds tolerate antialiasing while catching missing boxes,
+        // native labels, or a connection during either stage of the motion.
+        let count =
+            |x_min: f32, x_max: f32, y_min: f32, y_max: f32, matches: fn(&[u8; 4]) -> bool| {
+                let scale = HEIGHT as f32 / noon::DEFAULT_FRAME_HEIGHT;
+                frame
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, pixel)| {
+                        let x = ((*i % WIDTH) as f32 + 0.5 - WIDTH as f32 / 2.0) / scale;
+                        let y = (HEIGHT as f32 / 2.0 - (*i / WIDTH) as f32 - 0.5) / scale;
+                        x >= x_min && x <= x_max && y >= y_min && y <= y_max && matches(pixel)
+                    })
+                    .count()
+            };
+        let blue = count(-2.25, -0.55, y - 0.45, y + 0.45, |p| {
+            p[2] > 100 && p[1] > p[0].saturating_add(20)
+        });
+        let orange = count(right_x - 0.85, right_x + 0.85, y - 0.45, y + 0.45, |p| {
+            p[0] > 100 && p[0] > p[1].saturating_add(30) && p[1] > p[2].saturating_add(20)
+        });
+        assert!(blue > 60, "missing IMU box at t={time}: {blue} pixels");
+        assert!(orange > 60, "missing EKF box at t={time}: {orange} pixels");
+        let white: fn(&[u8; 4]) -> bool = |p| p[0] > 128 && p[1] > 128 && p[2] > 128;
+        for (label, x) in [("IMU", -1.4), ("EKF", right_x)] {
+            let pixels = count(x - 0.6, x + 0.6, y - 0.3, y + 0.3, white);
+            assert!(
+                pixels > 12,
+                "missing {label} label at t={time}: {pixels} pixels"
+            );
+        }
+        let arrow = count(-0.55, right_x - 0.85, y - 0.13, y + 0.13, white);
+        assert!(arrow > 15, "missing connection at t={time}: {arrow} pixels");
+
+        proof(
+            &format!("diagram-composition-{index:02}"),
+            frame.rgba,
+            WIDTH,
+            HEIGHT,
+        );
+        forward.push(frame.rgba.to_vec());
+    }
+    assert_ne!(
+        forward[0], forward[1],
+        "common group motion must be visible"
+    );
+    assert_ne!(forward[2], forward[3], "member motion must be visible");
+    assert_eq!(
+        forward[4], forward[5],
+        "the final hold must preserve pixels"
+    );
+    for index in [4, 2, 1, 0, 3, 5] {
+        let time = samples[index].0;
+        session.seek(time).unwrap();
+        let frame = capture.capture(&mut session).unwrap();
+        assert_eq!(
+            frame.rgba, forward[index],
+            "rendered replay differs at t={time}"
+        );
+    }
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
@@ -155,6 +155,59 @@ try {
   close(result.samples.at(-1).metrics.authoredDuration, 12.65, "shared authored duration");
   assert.deepEqual(errors, []);
   console.log("PASS shared composition: 20 retained samples cover unequal runtimes, nested/nonlinear timing, Wait/Add, LaggedStartMap and repeated targets");
+
+  // The paired diagram example needs only ordinary layout, nested groups and
+  // one coherent target per motion. Qualify the Python facade through the same
+  // normal host, including connection attachment at intermediate samples.
+  const diagramSamples = [
+    [0, 0, 1.4], [0.25, 0, 1.4], [0.75, 0.375, 1.4],
+    [1.25, 0.75, 1.4], [1.5, 0.75, 1.4], [2, 0.75, 1.9],
+    [2.5, 0.75, 2.4], [3, 0.75, 2.4],
+  ];
+  const diagramPage = await browser.newPage();
+  diagramPage.on("pageerror", error => errors.push(String(error)));
+  await diagramPage.goto(`${server.baseUrl}/web/manim-raster-host.html`);
+  await diagramPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30000 });
+  const diagram = await diagramPage.evaluate(async ({ source, times }) => {
+    const loaded = await window.noonHostRaster.load(source, 3);
+    const samples = [];
+    for (let index = 0; index < times.length; index += 1) {
+      const metrics = await window.noonHostRaster.renderThrough(index, times, {
+        stopAtSourceCompletion: index === times.length - 1,
+      });
+      samples.push({ metrics, frame: await window.noonHostRaster.debugFrame() });
+    }
+    return { loaded, samples };
+  }, {
+    source: await readFile(path.join(root, "web/python/examples/ordinary_diagram_composition.py"), "utf8"),
+    times: diagramSamples.map(([time]) => time),
+  });
+  assert.equal(diagram.loaded.kind, "semantic_execution");
+  assert.equal(diagram.loaded.rendererBackend, "WebGPU");
+  const diagramIds = diagram.samples[0].frame.objects.map(object => object.id);
+  for (const [index, { metrics, frame }] of diagram.samples.entries()) {
+    const [time, y, rightX] = diagramSamples[index];
+    assert.equal(frame.present_object_count, 6);
+    assert.deepEqual(frame.objects.map(object => object.id), diagramIds);
+    for (const [leaf, x] of [[0, -1.4], [1, -1.4], [2, rightX], [3, rightX]]) {
+      close(frame.objects[leaf].center[0], x, `diagram t=${time} leaf ${leaf} x`);
+      close(frame.objects[leaf].center[1], y, `diagram t=${time} leaf ${leaf} y`);
+    }
+    const shaft = frame.objects[4].bounds;
+    const tip = frame.objects[5].bounds;
+    close(shaft.min[0], -0.6, `diagram t=${time} fixed attachment`);
+    close(shaft.max[0], rightX - 1, `diagram t=${time} tip base`);
+    close(shaft.min[1], y, `diagram t=${time} shaft y`);
+    close(shaft.height, 0, `diagram t=${time} horizontal shaft`);
+    close(tip.max[0], rightX - 0.8, `diagram t=${time} moving attachment`);
+    close(tip.width, 0.2, `diagram t=${time} tip length`);
+    close(metrics.time, time, "diagram authored sample");
+    assert.ok(metrics.presented && metrics.drawCalls > 0);
+  }
+  close(diagram.samples.at(-1).metrics.authoredDuration, 3, "diagram duration");
+  assert.deepEqual(errors, []);
+  await diagramPage.close();
+  console.log("PASS ordinary diagram composition: eight retained samples preserve labels, identities and arrow attachments");
 } finally { await browser?.close(); await server.close(); }
 
 // Qualify Noon's independent retained channels separately from Manim point mutation.
