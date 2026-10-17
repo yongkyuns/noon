@@ -124,6 +124,8 @@ class CoordinateAccessors(Scene):
       console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
       const axisLabelsSource = `from noon import *
 
+await prepare_latex()
+
 class AxesLabels(Scene):
     async def construct(self):
         axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)

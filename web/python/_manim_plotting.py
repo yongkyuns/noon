@@ -882,8 +882,8 @@ class Axes(_compat.Group):
                          buff=_base.SMALL_BUFF, **kwargs):
         """Create a retained label next to the upper-right x-axis edge.
 
-        Strings and numeric values use the existing MathTex family. Retained
-        Text, MathTex, and other text mobjects are placed without recompiling.
+        Strings and numeric values use MathTex; call await prepare_latex() first.
+        Retained text mobjects are placed without recompiling.
         """
         if kwargs:
             raise TypeError("unsupported Axes label option(s): " + ", ".join(sorted(kwargs)))
