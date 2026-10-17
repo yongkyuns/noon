@@ -38,6 +38,9 @@ impl FramePreparer {
                     .is_none()
                     && batch.instance_range.end == batch.instance_range.start + 1
                     && !batch.index_range.is_empty()
+                    && !self
+                        .individual_path_objects
+                        .contains(&self.path_ids[batch.instance_range.start as usize])
             })
             .collect::<Vec<_>>();
         self.mega_path_segments
@@ -131,6 +134,9 @@ impl FramePreparer {
         }
         if path_batch.instance_range.end != path_batch.instance_range.start + 1
             || path_batch.index_range.is_empty()
+            || self
+                .individual_path_objects
+                .contains(&self.path_ids[path_batch.instance_range.start as usize])
         {
             return false;
         }

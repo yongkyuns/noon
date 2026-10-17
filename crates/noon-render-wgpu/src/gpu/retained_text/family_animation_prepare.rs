@@ -585,6 +585,103 @@ mod operation_selection_tests {
     }
 
     #[test]
+    fn family_instance_only_paths_keep_unrelated_paths_packed_and_release_their_exclusion() {
+        let (plan, mut retained, mut states) = fixture();
+        states[1] = None;
+        states[2] = None;
+        for index in [0, 2] {
+            let path = GeometryRef::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, 0.0))
+                    .line_to(noon_core::Vec2::new(1.0 + index as f32, 0.0)),
+            );
+            if index == 0 {
+                // A supported cached analytic family row can retain a prepared
+                // morph/render path without replacing semantic geometry.
+                retained.render_geometries[index] = Some(std::sync::Arc::new(path));
+                retained.render_transforms[index] = Some(Transform2D::IDENTITY);
+            } else {
+                retained.objects[index].content = ObjectContentRef::Geometry(path);
+            }
+            retained.objects[index].style.fill = None;
+            retained.objects[index].style.stroke = Some(noon_core::Color::WHITE);
+            retained.objects[index].style.stroke_width = 0.1;
+        }
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_painter_order(&[0, 1, 2]);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let images = noon_core::RasterImageResourceArena::new();
+        let plans = [plan];
+        let active_indices = std::collections::BTreeSet::from([0]);
+        for step in 0..3 {
+            if step == 1 {
+                preparer
+                    .compact_path_meshes(&device, &queue, &mut renderer, &[])
+                    .unwrap();
+            }
+            states[0].as_mut().unwrap().overall_progress = 0.2 + f64::from(step) * 0.1;
+            let frame = noon_runtime::RetainedPlannedFamilyFrame {
+                retained: &retained,
+                family_animations: &states,
+                family_plan_indices: &[Some(0), None, None],
+            };
+            let changes = if step == 0 {
+                FrameChanges::all()
+            } else {
+                FrameChanges::objects(vec![0])
+            };
+            let active = preparer
+                .prepare_active_family_plan_set_with_changes(
+                    &device,
+                    &frame,
+                    &plans,
+                    &active_indices,
+                    &changes,
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    metrics,
+                )
+                .unwrap();
+            for (index, packed) in [(0, false), (2, true)] {
+                let source = active.geometry.observe_object(index).unwrap();
+                let RenderPrimitive::Path { batch } = source.primitive else {
+                    panic!("expected retained source path");
+                };
+                assert_eq!(active.geometry.mega_source_segment(batch).is_some(), packed);
+            }
+            if step == 2 {
+                assert_eq!(active.geometry_stats().full_rebuilds, 0);
+                assert!(active.geometry.mega_path_instance_dirty_ranges.is_empty());
+            }
+            renderer.upload_retained(&device, &queue, &active, &mut text_state);
+        }
+
+        preparer.release_planned_family_realization();
+        let ordinary = preparer
+            .prepare_with_changes(
+                &device,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert!(ordinary.geometry_only);
+        assert_eq!(ordinary.geometry_stats().mega_path_count, 2);
+        assert_eq!(ordinary.geometry_stats().geometry_cache_misses, 0);
+    }
+
+    #[test]
     fn compiled_morph_budget_keeps_inactive_phase_meshes_warm() {
         const PER_PHASE: usize = 300;
         let (_, mut retained, _) = fixture();

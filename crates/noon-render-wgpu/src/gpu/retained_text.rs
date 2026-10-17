@@ -1304,6 +1304,11 @@ impl RetainedFramePreparer {
             upload: renderer.replace_preloaded_path_buffers(device, queue, &frame)?,
         };
         let baseline_bytes = geometry.resident_path_byte_count();
+        // Compaction replaces GPU residency while retaining this scratch
+        // generation and its active family rows. Preserve their scalar-upload
+        // admission only after fallible replacement has succeeded.
+        geometry.individual_path_objects =
+            std::mem::take(&mut self.geometry.individual_path_objects);
         self.geometry = geometry;
         self.resident_path_maintenance_baseline_bytes = baseline_bytes;
         self.resident_path_maintenance_baseline_roots = requests.len();
@@ -2114,6 +2119,9 @@ impl RetainedFramePreparer {
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
+        if !self.geometry_uses_source_indices {
+            self.geometry.individual_path_objects.clear();
+        }
         if changes.is_all() || !self.geometry_uses_source_indices {
             self.geometry
                 .set_painter_order(frame, &self.painter_order_indices);
@@ -2652,6 +2660,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<(), RetainedPrepareError> {
         self.scratch.time = frame.time;
+        self.geometry.individual_path_objects.clear();
         self.scratch.objects.clear();
         self.scratch.presences.clear();
         self.scratch.reveals.clear();

@@ -674,6 +674,11 @@ pub struct FramePreparer {
     // Mixed retained draws keep individual path/source identity but also prepare
     // the renderer's existing packed unique-path draw stream when eligible.
     mixed_mega_path_draws: bool,
+    // Renderer-derived rows whose active family operation requires one mutable
+    // instance record per member. Their source meshes stay retained; repeating
+    // the instance per vertex would turn a scalar reveal into a mesh-sized upload.
+    // Rebuilt with the mixed scratch generation, never a semantic authority.
+    individual_path_objects: std::collections::HashSet<ObjectId>,
     resident_vertex_count: usize,
     resident_index_count: usize,
     resident_mesh_count: usize,
@@ -2108,8 +2113,9 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 34] {
+    fn capacities(&self) -> [usize; 35] {
         [
+            self.individual_path_objects.capacity(),
             self.circle_ids.capacity(),
             self.circles.capacity(),
             self.rectangle_ids.capacity(),

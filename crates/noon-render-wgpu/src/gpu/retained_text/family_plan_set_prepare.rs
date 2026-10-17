@@ -437,6 +437,8 @@ impl RetainedFramePreparer {
                         continue;
                     };
 
+                    self.geometry.individual_path_objects.insert(scratch_id);
+
                     match state.mode {
                         noon_core::FamilyAnimationMode::Reveal => {
                             let scratch_index =

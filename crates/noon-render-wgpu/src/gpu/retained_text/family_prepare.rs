@@ -268,6 +268,7 @@ impl RetainedFramePreparer {
                         self.family_geometry_reveal(frame, plan, object_index, object_id)?
                     };
                     if let Some(reveal) = reveal {
+                        self.geometry.individual_path_objects.insert(scratch_id);
                         let target =
                             self.scratch.reveals.get_mut(scratch_index).ok_or(
                                 RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
@@ -508,6 +509,9 @@ impl RetainedFramePreparer {
                         reveal,
                         0.0,
                     );
+                    self.geometry
+                        .individual_path_objects
+                        .insert(self.scratch.objects[scratch_slot].id);
                     if stable_rows {
                         self.family_plan_scratch_slots
                             .entry(object_index)
