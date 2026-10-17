@@ -637,8 +637,8 @@ class NumberLineDecimalNumberLabels(Scene):
         assert tuple(label.get_value() for label in detached) == (1, -1, 1)
         assert len(line.submobjects) == 2
         assert line.add_numbers((0, 1, -1), excluding=(0,)) is line
-        assert tuple(label.get_value() for label in line.labels) == (1, -1)
-        assert all(isinstance(label, DecimalNumber) for label in line.labels)
+        assert tuple(label.get_value() for label in line.numbers) == (1, -1)
+        assert all(isinstance(label, DecimalNumber) for label in line.numbers)
         self.add(line, detached)
         await self.wait(0.05)
 `;
