@@ -26,3 +26,9 @@ inherited regular-polygon vertex queries. The Rust Triangle constructor delegate
 to the same closed regular-polygon path as the Python wrapper; the separate fixture
 preserves the polygon compound-fill/stroke regression unchanged. Wider inherited
 methods/options remain owned by #2012.
+
+`mobject-table-top-left-entry` exercises ManimCE's corner entry with shared
+retained objects and Rust-owned layout. Rust/WASM and Python-worker pixels match
+on WebGPU and WebGL2; strict pinned ManimCE Cairo raster qualification passes the
+unchanged thresholds on both backends with exact duration and 0.12% worst pixel
+difference.

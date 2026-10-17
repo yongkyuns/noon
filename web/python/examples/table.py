@@ -15,6 +15,7 @@ class RetainedTable(Scene):
             [[pair, MathTex("y")]],
             row_labels=[Text("r")],
             col_labels=[Text("a"), Text("b")],
+            top_left_entry=Text("i"),
             include_outer_lines=True,
         )
         composite.shift(DOWN * 2)

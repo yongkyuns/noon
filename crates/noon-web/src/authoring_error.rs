@@ -83,6 +83,7 @@ impl From<noon::TableAuthoringError> for AuthoringFailure {
             RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
             DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
             InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
+            TopLeftRequiresLabels => Self::new("input", "table.top_left_requires_labels", error),
             InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
             InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
             Text(error) => error.into(),

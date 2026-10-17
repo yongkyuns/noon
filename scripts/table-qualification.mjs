@@ -5,7 +5,7 @@ await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_TABLE_ARTIFACTS ?? "table-artifacts",
   cases: [{
     id: "table", file: "table.py", scene: "RetainedTable",
-    factory: "createTableRenderer", objectCount: 33,
+    factory: "createTableRenderer", objectCount: 34,
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
@@ -41,12 +41,14 @@ class TableLifecycle(Scene):
         entry = Circle(radius=0.18)
         row_label = Square(side_length=0.14, color=YELLOW)
         column_labels = [Circle(radius=0.1, color=GREEN), Square(side_length=0.12, color=BLUE)]
+        top_left_entry = Circle(radius=0.16, color=WHITE)
         labeled = MobjectTable([[entry, Circle(radius=0.12)]], row_labels=[row_label],
-                               col_labels=column_labels, h_buff=0.7, v_buff=0.45,
-                               include_outer_lines=True)
+                               col_labels=column_labels, top_left_entry=top_left_entry,
+                               h_buff=0.7, v_buff=0.45, include_outer_lines=True)
         assert labeled.submobjects[3].submobjects[0] is row_label
         assert labeled.submobjects[4].submobjects[0] is column_labels[0]
         assert labeled.submobjects[4].submobjects[1] is column_labels[1]
+        assert labeled.submobjects[5].submobjects[0] is top_left_entry
         assert labeled.get_entries((1, 1)) is entry
         self.add(labeled)
         await self.wait(0.0625)
@@ -54,7 +56,7 @@ class TableLifecycle(Scene):
     const result = await qualifyPythonPlayback(context, baseUrl, source, [0, 0.0625, 0.125, 0.1875]);
     assert.equal(result.rendererBackend, expectedBackend);
     assert.equal(result.presented, true);
-    assert.equal(result.objectCount, 34);
+    assert.equal(result.objectCount, 35);
     assert.ok(Math.abs(result.authoredDuration - 0.1875) < 1e-6,
       `expected 0.1875 authored seconds, received ${result.authoredDuration}`);
     return result;

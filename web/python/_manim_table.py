@@ -192,6 +192,11 @@ class DecimalTable(Table):
 
 class MobjectTable(Table):
     def __init__(self, table, **kwargs):
+        row_label_mobjects = list(kwargs.pop("row_labels", None) or [])
+        column_label_mobjects = list(kwargs.pop("col_labels", None) or [])
+        top_left_entry = kwargs.pop("top_left_entry", None)
+        if top_left_entry is not None and (not row_label_mobjects or not column_label_mobjects):
+            raise ValueError("top_left_entry requires both row_labels and col_labels")
         if _create_mobject_table is None:
             raise RuntimeError("MobjectTable requires Noon’s shared Rust authoring runtime")
         source_rows = [list(row) for row in table]
@@ -205,10 +210,11 @@ class MobjectTable(Table):
             if semantic is None:
                 raise TypeError("MobjectTable entries require current shared semantic identities")
             return semantic
-        row_label_mobjects = list(kwargs.pop("row_labels", None) or [])
-        column_label_mobjects = list(kwargs.pop("col_labels", None) or [])
         row_labels = [self._label_handle(value) for value in row_label_mobjects]
         column_labels = [self._label_handle(value) for value in column_label_mobjects]
+        top_left_entry_handle = (
+            self._label_handle(top_left_entry) if top_left_entry is not None else None
+        )
         context = _live_constructor_context("MobjectTable", allow_unstarted=True)
         self._initialize_table(
             engine_call(
@@ -216,6 +222,7 @@ class MobjectTable(Table):
                 _rows(source_rows, handle),
                 row_labels,
                 column_labels,
+                [top_left_entry_handle] if top_left_entry_handle is not None else [],
                 *_options(kwargs),
                 context,
             ),
@@ -233,13 +240,18 @@ class MobjectTable(Table):
                     _family_wrapper_key(value): value for value in labels
                 }
                 family_index += 1
+        if top_left_entry is not None:
+            top_left_family = self.submobjects[family_index]
+            top_left_family._semantic_member_wrappers = {
+                _family_wrapper_key(top_left_entry): top_left_entry
+            }
 
     @staticmethod
     def _label_handle(value):
         if not isinstance(value, _base.Mobject):
-            raise TypeError("MobjectTable row/column labels must be shared Mobjects")
+            raise TypeError("MobjectTable labels must be shared Mobjects")
         if getattr(value, "_semantic_family_handle", None) is not None:
-            raise TypeError("MobjectTable row/column labels must be individual Mobjects, not Groups")
+            raise TypeError("MobjectTable labels must be individual Mobjects, not Groups")
         handle = _handle_for(value)
         if handle is None:
             raise TypeError("MobjectTable labels require current shared semantic identities")

@@ -195,6 +195,23 @@ class RasterManifestTests(unittest.TestCase):
             scene.remove(scene.zoomed_display)
             self.assertEqual(module._scene_state(scene, 4, 1.0, 1.0)["inset_2d_views"], [])
 
+    def test_mobject_table_top_left_entry_fixture_is_enrolled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        matches = [
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "mobject-table-top-left-entry"
+        ]
+        self.assertEqual(len(matches), 1)
+        fixture = matches[0]
+        self.assertEqual(fixture["scene"], "MobjectTableTopLeftEntryExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertNotIn("tolerance", fixture)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        self.assertIn("top_left_entry=Circle(radius=0.25)", source)
+        self.assertIn("row_labels=[", source)
+        self.assertIn("col_labels=[", source)
+        self.assertIn("strict pinned ManimCE Cairo comparison passes unchanged thresholds", fixture["notes"])
+
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         matching = [

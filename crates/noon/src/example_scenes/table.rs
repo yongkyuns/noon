@@ -62,11 +62,13 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
         .into_iter()
         .map(|label| scene.text(label).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    let composite = MobjectTable::from_target_rows_with_labels(
+    let top_left_entry = scene.text("i").map_err(|error| error.to_string())?;
+    let composite = MobjectTable::from_target_rows_with_labels_and_top_left_entry(
         &mut scene,
         vec![vec![(&group).into(), (&y).into()]],
-        Some(vec![row_label]),
-        Some(column_labels),
+        vec![row_label],
+        column_labels,
+        top_left_entry,
         options,
     )
     .map_err(|error| error.to_string())?

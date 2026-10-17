@@ -16,7 +16,10 @@ use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 #[cfg(feature = "native-text")]
 use admission::publish_native_text_table;
-use admission::{publish_existing_table, publish_target_table, table_shape, TablePublisher};
+use admission::{
+    publish_existing_table, publish_target_table, publish_target_table_with_top_left_entry,
+    table_shape, TablePublisher,
+};
 
 #[cfg(feature = "latex")]
 use admission::{publish_numeric_table, publish_text_table};
@@ -71,6 +74,7 @@ pub enum TableAuthoringError {
         expected: usize,
         actual: usize,
     },
+    TopLeftRequiresLabels,
     InvalidOption {
         name: &'static str,
         value: f64,
@@ -92,6 +96,9 @@ impl std::fmt::Display for TableAuthoringError {
             Self::DuplicateEntry => f.write_str("a MobjectTable entry may occur only once"),
             Self::InvalidLabels { expected, actual } => {
                 write!(f, "table label count is {actual}; expected {expected}")
+            }
+            Self::TopLeftRequiresLabels => {
+                f.write_str("top_left_entry requires both row_labels and column_labels")
             }
             Self::InvalidOption { name, value } => write!(f, "invalid table {name}: {value}"),
             Self::InvalidStructure => f.write_str("semantic family is not a valid Table"),
@@ -130,6 +137,7 @@ pub struct Table {
     highlight_family: MobjectFamily,
     row_label_family: Option<MobjectFamily>,
     column_label_family: Option<MobjectFamily>,
+    top_left_entry_family: Option<MobjectFamily>,
 }
 /// One retained Table entry root. This common display handle preserves family
 /// identity while layout operates on ordered descendant leaves.
@@ -158,7 +166,7 @@ impl Table {
         let [highlights, entries, lines, labels @ ..] = members.as_slice() else {
             return Err(TableAuthoringError::InvalidStructure);
         };
-        if labels.len() > 2 {
+        if labels.len() > 3 {
             return Err(TableAuthoringError::InvalidStructure);
         }
         let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
@@ -172,6 +180,10 @@ impl Table {
                 .transpose()?,
             column_label_family: labels
                 .get(1)
+                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
+                .transpose()?,
+            top_left_entry_family: labels
+                .get(2)
                 .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
                 .transpose()?,
             entry_family,
@@ -291,6 +303,9 @@ impl Table {
     }
     pub fn column_label_family(&self) -> Option<&MobjectFamily> {
         self.column_label_family.as_ref()
+    }
+    pub fn top_left_entry_family(&self) -> Option<&MobjectFamily> {
+        self.top_left_entry_family.as_ref()
     }
     pub fn shape(&self) -> Result<(usize, usize), TableAuthoringError> {
         admission::shape_from_family(&self.entry_family)
@@ -738,6 +753,33 @@ impl MobjectTable {
         )
         .map(Self)
     }
+    /// Construct a retained MobjectTable with row/column labels and a corner
+    /// entry. The top-left entry requires both label sets, matching ManimCE.
+    pub fn from_target_rows_with_labels_and_top_left_entry<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Vec<Mobject>,
+        column_labels: Vec<Mobject>,
+        top_left_entry: Mobject,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_top_left_entry(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            Some(row_labels),
+            Some(column_labels),
+            Some(top_left_entry),
+            options,
+        )
+        .map(Self)
+    }
     /// Live-session counterpart of [`Self::from_target_rows_with_labels`].
     pub fn from_target_rows_with_labels_in_live_session<'a, I, J>(
         live: &mut crate::LiveSession<'_>,
@@ -758,6 +800,33 @@ impl MobjectTable {
             shape,
             row_labels,
             column_labels,
+            options,
+        )
+        .map(Self)
+    }
+    /// Live-session counterpart of
+    /// [`Self::from_target_rows_with_labels_and_top_left_entry`].
+    pub fn from_target_rows_with_labels_and_top_left_entry_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Vec<Mobject>,
+        column_labels: Vec<Mobject>,
+        top_left_entry: Mobject,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_top_left_entry(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            Some(row_labels),
+            Some(column_labels),
+            Some(top_left_entry),
             options,
         )
         .map(Self)
@@ -911,6 +980,7 @@ fn integer_format() -> DecimalFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Bounds2D64;
     use noon_core::{SemanticObjectState, StoredGeometry};
 
     fn circle(store: &Rc<RefCell<noon_core::SemanticStore>>, radius: f32) -> Mobject {
@@ -1071,6 +1141,56 @@ mod tests {
         let column_bounds = column_label.layout_bounds().unwrap().unwrap();
         assert!((entry_bounds.min_x - row_bounds.max_x - options.h_buff).abs() < 1e-6);
         assert!((column_bounds.min_y - entry_bounds.max_y - options.v_buff).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mobject_table_top_left_entry_uses_corner_cell_and_keeps_identity() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let row_label = circle(&store, 0.2);
+        let column_label = circle(&store, 0.15);
+        let top_left_entry = circle(&store, 0.35);
+        let options = TableOptions {
+            h_buff: 0.75,
+            v_buff: 0.4,
+            ..Default::default()
+        };
+
+        let table = MobjectTable::from_target_rows_with_labels_and_top_left_entry(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            vec![row_label.clone()],
+            vec![column_label.clone()],
+            top_left_entry.clone(),
+            options,
+        )
+        .unwrap()
+        .into_table();
+
+        let restored = Table::from_family(table.family().clone()).unwrap();
+        let store = store.borrow();
+        let top_left_family = table.top_left_entry_family().unwrap();
+        let restored_top_left_family = restored.top_left_entry_family().unwrap();
+        for family in [top_left_family, restored_top_left_family] {
+            assert_eq!(
+                store
+                    .semantic_family_members_checked(family.node_id())
+                    .unwrap(),
+                vec![top_left_entry.node_id()]
+            );
+        }
+
+        let top_left_bounds = top_left_entry.layout_bounds().unwrap().unwrap();
+        let row_bounds = row_label.layout_bounds().unwrap().unwrap();
+        let column_bounds = column_label.layout_bounds().unwrap().unwrap();
+        let entry_bounds = entry.layout_bounds().unwrap().unwrap();
+        let center_x = |bounds: Bounds2D64| (bounds.min_x + bounds.max_x) * 0.5;
+        let center_y = |bounds: Bounds2D64| (bounds.min_y + bounds.max_y) * 0.5;
+        assert!((center_x(top_left_bounds) - center_x(row_bounds)).abs() < 1e-6);
+        assert!((center_y(top_left_bounds) - center_y(column_bounds)).abs() < 1e-6);
+        assert!((entry_bounds.min_x - top_left_bounds.max_x - options.h_buff).abs() < 1e-6);
+        assert!((top_left_bounds.min_y - entry_bounds.max_y - options.v_buff).abs() < 1e-6);
     }
 
     #[test]

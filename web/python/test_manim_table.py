@@ -48,7 +48,7 @@ class _MobjectHandle(_Handle):
 
 
 class _MobjectTableHandle:
-    def __init__(self, row_labels, column_labels, entries):
+    def __init__(self, row_labels, column_labels, entries, top_left_entry=None):
         self._family = _Family()
         self._family.submobjects = [
             types.SimpleNamespace(submobjects=[]),
@@ -56,6 +56,7 @@ class _MobjectTableHandle:
             types.SimpleNamespace(submobjects=[]),
             *([types.SimpleNamespace(submobjects=row_labels)] if row_labels else []),
             *([types.SimpleNamespace(submobjects=column_labels)] if column_labels else []),
+            *([types.SimpleNamespace(submobjects=[top_left_entry])] if top_left_entry else []),
         ]
 
     def family(self):
@@ -146,13 +147,15 @@ class TableFacadeTests(unittest.TestCase):
         entry = _FakeMobject(1)
         row_label = _FakeMobject(2)
         column_label = _FakeMobject(3)
+        top_left_entry = _FakeMobject(4)
         context = types.SimpleNamespace()
-        handle = _MobjectTableHandle([row_label], [column_label], [entry])
+        handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
-        def create(rows, row_labels, column_labels, v_buff, h_buff, outer_lines, _context):
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
             self.assertEqual(row_labels, [row_label._semantic_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
+            self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
             self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
             return handle
 
@@ -172,6 +175,7 @@ class TableFacadeTests(unittest.TestCase):
                 )):
             value = table.MobjectTable(
                 [[entry]], row_labels=[row_label], col_labels=[column_label],
+                top_left_entry=top_left_entry,
                 v_buff=0.4, h_buff=0.7, include_outer_lines=True,
             )
 
@@ -179,6 +183,15 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(children[1].submobjects[0]._semantic_member_wrappers["1:1"], entry)
         self.assertIs(children[3]._semantic_member_wrappers["2:1"], row_label)
         self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)
+        self.assertIs(children[5]._semantic_member_wrappers["4:1"], top_left_entry)
+
+    def test_mobject_table_top_left_entry_requires_both_label_sets(self):
+        entry = _FakeMobject(1)
+        top_left_entry = _FakeMobject(2)
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
+                table.MobjectTable([[entry]], top_left_entry=top_left_entry)
 
     def test_mobject_table_label_boundaries_are_explicit(self):
         with patch.object(table._base, "Mobject", _FakeMobject), \

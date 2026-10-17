@@ -218,6 +218,7 @@ impl CanonicalAuthoringSceneContext {
         rows: &WasmCompositeRows,
         row_labels: &WasmCompositeRows,
         column_labels: &WasmCompositeRows,
+        top_left_entry: &WasmCompositeRows,
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
@@ -225,7 +226,49 @@ impl CanonicalAuthoringSceneContext {
         let column_labels = column_labels.objects()?;
         let row_labels = (!row_labels.is_empty()).then_some(row_labels);
         let column_labels = (!column_labels.is_empty()).then_some(column_labels);
-        if self.inner.player_ownership.is_unstarted() {
+        let mut top_left_entries = top_left_entry.objects()?;
+        let top_left_entry = match top_left_entries.len() {
+            0 => None,
+            1 => Some(top_left_entries.remove(0)),
+            _ => {
+                return Err(js_error(
+                    "MobjectTable top_left_entry must be one shared Mobject",
+                ))
+            }
+        };
+        if let Some(top_left_entry) = top_left_entry {
+            let row_labels = row_labels.ok_or_else(|| {
+                js_error("top_left_entry requires both row_labels and col_labels")
+            })?;
+            let column_labels = column_labels.ok_or_else(|| {
+                js_error("top_left_entry requires both row_labels and col_labels")
+            })?;
+            if self.inner.player_ownership.is_unstarted() {
+                noon::MobjectTable::from_target_rows_with_labels_and_top_left_entry(
+                    &mut self.inner.scene,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    top_left_entry,
+                    options.options,
+                )
+                .map(|value| WasmTableHandle::new(value.into_table()))
+                .map_err(js_error)
+            } else {
+                self.inner
+                    .active_live_player()
+                    .map_err(js_error)?
+                    .live_create_mobject_table_with_labels_and_top_left_entry(
+                        rows,
+                        row_labels,
+                        column_labels,
+                        top_left_entry,
+                        options.options,
+                    )
+                    .map(|value| WasmTableHandle::new(value.into_table()))
+                    .map_err(js_error)
+            }
+        } else if self.inner.player_ownership.is_unstarted() {
             noon::MobjectTable::from_target_rows_with_labels(
                 &mut self.inner.scene,
                 rows,
