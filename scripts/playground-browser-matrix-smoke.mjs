@@ -432,8 +432,14 @@ async function exerciseAuthoringTrapRecovery(browser) {
         await import('./python-worker.js');
       `,
     }));
+    // This probe exercises the real authoring worker; it needs no editor or gallery.
+    const probeUrl = `${baseUrl}/web/authoring-trap-probe.html`;
+    await context.route(probeUrl, route => route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><meta charset=utf-8><title>Authoring trap probe</title>",
+    }));
     const probe = await context.newPage();
-    await probe.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`);
+    await probe.goto(probeUrl);
     const report = await probe.evaluate(async () => {
       const { PythonAuthoringClient } = await import("./authoring-client.js");
       const attempt = async promise => {
