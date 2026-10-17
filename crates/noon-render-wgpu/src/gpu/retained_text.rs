@@ -6202,6 +6202,15 @@ mod tests {
                 .line_to(Vec2::new(0.5, 0.0)),
         );
         frame.objects[0].content = ObjectContentRef::Geometry(path.clone());
+        // An open, fill-only path can have no triangulated content. Make the
+        // actual residency fixture a stroked packed path so compaction must
+        // retire a nonempty packed index and attribute allocation.
+        frame.objects[0].style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            ..Style::default()
+        };
         let mut images = noon_core::RasterImageResourceArena::new();
         let image_handle = images.intern_rgba8(1, 1, vec![255, 64, 32, 255]).unwrap();
         let image_resource = images.get(image_handle).unwrap();
