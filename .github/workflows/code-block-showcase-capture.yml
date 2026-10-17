@@ -34,7 +34,7 @@ jobs:
       - name: Build exact browser runtime
         uses: ./.github/actions/dev-wasm-build
         with:
-          preflight: 'true'
+          preflight: 'false'
       - name: Install the pinned browser renderer
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
