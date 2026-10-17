@@ -8,7 +8,7 @@ WEB = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
 # Qualified by the actual Pyodide showcase captures on both renderer backends.
 # These are bundled standard-library modules; optional packages stay excluded.
-QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array"}
+QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array", "re"}
 
 
 class ShowcaseSourceContract(unittest.TestCase):
