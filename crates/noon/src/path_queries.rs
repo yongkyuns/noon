@@ -325,6 +325,23 @@ pub fn effective_path_query(
 }
 
 impl Mobject {
+    /// Number of points owned by this Mobject, matching ManimCE's
+    /// `len(self.points)` rather than recursively counting family members.
+    pub fn get_num_points(&self) -> Result<usize, AuthoringError> {
+        let content = self.state()?.content;
+        match content {
+            noon_core::SemanticObjectContent::Geometry(_) => {
+                self.path_query().map(|query| query.point_count())
+            }
+            // Text glyphs are retained as source-aware text resources, not as
+            // points on the Text root Mobject. ManimCE likewise keeps those
+            // points on its child glyph family.
+            noon_core::SemanticObjectContent::Text(_) => Ok(0),
+            // ManimCE's ImageMobject owns its four-corner image quad.
+            noon_core::SemanticObjectContent::Image(_) => Ok(4),
+        }
+    }
+
     /// Prepare a query over immutable local/content-space geometry.
     pub fn local_path_query(&self) -> Result<PathQuery, AuthoringError> {
         let store = self.integration_store().borrow();
@@ -349,5 +366,27 @@ impl Mobject {
                 .as_planar()
                 .ok_or(AuthoringError::NonFiniteObjectState)?,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Scene;
+    use noon_core::{SemanticStyle, VectorPath};
+
+    #[test]
+    fn mobject_point_count_matches_its_own_authored_path_buffer() {
+        let mut scene = Scene::new();
+        let rectangle = scene.rectangle(2.0, 1.0).unwrap();
+        let circle = scene.circle(1.0).unwrap();
+        let line = scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+        let empty = scene
+            .path(VectorPath::new(), SemanticStyle::default())
+            .unwrap();
+
+        assert_eq!(rectangle.get_num_points().unwrap(), 16);
+        assert_eq!(circle.get_num_points().unwrap(), 32);
+        assert_eq!(line.get_num_points().unwrap(), 4);
+        assert_eq!(empty.get_num_points().unwrap(), 0);
     }
 }

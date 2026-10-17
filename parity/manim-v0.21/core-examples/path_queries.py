@@ -7,7 +7,11 @@ class OrdinaryPathQueries(Scene):
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
         ellipse = Circle(radius=0.8, color=WHITE)
         ellipse.stretch_to_fit_width(2.4).shift(RIGHT * 2.5)
-        for shape in (rectangle, ellipse):
+        assert Mobject().get_num_points() == 0
+        assert VGroup(rectangle, ellipse).get_num_points() == 0
+        assert ImageMobject([[0]]).get_num_points() == 4
+        for shape, expected_points in ((rectangle, 16), (ellipse, 32)):
+            assert shape.get_num_points() == expected_points
             self.add(shape)
             assert shape.get_arc_length() > 0
             for alpha in (0.125, 0.375, 0.625, 0.875):
