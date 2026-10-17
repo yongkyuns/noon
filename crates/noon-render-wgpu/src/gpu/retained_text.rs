@@ -1266,6 +1266,7 @@ impl RetainedFramePreparer {
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
         let mut geometry = FramePreparer::for_mixed_retained_path_draws();
+        geometry.set_packed_path_buffer_limit(device.limits().max_buffer_size);
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1296,6 +1297,7 @@ impl RetainedFramePreparer {
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
         let mut geometry = FramePreparer::for_mixed_retained_path_draws();
+        geometry.set_packed_path_buffer_limit(device.limits().max_buffer_size);
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1760,6 +1762,8 @@ impl RetainedFramePreparer {
             && !changes.has_stable_changes())
         .then(FrameChanges::default);
         let changes = stable_changes.as_ref().unwrap_or(changes);
+        self.geometry
+            .set_packed_path_buffer_limit(device.limits().max_buffer_size);
 
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;

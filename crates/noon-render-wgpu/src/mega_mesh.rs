@@ -5,6 +5,14 @@ use bytemuck::Zeroable;
 use crate::{FramePreparer, MegaPathBatch, OrderedRenderBatch, PathInstance, RenderPrimitive};
 
 impl FramePreparer {
+    /// Optional packing cannot consume a GPU buffer that exceeds the device
+    /// limit. A rejected path still has its ordinary source draw and indices.
+    fn packed_path_allocation_fits(&self, vertex_end: usize, index_count: usize) -> bool {
+        let limit = self.packed_path_buffer_limit.unwrap_or(u64::MAX);
+        rounded_capacity_fits(vertex_end, std::mem::size_of::<PathInstance>(), limit)
+            && rounded_capacity_fits(index_count, std::mem::size_of::<u32>(), limit)
+    }
+
     /// Builds the static packed index/attribute stream used by unique vector paths.
     ///
     /// This is a compaction operation and runs only on a full frame rebuild. Live
@@ -24,7 +32,7 @@ impl FramePreparer {
             return;
         }
 
-        let eligible = self
+        let mut eligible = self
             .path_batches
             .iter()
             .enumerate()
@@ -43,6 +51,28 @@ impl FramePreparer {
                         .contains(&self.path_ids[batch.instance_range.start as usize])
             })
             .collect::<Vec<_>>();
+        // This full-rebuild pass already visits the source batches. Check each
+        // candidate before materializing the repeated vertex attributes or
+        // painter-ordered packed indices. No additional frame traversal is added.
+        let mut packed_index_count = 0usize;
+        for (index, selected) in eligible.iter_mut().enumerate() {
+            if !*selected {
+                continue;
+            }
+            let source_indices = &self.path_batches[index].index_range;
+            let index_count = (source_indices.end - source_indices.start) as usize;
+            let next = packed_index_count.checked_add(index_count);
+            if let Some(next) = next.filter(|&count| {
+                self.packed_path_allocation_fits(
+                    self.path_batch_vertex_ranges[index].end as usize,
+                    count,
+                )
+            }) {
+                packed_index_count = next;
+            } else {
+                *selected = false;
+            }
+        }
         self.mega_path_segments
             .resize(self.path_batches.len(), None);
         self.mega_path_detached
@@ -153,6 +183,15 @@ impl FramePreparer {
         else {
             return false;
         };
+        let source_index_count =
+            (path_batch.index_range.end - path_batch.index_range.start) as usize;
+        let Some(next_index_count) = self.mega_path_indices.len().checked_add(source_index_count)
+        else {
+            return false;
+        };
+        if !self.packed_path_allocation_fits(vertex_range.end as usize, next_index_count) {
+            return false;
+        }
 
         if self.mega_path_segments.len() <= path_batch_index {
             self.mega_path_segments.resize(path_batch_index + 1, None);
@@ -338,6 +377,19 @@ impl FramePreparer {
     }
 }
 
+/// Match the allocation rounded by the GPU uploader, including overflow and
+/// the 256-byte minimum. An empty optional stream needs no buffer allocation.
+fn rounded_capacity_fits(elements: usize, stride: usize, limit: u64) -> bool {
+    let Some(bytes) = elements.checked_mul(stride) else {
+        return false;
+    };
+    bytes == 0
+        || bytes
+            .checked_next_power_of_two()
+            .and_then(|_| u64::try_from(crate::buffer_growth_capacity(bytes)).ok())
+            .is_some_and(|capacity| capacity <= limit)
+}
+
 fn range_usize(range: &Range<u32>) -> Range<usize> {
     range.start as usize..range.end as usize
 }
@@ -361,6 +413,158 @@ fn push_dirty_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_admission_checks_rounding_index_limits_and_overflow() {
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        preparer.set_packed_path_buffer_limit(65_536);
+        assert!(preparer.packed_path_allocation_fits(819, 16_384));
+        assert!(!preparer.packed_path_allocation_fits(820, 1));
+        assert!(!preparer.packed_path_allocation_fits(1, 16_385));
+        assert!(!preparer.packed_path_allocation_fits(usize::MAX, 1));
+        assert!(!preparer.packed_path_allocation_fits(1, usize::MAX));
+        assert!(preparer.packed_path_allocation_fits(0, 0));
+        preparer.set_packed_path_buffer_limit(255);
+        assert!(!preparer.packed_path_allocation_fits(1, 1));
+    }
+
+    #[test]
+    fn high_address_preload_falls_back_on_real_limited_device() {
+        const LIMIT: usize = 65_536;
+        let (_, _, _, sample_ranges) = preloaded_prefix_fixture(1);
+        let vertices_per_path = sample_ranges[0].end as usize;
+        let count = LIMIT / (vertices_per_path * std::mem::size_of::<crate::PathVertex>());
+        assert!(count > 1);
+        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(count);
+        let high_end = ranges[count - 1].end as usize;
+        assert_eq!(preparer.path_vertices.len(), high_end);
+        assert!(
+            crate::buffer_growth_capacity(
+                high_end * std::mem::size_of::<crate::PathVertex>()
+            ) <= LIMIT
+        );
+        assert!(
+            crate::buffer_growth_capacity(
+                high_end * std::mem::size_of::<PathInstance>()
+            ) > LIMIT
+        );
+        assert!(
+            crate::buffer_growth_capacity(
+                preparer.path_indices.len() * std::mem::size_of::<u32>()
+            ) <= LIMIT
+        );
+
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_buffer_size: LIMIT as u64,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(device.limits().max_buffer_size, LIMIT as u64);
+        let mut renderer =
+            crate::GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let preload = preparer.preloaded_frame();
+        renderer
+            .upload_preloaded_paths(&device, &queue, &preload)
+            .expect("original geometry and index buffers fit the reduced device limit");
+
+        append_fixture_row(&mut frame, rows[count - 1].clone());
+        let unbounded = preparer.prepare(&frame);
+        assert_eq!(unbounded.stats.mega_path_count, 1);
+        assert!(
+            crate::buffer_growth_capacity(
+                std::mem::size_of_val(unbounded.mega_path_vertex_instances)
+            ) > LIMIT,
+            "the real preparer produces a packed allocation exceeding the device"
+        );
+
+        // Never upload the unbounded witness: it is a deliberate negative.
+        // Installing the exact device limit forces safe derivation and fallback.
+        preparer.set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        let bounded = preparer.prepare_incremental(&frame, &Default::default());
+        assert_eq!(bounded.stats.mega_path_count, 0);
+        assert_eq!(bounded.stats.unsupported_count, 0);
+        assert!(bounded.mega_path_indices.is_empty());
+        assert!(bounded.mega_path_vertex_instances.is_empty());
+        assert!(bounded.ordered_render_batches().any(|batch| {
+            matches!(batch.batch.primitive, RenderPrimitive::Path { .. })
+        }));
+        renderer.upload(&device, &queue, &bounded);
+
+        // The ordinary pipeline still encodes and submits on this exact device.
+        renderer.set_viewport(&device, &queue, 32, 32);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Noon limited packed fallback target"),
+            size: wgpu::Extent3d {
+                width: 32,
+                height: 32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let draws = renderer.encode(&mut encoder, &view, &bounded, wgpu::Color::BLACK);
+        queue.submit(Some(encoder.finish()));
+        assert_eq!(draws.draw_calls, 1);
+
+        // A sufficient separate device can still select the packed path.
+        preparer.set_packed_path_buffer_limit(wgpu::Limits::default().max_buffer_size);
+        let recovered = preparer.prepare(&frame);
+        assert_eq!(recovered.stats.mega_path_count, 1);
+    }
+
+    #[test]
+    fn structural_append_uses_local_individual_fallback_at_packed_limit() {
+        use noon_core::{GeometryRef, ObjectId, Vec2, VectorPath};
+        use noon_runtime::FrameChanges;
+
+        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(32);
+        let first_end = ranges[0].end as usize;
+        let limit = crate::buffer_growth_capacity(first_end * std::mem::size_of::<PathInstance>());
+        preparer.set_packed_path_buffer_limit(limit as u64);
+        append_fixture_row(&mut frame, rows[0].clone());
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.mega_path_count, 1);
+        let packed_prefix = initial.mega_path_vertex_instances.to_vec();
+
+        let mut added = rows[0].clone();
+        added.id = ObjectId::new(1001);
+        added.content = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-2.0, 0.125))
+                .line_to(Vec2::new(2.0, 0.125)),
+        )
+        .into();
+        append_fixture_row(&mut frame, added);
+        let appended = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::with_structure(vec![], vec![1], vec![]),
+        );
+        assert_eq!(appended.stats.full_rebuilds, 0);
+        assert_eq!(appended.stats.mega_path_count, 1);
+        assert_eq!(appended.stats.unsupported_count, 0);
+        assert_eq!(appended.mega_path_vertex_instances, packed_prefix);
+        assert_eq!(appended.mega_path_instance_dirty_ranges.len(), 0);
+        assert!(appended.ordered_render_batches().any(|batch| {
+            matches!(batch.batch.primitive, RenderPrimitive::Path { .. })
+        }));
+
+        let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        assert_eq!(clean.stats.full_rebuilds, 0);
+        assert!(clean.mega_path_instance_dirty_ranges.is_empty());
+
+        preparer.set_packed_path_buffer_limit(u64::MAX);
+        let recovered = preparer.prepare(&frame);
+        assert_eq!(recovered.stats.mega_path_count, 2);
+    }
 
     #[test]
     fn reversed_mega_dirty_ranges_preserve_clean_gaps() {

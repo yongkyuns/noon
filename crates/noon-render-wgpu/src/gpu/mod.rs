@@ -32,6 +32,7 @@ pub use raster_image_prepare::RasterImagePrepareError;
 use crate::{
     CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
     PathVertex, PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
+    buffer_growth_capacity,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -2286,13 +2287,6 @@ fn ensure_capacity(
         label,
         wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     )
-}
-
-fn buffer_growth_capacity(required_bytes: usize) -> usize {
-    required_bytes
-        .checked_next_power_of_two()
-        .unwrap_or(required_bytes)
-        .max(256)
 }
 
 fn validate_preload_allocation(

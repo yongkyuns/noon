@@ -39,6 +39,14 @@ use std::{
 const PATH_PROGRESS_MAX: u32 = 16_777_215;
 const DEFAULT_PATH_MESH_CACHE_LIMIT: usize = 256;
 
+/// Shared GPU buffer growth policy used by upload and optional packed admission.
+pub(crate) fn buffer_growth_capacity(required_bytes: usize) -> usize {
+    required_bytes
+        .checked_next_power_of_two()
+        .unwrap_or(required_bytes)
+        .max(256)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedTransform {
@@ -674,6 +682,9 @@ pub struct FramePreparer {
     // Mixed retained draws keep individual path/source identity but also prepare
     // the renderer's existing packed unique-path draw stream when eligible.
     mixed_mega_path_draws: bool,
+    // The current device's per-buffer limit for optional packed-path draws.
+    // Rejection must leave ordinary path rendering available at painter order.
+    packed_path_buffer_limit: Option<u64>,
     // Renderer-derived rows whose active family operation requires one mutable
     // instance record per member. Their source meshes stay retained; repeating
     // the instance per vertex would turn a scalar reveal into a mesh-sized upload.
@@ -769,6 +780,15 @@ impl FramePreparer {
             individual_path_draws: true,
             mixed_mega_path_draws: true,
             ..Self::default()
+        }
+    }
+
+    /// Install the actual renderer device limit before selecting packed draws.
+    /// Changing devices invalidates derived packing, not semantic geometry.
+    pub(crate) fn set_packed_path_buffer_limit(&mut self, limit: u64) {
+        if self.packed_path_buffer_limit != Some(limit) {
+            self.packed_path_buffer_limit = Some(limit);
+            self.initialized = false;
         }
     }
 
