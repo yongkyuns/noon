@@ -117,7 +117,7 @@ def _js_bytes(data):
 
 
 class ImageMobject(_base.Mobject):
-    """PNG/JPEG files or uint8 grayscale/RGB/RGBA arrays.
+    """PNG/JPEG/WebP files or uint8 grayscale/RGB/RGBA arrays.
 
     Pixels are immutable. Color replacement, mutable pixel-array access, other
     file formats, and pixel-to-pixel morphing are not supported. Copies share
@@ -167,7 +167,7 @@ class ImageMobject(_base.Mobject):
 
     @classmethod
     async def from_blob(cls, blob, **kwargs):
-        """Read one browser Blob before ordinary bounded PNG/JPEG preparation."""
+        """Read one browser Blob before ordinary bounded PNG/JPEG/WebP preparation."""
         if int(blob.size) > _MAX_ENCODED_BYTES:
             raise ValueError("encoded image exceeds 32 MiB")
         data = Uint8Array.new(await blob.arrayBuffer())

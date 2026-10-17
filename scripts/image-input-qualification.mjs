@@ -8,7 +8,8 @@ export const IMAGE_INPUT_CASES = Object.freeze([
   'nested-gray', 'nested-gray-channel', 'nested-rgb', 'nested-rgba',
   'numpy-gray', 'numpy-gray-channel', 'numpy-rgb', 'numpy-rgba', 'numpy-strided',
   'png-bytes', 'png-file-object', 'png-path', 'png-filename',
-  'jpeg-bytes', 'jpeg-path', 'png-url', 'png-blob',
+  'jpeg-bytes', 'jpeg-path', 'webp-bytes', 'webp-path', 'png-url', 'png-blob',
+  'webp-url', 'webp-blob',
 ]);
 
 export async function qualifyPythonImageInputs({context, baseUrl, root, oracleRoot, artifacts, backend, reports}) {
@@ -16,12 +17,16 @@ export async function qualifyPythonImageInputs({context, baseUrl, root, oracleRo
   await mkdir(directory, {recursive: true});
   const png = await readFile(path.join(oracleRoot, 'input-fixture.png'));
   const jpeg = await readFile(path.join(oracleRoot, 'input-fixture.jpg'));
+  const webp = await readFile(path.join(oracleRoot, 'input-fixture.webp'));
   await writeFile(path.join(directory, 'fixture.png'), png);
+  await writeFile(path.join(directory, 'fixture.webp'), webp);
   const source = [
     `INPUT_CASES = ${JSON.stringify(IMAGE_INPUT_CASES)}`,
     `INPUT_PNG_HEX = ${JSON.stringify(png.toString('hex'))}`,
     `INPUT_JPEG_HEX = ${JSON.stringify(jpeg.toString('hex'))}`,
+    `INPUT_WEBP_HEX = ${JSON.stringify(webp.toString('hex'))}`,
     `INPUT_URL = ${JSON.stringify(`${baseUrl}/browser-smoke-artifacts/image-input-assets/fixture.png`)}`,
+    `INPUT_WEBP_URL = ${JSON.stringify(`${baseUrl}/browser-smoke-artifacts/image-input-assets/fixture.webp`)}`,
     await readFile(path.join(root, 'scripts/image-input-smoke.py'), 'utf8'),
   ].join('\n');
   const expected = PNG.sync.read(await readFile(path.join(oracleRoot, 'input-raster.png')));
@@ -53,8 +58,8 @@ export async function qualifyPythonImageInputs({context, baseUrl, root, oracleRo
       }
       const observation = {kind: 'python-image-input', backend, input, maximum, time: frame.time};
       reports.push(observation);
-      // JPEG is lossy; both PNG and array paths must match the reference exactly
-      // apart from a single quantization level on the actual browser surface.
+      // JPEG is lossy; PNG, lossless WebP and array paths use the same pixel
+      // values as the Manim reference apart from browser-surface quantization.
       assert.ok(maximum <= (input.startsWith('jpeg-') ? 2 : 1), JSON.stringify(observation));
     }
     const final = await page.evaluate(({index, times}) => window.noonHostRaster.renderThrough(index, times),
