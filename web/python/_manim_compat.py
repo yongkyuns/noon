@@ -191,6 +191,17 @@ class VMobject(Mobject):
         from _manim_path_queries import curve_functions_with_lengths
         yield from curve_functions_with_lengths(self, **kwargs)
 
+    def get_direction(self):
+        from _manim_path_queries import path_direction
+        return path_direction(self)
+
+    def force_direction(self, target_direction):
+        if target_direction not in ("CW", "CCW"):
+            raise ValueError('Invalid input for force_direction. Use "CW" or "CCW"')
+        if self.get_direction() != target_direction:
+            self.reverse_direction()
+        return self
+
     def get_start_anchors(self):
         from _manim_path_queries import path_points
         return path_points(self, "startAnchors")

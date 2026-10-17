@@ -132,6 +132,22 @@ impl PathQuery {
         self.curve_column(0)
     }
 
+    /// Return Manim's shoelace direction for the ordered start anchors.
+    /// This intentionally mirrors `numpy.trapezoid(y, x)` without adding a
+    /// closing edge: Manim applies that operation to the anchor array as-is.
+    pub fn direction(&self) -> &'static str {
+        let anchors = self.start_anchors();
+        let integral = anchors
+            .windows(2)
+            .map(|pair| (pair[1].0 - pair[0].0) * (pair[0].1 + pair[1].1) * 0.5)
+            .sum::<f64>();
+        if integral > 0.0 {
+            "CW"
+        } else {
+            "CCW"
+        }
+    }
+
     /// Manim Polygram vertex runs end whenever a curve returns to their first
     /// anchor. This also splits repeated starting vertices, as upstream does.
     pub fn vertex_groups(&self) -> Vec<Vec<(f64, f64)>> {
