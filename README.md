@@ -133,6 +133,12 @@ lines are deliberately preserved, including those Manim's Pygments preprocessing
 may strip. See the paired [Rust](crates/noon-native/examples/code_block.rs) and
 [Python](web/python/examples/code_block.py) examples.
 
+![Native Noon rendering of indented Python and CUDA code with syntax colors and line numbers.](docs/images/code-blocks-native.png)
+
+This frame is captured from the native retained renderer by
+`crates/noon/tests/code_block_raster.rs`; the paired browser checks render the
+same scene through direct Rust/WASM and the production Python worker.
+
 ### Source-declared click indication
 
 An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:
