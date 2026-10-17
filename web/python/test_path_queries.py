@@ -366,6 +366,9 @@ class PathQueryTests(unittest.TestCase):
         self.assertIn("get_z", noon.Mobject.__dict__)
         self.assertIn("get_zenith", noon.Mobject.__dict__)
         self.assertIn("get_nadir", noon.Mobject.__dict__)
+        self.assertIn("split", noon.Mobject.__dict__)
+        self.assertIn("nonempty_submobjects", noon.Mobject.__dict__)
+        self.assertIn("family_members_with_points", noon.Mobject.__dict__)
         self.assertIn("get_center_of_mass", noon.Mobject.__dict__)
         self.assertIn("get_boundary_point", noon.Mobject.__dict__)
         self.assertIn("get_midpoint", noon.Mobject.__dict__)
@@ -409,6 +412,32 @@ class PathQueryTests(unittest.TestCase):
         )
         line.get_start.assert_called_once_with()
         line.get_end.assert_called_once_with()
+
+    def test_family_split_filters_point_owners_in_pinned_order(self):
+        from unittest.mock import Mock
+        import noon
+
+        root = Mock()
+        root.has_points.return_value = False
+        leaf = Mock(get_num_points=Mock(return_value=4), submobjects=[])
+        second_leaf = Mock(get_num_points=Mock(return_value=2), submobjects=[])
+        empty = Mock(get_num_points=Mock(return_value=0), submobjects=[])
+        nested = Mock(get_num_points=Mock(return_value=0), submobjects=[empty])
+        root.submobjects = [nested, empty, leaf, second_leaf]
+
+        self.assertEqual(noon.Mobject.split(root), [nested, empty, leaf, second_leaf])
+        self.assertEqual(noon.Mobject.nonempty_submobjects(root), [nested, leaf, second_leaf])
+        empty.get_num_points.assert_called_once_with()
+        nested.get_num_points.assert_called_once_with()
+        leaf.get_num_points.assert_called_once_with()
+        second_leaf.get_num_points.assert_called_once_with()
+
+        root.has_points.return_value = True
+        self.assertEqual(noon.Mobject.split(root), [root, nested, empty, leaf, second_leaf])
+
+        root.get_family.return_value = [root, nested, empty, leaf, second_leaf]
+        root.get_num_points.return_value = 0
+        self.assertEqual(noon.Mobject.family_members_with_points(root), [leaf, second_leaf])
 
     def test_base_point_count_queries_share_the_path_snapshot_contract(self):
         import noon

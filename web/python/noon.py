@@ -433,6 +433,15 @@ class Mobject:
         from _manim_semantic_handles import _get_family
         return _get_family(self)
 
+    def split(self) -> list[Mobject]:
+        """Return this point-owning object, if any, followed by direct children."""
+        result = [self] if self.has_points() else []
+        return result + list(getattr(self, "submobjects", ()))
+
+    def family_members_with_points(self) -> list[Mobject]:
+        """Return point-owning family members in the shared family order."""
+        return [mobject for mobject in self.get_family() if mobject.get_num_points() > 0]
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
@@ -473,6 +482,14 @@ class Mobject:
 
     def has_no_points(self) -> bool:
         return not self.has_points()
+
+    def nonempty_submobjects(self) -> list[Mobject]:
+        return [
+            submobject
+            for submobject in getattr(self, "submobjects", ())
+            if submobject.get_num_points() > 0
+            or bool(getattr(submobject, "submobjects", ()))
+        ]
 
     def get_all_points(self):
         """Return this object's and its family's authored point arrays."""
