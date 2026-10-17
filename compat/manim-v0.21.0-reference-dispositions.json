@@ -4799,8 +4799,8 @@
     },
     {
       "id": "reference-32ccd9416c553cdc",
-      "status": "unqualified",
-      "reason": "Axes LogBase exponent labels share Rust DecimalNumber preparation. The literal pinned-source fixture is enrolled in retained Python-host execution; curated current-head semantic/raster qualification remains required before promotion.",
+      "status": "blocked",
+      "reason": "Generated LogBase TeX exponent labels remain blocked on shared math-font qualification (#83). The pinned BaKoMa TrueType and Manim Type 1 digit outlines differ; a genuine shared unit-spacing correction reduced the retained literal LogScalingExample raster difference from 1.08% to 0.76%, still above the unchanged 0.6% gate. Source and original failures are preserved on codex/coordinate-log-cairo-hold; no fake native-text fallback is offered.",
       "owners": [
         "#85",
         "#89",
@@ -4813,7 +4813,8 @@
         "directive_line": 1902,
         "name": "LogScalingExample",
         "source_sha256": "2e782f8956ae973849648208a0dc6cf10458d398d137afd9dd8555a68e07604b"
-      }
+      },
+      "blocker_kind": "behavior"
     },
     {
       "id": "reference-bf421ad3bee7f499",

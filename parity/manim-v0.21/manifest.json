@@ -1483,17 +1483,6 @@
       "expected_duration": 0.2
     },
     {
-      "id": "axes-log-scaling-example",
-      "scene": "LogScalingExample",
-      "source": "parity/manim-v0.21/core-examples/log_scaling_example.py",
-      "expected_duration": 0.0,
-      "requires_latex": true,
-      "sample_times": [
-        0.0
-      ],
-      "notes": "Literal pinned ManimCE v0.21 Axes LogScalingExample from the Axes docstring. It exercises generated logarithmic exponent labels together with the source-identical static x^2 graph."
-    },
-    {
       "id": "plot-example-upstream",
       "scene": "PlotExample",
       "source": "parity/manim-v0.21/upstream-examples/plot_example.py",

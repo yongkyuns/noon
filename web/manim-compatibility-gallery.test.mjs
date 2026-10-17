@@ -55,12 +55,8 @@ assert.deepEqual(
 const compilerEntries = readyEntries.filter((entry) => entry.requires_latex === true);
 assert.deepEqual(
   compilerEntries.map((entry) => entry.id).sort(),
-  [
-    "noon-ordinary-matrix",
-    "noon-ordinary-table",
-    "noon-ordinary-variable",
-  ],
-  "only demos that declare the LaTeX bootstrap may use async construct",
+  ["noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable"],
+  "only the three qualified compiler demos may declare the LaTeX bootstrap",
 );
 
 const noonOnlyPatterns = [

@@ -40,11 +40,10 @@ impl PreparedDecimalLabels {
         let mut values = Vec::with_capacity(labels.len());
         let mut placements = Vec::with_capacity(labels.len());
         for label in labels {
-            let (value, format) = options.decimal_presentation(label.number)?;
             values.push(PreparedDecimalValue::prepare(
                 backend,
-                value,
-                format,
+                label.number,
+                options.decimal_format(),
                 options.font_size,
             )?);
             placements.push((label.number, label.point));

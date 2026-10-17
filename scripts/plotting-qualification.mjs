@@ -24,25 +24,6 @@ assert.equal(
   "PlotExample execution may change only the import line",
 );
 const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
-const upstreamLogScalingExample = await readFile(
-  new URL("../parity/manim-v0.21/core-examples/log_scaling_example.py", import.meta.url),
-  "utf8",
-);
-assert.equal(
-  upstreamLogScalingExample.split(plotExampleImport).length - 1,
-  1,
-  "pinned LogScalingExample must contain exactly one Manim wildcard import",
-);
-const adaptedLogScalingExample = upstreamLogScalingExample.replace(plotExampleImport, "from noon import *");
-assert.equal(
-  adaptedLogScalingExample.replace("from noon import *", plotExampleImport),
-  upstreamLogScalingExample,
-  "LogScalingExample execution may change only the import line",
-);
-const logScalingExampleSource = rasterFixtureSource(
-  adaptedLogScalingExample, "LogScalingExample", { requires_latex: true },
-);
-
 async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
   const page = await context.newPage();
   try {
@@ -87,82 +68,48 @@ await qualifyPairedAuthoring({
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
-    const logLabelsSource = `from noon import *
+    const explicitLogLabelsSource = `from noon import *
 
-class LogBaseNumberLineLabels(Scene):
+class ExplicitLogNumericLabels(Scene):
     async def construct(self):
         await prepare_latex()
-        linear = NumberLine((-1, 1, 1), include_numbers=True)
-        assert tuple(label.get_value() for label in linear.numbers) == (-1, 0, 1)
-        line = NumberLine(
-            (-2, 2, 1), scaling=LogBase(base=10), include_numbers=True,
-            decimal_number_config={"num_decimal_places": 0},
-        )
-        assert tuple(label._source for label in line.labels) == (
-            "10^{-2}", "10^{-1}", "10^{0}", "10^{1}", "10^{2}",
-        )
-        assert all(isinstance(label, Integer) for label in line.labels)
-        assert tuple(label.get_value() for label in line.labels) == (10, 10, 10, 10, 10)
-        for label, coordinate in zip(line.labels, (0.01, 0.1, 1, 10, 100)):
-            assert abs(label.get_center().x - line.number_to_point(coordinate).x) < 1e-6
-        line.add_numbers((0.1, 10.0), excluding=(0.1,))
-        assert tuple(label.get_value() for label in line.numbers) == (10.0,)
+        for constructor in (
+            lambda: NumberLine((-2, 2, 1), scaling=LogBase(), include_numbers=True),
+            lambda: Axes(x_axis_config={"scaling": LogBase(), "include_numbers": True}),
+        ):
+            try:
+                constructor()
+            except NotImplementedError as error:
+                assert "generated LogBase exponent labels" in str(error)
+            else:
+                raise AssertionError("unqualified generated labels must reject")
+        line = NumberLine((-2, 2, 1), length=4, scaling=LogBase())
+        line.add_numbers((0.1, 1, 10), num_decimal_places=1)
+        assert tuple(label.get_value() for label in line.numbers) == (0.1, 1, 10)
         assert all(isinstance(label, DecimalNumber) and not isinstance(label, Integer)
                    for label in line.numbers)
-        self.add(line, linear)
+        axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False,
+                    x_axis_config={"scaling": LogBase()})
+        axes.add_coordinates((0.5, 4.0), x_config={"num_decimal_places": 1})
+        before = axes.coordinate_labels
+        try:
+            axes.add_coordinates()
+        except NotImplementedError:
+            pass
+        else:
+            raise AssertionError("default exponent labels must remain unsupported")
+        assert axes.coordinate_labels is before
+        assert tuple(label.get_value() for label in axes.x_axis.numbers) == (0.5, 4.0)
+        self.add(line, axes)
         await self.wait(0.05)
 `;
-    const logLabels = await qualifyPythonPlayback(
-      context, baseUrl, logLabelsSource, [0, 0.05],
+    const explicitLogLabels = await qualifyPythonPlayback(
+      context, baseUrl, explicitLogLabelsSource, [0, 0.05],
     );
-    assert.equal(logLabels.rendererBackend, expectedBackend);
-    assert.equal(logLabels.presented, true);
-    assert.ok(Math.abs(logLabels.authoredDuration - 0.05) < 1e-6);
-    console.log(`[PASS] ${expectedBackend}: LogBase NumberLine exponent labels`);
-    const axesLogLabelsSource = `from noon import *
-
-class AxesLogBaseLabels(Scene):
-    async def construct(self):
-        await prepare_latex()
-        axes = Axes(
-            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
-            x_length=4, y_length=2, tips=False,
-            x_axis_config={"scaling": LogBase(base=2), "include_numbers": True},
-            y_axis_config={"include_numbers": True, "numbers_to_exclude": []},
-        )
-        x_labels = axes.x_axis.labels
-        assert tuple(label._source for label in x_labels) == (
-            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
-        )
-        assert all(isinstance(label, Integer) for label in x_labels)
-        assert tuple(label.get_value() for label in x_labels) == (2, 2, 2, 2, 2)
-        for label, coordinate in zip(x_labels, (0.25, 0.5, 1, 2, 4)):
-            assert abs(label.get_center().x - axes.x_axis.number_to_point(coordinate).x) < 1e-6
-        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 1)
-        axes.y_axis.add_numbers((-1, 0, 1))
-        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 0, 1)
-        coordinate_axes = Axes(
-            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
-            x_axis_config={"scaling": LogBase(base=2)}, tips=False,
-        )
-        coordinate_axes.add_coordinates()
-        assert tuple(label._source for label in coordinate_axes.x_axis.labels) == (
-            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
-        )
-        coordinate_axes.add_coordinates((0.5, 4.0))
-        assert tuple(label.get_value() for label in coordinate_axes.x_axis.numbers) == (0.5, 4.0)
-        assert all(isinstance(label, DecimalNumber) and not isinstance(label, Integer)
-                   for label in coordinate_axes.x_axis.numbers)
-        self.add(axes, coordinate_axes)
-        await self.wait(0.05)
-`;
-    const axesLogLabels = await qualifyPythonPlayback(
-      context, baseUrl, axesLogLabelsSource, [0, 0.05],
-    );
-    assert.equal(axesLogLabels.rendererBackend, expectedBackend);
-    assert.equal(axesLogLabels.presented, true);
-    assert.ok(Math.abs(axesLogLabels.authoredDuration - 0.05) < 1e-6);
-    console.log(`[PASS] ${expectedBackend}: per-axis LogBase exponent labels`);
+    assert.equal(explicitLogLabels.rendererBackend, expectedBackend);
+    assert.equal(explicitLogLabels.presented, true);
+    assert.ok(Math.abs(explicitLogLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: explicit log numeric labels and unsupported-profile atomicity`);
     const page = await context.newPage();
     try {
       page.setDefaultTimeout(90_000);
@@ -206,21 +153,6 @@ class AxesLogBaseLabels(Scene):
       assert.equal(curveRows.length, 3);
       assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
         "each upstream log curve must retain two-dimensional sampled bounds");
-      const logScalingExample = await page.evaluate(
-        source => window.noonManimCompat.runLive(source),
-        logScalingExampleSource,
-      );
-      assert.equal(logScalingExample.duration, 0, "upstream LogScalingExample is static");
-      assert.equal(logScalingExample.frame.time, 0);
-      assert.equal(logScalingExample.metrics.backend, expectedBackend);
-      assert.ok(logScalingExample.metrics.objectCount > 0);
-      assert.ok(logScalingExample.metrics.presentedFrames > 0);
-      assert.equal(logScalingExample.frame.objects.length, logScalingExample.metrics.objectCount);
-      assert.ok(logScalingExample.frame.objects.every(object => object.present));
-      const plottedGraph = logScalingExample.frame.objects.at(-1);
-      assert.ok(plottedGraph && plottedGraph.bounds.width > 0 && plottedGraph.bounds.height > 0,
-        "the final retained object from upstream LogScalingExample must be its two-dimensional x^2 graph");
-      console.log(`[PASS] ${expectedBackend}: exact upstream LogScalingExample Python-host frame`);
       console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
       await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *

@@ -27,7 +27,7 @@ def _cold_labels():
         raise NotImplementedError("construct numeric label families before the first play/wait")
 
 
-def _options(config, *, excluding=(), log_base=None):
+def _options(config, *, excluding=()):
     config = dict(config)
     if "num_decimal_places" in config:
         places = config.pop("num_decimal_places")
@@ -46,10 +46,6 @@ def _options(config, *, excluding=(), log_base=None):
     unit = config.pop("unit", None)
     if unit is not None and not isinstance(unit, str):
         raise TypeError("unit must be a string or None")
-    if log_base is not None:
-        log_base = _base._ir._finite_number("log_base", log_base)
-        if log_base <= 0 or log_base == 1:
-            raise ValueError("log_base must be positive and not equal to one")
     color = _shared._constructor_color("label color", config.pop("color", _base.WHITE))
     if config:
         raise TypeError("unsupported native numeric-label option(s): " + ", ".join(sorted(config)))
@@ -65,7 +61,6 @@ def _options(config, *, excluding=(), log_base=None):
         engine_call(options.setGroupWithCommas, group_with_commas)
         engine_call(options.setShowEllipsis, show_ellipsis)
         engine_call(options.setUnit, unit)
-        engine_call(options.setLogBase, log_base)
         engine_call(options.setExcludedNumbers, _plot._array(excluding))
         engine_call(options.setColor, color.red, color.green, color.blue, color.alpha)
     except BaseException:
@@ -84,28 +79,27 @@ def _family(handle, size, color):
     return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
-def _decimal_family(handle, color, number_class=None):
+def _decimal_family(handle, color):
     from _manim_numbers import DecimalNumber
 
     if _decimal_members is None:
         raise RuntimeError("DecimalNumber labels require the shared Rust authoring host")
-    number_class = DecimalNumber if number_class is None else number_class
-    members = [number_class._from_numeric_handle(
+    members = [DecimalNumber._from_numeric_handle(
         member, None, color=color, presentation_applied=True,
     )
                for member in engine_call(_decimal_members, handle)]
     return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
-def _remember(axis, labels, *, attribute="numbers"):
+def _remember(axis, labels):
     # Only register aliases to the new Rust-owned family. Membership and order
     # have already committed in Rust; Python does not repeat the attachment.
     axis._semantic_member_wrappers[_shared._family_wrapper_key(labels)] = labels
-    setattr(axis, attribute, labels)
+    axis.numbers = labels
 
 
-def _axis_options(axis, config, *, excluding=(), log_base=None):
-    options, size, color = _options(config, excluding=excluding, log_base=log_base)
+def _axis_options(axis, config, *, excluding=()):
+    options, size, color = _options(config, excluding=excluding)
     try:
         engine_call(options.setTickRangeFlags,
                     bool(getattr(axis, "include_tip", False)),
@@ -116,15 +110,12 @@ def _axis_options(axis, config, *, excluding=(), log_base=None):
     return options, size, color
 
 
-def number_mobjects(axis, values, *, attach, config, excluding=None,
-                    log_base=None, number_class=None, attribute="numbers"):
+def number_mobjects(axis, values, *, attach, config, excluding=None):
     _cold_labels()
     native_text = "font" in config
-    if native_text and log_base is not None:
-        raise NotImplementedError("LogBase custom labels require the DecimalNumber profile")
     values_js = _plot._array(() if values is None else values)
     options, size, color = _axis_options(
-        axis, config, excluding=() if excluding is None else excluding, log_base=log_base,
+        axis, config, excluding=() if excluding is None else excluding,
     )
     if native_text:
         handle = engine_call(axis._semantic_family_handle.numberLabelFamily,
@@ -142,29 +133,10 @@ def number_mobjects(axis, values, *, attach, config, excluding=None,
             options,
             bool(attach),
         )
-        labels = (
-            _decimal_family(handle, color)
-            if number_class is None
-            else _decimal_family(handle, color, number_class=number_class)
-        )
+        labels = _decimal_family(handle, color)
     if attach:
-        _remember(axis, labels, attribute=attribute)
+        _remember(axis, labels)
     return labels
-
-
-def logarithmic_labels(axis, *, decimal_places=0):
-    """Select the pinned generated-label profile; Rust formats and places it."""
-    from _manim_numbers import Integer
-
-    return number_mobjects(
-        axis, None, attach=True, excluding=(), log_base=axis.scaling.base,
-        number_class=Integer, attribute="labels", config={
-            "font_size": getattr(axis, "font_size", 36),
-            "direction": getattr(axis, "label_direction", _base.DOWN),
-            "buff": getattr(axis, "line_to_number_buff", _base.MED_SMALL_BUFF),
-            "decimal_places": decimal_places, "exclude_zero": False,
-        },
-    )
 
 
 def custom_labels(axis, labels, *, config):
@@ -237,16 +209,11 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
             "mapping coordinate labels require an explicit font for native Text; "
             "default TeX mappings are not yet supported"
         )
-    generated_log_labels = [
-        value is None and _plot._number_line_scale(getattr(axes[index], "scaling", None))[2]
-        for index, value in enumerate(values)
-    ]
-    if any(generated and native_profiles[index]
-           for index, generated in enumerate(generated_log_labels)):
-        raise NotImplementedError("generated LogBase labels require the DecimalNumber profile")
-    custom_log_labels = any(generated_log_labels)
+    if any(value is None and _plot._number_line_scale(getattr(axes[index], "scaling", None))[2]
+           for index, value in enumerate(values)):
+        raise NotImplementedError(_plot._UNSUPPORTED_LOG_LABELS)
     if (len(values) == 2 and native_profiles[0] == native_profiles[1]
-            and not custom_log_labels and not any(isinstance(value, Mapping) for value in values)):
+            and not any(isinstance(value, Mapping) for value in values)):
         if native_profiles[0]:
             method = "numberPlaneCoordinateLabelFamilies" if plane else "coordinateLabelFamilies"
             result = _add_coordinate_labels(
@@ -267,8 +234,6 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
         if isinstance(value, Mapping):
             _add_axis_custom_labels(axis, value, settings)
             families.append(axis.labels)
-        elif generated_log_labels[index]:
-            families.append(logarithmic_labels(axis))
         elif plane and not native_profiles[index]:
             settings.setdefault("exclude_zero", False)
             families.append(number_mobjects(axis, value, attach=True, config=settings,

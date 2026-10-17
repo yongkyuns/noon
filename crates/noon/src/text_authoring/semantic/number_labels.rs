@@ -30,8 +30,7 @@ fn prepare(
 ) -> Result<Vec<PreparedLabel>, Error> {
     let mut labels = options.prepare_values(frame, numbers)?;
     for label in &mut labels {
-        let (value, format) = options.decimal_presentation(label.number)?;
-        label.text = format_decimal(value, &format)
+        label.text = format_decimal(label.number, &options.decimal_format())
             .map_err(|_| PlotPresentationError::InvalidInput("invalid numeric label format"))?;
     }
     prepare_display_labels(labels, options)

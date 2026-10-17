@@ -24,8 +24,6 @@ class Owned:
         self.show_ellipsis = value
     def setUnit(self, value):
         self.unit = value
-    def setLogBase(self, value):
-        self.log_base = value
     def setExcludedNumbers(self, value):
         self.excluded = value
     def setTickRangeFlags(self, include_tip, exclude_origin_tick):
@@ -172,11 +170,6 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertFalse(options.group_with_commas)
         self.assertTrue(options.show_ellipsis)
         self.assertEqual(options.unit, r"\text{m}")
-        self.assertIsNone(options.log_base)
-
-    def test_log_base_is_forwarded_to_the_shared_rust_adapter(self):
-        options, _, _ = labels._options({"font": "Fixture Sans"}, log_base=10)
-        self.assertEqual(self.options[0].log_base, 10.0)
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
         family = Owned()
@@ -195,23 +188,20 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(self.axis.labels, family)
         self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
 
-    def test_log_axes_defaults_select_exponents_and_explicit_values_keep_numeric_labels(self):
+    def test_log_axes_defaults_reject_before_labels_but_explicit_values_stay_numeric(self):
         axes = self.axes()
         axes.x_axis.scaling = plotting.LogBase(base=2)
         axes.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
             axes.x_axis, "numbers", "explicit-labels"))
-        axes.y_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
-            axes.y_axis, "numbers", "linear-labels"))
-        with patch.object(labels, "logarithmic_labels", return_value="log-labels") as custom:
-            self.assertIs(labels.add_coordinates(axes, config={}), axes)
-            custom.assert_called_once_with(axes.x_axis)
-            axes.x_axis.add_numbers.assert_not_called()
-            self.assertEqual(axes.coordinate_labels, ("log-labels", "linear-labels"))
-        with patch.object(labels, "logarithmic_labels") as custom:
-            self.assertIs(labels.add_coordinates(axes, (0.5, 4.0), config={}), axes)
-            custom.assert_not_called()
-            self.assertEqual(axes.x_axis.add_numbers.call_args.args, ((0.5, 4.0),))
-            self.assertEqual(axes.coordinate_labels, ("explicit-labels",))
+        axes.y_axis.add_numbers = Mock()
+        with self.assertRaisesRegex(NotImplementedError, "generated LogBase exponent labels"):
+            labels.add_coordinates(axes, config={})
+        axes.x_axis.add_numbers.assert_not_called()
+        axes.y_axis.add_numbers.assert_not_called()
+        self.assertEqual(self.options, [])
+        self.assertIs(labels.add_coordinates(axes, (0.5, 4.0), config={}), axes)
+        self.assertEqual(axes.x_axis.add_numbers.call_args.args, ((0.5, 4.0),))
+        self.assertEqual(axes.coordinate_labels, ("explicit-labels",))
 
     def test_custom_labels_reject_unsupported_objects_before_allocating(self):
         with self.assertRaises(NotImplementedError):

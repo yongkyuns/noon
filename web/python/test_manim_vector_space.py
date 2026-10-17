@@ -249,15 +249,15 @@ class ManimVectorSpaceTests(unittest.TestCase):
             labels._plot._array = lambda values: tuple(values)
             labels._compat.VGroup = lambda *members: tuple(members)
             options = []
-            def make_options(config, *, excluding=(), log_base=None):
+            def make_options(config, *, excluding=()):
                 token = Options(len(options))
                 options.append((token, config, tuple(excluding)))
                 return token, 18.0, "white"
             labels._options = make_options
             families, remembered = [], []
             labels._family = lambda handle, size, color: (handle, size, color)
-            def remember(axis, family, *, attribute="numbers"):
-                setattr(axis, attribute, family)
+            def remember(axis, family):
+                axis.numbers = family
                 remembered.append((axis, family))
             labels._remember = remember
 

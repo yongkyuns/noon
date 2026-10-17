@@ -260,6 +260,8 @@ _AXES_CONFIG_KEYS = {
     "font_size", "label_direction", "line_to_number_buff", "decimal_number_config",
 }
 
+_UNSUPPORTED_LOG_LABELS = "generated LogBase exponent labels are not yet supported"
+
 _DECIMAL_NUMBER_FORMAT_KEYS = frozenset((
     "num_decimal_places", "include_sign", "group_with_commas", "show_ellipsis", "unit",
 ))
@@ -328,8 +330,8 @@ def _axes_label_options(config, scale, name, default_direction):
         config.get("decimal_number_config"), f"{name}.decimal_number_config",
     )
     custom_log_labels = scale[0] == "log" and scale[2]
-    if custom_log_labels and decimal_config.get("unit") is not None:
-        raise TypeError("Axes LogBase custom labels supply the exponent unit")
+    if custom_log_labels and (include_numbers or numbers_to_include is not None):
+        raise NotImplementedError(_UNSUPPORTED_LOG_LABELS)
 
     return {
         "scaling": config.get("scaling"),
@@ -399,12 +401,7 @@ def _configure_axes_numeric_labels(axis, config, range_values):
     decimal_config = dict(config.get("decimal_number_config", {}))
     decimal_config.setdefault("num_decimal_places", places)
     axis.decimal_number_config = decimal_config
-    if (axis.include_numbers or axis.numbers_to_include is not None) and _number_line_scale(
-        getattr(axis, "scaling", None)
-    )[2]:
-        from _manim_number_labels import logarithmic_labels
-        logarithmic_labels(axis, decimal_places=places)
-    elif axis.include_numbers or axis.numbers_to_include is not None:
+    if axis.include_numbers or axis.numbers_to_include is not None:
         axis.add_numbers(
             x_values=axis.numbers_to_include,
             excluding=axis.numbers_to_exclude,
@@ -521,6 +518,8 @@ class NumberLine(_compat.Group):
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
         scale_kind, scale_parameter, custom_scale_labels = _number_line_scale(scaling)
+        if custom_scale_labels and (include_numbers or numbers_to_include is not None):
+            raise NotImplementedError(_UNSUPPORTED_LOG_LABELS)
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         font_size, label_direction, line_to_number_buff, decimal_places = _number_label_style(
             font_size, _base.DOWN if label_direction is None else label_direction,
@@ -544,8 +543,6 @@ class NumberLine(_compat.Group):
         decimal_number_config = _decimal_number_options(
             decimal_number_config, "NumberLine.decimal_number_config",
         )
-        if custom_scale_labels and decimal_number_config.get("unit") is not None:
-            raise TypeError("LogBase custom labels supply the exponent unit")
         numbers_to_include = (
             None if numbers_to_include is None else list(numbers_to_include)
         )
@@ -593,10 +590,7 @@ class NumberLine(_compat.Group):
         decimal_number_config.setdefault("num_decimal_places", decimal_places)
         self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
-        if (self.include_numbers or numbers_to_include is not None) and custom_scale_labels:
-            from _manim_number_labels import logarithmic_labels
-            logarithmic_labels(self, decimal_places=decimal_places)
-        elif self.include_numbers or numbers_to_include is not None:
+        if self.include_numbers or numbers_to_include is not None:
             self.add_numbers(
                 x_values=numbers_to_include,
                 excluding=numbers_to_exclude,
