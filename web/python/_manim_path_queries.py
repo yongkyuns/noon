@@ -74,6 +74,48 @@ def curve_points(value, n):
         query.free()
 
 
+def _curve_sample_count(sample_points):
+    if sample_points is None:
+        return None
+    samples = operator.index(sample_points)
+    if samples < 0:
+        raise ValueError(f"Number of samples, {samples}, must be non-negative.")
+    if samples > 0xFFFFFFFF:
+        raise ValueError("sample_points must be between 0 and 4294967295")
+    return samples
+
+
+def _assert_curve_index(query, index):
+    if index >= int(query.curveCount):
+        raise AssertionError
+
+
+def curve_length_pieces(value, n, sample_points):
+    index = operator.index(n)
+    if index < 0:
+        raise IndexError("curve index must be between 0 and 4294967295")
+    samples = _curve_sample_count(sample_points)
+    query = _query(value)
+    try:
+        _assert_curve_index(query, index)
+        return [float(piece) for piece in engine_call(query.curveLengthPieces, index, samples)]
+    finally:
+        query.free()
+
+
+def curve_length(value, n, sample_points):
+    index = operator.index(n)
+    if index < 0:
+        raise IndexError("curve index must be between 0 and 4294967295")
+    samples = _curve_sample_count(sample_points)
+    query = _query(value)
+    try:
+        _assert_curve_index(query, index)
+        return float(engine_call(query.curveLength, index, samples))
+    finally:
+        query.free()
+
+
 def path_points(value, method):
     query = _query(value)
     try:

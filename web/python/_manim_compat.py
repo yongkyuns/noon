@@ -167,6 +167,14 @@ class VMobject(Mobject):
         from _manim_path_queries import curve_points
         return curve_points(self, n)
 
+    def get_nth_curve_length_pieces(self, n, sample_points=None):
+        from _manim_path_queries import curve_length_pieces
+        return curve_length_pieces(self, n, sample_points)
+
+    def get_nth_curve_length(self, n, sample_points=None):
+        from _manim_path_queries import curve_length
+        return curve_length(self, n, sample_points)
+
     def get_start_anchors(self):
         from _manim_path_queries import path_points
         return path_points(self, "startAnchors")

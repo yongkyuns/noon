@@ -1549,6 +1549,22 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = curveLengthPieces)]
+        pub fn curve_length_pieces(
+            &self,
+            index: u32,
+            sample_points: Option<u32>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .curve_length_pieces(index as usize, sample_points.map(|n| n as usize))
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = curveLength)]
+        pub fn curve_length(&self, index: u32, sample_points: Option<u32>) -> Result<f64, JsValue> {
+            self.value
+                .curve_length(index as usize, sample_points.map(|n| n as usize))
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = isClosed)]
         pub fn is_closed(&self) -> Result<bool, JsValue> {
             self.value.is_closed().map_err(js_error)
