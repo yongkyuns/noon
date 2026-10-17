@@ -78,6 +78,27 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(observe.call_count, 5)
         self.assertEqual(query.free.call_count, 5)
 
+    def test_get_last_point_returns_the_final_anchor_and_matches_empty_index_error(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.pointCount = 4
+        query.end.return_value = [7.0, -2.0]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(value.get_last_point(), noon.Vec2(7.0, -2.0))
+            self.assertEqual(observe.call_count, 1)
+            query.end.assert_called_once_with()
+            self.assertEqual(query.free.call_count, 1)
+
+            query.pointCount = 0
+            with self.assertRaisesRegex(
+                IndexError, "index -1 is out of bounds for axis 0 with size 0"
+            ):
+                value.get_last_point()
+            self.assertEqual(query.end.call_count, 1)
+            self.assertEqual(query.free.call_count, 2)
+
     def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(queries, '_typed_manim_observation') as observe:

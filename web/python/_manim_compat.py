@@ -299,6 +299,10 @@ class VMobject(Mobject):
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
 
+    def get_last_point(self) -> _base.Vec2:
+        from _manim_path_queries import last_point
+        return last_point(self)
+
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
         return arc_length(self, sample_points_per_curve)

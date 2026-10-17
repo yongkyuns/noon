@@ -43,6 +43,17 @@ def endpoint(value, end):
         query.free()
 
 
+def last_point(value):
+    query = _query(value)
+    try:
+        if int(query.pointCount) == 0:
+            raise IndexError("index -1 is out of bounds for axis 0 with size 0")
+        coordinates = engine_call(query.end)
+        return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+    finally:
+        query.free()
+
+
 def _points(coordinates):
     return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
 
