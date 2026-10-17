@@ -352,7 +352,7 @@ impl Text {
         self.presentation.validate()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "bundled-fonts"))]
     fn compile_artifact(&self) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
         self.compile_artifact_with_fill(None)
     }

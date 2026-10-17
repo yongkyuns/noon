@@ -180,7 +180,13 @@ pub fn text_compiler_diagnostics() -> TextCompilerDiagnostics {
     REGISTRY.with(|registry| registry.borrow().diagnostics)
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "latex",
+        all(feature = "native-text", feature = "bundled-fonts")
+    )
+))]
 pub(crate) fn clear_text_compiler_cache() {
     REGISTRY.with(|registry| *registry.borrow_mut() = TextCompilerRegistry::default());
 }
