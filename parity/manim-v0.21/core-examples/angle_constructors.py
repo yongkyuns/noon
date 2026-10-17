@@ -20,5 +20,7 @@ class AngleConstructors(Scene):
                 angle = Angle(first, second)
             if index != 3:
                 assert abs(angle.get_value(degrees=True) - [90, -270, 270, 0, 90, 0][index]) < 1e-9
+            angle.angle_value = (index + 1) / 8
+            assert angle.get_value() == (index + 1) / 8
             self.add(first, second, angle)
         self.wait(0.2)

@@ -3273,6 +3273,32 @@ mod tests {
         }
 
         assert_eq!(session.frame(), &frame_before);
+
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(angle.node_id(), HostCallbackId::new(9), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+        };
+        let publication = live.session.publication_context();
+        assert!(matches!(
+            live.set_angle_value(&angle, 0.5),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::RequiredCallbackPending
+            ))
+        ));
+        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(angle.angle_value(false).unwrap(), -0.75);
+        live.session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        live.set_angle_value(&angle, 0.5).unwrap();
+        assert_eq!(angle.angle_value(false).unwrap(), 0.5);
     }
 
     #[test]
