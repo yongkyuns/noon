@@ -1135,6 +1135,26 @@ mod wasm {
             Ok(0)
         }
 
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.semantic_family()?;
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
         #[wasm_bindgen(js_name = allPoints)]
         pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;
@@ -1545,6 +1565,16 @@ mod wasm {
         points.into_iter().flat_map(|(x, y)| [x, y]).collect()
     }
 
+    fn reduce_point_extremum_from_values(
+        coordinates: Vec<f64>,
+        point_dimensions: u32,
+        dim: u32,
+        key: f64,
+    ) -> Result<f64, JsValue> {
+        noon::reduce_point_extremum(&coordinates, point_dimensions as usize, dim as usize, key)
+            .map_err(js_error)
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -1772,6 +1802,24 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
         #[wasm_bindgen(js_name = allPoints)]
         pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
             noon::MobjectTarget::from(&self.handle)

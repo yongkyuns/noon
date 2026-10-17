@@ -506,6 +506,12 @@ impl MobjectTarget<'_> {
         let occurrences = family_point_occurrences(&store, self.node_id())?;
         authored_points_for_occurrences(&store, &occurrences)
     }
+
+    /// Return a Manim-style min, midpoint, or max coordinate across this
+    /// object's or family's boundary points.
+    pub fn extremum_along_dim(&self, dim: usize, key: f64) -> Result<f64, AuthoringError> {
+        extremum_for_xy_points(&self.all_points()?, dim, key)
+    }
 }
 
 /// Observe current effective points for all object occurrences below a target.
@@ -530,6 +536,77 @@ pub fn effective_all_points(
         result.extend(effective_path_query(store, execution, &object)?.points()?);
     }
     Ok(result)
+}
+
+/// Observe one dimension's Manim-style extremum from the current execution.
+pub fn effective_extremum_along_dim(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    dim: usize,
+    key: f64,
+) -> Result<f64, AuthoringError> {
+    extremum_for_xy_points(&effective_all_points(store, execution, target)?, dim, key)
+}
+
+/// Reduce caller-supplied flattened point rows in Rust, using Manim's key rule:
+/// negative selects the minimum, zero the midpoint, and positive the maximum.
+pub fn reduce_point_extremum(
+    coordinates: &[f64],
+    point_dimensions: usize,
+    dim: usize,
+    key: f64,
+) -> Result<f64, AuthoringError> {
+    if point_dimensions == 0 || dim >= point_dimensions {
+        return Err(AuthoringError::InvalidPointDimension(dim as u32));
+    }
+    if !coordinates.len().is_multiple_of(point_dimensions) {
+        return Err(AuthoringError::InvalidPointCoordinates(coordinates.len()));
+    }
+    let mut values = coordinates
+        .chunks_exact(point_dimensions)
+        .map(|row| row[dim]);
+    let Some(first) = values.next() else {
+        return Err(AuthoringError::PathQuery(PathProportionError::EmptyPath));
+    };
+    let mut minimum = first;
+    let mut maximum = first;
+    for value in values {
+        if value.is_nan() {
+            return Ok(f64::NAN);
+        }
+        minimum = minimum.min(value);
+        maximum = maximum.max(value);
+    }
+    if first.is_nan() {
+        return Ok(f64::NAN);
+    }
+    Ok(if key < 0.0 {
+        minimum
+    } else if key == 0.0 {
+        (minimum + maximum) / 2.0
+    } else {
+        maximum
+    })
+}
+
+fn extremum_for_xy_points(
+    points: &[(f64, f64)],
+    dim: usize,
+    key: f64,
+) -> Result<f64, AuthoringError> {
+    if dim == 2 {
+        return if points.is_empty() {
+            Err(AuthoringError::PathQuery(PathProportionError::EmptyPath))
+        } else {
+            Ok(0.0)
+        };
+    }
+    if dim > 2 {
+        return Err(AuthoringError::InvalidPointDimension(dim as u32));
+    }
+    let coordinates = points.iter().flat_map(|&(x, y)| [x, y]).collect::<Vec<_>>();
+    reduce_point_extremum(&coordinates, 2, dim, key)
 }
 
 /// Observe one object's exact current path from an existing coherent execution.

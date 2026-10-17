@@ -917,6 +917,26 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_extremum_along_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).extremum_along_dim(dim, key),
+            |player, handle| {
+                player.live_effective_extremum_along_dim(
+                    noon::MobjectTarget::from(handle),
+                    dim,
+                    key,
+                )
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn family_all_points(
         &mut self,
         family: &noon::MobjectFamily,
@@ -937,6 +957,33 @@ impl CanonicalAuthoringScene {
             }
         }
         target.all_points().map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_extremum_along_dim(
+        &mut self,
+        family: &noon::MobjectFamily,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_extremum_along_dim(target, dim, key);
+            }
+        }
+        target
+            .extremum_along_dim(dim, key)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -6970,6 +7017,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyExtremumAlongDim)]
+        pub fn query_family_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .family_extremum_along_dim(&handle.semantic_family()?, dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_move_family_to_point(
@@ -7293,6 +7352,18 @@ mod wasm {
             self.inner
                 .mobject_all_points(handle.semantic_mobject())
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectExtremumAlongDim)]
+        pub fn query_mobject_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_extremum_along_dim(handle.semantic_mobject(), dim as usize, key)
                 .map_err(typed_js_error)
         }
 

@@ -5,6 +5,8 @@ import _noon_ir as _ir
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _all_points_observation,
+    _extremum_along_dim_observation,
+    _extremum_from_points_observation,
     _family_point_count_observation,
     _typed_manim_observation,
 )
@@ -90,6 +92,58 @@ def all_points(value):
     except ImportError:
         return _points(coordinates)
     return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+
+
+def _normalize_point_dimension(dim, point_dimensions):
+    dim = operator.index(dim)
+    normalized = dim if dim >= 0 else point_dimensions + dim
+    if not 0 <= normalized < point_dimensions:
+        raise IndexError(
+            f"index {dim} is out of bounds for axis 1 with size {point_dimensions}"
+        )
+    return normalized
+
+
+def extremum_along_dim(value, points=None, dim=0, key=0):
+    dim = operator.index(dim)
+    key = float(key)
+    if points is None:
+        dim = _normalize_point_dimension(dim, 3)
+        result = _extremum_along_dim_observation(value, dim, key)
+        if result is None:
+            raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+        return float(result)
+
+    try:
+        import numpy as np
+    except ImportError:
+        rows = [list(row) for row in points]
+        if not rows:
+            raise IndexError("too many indices for array: array is 1-dimensional, but 2 were indexed")
+        point_dimensions = len(rows[0])
+        if any(len(row) != point_dimensions for row in rows):
+            raise ValueError("point rows must have a consistent number of dimensions")
+        dim = _normalize_point_dimension(dim, point_dimensions)
+        coordinates = [float(coordinate) for row in rows for coordinate in row]
+    else:
+        array = np.asarray(points)
+        # Indexing only shapes the input like Manim's NumPy path; Rust performs
+        # the min/max/midpoint reduction over the selected coordinate values.
+        selected = array[:, dim]
+        coordinates = selected.astype(np.float64, copy=False).reshape(-1).tolist()
+        point_dimensions = 1
+        dim = 0
+
+    result = _extremum_from_points_observation(
+        value,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
+    if result is None:
+        raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+    return float(result)
 
 
 def has_new_path_started(value):

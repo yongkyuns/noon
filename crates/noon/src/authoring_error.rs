@@ -171,7 +171,7 @@ pub enum AuthoringError {
     },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
-    /// Flattened XY point input has an incomplete coordinate pair.
+    /// Flattened point input has an incomplete coordinate row.
     InvalidPointCoordinates(usize),
     /// A polygon or star constructor has invalid topology options.
     InvalidPolygonOptions(&'static str),
@@ -218,6 +218,8 @@ pub enum AuthoringError {
     ZeroMatchHeight,
     /// Width matching would divide by a zero target width.
     ZeroMatchWidth,
+    /// A point-coordinate dimension is outside the supplied point width.
+    InvalidPointDimension(u32),
     /// An operation requires finite bounds for this node.
     MissingLayoutBounds(noon_core::SemanticNodeId),
     /// The requested direct family member index does not exist.
@@ -332,7 +334,7 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::InvalidPointCoordinates(count) => write!(
                 f,
-                "point coordinates require XY pairs, received {count} values"
+                "point coordinates do not form complete rows, received {count} values"
             ),
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::InvalidPolygonOptions(reason) => f.write_str(reason),
@@ -369,6 +371,9 @@ impl std::fmt::Display for AuthoringError {
             Self::UnorderedBounds(_) => f.write_str("layout bounds must be ordered"),
             Self::InvalidDimension(_) => {
                 f.write_str("dimension fitting supports width (0) and height (1) only")
+            }
+            Self::InvalidPointDimension(dim) => {
+                write!(f, "point dimension {dim} is outside the point coordinate width")
             }
             Self::ZeroStretchTarget => {
                 f.write_str("cannot stretch a zero-width or zero-height target")

@@ -85,6 +85,76 @@ class PathQueryTests(unittest.TestCase):
                 self.assertTrue(value.has_no_points())
                 self.assertEqual(family.pointCount.call_count, 3)
 
+    def test_shared_family_extremum_uses_live_query_or_authored_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+
+        context = Mock()
+        context.queryFamilyExtremumAlongDim.return_value = 4.0
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 1, 1.0), 4.0)
+        context.queryFamilyExtremumAlongDim.assert_called_once_with(family, 1, 1.0)
+        family.extremumAlongDim.assert_not_called()
+
+        family.extremumAlongDim.return_value = 2.0
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=None,
+        ):
+            self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 0, -1.0), 2.0)
+        family.extremumAlongDim.assert_called_once_with(0, -1.0)
+
+    def test_extremum_along_dim_routes_default_points_to_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
+        with patch.object(
+            queries,
+            "_extremum_along_dim_observation",
+            return_value=3.5,
+        ) as observe:
+            self.assertEqual(value.get_extremum_along_dim(dim=1, key=1), 3.5)
+        observe.assert_called_once_with(value, 1, 1.0)
+
+        with patch.object(
+            queries,
+            "_extremum_along_dim_observation",
+            return_value=0.0,
+        ) as observe:
+            self.assertEqual(value.get_extremum_along_dim(dim=-1, key=1), 0.0)
+        observe.assert_called_once_with(value, 2, 1.0)
+        value.get_points_defining_boundary.assert_not_called()
+        with self.assertRaises(IndexError):
+            value.get_extremum_along_dim(dim=3)
+
+    def test_extremum_along_dim_flattens_custom_points_for_rust_reducer(self):
+        value = identity_only_wrapper(compat.VMobject)
+        points = [(-2., 3.), (4., -1.)]
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        with patch.object(queries, "_extremum_from_points_observation", return_value=3.0) as observe:
+            self.assertEqual(value.get_extremum_along_dim(points, dim=1, key=1), 3.0)
+        if np is not None:
+            observe.assert_called_once_with(value, [3., -1.], 1, 0, 1.0)
+        else:
+            observe.assert_called_once_with(value, [-2., 3., 4., -1.], 2, 1, 1.0)
+
+        with (
+            patch.dict("sys.modules", {"numpy": None}),
+            patch.object(queries, "_extremum_from_points_observation", return_value=-2.0) as observe,
+        ):
+            self.assertEqual(value.get_extremum_along_dim(points, dim=-2, key=-1), -2.0)
+        observe.assert_called_once_with(value, [-2., 3., 4., -1.], 2, 0, -1.0)
+        with self.assertRaises(IndexError):
+            value.get_extremum_along_dim(points, dim=3)
+
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()

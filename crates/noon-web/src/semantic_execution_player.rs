@@ -1903,6 +1903,21 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_extremum_along_dim(&semantics, &self.session, target, dim, key)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
         mobject: &noon::Mobject,

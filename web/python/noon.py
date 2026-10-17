@@ -665,6 +665,10 @@ class Mobject:
     def get_critical_point(self, direction: object) -> Vec2:
         return _semantic_operations()._get_critical_point(self, direction)
 
+    def get_extremum_along_dim(self, points=None, dim: int = 0, key: int = 0):
+        from _manim_path_queries import extremum_along_dim
+        return extremum_along_dim(self, points, dim, key)
+
     def become(
         self,
         mobject: Mobject,

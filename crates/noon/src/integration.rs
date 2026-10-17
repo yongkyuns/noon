@@ -68,7 +68,9 @@ pub use crate::host_callbacks::{
     rotate_effective_transform_about_point,
 };
 pub use crate::path_alignment::publish_alignment;
-pub use crate::path_queries::{effective_all_points, effective_path_query};
+pub use crate::path_queries::{
+    effective_all_points, effective_extremum_along_dim, effective_path_query,
+};
 pub use crate::point_matching::publish_match_points;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]

@@ -130,12 +130,47 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     expected.extend(first_points);
     assert_eq!(MobjectTarget::from(&root).all_points().unwrap(), expected);
     assert_eq!(
+        MobjectTarget::from(&root)
+            .extremum_along_dim(0, 0.)
+            .unwrap(),
+        1.5
+    );
+    assert_eq!(
+        MobjectTarget::from(&root)
+            .extremum_along_dim(2, 1.)
+            .unwrap(),
+        0.
+    );
+    assert_eq!(
         MobjectTarget::from(&first).all_points().unwrap(),
         first.path_query().unwrap().points().unwrap()
     );
 
     let empty = scene.family(&[]).unwrap();
     assert!(MobjectTarget::from(&empty).all_points().unwrap().is_empty());
+}
+
+#[test]
+fn point_extremum_reducer_matches_manim_key_selection() {
+    let coordinates = [-2., 3., 4., -1.];
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 0, -1.).unwrap(),
+        -2.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 0, 0.).unwrap(),
+        1.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 1, 1.).unwrap(),
+        3.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 2, 1.),
+        Err(noon::AuthoringError::InvalidPointDimension(2))
+    );
+    assert!(noon::reduce_point_extremum(&[], 2, 0, 0.).is_err());
+    assert!(noon::reduce_point_extremum(&[1., 2., 3.], 2, 0, 0.).is_err());
 }
 
 #[test]
@@ -395,6 +430,34 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
             .unwrap();
     assert_eq!(points, expected);
     assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
+    assert_eq!(
+        MobjectTarget::from(&family)
+            .extremum_along_dim(1, 1.)
+            .unwrap(),
+        0.5
+    );
+    assert_eq!(
+        noon::integration::effective_extremum_along_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            1,
+            1.,
+        )
+        .unwrap(),
+        1.5
+    );
+    assert_eq!(
+        noon::integration::effective_extremum_along_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            2,
+            1.,
+        )
+        .unwrap(),
+        0.
+    );
 }
 
 #[test]

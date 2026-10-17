@@ -1869,6 +1869,60 @@ def _family_point_count_observation(value: _base.Mobject) -> int | None:
     return int(engine_call(value._semantic_family_handle.pointCount))
 
 
+def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyExtremumAlongDim, family, dim, key)
+        return engine_call(family.extremumAlongDim, dim, key)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, "queryMobjectExtremumAlongDim", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, dim, key)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(handle.extremumAlongDim, dim, key)
+
+
+def _extremum_from_points_observation(
+    value: _base.Mobject,
+    coordinates: list[float],
+    point_dimensions: int,
+    dim: int,
+    key: float,
+):
+    if _is_shared_family(value):
+        return engine_call(
+            value._semantic_family_handle.extremumFromPoints,
+            coordinates,
+            point_dimensions,
+            dim,
+            key,
+        )
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    return engine_call(
+        handle.extremumFromPoints,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
+
+
 def _is_shared_family(value: object) -> bool:
     return (
         isinstance(value, _compat.Group)
