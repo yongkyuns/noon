@@ -96,6 +96,23 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   assert.equal(parityLabel("parity-qualified"), "Parity qualified");
 });
 
+test("CUDA lesson reuses the approved canonical source, not a copied showcase wrapper", async () => {
+  const normalized = normalizeShowcaseManifest(manifest);
+  const entry = normalized.examples.find(value => value.id === "showcase-cuda-transpose");
+  assert.ok(entry, "CUDA transpose lesson is visible in the default curated showcase");
+  assert.equal(entry.path, "./python/examples/cuda_transpose_banks.py");
+  assert.equal(entry.thumbnail, "./thumbnails/showcase/showcase-cuda-transpose.png");
+  assert.equal(entry.playbackCapability, "deterministic-retained-replay");
+  const source = await readFile(new URL(entry.path, import.meta.url), "utf8");
+  assert.ok(source.includes("class CudaTransposeBanks(Scene):"));
+  assert.ok(source.includes("reference_trace(s, COLUMN) for s in (32, 33)"));
+  assert.equal(source.includes("GPU_TRACE"), false);
+  assert.equal(manifest.entries.filter(item => item.path === entry.path.slice(2)).length, 1);
+  const invalid = copy();
+  invalid.entries.at(-1).path = "python/examples/../other.py";
+  assert.throws(() => normalizeShowcaseManifest(invalid), /unique local showcase source/);
+});
+
 test("invalid or misleading publication metadata is rejected", () => {
   for (const mutate of [
     (value) => { value.publication = "approved"; },

@@ -30,6 +30,7 @@ const requiredPortableControls = [
   "showcase-camera-follows-path",
   "showcase-text-math",
   "showcase-latex-create",
+  "showcase-cuda-transpose",
 ];
 const caseKey = ({ entry, noJspi }) => entry.id + ":" + (noJspi ? "no-jspi" : "normal");
 

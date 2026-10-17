@@ -368,6 +368,18 @@
           "label": "Dense near-white exposure and rainbow direction ring"
         }
       ]
+    },
+    {
+      "id": "showcase-cuda-transpose", "title": "One Extra Column",
+      "lesson": "Follow a CUDA transpose from row loads to shared-memory banks and see how one padding column turns 32 conflicting column reads into 32 independent bank accesses. Timing is illustrative, not measured GPU speed.",
+      "primary_feature": "cuda-shared-memory-bank-conflicts", "category": "Systems and algorithms",
+      "path": "python/examples/cuda_transpose_banks.py",
+      "features": ["CUDA transpose","shared-memory banks","source-synchronized code","32 vs 33 stride","bank conflicts"],
+      "duration": 76.14, "thumbnail_time": 64.0499998399999,
+      "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
+      "thumbnail_alt": "Actual Noon renderer frame showing the padded CUDA transpose's 32 differently colored requests distributed across 32 shared-memory bank cards, with the corresponding CUDA code highlighted",
+      "still_intervals": [[72.64,76.14]],
+      "beats": [{"time":6.43,"label":"Load shared-memory rows"},{"time":25,"label":"Unpadded accesses contend for one bank"},{"time":64.0499998399999,"label":"Padded reads occupy all 32 banks"},{"time":73.2,"label":"Compare 32 rounds with one"}]
     }
   ]
 }

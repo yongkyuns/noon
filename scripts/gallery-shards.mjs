@@ -16,6 +16,7 @@ export const curatedLessons = Object.freeze([
   "showcase-camera-follows-path",
   "showcase-text-math",
   "showcase-latex-create",
+  "showcase-cuda-transpose",
 ]);
 
 export const affected = Object.freeze([

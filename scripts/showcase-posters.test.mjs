@@ -9,15 +9,34 @@ const read = path => readFile(new URL(path, web));
 const manifest = JSON.parse(await read("python/examples/noon_showcase_manifest.json"));
 const evidence = JSON.parse(await read("thumbnails/showcase/capture-evidence.json"));
 const assertPoster = (...args) => assertRetainedPoster(...args, evidence.runtimeBuildIdentity);
+const cudaEvidence = JSON.parse(await read("thumbnails/showcase/cuda-transpose-capture-evidence.json"));
+
+function sourceBoundPosters() {
+  const sources = [evidence, cudaEvidence];
+  const records = new Map();
+  for (const source of sources) {
+    assert.equal(source.schema, 1);
+    assert.equal(source.publication, "captured-preview");
+    assert.equal(source.captureRevision, source.runtimeBuildIdentity.sourceRevision);
+    for (const poster of source.posters) {
+      assert.equal(records.has(poster.id), false, poster.id + ": duplicated capture evidence");
+      records.set(poster.id, { poster, identity: source.runtimeBuildIdentity });
+    }
+  }
+  return records;
+}
+
 
 test("every showcase card has a retained, source-bound real capture", async () => {
   assert.equal(evidence.schema, 1);
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  assert.deepEqual(evidence.posters.map(poster => poster.id), manifest.entries.map(entry => entry.id));
-  for (const [index, entry] of manifest.entries.entries()) {
-    assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
+  const captures = sourceBoundPosters();
+  assert.deepEqual([...captures.keys()], manifest.entries.map(entry => entry.id));
+  for (const entry of manifest.entries) {
+    const { poster, identity } = captures.get(entry.id);
+    assertRetainedPoster(entry, poster, await read(entry.path), await read(entry.thumbnail), identity);
   }
 });
 
@@ -90,4 +109,25 @@ test("failed or mixed-build reports cannot generate a retained evidence record",
     {}, { checkoutRevision: "a".repeat(40), servedBuildIdentity: { sourceRevision: "b".repeat(40) } },
     { checkoutRevision: "a".repeat(40), servedBuildIdentity: { sourceRevision: "a".repeat(40), buildId: "b".repeat(64) }, backendRequested: "fake", results: [] },
   ]) assert.throws(() => posterEvidence(manifest, report));
+});
+
+test("the CUDA card reuses source-bound actual Noon browser-fidelity PNG evidence", async () => {
+  const entry = manifest.entries.find(item => item.id === "showcase-cuda-transpose");
+  const poster = cudaEvidence.posters[0];
+  assert.equal(cudaEvidence.posters.length, 1);
+  assert.equal(poster.id, entry.id);
+  assert.equal(cudaEvidence.backend, "webgpu");
+  assert.equal(cudaEvidence.origin?.workflowRun, 39055762669);
+  assert.equal(cudaEvidence.origin?.artifact, 12110234543);
+  assert.equal(cudaEvidence.origin?.frame, "column-3-speed-1-none/215-bank-end.png");
+  assert.equal(cudaEvidence.origin?.sourceMode, "deterministic-cpu-reference");
+  assert.equal(poster.sample.completionProbe, false);
+  assert.equal(poster.sample.publishedTime, entry.thumbnail_time);
+  const source = await read(entry.path), png = await read(entry.thumbnail);
+  assertRetainedPoster(entry, poster, source, png, cudaEvidence.runtimeBuildIdentity);
+  assert.throws(() => assertRetainedPoster(entry, poster, source, png, evidence.runtimeBuildIdentity),
+    /different runtime build/);
+  const otherSource = Buffer.concat([source, Buffer.from("# altered")]);
+  assert.throws(() => assertRetainedPoster(entry, poster, otherSource, png, cudaEvidence.runtimeBuildIdentity),
+    /recapture/);
 });
