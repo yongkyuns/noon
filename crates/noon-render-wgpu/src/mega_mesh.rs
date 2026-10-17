@@ -456,10 +456,12 @@ mod tests {
             let initial = preparer.prepare(&frame);
             assert_eq!(initial.stats.mega_path_count, 3);
             let batches = (0..3)
-                .map(|index| match initial.observe_object(index).unwrap().primitive {
-                    RenderPrimitive::Path { batch } => batch,
-                    primitive => panic!("expected a retained source path, got {primitive:?}"),
-                })
+                .map(
+                    |index| match initial.observe_object(index).unwrap().primitive {
+                        RenderPrimitive::Path { batch } => batch,
+                        primitive => panic!("expected a retained source path, got {primitive:?}"),
+                    },
+                )
                 .collect::<Vec<_>>();
             (initial.mega_path_vertex_instances.to_vec(), batches)
         };
@@ -478,8 +480,7 @@ mod tests {
         for (first_opacity, last_opacity) in [(0.25, 0.5), (1.0, 1.0), (0.6, 0.3)] {
             frame.objects[0].style.opacity = first_opacity;
             frame.objects[2].style.opacity = last_opacity;
-            let prepared =
-                preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0, 2]));
+            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0, 2]));
             assert_eq!(prepared.stats.full_rebuilds, 0);
             assert_eq!(prepared.stats.geometry_cache_misses, 0);
             assert_eq!(prepared.stats.path_vertices_repacked, 0);
@@ -489,9 +490,12 @@ mod tests {
                 prepared.stats.mega_path_instance_vertices_repacked,
                 expected_dirty_vertices
             );
-            assert!(prepared.mega_path_instance_dirty_ranges.iter().all(|range| {
-                range.end <= source_ranges[1].start || range.start >= source_ranges[1].end
-            }));
+            assert!(prepared
+                .mega_path_instance_dirty_ranges
+                .iter()
+                .all(|range| {
+                    range.end <= source_ranges[1].start || range.start >= source_ranges[1].end
+                }));
             for range in prepared.mega_path_instance_dirty_ranges {
                 uploaded[range.clone()]
                     .copy_from_slice(&prepared.mega_path_vertex_instances[range.clone()]);
