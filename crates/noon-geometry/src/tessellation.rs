@@ -1262,8 +1262,7 @@ fn tessellate_morph_path(
         let mut point_distances = Vec::with_capacity(point_count);
         point_distances.push(contour_start_distance);
         for pair in contour.source_points.windows(2) {
-            let segment_length =
-                (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y);
+            let segment_length = (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y);
             point_distances.push(point_distances.last().copied().unwrap() + segment_length);
         }
         stroke_length += polyline_length(&contour.source_points, contour.closed);
@@ -2521,7 +2520,9 @@ mod tests {
             .collect();
         assert!(!near_seam.is_empty(), "closure seam must be rendered");
         assert!(
-            near_seam.iter().any(|vertex| vertex.path_distance.abs() < 1e-4),
+            near_seam
+                .iter()
+                .any(|vertex| vertex.path_distance.abs() < 1e-4),
             "missing initial path distance at the loop seam"
         );
         assert!(
@@ -2654,7 +2655,9 @@ mod tests {
                 && vertex.path_distance <= mesh.stroke_length + 1e-4
                 && (0.0..=1.0).contains(&vertex.path_progress)
         }));
-        assert!(stroke.iter().any(|vertex| vertex.path_distance.abs() < 1e-4));
+        assert!(stroke
+            .iter()
+            .any(|vertex| vertex.path_distance.abs() < 1e-4));
         assert!(stroke
             .iter()
             .any(|vertex| (vertex.path_distance - 12.0).abs() < 1e-4));
