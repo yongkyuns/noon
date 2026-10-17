@@ -44,7 +44,20 @@ class RasterManifestTests(unittest.TestCase):
         self.assertIn("vertex_type=Circle", scene_source)
         self.assertIn('"circle-left": [-1.4, 0, 0]', scene_source)
 
-    def test_graph_label_fixtures_cover_default_partial_and_mutated_labels(self):
+    def test_graph_circle_late_vertex_fixture_covers_add_vertices_defaults(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "graph-circle-late-vertex"
+        )
+        self.assertEqual(fixture["scene"], "GraphCircleLateVertex")
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        scene_source = source.split("class GraphCircleLateVertex(Scene):", maxsplit=1)[1]
+        self.assertIn("graph.add_vertices", scene_source)
+        self.assertIn("vertex_type=Circle", scene_source)
+        self.assertIn('positions={"circle": [1.2, 0, 0]}', scene_source)
+
+    def test_graph_label_fixtures_cover_upstream_constructible_label_forms(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         source = (ROOT / "parity/manim-v0.21/core-examples/graph.py").read_text(
             encoding="utf-8"
@@ -54,17 +67,20 @@ class RasterManifestTests(unittest.TestCase):
         )
         style_source = source.split("class GraphStyleExample(Scene):", maxsplit=1)[1]
         self.assertNotIn("requires_latex", style_fixture)
-        self.assertEqual(style_source.count('labels={"a": Text("a", color=BLACK)}'), 2)
+        self.assertIn('def _graph_fixture_text(text, color):', source)
+        self.assertIn('"font": "DejaVu Sans Mono"', source)
+        self.assertIn('"warn_missing_font" in inspect.signature(Text).parameters', source)
+        self.assertEqual(style_source.count("_graph_fixture_text("), 4)
         for fixture_id, scene, expected in (
             (
                 "graph-default-labels", "GraphDefaultLabels",
                 ("labels=True", "label_fill_color=YELLOW", "graph.add_vertices",
-                 "graph.change_layout", "graph.copy()", "graph.remove_vertices"),
+                 "graph.copy()", "graph.remove_vertices"),
             ),
             (
-                "digraph-partial-labels", "DiGraphPartialLabels",
-                ("labels={", "MathTex", "Text(\"C\"", "graph.add_vertices",
-                 "graph.change_layout", "graph.copy()", "graph.remove_vertices"),
+                "digraph-custom-labels", "DiGraphCustomLabels",
+                ("labels={", "MathTex", '_graph_fixture_text("C"', "graph.add_vertices",
+                 "graph.copy()", "graph.remove_vertices"),
             ),
         ):
             with self.subTest(fixture=fixture_id):
@@ -74,6 +90,33 @@ class RasterManifestTests(unittest.TestCase):
                 scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
                 for marker in expected:
                     self.assertIn(marker, scene_source)
+
+        layout_fixture = next(
+            item for item in manifest["fixtures"]
+            if item["id"] == "graph-change-layout-scale"
+        )
+        self.assertEqual(layout_fixture["scene"], "GraphChangeLayoutScale")
+        self.assertIn('"circular", layout_scale=1.3', source)
+
+    def test_pinned_manim_partial_label_mapping_is_not_constructible(self):
+        try:
+            import manim
+            from manim import Graph, Text
+        except ImportError:
+            self.skipTest("pinned ManimCE is installed only in the raster-oracle environment")
+        if manim.__version__ != "0.21.0":
+            self.skipTest("this upstream behavior is pinned specifically to ManimCE 0.21.0")
+
+        with self.assertRaisesRegex(TypeError, "LabeledDot.*label"):
+            Graph(
+                ["a", "b"], [("a", "b")], labels={"a": Text("a")},
+                layout={"a": [-1, 0, 0], "b": [1, 0, 0]},
+            )
+        Graph(
+            ["a", "b"], [("a", "b")],
+            labels={"a": Text("a"), "b": Text("b")},
+            layout={"a": [-1, 0, 0], "b": [1, 0, 0]},
+        )
 
     def test_graph_and_digraph_default_spring_fixtures_use_seeded_constructor_defaults(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -132,6 +175,10 @@ class RasterManifestTests(unittest.TestCase):
                     fixture["source"],
                     "parity/manim-v0.21/core-examples/graph.py",
                 )
+                self.assertEqual(
+                    fixture.get("noon_source"),
+                    "parity/manim-v0.21/noon_weighted_graph.py",
+                )
                 self.assertEqual(fixture["expected_duration"], 0.2)
                 self.assertIn(f"class {scene}(Scene)", source)
                 scene_source = source.split(f"class {scene}(Scene):", maxsplit=1)[1]
@@ -140,8 +187,14 @@ class RasterManifestTests(unittest.TestCase):
                     'layout_config={"seed": 42, "weight": "strength"}',
                     scene_source,
                 )
+                self.assertIn("graph.update(0)", scene_source)
                 for edge in edges:
                     self.assertIn(edge, scene_source)
+                noon_source = (ROOT / fixture["noon_source"]).read_text(encoding="utf-8")
+                noon_scene = noon_source.split(f"class {scene}(Scene):", maxsplit=1)[1]
+                self.assertIn('{"strength":', noon_scene)
+                self.assertIn('"weight": "strength"', noon_scene)
+                self.assertNotIn("graph._graph", noon_scene)
 
     def test_seeded_random_graph_fixtures_use_seeded_networkx_layout(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -213,6 +266,12 @@ class RasterManifestTests(unittest.TestCase):
                 self.assertIn("partitions=", scene_source)
                 self.assertIn('"align":', scene_source)
                 self.assertNotIn('"dim":', scene_source)
+                self.assertIn("[0, 1, 2, 3]", scene_source)
+                self.assertIn("partitions=[[0, 1], [2, 3]]", scene_source)
+        directed_spectral_source = source.split(
+            "class DiGraphSpectralLayout(Scene):", maxsplit=1
+        )[1].split("\nclass ", maxsplit=1)[0]
+        self.assertIn('["b", "d", "c", "a"]', directed_spectral_source)
 
     def test_polynomial_easing_checkpoints_have_exact_original_frames(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

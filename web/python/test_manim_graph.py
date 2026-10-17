@@ -360,9 +360,12 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(
             self.context.options[0].calls,
             [
+                ("fill", (252 / 255, 98 / 255, 85 / 255, 1.0)),
+                ("stroke", (252 / 255, 98 / 255, 85 / 255, 1.0)),
                 ("radius", (1.0,)),
                 ("fill_opacity", (0.0,)),
                 ("vertex_width", (4.0,)),
+                ("vertex_opacity", (1.0,)),
             ],
         )
 
@@ -373,9 +376,12 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(
             self.context.add_vertex_calls[1][-1].calls,
             [
+                ("fill", (252 / 255, 98 / 255, 85 / 255, 1.0)),
+                ("stroke", (252 / 255, 98 / 255, 85 / 255, 1.0)),
                 ("radius", (1.0,)),
                 ("fill_opacity", (0.0,)),
                 ("vertex_width", (4.0,)),
+                ("vertex_opacity", (1.0,)),
             ],
         )
 
@@ -643,6 +649,24 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(self.context.layout_calls[0][1:3], scale)
         self.assertEqual(self.context.spiral_layout_calls[0][1:3], scale)
         self.assertEqual(self.context.partite_layout_calls[0][3:5], scale)
+
+    def test_change_layout_accepts_upstream_layout_scale_keyword_and_position(self):
+        value = graph.Graph(
+            {"a": (0, 0), "b": (1, 0)}, [("a", "b")],
+        )
+        value.change_layout(
+            "circular", layout_scale=(1.5, 0.7),
+            layout_config={"center": (0.3, -0.2)},
+        )
+        self.assertEqual(self.context.layout_calls[-1][1:], (1.5, 0.7, 0.3, -0.2))
+
+        value.change_layout("circular", (0.8, 1.2))
+        self.assertEqual(self.context.layout_calls[-1][1:3], (0.8, 1.2))
+
+        call_count = len(self.context.layout_calls)
+        with self.assertRaisesRegex(TypeError, "either layout_scale or scale"):
+            value.change_layout("circular", layout_scale=1.5, scale=0.7)
+        self.assertEqual(len(self.context.layout_calls), call_count)
 
     def test_layout_scale_tuple_validation_and_shell_scalar_contract(self):
         self.assertEqual(graph._layout_scale_pair((1, 0.5)), (1.0, 0.5))
@@ -976,7 +1000,7 @@ class GraphFacadeTests(unittest.TestCase):
             value.add_vertices({"c": (2, 0)})
         self.assertEqual(value._graph_key_ids, before)
 
-    def test_add_vertices_inherits_global_style_and_publishes_per_key_overrides_once(self):
+    def test_add_vertices_replaces_global_style_for_keyed_vertices(self):
         value = graph.Graph(
             {"a": (0, 0)}, [], vertex_config={"color": "#112233", "stroke_width": 2}
         )
@@ -996,18 +1020,18 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertIs(graph_handle, value._graph_handle)
         self.assertEqual((ids, positions), ([1, 2], [1.0, 0.0, 2.0, 0.0]))
         self.assertEqual(len(overrides), 24)
-        self.assertTrue(math.isnan(overrides[0]))
+        self.assertEqual(overrides[0], 0.08)
         self.assertEqual(overrides[1:5], [119 / 255, 136 / 255, 153 / 255, 1.0])
         self.assertEqual(overrides[5], 0.3)
         self.assertEqual(overrides[6:10], [68 / 255, 85 / 255, 102 / 255, 1.0])
-        self.assertTrue(math.isnan(overrides[10]))
+        self.assertEqual(overrides[10], 0.0)
         self.assertEqual(overrides[11], 0.25)
         self.assertEqual(overrides[12], 0.16)
-        self.assertTrue(all(math.isnan(value) for value in overrides[13:17]))
-        self.assertTrue(math.isnan(overrides[17]))
+        self.assertEqual(overrides[13:17], [1.0, 1.0, 1.0, 1.0])
+        self.assertEqual(overrides[17], 1.0)
         self.assertEqual(overrides[18:22], [170 / 255, 187 / 255, 204 / 255, 1.0])
         self.assertEqual(overrides[22], 4)
-        self.assertTrue(math.isnan(overrides[23]))
+        self.assertEqual(overrides[23], 1.0)
         self.assertEqual(
             options.calls,
             [
@@ -1458,7 +1482,10 @@ class GraphFacadeTests(unittest.TestCase):
         )
 
     def test_per_key_vertex_and_edge_style_configs_apply_after_publication(self):
-        with patch.object(graph, "_apply_key_style") as apply_style:
+        with (
+            patch.object(graph, "_apply_key_style") as apply_style,
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+        ):
             graph.Graph(
                 ["a", "b"], [("a", "b")],
                 vertex_config={"a": {"fill_color": "#112233", "stroke_opacity": 0.4}},
@@ -1468,19 +1495,53 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(apply_style.call_count, 2)
         vertex_style = apply_style.call_args_list[0].args[1]
         edge_style = apply_style.call_args_list[1].args[1]
+        self.assertEqual(vertex_style["radius"], 0.08)
         self.assertEqual(vertex_style["fill_color"], graph._compat._as_color("color", "#112233"))
-        self.assertEqual(edge_style["color"], graph._compat._as_color("color", "#445566"))
+        self.assertEqual(vertex_style["fill_opacity"], 1.0)
+        self.assertEqual(vertex_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
+        self.assertEqual(vertex_style["stroke_width"], 0.0)
+        self.assertEqual(edge_style["stroke_color"], graph._compat._as_color("color", "#445566"))
         self.assertEqual(edge_style["stroke_width"], 2)
         self.assertEqual(vertex_style["stroke_opacity"], 0.4)
         self.assertEqual(edge_style["stroke_opacity"], 0.7)
         self.assertEqual(graph._compat._manim_stroke_width(edge_style["stroke_width"]), 0.02)
         self.assertEqual(len(self.context.creation_calls), 1)
 
+    def test_partial_key_styles_replace_global_styles_with_manim_defaults(self):
+        label = _Label()
+        with (
+            patch.object(graph, "_apply_key_style") as apply_style,
+            patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+        ):
+            graph.Graph(
+                ["a", "b"], [("a", "b")], labels={"b": label},
+                vertex_config={
+                    "radius": 0.21, "fill_color": "#FC6255", "fill_opacity": 0.35,
+                    "stroke_color": "#58C4DD", "stroke_width": 3, "stroke_opacity": 0.45,
+                    "b": {"stroke_opacity": 0.2},
+                },
+                edge_config={
+                    "color": "#83C167", "stroke_width": 6, "stroke_opacity": 0.55,
+                    ("a", "b"): {"stroke_opacity": 0.3},
+                },
+            )
+        vertex_style, edge_style = [call.args[1] for call in apply_style.call_args_list]
+        self.assertAlmostEqual(vertex_style["radius"], 0.6)
+        self.assertEqual(vertex_style["fill_color"], graph._compat._as_color("color", "#FFFFFF"))
+        self.assertEqual(vertex_style["fill_opacity"], 1.0)
+        self.assertEqual(vertex_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
+        self.assertEqual(vertex_style["stroke_width"], 0.0)
+        self.assertEqual(vertex_style["stroke_opacity"], 0.2)
+        self.assertEqual(edge_style["stroke_color"], graph._compat._as_color("color", "#FFFFFF"))
+        self.assertEqual(edge_style["stroke_width"], 4.0)
+        self.assertEqual(edge_style["stroke_opacity"], 0.3)
+
     def test_constructor_per_key_vertex_radius_is_passed_to_rust_by_vertex_order(self):
-        graph.Graph(
-            ["left", "right"], [], layout={"left": (0, 0), "right": (1, 0)},
-            vertex_config={"right": {"radius": 0.28}},
-        )
+        with patch.object(graph, "_apply_key_style"):
+            graph.Graph(
+                ["left", "right"], [], layout={"left": (0, 0), "right": (1, 0)},
+                vertex_config={"right": {"radius": 0.28}},
+            )
         self.assertIn(("vertex_radius_for", (1, 0.28)), self.context.options[0].calls)
         self.assertEqual(len(self.context.creation_calls), 1)
 
@@ -1504,10 +1565,10 @@ class GraphFacadeTests(unittest.TestCase):
                         )
                     target.set_style.assert_called_once_with(
                         fill_color=graph._compat._as_color("color", fill),
-                        fill_opacity=None,
+                        fill_opacity=1.0,
                         stroke_color=graph._compat._as_color("color", stroke),
-                        stroke_width=None,
-                        stroke_opacity=None,
+                        stroke_width=0.0,
+                        stroke_opacity=1.0,
                     )
 
     def test_invalid_per_key_and_unsupported_style_configs_fail_before_publication(self):

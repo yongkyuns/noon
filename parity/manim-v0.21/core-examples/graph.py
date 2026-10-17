@@ -1,4 +1,16 @@
+import inspect
+
 from manim import *
+
+
+def _graph_fixture_text(text, color):
+    """Use the bundled monospace family on both renderers when available."""
+    options = {"font": "DejaVu Sans Mono", "color": color}
+    if "warn_missing_font" in inspect.signature(Text).parameters:
+        # The pinned Manim renderer uses fontconfig fallback on macOS, where
+        # this bundled family is not exposed by Manim's Pango font list.
+        options["warn_missing_font"] = False
+    return Text(text, **options)
 
 
 class GraphExample(Scene):
@@ -28,10 +40,15 @@ class GraphStyleExample(Scene):
                          "stroke_opacity": 0.55,
                          ("a", "b"): {"stroke_opacity": 0.3}},
         )
-        left = Graph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
+        labels = {
+            "a": _graph_fixture_text("a", BLACK),
+            "b": _graph_fixture_text("b", BLACK),
+            "c": _graph_fixture_text("c", BLACK),
+        }
+        left = Graph(vertices, edges, labels=labels, layout={
             "a": [-5, -1, 0], "b": [-3.5, 1.2, 0], "c": [-2, -1, 0],
         }, **options)
-        right = DiGraph(vertices, edges, labels={"a": Text("a", color=BLACK)}, layout={
+        right = DiGraph(vertices, edges, labels=labels, layout={
             "a": [2, -1, 0], "b": [3.5, 1.2, 0], "c": [5, -1, 0],
         }, **options)
         self.add(left, right)
@@ -45,6 +62,19 @@ class GraphCircleVertexType(Scene):
             [("circle-left", "circle-right")],
             layout={"circle-left": [-1.4, 0, 0], "circle-right": [1.4, 0, 0]},
             vertex_type=Circle,
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
+class GraphCircleLateVertex(Scene):
+    def construct(self):
+        graph = Graph(
+            ["dot"], [],
+            layout={"dot": [-1.2, 0, 0]},
+        )
+        graph.add_vertices(
+            "circle", positions={"circle": [1.2, 0, 0]}, vertex_type=Circle,
         )
         self.add(graph)
         self.wait(0.2)
@@ -72,6 +102,20 @@ class DiGraphDefaultSpringLayout(Scene):
         self.wait(0.2)
 
 
+class GraphChangeLayoutScale(Scene):
+    def construct(self):
+        graph = Graph(
+            ["a", "b", "c"], [],
+            layout={"a": [-2.5, 0.4, 0], "b": [0, -0.4, 0], "c": [2.5, 0.4, 0]},
+        )
+        graph.change_layout(
+            "circular", layout_scale=1.3,
+            layout_config={"center": (0.4, -0.2)},
+        )
+        self.add(graph)
+        self.wait(0.2)
+
+
 class GraphWeightedSpringLayout(Scene):
     def construct(self):
         graph = Graph(
@@ -86,6 +130,7 @@ class GraphWeightedSpringLayout(Scene):
         graph._graph["a"]["b"]["strength"] = 3.0
         graph._graph["b"]["c"]["strength"] = 0.4
         graph.change_layout(layout="spring", layout_config={"seed": 42, "weight": "strength"})
+        graph.update(0)
         self.add(graph)
         self.wait(0.2)
 
@@ -100,6 +145,7 @@ class DiGraphWeightedSpringLayout(Scene):
         graph._graph["a"]["b"]["strength"] = 2.5
         graph._graph["c"]["b"]["strength"] = 0.6
         graph.change_layout(layout="spring", layout_config={"seed": 42, "weight": "strength"})
+        graph.update(0)
         self.add(graph)
         self.wait(0.2)
 
@@ -207,9 +253,9 @@ class DiGraphSpiralLayout(Scene):
 class GraphPartiteLayout(Scene):
     def construct(self):
         graph = Graph(
-            ["a", "b", "c", "d"],
-            [("a", "c"), ("a", "d"), ("b", "c")],
-            layout="partite", partitions=[["a", "b"], ["c", "d"]],
+            [0, 1, 2, 3],
+            [(0, 2), (0, 3), (1, 2)],
+            layout="partite", partitions=[[0, 1], [2, 3]],
             layout_config={"align": "horizontal", "center": (0.25, -0.2)},
         )
         self.add(graph)
@@ -219,9 +265,9 @@ class GraphPartiteLayout(Scene):
 class DiGraphPartiteLayout(Scene):
     def construct(self):
         graph = DiGraph(
-            ["a", "b", "c", "d"],
-            [("a", "c"), ("b", "c"), ("b", "d")],
-            layout="partite", partitions=[["a", "b"], ["c", "d"]],
+            [0, 1, 2, 3],
+            [(0, 2), (1, 2), (1, 3)],
+            layout="partite", partitions=[[0, 1], [2, 3]],
             layout_config={"align": "vertical", "center": (-0.2, 0.25)},
         )
         self.add(graph)
@@ -243,7 +289,7 @@ class GraphSpectralLayout(Scene):
 class DiGraphSpectralLayout(Scene):
     def construct(self):
         graph = DiGraph(
-            ["a", "b", "c", "d"],
+            ["b", "d", "c", "a"],
             [("a", "b"), ("c", "b"), ("c", "d")],
             layout="spectral",
             layout_config={"weight": None, "center": (-0.25, 0.3), "dim": 2},
@@ -296,29 +342,28 @@ class GraphDefaultLabels(Scene):
             layout_config={"center": (-1.2, 0.2)},
             labels=True, label_fill_color=YELLOW,
         )
-        graph.add_vertices("d", positions={"d": (1.5, 0.4)}, labels=True)
-        graph.change_layout(
-            "circular", scale=1.0, layout_config={"center": (-0.8, -0.1)},
-        )
+        graph.add_vertices("d", positions={"d": (1.5, 0.4, 0)}, labels=True)
         copied = graph.copy().shift(3 * RIGHT)
         graph.remove_vertices("b")
         self.add(graph, copied)
         self.wait(0.2)
 
 
-class DiGraphPartialLabels(Scene):
+class DiGraphCustomLabels(Scene):
     def construct(self):
         graph = DiGraph(
             ["a", "b", "c"], [("a", "b"), ("c", "b")],
-            layout={"a": [-2.5, 0.4, 0], "b": [0, -0.4, 0], "c": [2.5, 0.4, 0]},
-            labels={"a": MathTex(r"\alpha", color=GREEN), "c": Text("C", color=ORANGE)},
+            layout="circular", layout_scale=1.2,
+            layout_config={"center": (0.2, -0.1)},
+            labels={
+                "a": MathTex(r"\alpha", color=GREEN),
+                "b": MathTex(r"\beta", color=YELLOW),
+                "c": _graph_fixture_text("C", ORANGE),
+            },
         )
         graph.add_vertices(
-            "d", positions={"d": (2.0, -1.6)},
+            "d", positions={"d": (2.0, -1.6, 0)},
             labels={"d": MathTex("d", color=BLUE)},
-        )
-        graph.change_layout(
-            "circular", scale=1.2, layout_config={"center": (0.2, -0.1)},
         )
         copied = graph.copy().shift(3 * LEFT)
         graph.remove_vertices("b")

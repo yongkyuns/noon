@@ -455,7 +455,7 @@
     {
       "id": "noon-styled-graphs",
       "title": "StyledGraphs",
-      "summary": "Compare directed and undirected graphs with shared vertex fills, outlines, edge colors, explicit layouts, and partial Text labels.",
+      "summary": "Compare directed and undirected graphs with shared vertex fills, outlines, edge colors, explicit layouts, and partial Text labels as a Noon extension (ManimCE 0.21.0 raises for partial labels mappings).",
       "status": "ready",
       "path": "python/examples/styled_graph.py",
       "category": "manim-compatible/graphs",

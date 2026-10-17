@@ -22,6 +22,8 @@ except ImportError:  # pragma: no cover - native import smoke only
     _graph_options = None
     _to_js = None
 
+_LAYOUT_SCALE_UNSET = object()
+
 
 def _array(values):
     if _to_js is None:
@@ -189,6 +191,52 @@ def _graph_labels(labels, vertices, label_fill_color):
 
 def _labeled_dot_radius(label):
     return _base.SMALL_BUFF + math.hypot(float(label.width), float(label.height)) / 2
+
+
+def _default_vertex_style(circle_vertices, label=None):
+    if circle_vertices:
+        color = _compat._as_color("vertex default color", "#FC6255")
+        radius, fill_opacity, stroke_width = 1.0, 0.0, 4.0
+    else:
+        color = _compat._as_color("vertex default color", "#FFFFFF")
+        radius = _labeled_dot_radius(label) if label is not None else 0.08
+        fill_opacity, stroke_width = 1.0, 0.0
+    return {
+        "radius": radius,
+        "fill_color": color,
+        "fill_opacity": fill_opacity,
+        "stroke_color": color,
+        "stroke_width": stroke_width,
+        "stroke_opacity": 1.0,
+    }
+
+
+def _complete_keyed_vertex_styles(keyed_config, explicit_keys, labels, circle_vertices):
+    for key in explicit_keys:
+        style = dict(keyed_config[key])
+        color = style.pop("color", None)
+        if color is not None:
+            style.setdefault("fill_color", color)
+            style.setdefault("stroke_color", color)
+        keyed_config[key] = {
+            **_default_vertex_style(circle_vertices, labels.get(key)),
+            **style,
+        }
+
+
+def _complete_keyed_edge_styles(keyed_config):
+    default_color = _compat._as_color("edge default color", "#FFFFFF")
+    for edge, raw_style in list(keyed_config.items()):
+        style = dict(raw_style)
+        color = style.pop("color", None)
+        if color is not None:
+            style.setdefault("stroke_color", color)
+        keyed_config[edge] = {
+            "stroke_color": default_color,
+            "stroke_width": _compat.MANIM_DEFAULT_STROKE_WIDTH,
+            "stroke_opacity": 1.0,
+            **style,
+        }
 
 
 def _graph_style_options(vertex_config, edge_config):
@@ -412,27 +460,43 @@ class _GraphBase(_compat.Group):
             "vertex_config", vertex_config, _VERTEX_CONFIG_KEYS, set(self._graph_key_ids),
             per_key_supported=_VERTEX_CONFIG_KEYS,
         )
+        explicit_keyed_vertex_ids = tuple(keyed_vertex_config)
         if label_mobjects and not circle_vertices:
             for key, label in label_mobjects.items():
-                if (
-                    "radius" not in global_vertex_config
-                    and "radius" not in keyed_vertex_config.get(key, {})
-                ):
+                keyed_style = keyed_vertex_config.get(key)
+                if keyed_style is not None and "radius" not in keyed_style:
+                    keyed_style["radius"] = _labeled_dot_radius(label)
+                elif keyed_style is None and "radius" not in global_vertex_config:
                     keyed_vertex_config.setdefault(key, {})["radius"] = _labeled_dot_radius(label)
         self._default_vertex_config = dict(global_vertex_config)
         if circle_vertices:
             # Match Circle's defaults while retaining the same Rust-owned
-            # circle primitives used by Dot vertices. These defaults are also
-            # inherited by later add_vertices()/add_edges() calls.
-            global_vertex_config = {
+            # circle primitives used by Dot vertices. Late additions retain
+            # their own default Dot semantics unless Circle is requested.
+            default_circle_color = _compat._as_color(
+                "vertex default color", "#FC6255"
+            )
+            circle_defaults = {
                 "radius": 1.0,
+                "fill_color": default_circle_color,
                 "fill_opacity": 0.0,
+                "stroke_color": default_circle_color,
                 "stroke_width": 4.0,
-                **global_vertex_config,
+                "stroke_opacity": 1.0,
             }
+            if "color" in global_vertex_config:
+                circle_defaults["fill_color"] = global_vertex_config["color"]
+                circle_defaults["stroke_color"] = global_vertex_config["color"]
+            circle_defaults.update(global_vertex_config)
+            global_vertex_config = circle_defaults
+        _complete_keyed_vertex_styles(
+            keyed_vertex_config, explicit_keyed_vertex_ids, label_mobjects,
+            circle_vertices,
+        )
         global_edge_config, keyed_edge_config = _split_style_config(
             "edge_config", edge_config, _EDGE_CONFIG_KEYS, set(edges)
         )
+        _complete_keyed_edge_styles(keyed_edge_config)
         self._default_edge_config = dict(global_edge_config)
         center = (0.0, 0.0)
         if circular:
@@ -783,6 +847,7 @@ class _GraphBase(_compat.Group):
                 "stroke_width", "stroke_opacity", "radius",
             },
         )
+        explicit_keyed_vertex_ids = tuple(keyed_config)
         label_mobjects = _graph_labels(
             labels, tuple(key for key, _, _ in pending), label_fill_color
         )
@@ -797,10 +862,11 @@ class _GraphBase(_compat.Group):
                     and "radius" not in keyed_config.get(key, {})
                 ):
                     keyed_config.setdefault(key, {})["radius"] = _labeled_dot_radius(label)
-        base_config = (
-            {"radius": 1.0, "fill_opacity": 0.0, "stroke_width": 4.0}
-            if circle_vertices else {}
+        _complete_keyed_vertex_styles(
+            keyed_config, explicit_keyed_vertex_ids, label_mobjects,
+            circle_vertices,
         )
+        base_config = _default_vertex_style(True) if circle_vertices else {}
         base_config.update(self._default_vertex_config)
         base_config.update(global_config)
         options = _graph_style_options(base_config, {})
@@ -1135,9 +1201,15 @@ class _GraphBase(_compat.Group):
         _compat.Group.__init__(clone, graph_wrapper, *clone._labels.values())
         return clone
 
-    def change_layout(self, layout="spring", *, scale=2.0, center=(0.0, 0.0),
-                      positions=None, layout_config=None, root_vertex=None,
-                      partitions=None):
+    def change_layout(self, layout="spring", layout_scale=_LAYOUT_SCALE_UNSET, *,
+                      scale=_LAYOUT_SCALE_UNSET,
+                      center=(0.0, 0.0), positions=None, layout_config=None,
+                      root_vertex=None, partitions=None):
+        if layout_scale is not _LAYOUT_SCALE_UNSET and scale is not _LAYOUT_SCALE_UNSET:
+            raise TypeError("change_layout accepts either layout_scale or scale, not both")
+        scale = 2.0 if layout_scale is _LAYOUT_SCALE_UNSET and scale is _LAYOUT_SCALE_UNSET else (
+            scale if layout_scale is _LAYOUT_SCALE_UNSET else layout_scale
+        )
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
         if root_vertex is not None and layout != "tree":
