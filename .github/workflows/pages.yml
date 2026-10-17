@@ -37,7 +37,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Classify complete push for deployment
+        id: scope
+        env:
+          BEFORE_REVISION: ${{ github.event.before }}
+        run: node scripts/ci-qualification-scope.mjs pages
+
       - name: Use repository-pinned Rust and WASM target
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: |
           rustup install
           rustup show active-toolchain
@@ -45,6 +52,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo sources
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/cache@v6
         with:
           path: |
@@ -55,29 +63,36 @@ jobs:
             ${{ runner.os }}-cargo-sources-
 
       - name: Use sccache
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
 
       - name: Install pinned wasm-opt
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: ./.github/actions/install-wasm-opt
 
       - name: Build and validate playground
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: bash scripts/build-web-demo.sh
 
       - name: Stamp deployed revision
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
 
       - name: Configure Pages
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/upload-pages-artifact@v5
         with:
           path: web
@@ -85,10 +100,12 @@ jobs:
           retention-days: 1
 
       - name: Deploy
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         id: deployment
         uses: actions/deploy-pages@v5
 
       - name: Verify deployed revision
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
           EXPECTED_SHA: ${{ github.sha }}

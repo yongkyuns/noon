@@ -33,6 +33,12 @@ all workspace library tests and the shared CPU family target in one Cargo
 invocation; production, toolchain, Cargo configuration and mixed changes retain
 Product qualification.
 
+Pages reuses the complete push-diff classifier on its existing runner. Pushes
+containing only Cargo integration tests, CI policy tests, the CI README or
+unrelated workflows skip compilation and publication. Production, mixed, unknown
+and incomplete-history changes keep the optimized build/deploy/verification path.
+Manual dispatch always deploys; PR validation is unchanged.
+
 Master CI reads the complete before/after Git diff and skips its compiled/browser
 jobs only for documentation, named preflight-only policies or web unit tests.
 Unknown inputs, mixed changes, missing history and classification failures retain

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { needsCudaDemoQualification, needsFullCiQualification } from "../../scripts/ci-qualification-scope.mjs";
+import { needsCudaDemoQualification, needsFullCiQualification, needsPagesDeployment } from "../../scripts/ci-qualification-scope.mjs";
 
 const workflow = await readFile(
   new URL("../workflows/manim-raster-differential.yml", import.meta.url),
@@ -124,6 +124,28 @@ const revisions = { event: "push", before: "a".repeat(40), after: "b".repeat(40)
 const diffFixture = paths => (_command, args) =>
   Buffer.from(args[0] === "diff" ? paths.join("\0") + "\0" : "");
 
+test("Pages skips known non-product changes using the complete push diff", async () => {
+  const nonProduct = ["crates/noon/tests/family/main.rs", "crates/noon-web/tests/lifecycle.rs",
+    ".github/ci/wasm-build.test.mjs", ".github/ci/README.md", ".github/workflows/pr-fast.yml",
+    ".github/workflows/playground-product-gate.yml"];
+  assert.equal(needsPagesDeployment(revisions, diffFixture(nonProduct)), false);
+  const pages = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
+  for (const path of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/config.toml",
+    "crates/noon/src/family_layout.rs", "crates/new-engine/src/lib.rs", "web/index.html",
+    "web/python/examples/new_scene.py", "scripts/build-web-demo.sh", "new-product-input.bin",
+    ".github/ci/wasm-build.mjs", "scripts/ci-qualification-scope.mjs", ".github/workflows/pages.yml",
+    ...[...pages.matchAll(/uses: \.\/(\S+)/g)].map(match => match[1])]) {
+    assert.equal(needsPagesDeployment(revisions, diffFixture([path])), true, path);
+    assert.equal(needsPagesDeployment(revisions, diffFixture([...nonProduct, path])), true, "mixed: " + path);
+  }
+  const large = Array.from({ length: 3001 }, (_, i) => `crates/noon/tests/entry-${i}.rs`);
+  assert.equal(needsPagesDeployment(revisions, diffFixture(large)), false);
+  assert.equal(needsPagesDeployment(revisions, diffFixture([...large, "web/main.js"])), true);
+  const push = pages.split("  push:\n")[1]?.split("  workflow_dispatch:")[0];
+  assert.doesNotMatch(push, /paths(?:-ignore)?:/, "do not use the bounded event path list");
+  assert.match(pages, /run: node scripts\/ci-qualification-scope\.mjs pages/);
+});
+
 test("master docs, named policy and web unit-test changes use preflight", () => {
   const paths = ["README.md", "AGENTS.md", "AGENTS.override.md", "docs/architecture.md",
     "docs/diagrams/execution.svg", ".github/ci/README.md",
@@ -149,23 +171,26 @@ test("unknown, runtime, qualification and mixed changes retain complete master C
 test("manual and PR qualification cannot be suppressed by path classification", () => {
   for (const event of ["pull_request", "workflow_dispatch", "unknown"]) {
     assert.equal(needsFullCiQualification({ ...revisions, event }, () => assert.fail("must not read a diff")), true);
+    assert.equal(needsPagesDeployment({ ...revisions, event }, () => assert.fail("must not read a diff")), true);
   }
 });
 
 test("missing revisions, diff failures and incomplete evidence retain full CI", () => {
-  for (const field of ["before", "after"]) {
-    for (const value of [undefined, "0".repeat(40), "HEAD", "bad;revision"]) {
-      assert.equal(needsFullCiQualification({ ...revisions, [field]: value }, () => assert.fail("invalid revision reached Git")), true);
+  for (const qualify of [needsFullCiQualification, needsPagesDeployment]) {
+    for (const field of ["before", "after"]) {
+      for (const value of [undefined, "0".repeat(40), "HEAD", "bad;revision"]) {
+        assert.equal(qualify({ ...revisions, [field]: value }, () => assert.fail("invalid revision reached Git")), true);
+      }
     }
-  }
-  for (const output of [Buffer.alloc(0), Buffer.from("\0"), Buffer.from("README.md\0\0"), Buffer.from("README.md"), "README.md\0"]) {
-    assert.equal(needsFullCiQualification(revisions, (_command, args) => args[0] === "diff" ? output : Buffer.alloc(0)), true);
-  }
-  for (const failingCommand of ["fetch", "diff"]) {
-    assert.equal(needsFullCiQualification(revisions, (_command, args) => {
-      if (args[0] === failingCommand) throw new Error("missing evidence");
-      return Buffer.alloc(0);
-    }), true);
+    for (const output of [Buffer.alloc(0), Buffer.from("\0"), Buffer.from("README.md\0\0"), Buffer.from("README.md"), "README.md\0"]) {
+      assert.equal(qualify(revisions, (_command, args) => args[0] === "diff" ? output : Buffer.alloc(0)), true);
+    }
+    for (const failingCommand of ["fetch", "diff"]) {
+      assert.equal(qualify(revisions, (_command, args) => {
+        if (args[0] === failingCommand) throw new Error("missing evidence");
+        return Buffer.alloc(0);
+      }), true);
+    }
   }
 });
 
@@ -226,6 +251,21 @@ test("real Git and CLI classify docs and a rename into runtime source", t => {
     cwd: root, stdio: "pipe", env: { ...env, BEFORE_REVISION: after, GITHUB_SHA: commit() },
   });
   assert.equal(readFileSync(output, "utf8"), "full=true\ncuda_demo=false\n");
+  rmSync(output);
+  const runtime = git("rev-parse", "HEAD").toString().trim();
+  mkdirSync(join(root, "crates/noon/tests"), { recursive: true });
+  writeFileSync(join(root, "crates/noon/tests/fixture.rs"), "// integration test\n");
+  const testsOnly = commit();
+  execFileSync(process.execPath, [script, "pages"], {
+    cwd: root, stdio: "pipe", env: { ...env, BEFORE_REVISION: runtime, GITHUB_SHA: testsOnly },
+  });
+  assert.equal(readFileSync(output, "utf8"), "deploy=false\n");
+  rmSync(output);
+  renameSync(join(root, "crates/noon/tests/fixture.rs"), join(root, "crates/new-production.rs"));
+  execFileSync(process.execPath, [script, "pages"], {
+    cwd: root, stdio: "pipe", env: { ...env, BEFORE_REVISION: testsOnly, GITHUB_SHA: commit() },
+  });
+  assert.equal(readFileSync(output, "utf8"), "deploy=true\n");
 });
 
 
