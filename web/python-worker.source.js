@@ -357,6 +357,14 @@ async function initializePyodide() {
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     return context.liveCreateTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity));
   };
+  self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
+    return context.liveCreateTableWithLabels(
+      Array.from(rows, row => Array.from(row)),
+      compositeRows(rowLabels.length ? [rowLabels] : []),
+      compositeRows(columnLabels.length ? [columnLabels] : []),
+      compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity));
+  };
   self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
     return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);

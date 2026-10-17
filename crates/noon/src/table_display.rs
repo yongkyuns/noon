@@ -14,13 +14,13 @@ use crate::{
 use crate::{DecimalFormat, LatexBackend, NumericAuthoringError};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-#[cfg(feature = "native-text")]
-use admission::publish_native_text_table;
 use admission::{
     publish_existing_table, publish_target_table, publish_target_table_with_composite_labels,
     publish_target_table_with_composite_labels_and_top_left_entry,
     publish_target_table_with_top_left_entry, table_shape, TablePublisher,
 };
+#[cfg(feature = "native-text")]
+use admission::{publish_native_text_table, publish_native_text_table_with_composite_labels};
 
 #[cfg(feature = "latex")]
 use admission::{publish_numeric_table, publish_text_table};
@@ -291,6 +291,36 @@ impl Table {
             options,
         )
     }
+    /// Build a native-text table with retained object or family-valued labels.
+    ///
+    /// Labels keep their original semantic roots and are positioned with the
+    /// same grid measurement used for the table entries.
+    #[cfg(feature = "native-text")]
+    pub fn from_rows_with_composite_labels<'a, I, J, S>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let rows = collect_text_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_native_text_table_with_composite_labels(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
+    }
     #[cfg(feature = "native-text")]
     pub fn from_rows_in_store<I, J, S>(
         store: Rc<RefCell<noon_core::SemanticStore>>,
@@ -332,6 +362,33 @@ impl Table {
             shape,
             None,
             None,
+            options,
+        )
+    }
+    /// Live-session counterpart of [`Self::from_rows_with_composite_labels`].
+    #[cfg(feature = "native-text")]
+    pub fn from_rows_with_composite_labels_in_live_session<'a, I, J, S>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let rows = collect_text_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_native_text_table_with_composite_labels(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
             options,
         )
     }
@@ -1923,5 +1980,86 @@ mod tests {
             .iter()
             .all(|entry| matches!(entry, TableEntry::Mobject(object)
             if object.state().unwrap().content.text().is_some())));
+    }
+
+    #[cfg(feature = "native-text")]
+    #[test]
+    fn plain_table_positions_composite_labels_and_corner_entry() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let row_a = circle(&store, 0.15);
+        let row_b = circle(&store, 0.2);
+        let row_a_family = MobjectFamily::create(Rc::clone(&store), &[(&row_a).into()]).unwrap();
+        let row_b_family = MobjectFamily::create(Rc::clone(&store), &[(&row_b).into()]).unwrap();
+        let column = circle(&store, 0.25);
+        let corner = circle(&store, 0.3);
+        let table = Table::from_rows_with_composite_labels(
+            &mut scene,
+            [["first"], ["second"]],
+            Some(vec![(&row_a_family).into(), (&row_b_family).into()]),
+            Some(vec![(&column).into()]),
+            Some((&corner).into()),
+            TableOptions::default(),
+        )
+        .unwrap();
+
+        let row_label_roots = store
+            .borrow()
+            .semantic_family_members_checked(table.row_label_family().unwrap().node_id())
+            .unwrap();
+        assert_eq!(
+            row_label_roots,
+            vec![row_a_family.node_id(), row_b_family.node_id()]
+        );
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(table.column_label_family().unwrap().node_id())
+                .unwrap(),
+            vec![column.node_id()]
+        );
+        let top_left_family = table.top_left_entry_family().unwrap();
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(top_left_family.node_id())
+                .unwrap(),
+            vec![corner.node_id()]
+        );
+
+        let entries = table.rows().unwrap();
+        let entry_bounds = entries
+            .iter()
+            .map(|row| match &row[0] {
+                TableEntry::Mobject(object) => object.layout_bounds().unwrap().unwrap(),
+                TableEntry::Family(family) => family.layout_bounds().unwrap().unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let center = |bounds: Bounds2D64| {
+            (
+                (bounds.min_x + bounds.max_x) * 0.5,
+                (bounds.min_y + bounds.max_y) * 0.5,
+            )
+        };
+        assert_eq!(
+            center(row_a_family.layout_bounds().unwrap().unwrap()).1,
+            center(entry_bounds[0]).1
+        );
+        assert_eq!(
+            center(row_b_family.layout_bounds().unwrap().unwrap()).1,
+            center(entry_bounds[1]).1
+        );
+        assert_eq!(
+            center(column.layout_bounds().unwrap().unwrap()).0,
+            center(entry_bounds[0]).0
+        );
+        assert_eq!(
+            center(corner.layout_bounds().unwrap().unwrap()).0,
+            center(row_a_family.layout_bounds().unwrap().unwrap()).0
+        );
+        assert_eq!(
+            center(corner.layout_bounds().unwrap().unwrap()).1,
+            center(column.layout_bounds().unwrap().unwrap()).1
+        );
     }
 }

@@ -83,6 +83,35 @@ pub fn family_labels_session() -> Result<ExecutionSession, String> {
     scene.execution_session().map_err(|error| error.to_string())
 }
 
+/// Plain-text Table counterpart of the ManimCE fixture with retained labels.
+pub fn labels_session() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let row_labels = [
+        scene.circle(0.15).map_err(|error| error.to_string())?,
+        scene.square(0.4).map_err(|error| error.to_string())?,
+    ];
+    let column_labels = [scene.circle(0.25).map_err(|error| error.to_string())?];
+    let top_left_entry = scene.square(0.3).map_err(|error| error.to_string())?;
+    let table = Table::from_rows_with_composite_labels(
+        &mut scene,
+        [[" "], [" "]],
+        Some(row_labels.iter().map(MobjectTarget::from).collect()),
+        Some(column_labels.iter().map(MobjectTarget::from).collect()),
+        Some(MobjectTarget::from(&top_left_entry)),
+        TableOptions {
+            h_buff: 0.7,
+            v_buff: 0.45,
+            include_outer_lines: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[table.family().into()])
+        .map_err(|error| error.to_string())?;
+    scene.execution_session().map_err(|error| error.to_string())
+}
+
 pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let options = TableOptions {

@@ -12,6 +12,24 @@ class MathTableExample(Scene):
         self.wait(0.2)
 
 
+class TableLabelsExample(Scene):
+    def construct(self):
+        row_labels = [Circle(radius=0.15), Square(side_length=0.4)]
+        column_labels = [Circle(radius=0.25)]
+        top_left_entry = Square(side_length=0.3)
+        table = Table(
+            [[" "], [" "]],
+            row_labels=row_labels,
+            col_labels=column_labels,
+            top_left_entry=top_left_entry,
+            h_buff=0.7,
+            v_buff=0.45,
+            include_outer_lines=True,
+        )
+        self.add(table)
+        self.wait(0.2)
+
+
 class MobjectTableExample(Scene):
     def construct(self):
         pair = VGroup(Circle(radius=0.2), Square(side_length=0.3).shift(RIGHT * 0.5))

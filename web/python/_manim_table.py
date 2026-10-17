@@ -18,6 +18,7 @@ try:
     from js import noonCreateAuthoringIntegerTableHandle as _create_integer_table
     from js import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
     from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
+    from js import noonCreateAuthoringTableWithLabelsHandle as _create_table_with_labels
     from js import noonHighlightTableCell as _highlight_table
     from js import noonGetHighlightedTableCell as _get_highlighted_table
     from js import noonTableFromFamily as _table_from_family
@@ -25,7 +26,8 @@ try:
 except ImportError:
     _table_from_family = None
     _create_table = _create_math_table = _create_integer_table = None
-    _create_decimal_table = _create_mobject_table = _highlight_table = _get_highlighted_table = _table_cell = None
+    _create_decimal_table = _create_mobject_table = _create_table_with_labels = None
+    _highlight_table = _get_highlighted_table = _table_cell = None
 
 
 _OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines", "line_config"}
@@ -74,6 +76,18 @@ def _handle_key(handle):
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
 
 
+def _label_handle(value, kind="Table"):
+    if not isinstance(value, _base.Mobject):
+        raise TypeError(f"{kind} labels must be shared Mobjects")
+    family = getattr(value, "_semantic_family_handle", None)
+    if family is not None:
+        return family
+    handle = _handle_for(value)
+    if handle is None:
+        raise TypeError(f"{kind} labels require current shared semantic identities")
+    return handle
+
+
 def _cell_position(pos):
     try:
         row, column = pos
@@ -88,10 +102,51 @@ def _cell_position(pos):
 class Table(_compat.VGroup):
     """A normal retained family: entries, lines and highlights remain Rust handles."""
     def __init__(self, table, **kwargs):
+        row_label_mobjects = kwargs.pop("row_labels", None)
+        column_label_mobjects = kwargs.pop("col_labels", None)
+        top_left_entry = kwargs.pop("top_left_entry", None)
+        if row_label_mobjects is not None:
+            row_label_mobjects = list(row_label_mobjects)
+        if column_label_mobjects is not None:
+            column_label_mobjects = list(column_label_mobjects)
+        if top_left_entry is not None and (
+            row_label_mobjects is None or column_label_mobjects is None
+        ):
+            raise ValueError("top_left_entry requires both row_labels and col_labels")
         if _create_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("Table", allow_unstarted=True)
-        self._initialize_table(engine_call(_create_table, _rows(table, str), *_options(kwargs), context), context)
+        if row_label_mobjects is not None or column_label_mobjects is not None or top_left_entry is not None:
+            if _create_table_with_labels is None:
+                raise RuntimeError("Table labels require Noon’s shared Rust authoring runtime")
+            handle = engine_call(
+                _create_table_with_labels,
+                _rows(table, str),
+                [_label_handle(value) for value in row_label_mobjects or []],
+                [_label_handle(value) for value in column_label_mobjects or []],
+                [_label_handle(top_left_entry)] if top_left_entry is not None else [],
+                *_options(kwargs),
+                context,
+            )
+        else:
+            handle = engine_call(_create_table, _rows(table, str), *_options(kwargs), context)
+        self._initialize_table(handle, context)
+        self.row_labels = row_label_mobjects
+        self.col_labels = column_label_mobjects
+        self.top_left_entry = top_left_entry
+        family_index = 3
+        for labels in (row_label_mobjects, column_label_mobjects):
+            if labels is not None:
+                label_group = self.submobjects[family_index]
+                label_group._semantic_member_wrappers = {
+                    _family_wrapper_key(value): value for value in labels
+                }
+                family_index += 1
+        if top_left_entry is not None:
+            top_left_family = self.submobjects[family_index]
+            top_left_family._semantic_member_wrappers = {
+                _family_wrapper_key(top_left_entry): top_left_entry
+            }
 
     def _initialize_table(self, handle, context):
         self._table_handle = handle
@@ -309,12 +364,4 @@ class MobjectTable(Table):
 
     @staticmethod
     def _label_handle(value):
-        if not isinstance(value, _base.Mobject):
-            raise TypeError("MobjectTable labels must be shared Mobjects")
-        family = getattr(value, "_semantic_family_handle", None)
-        if family is not None:
-            return family
-        handle = _handle_for(value)
-        if handle is None:
-            raise TypeError("MobjectTable labels require current shared semantic identities")
-        return handle
+        return _label_handle(value, "MobjectTable")

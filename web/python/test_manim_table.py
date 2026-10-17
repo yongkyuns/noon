@@ -48,6 +48,10 @@ class _Context:
         self.calls.append(("create", args))
         return self.handle
 
+    def liveCreateTableWithLabels(self, *args):
+        self.calls.append(("create_with_labels", args))
+        return self.handle
+
 
 class _MobjectHandle(_Handle):
     pass
@@ -92,6 +96,7 @@ class TableFacadeTests(unittest.TestCase):
 
         self.patches = [
             patch.object(table, "_create_table", side_effect=self.context.liveCreateTable),
+            patch.object(table, "_create_table_with_labels", side_effect=self.context.liveCreateTableWithLabels),
             patch.object(table, "_live_constructor_context", return_value=self.context),
             patch.object(table, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
             patch.object(table, "_attach_shared_family", side_effect=attach_family),
@@ -219,6 +224,64 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
             with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
                 table.MobjectTable([[entry]], top_left_entry=top_left_entry)
+
+    def test_table_row_column_and_corner_labels_retain_shared_wrappers(self):
+        row_label = _FakeMobject(1)
+        column_label = _FakeFamily(2)
+        top_left_entry = _FakeMobject(3)
+        context = types.SimpleNamespace()
+        self.handle._family.submobjects = [
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[row_label]),
+            types.SimpleNamespace(submobjects=[column_label]),
+            types.SimpleNamespace(submobjects=[top_left_entry]),
+        ]
+        calls = []
+
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff,
+                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, _context):
+            calls.append((rows, row_labels, column_labels, top_left_entries))
+            self.assertEqual(rows, [["a"]])
+            self.assertEqual(row_labels, [row_label._semantic_handle])
+            self.assertEqual(column_labels, [column_label._semantic_family_handle])
+            self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
+            self.assertEqual((v_buff, h_buff, outer_lines, inner_lines), (0.8, 1.3, False, True))
+            return self.handle
+
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_table_with_labels", side_effect=create), \
+                patch.object(table, "_live_constructor_context", return_value=context), \
+                patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_test_submobjects", family.submobjects),
+                    setattr(wrapper, "_canonical_live_target_context", context),
+                )), \
+                patch.object(table._compat.Group, "submobjects", new=property(
+                    lambda wrapper: wrapper._test_submobjects
+                )), \
+                patch.object(table, "_family_wrapper_key", side_effect=lambda value: (
+                    f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"
+                )):
+            value = table.Table(
+                [["a"]], row_labels=[row_label], col_labels=[column_label],
+                top_left_entry=top_left_entry,
+            )
+
+        self.assertEqual(calls, [([['a']], [row_label._semantic_handle],
+                                  [column_label._semantic_family_handle],
+                                  [top_left_entry._semantic_handle])])
+        self.assertIs(value.row_labels[0], row_label)
+        self.assertIs(value.col_labels[0], column_label)
+        self.assertIs(value.top_left_entry, top_left_entry)
+        self.assertIs(value._test_submobjects[3]._semantic_member_wrappers["1:1"], row_label)
+        self.assertIs(value._test_submobjects[4]._semantic_member_wrappers["2:1"], column_label)
+        self.assertIs(value._test_submobjects[5]._semantic_member_wrappers["3:1"], top_left_entry)
+
+    def test_table_top_left_entry_requires_both_label_sets(self):
+        with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
+            table.Table([["a"]], top_left_entry=_FakeMobject(1))
 
     def test_mobject_table_accepts_family_labels_and_rejects_unshared_labels(self):
         with patch.object(table._base, "Mobject", _FakeMobject), \

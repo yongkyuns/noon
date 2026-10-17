@@ -44,6 +44,15 @@ The Python table also exposes the original `row_labels`, `col_labels`, and
 `top_left_entry` wrappers; a copied table gets independent wrappers over its
 copied semantic roots.
 
+`table-labels` covers those same retained label identities on base `Table`.
+Its body cells use blank strings to isolate label and corner placement from the
+known default-cell font-metric difference. Rust/WASM and Python-worker pixels
+match exactly on WebGPU and WebGL2; the browser lifecycle verifies wrapper
+identity, copy independence, and table construction on both. Strict pinned
+ManimCE Cairo comparison passes unchanged thresholds with exact duration and
+0.17% worst differing pixels. Non-empty default-cell font metrics and custom
+element formatting remain unqualified.
+
 `table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
 outer rules retained. The option defaults to `True`, travels through the Rust,
 WASM, and Python constructors, and survives table-family rehydration. Its direct
