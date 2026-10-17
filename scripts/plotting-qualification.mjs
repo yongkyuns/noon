@@ -302,10 +302,27 @@ class AxesAddCoordinates(Scene):
         assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
 
         mixed = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
-        mixed.add_coordinates({0: "origin"}, (-1, 1), font="DejaVu Sans Mono")
-        assert len(mixed.coordinate_labels.submobjects) == 2
-        assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
-        assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
+        family_size = len(mixed.get_family())
+        coordinates_before = getattr(mixed, "coordinate_labels", None)
+        aliases_before = tuple(getattr(axis, key, None)
+                               for axis in (mixed.x_axis, mixed.y_axis)
+                               for key in ("numbers", "labels"))
+        for values, options in (
+            (({0: "origin"}, (-1, 1)), {"font": "DejaVu Sans Mono"}),
+            (((-1, 1), (-1, 1)), {"x_config": {"font": "DejaVu Sans Mono"}}),
+        ):
+            try:
+                mixed.add_coordinates(*values, **options)
+            except NotImplementedError as error:
+                assert "two-axis" in str(error)
+            else:
+                raise AssertionError("unqualified two-axis profiles must reject")
+            assert len(mixed.get_family()) == family_size
+            assert getattr(mixed, "coordinate_labels", None) is coordinates_before
+            aliases_after = tuple(getattr(axis, key, None)
+                                  for axis in (mixed.x_axis, mixed.y_axis)
+                                  for key in ("numbers", "labels"))
+            assert all(after is before for before, after in zip(aliases_before, aliases_after))
 
         self.add(default_axes, configured, override, x_only, x_default, custom, mixed)
         await self.wait(0.05)
@@ -347,10 +364,27 @@ class NumberPlaneAddCoordinates(Scene):
         assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
 
         mixed = NumberPlane((-2, 2, 1), (-1, 1, 1))
-        mixed.add_coordinates({0: "origin"}, (-1, 1), font="DejaVu Sans Mono")
-        assert len(mixed.coordinate_labels.submobjects) == 2
-        assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
-        assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
+        family_size = len(mixed.get_family())
+        coordinates_before = getattr(mixed, "coordinate_labels", None)
+        aliases_before = tuple(getattr(axis, key, None)
+                               for axis in (mixed.x_axis, mixed.y_axis)
+                               for key in ("numbers", "labels"))
+        for values, options in (
+            (({0: "origin"}, (-1, 1)), {"font": "DejaVu Sans Mono"}),
+            (((-1, 1), (-1, 1)), {"x_config": {"font": "DejaVu Sans Mono"}}),
+        ):
+            try:
+                mixed.add_coordinates(*values, **options)
+            except NotImplementedError as error:
+                assert "two-axis" in str(error)
+            else:
+                raise AssertionError("unqualified two-axis profiles must reject")
+            assert len(mixed.get_family()) == family_size
+            assert getattr(mixed, "coordinate_labels", None) is coordinates_before
+            aliases_after = tuple(getattr(axis, key, None)
+                                  for axis in (mixed.x_axis, mixed.y_axis)
+                                  for key in ("numbers", "labels"))
+            assert all(after is before for before, after in zip(aliases_before, aliases_after))
 
         self.add(default_plane, x_only, x_default, custom, mixed)
         await self.wait(0.05)
