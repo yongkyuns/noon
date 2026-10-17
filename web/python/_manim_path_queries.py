@@ -3,7 +3,11 @@ import operator
 import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
-from _manim_semantic_handles import _all_points_observation, _typed_manim_observation
+from _manim_semantic_handles import (
+    _all_points_observation,
+    _family_point_count_observation,
+    _typed_manim_observation,
+)
 
 
 def _query(value):
@@ -67,6 +71,9 @@ def curve_count(value):
 
 
 def point_count(value):
+    family_count = _family_point_count_observation(value)
+    if family_count is not None:
+        return family_count
     query = _query(value)
     try:
         return int(query.pointCount)

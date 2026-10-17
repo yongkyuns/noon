@@ -1861,6 +1861,14 @@ def _all_points_observation(value: _base.Mobject):
     )
 
 
+def _family_point_count_observation(value: _base.Mobject) -> int | None:
+    if not _is_shared_family(value):
+        return None
+    # Family nodes own membership but no point array of their own, matching
+    # Mobject.get_num_points() on Manim Group/VGroup instances.
+    return int(engine_call(value._semantic_family_handle.pointCount))
+
+
 def _is_shared_family(value: object) -> bool:
     return (
         isinstance(value, _compat.Group)

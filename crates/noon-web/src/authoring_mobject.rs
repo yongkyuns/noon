@@ -1129,6 +1129,12 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            self.semantic_family()?;
+            Ok(0)
+        }
+
         #[wasm_bindgen(js_name = allPoints)]
         pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;

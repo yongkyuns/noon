@@ -72,6 +72,19 @@ class PathQueryTests(unittest.TestCase):
             self.assertIs(semantic_handles._all_points_observation(value), coordinates)
         family.allPoints.assert_called_once_with()
 
+    def test_group_point_count_excludes_descendant_points(self):
+        for cls in (compat.Group, compat.VGroup):
+            with self.subTest(cls=cls.__name__):
+                value = identity_only_wrapper(cls)
+                family = Mock()
+                family.pointCount.return_value = 0
+                value._semantic_family_handle = family
+
+                self.assertEqual(value.get_num_points(), 0)
+                self.assertFalse(value.has_points())
+                self.assertTrue(value.has_no_points())
+                self.assertEqual(family.pointCount.call_count, 3)
+
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
