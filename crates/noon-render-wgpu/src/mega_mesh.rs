@@ -338,10 +338,172 @@ fn push_dirty_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
         return;
     }
     if let Some(last) = ranges.last_mut() {
-        if last.end >= range.start {
+        // Source-slot order need not match resident vertex order after preload
+        // or arena reuse. Preserve earlier ranges for the existing normalization
+        // pass instead of silently dropping their lower start (or filling gaps).
+        if last.start <= range.start && last.end >= range.start {
             last.end = last.end.max(range.end);
             return;
         }
     }
     ranges.push(range);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reversed_mega_dirty_ranges_preserve_clean_gaps() {
+        let mut ranges = Vec::new();
+        push_dirty_range(&mut ranges, 16..24);
+        push_dirty_range(&mut ranges, 0..8);
+        crate::normalize_dirty_ranges(&mut ranges);
+        assert_eq!(ranges, vec![0..8, 16..24]);
+    }
+
+    #[test]
+    fn mega_dirty_ranges_preserve_every_small_three_write_union() {
+        let candidates = (0..=6)
+            .flat_map(|start| (start..=6).map(move |end| start..end))
+            .collect::<Vec<_>>();
+        let coverage = |ranges: &[Range<usize>]| {
+            ranges
+                .iter()
+                .flat_map(|range| range.clone())
+                .fold(0_u64, |mask, index| mask | (1_u64 << index))
+        };
+        for first in &candidates {
+            for second in &candidates {
+                for third in &candidates {
+                    let inputs = [first.clone(), second.clone(), third.clone()];
+                    let mut actual = Vec::new();
+                    for range in &inputs {
+                        push_dirty_range(&mut actual, range.clone());
+                    }
+                    crate::normalize_dirty_ranges(&mut actual);
+                    assert_eq!(
+                        coverage(&actual),
+                        coverage(&inputs),
+                        "dirty upload coverage changed for {inputs:?}: {actual:?}"
+                    );
+                    assert!(actual.windows(2).all(|pair| pair[0].end < pair[1].start));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_preloaded_paths_publish_reverse_order_instance_updates() {
+        use crate::PathMeshPreload;
+        use noon_core::{
+            Color, GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec2, VectorPath,
+        };
+        use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+
+        let geometries = (0..3)
+            .map(|index| {
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-1.0, index as f32 * 0.2))
+                        .line_to(Vec2::new(1.0 + index as f32 * 0.1, -0.5)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            ..Style::default()
+        };
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: geometries
+                .iter()
+                .enumerate()
+                .map(|(index, geometry)| FrameObjectState {
+                    glow: None,
+                    spatial: None,
+                    id: ObjectId::new(index as u64 + 1),
+                    z_index: 0.0,
+                    content: ObjectContentRef::Geometry(geometry.clone()),
+                    text_bounds: None,
+                    transform: Transform2D::IDENTITY,
+                    style,
+                    appearance: 1.0,
+                })
+                .collect(),
+            presences: vec![true; 3],
+            reveals: vec![1.0; 3],
+            morphs: vec![0.0; 3],
+            render_geometries: vec![None; 3],
+            render_transforms: vec![None; 3],
+            family_animations: vec![],
+            family_animation_plan_indices: vec![],
+        };
+        let requests = geometries
+            .iter()
+            .rev()
+            .map(|geometry| PathMeshPreload {
+                geometry,
+                style,
+                transform: Transform2D::IDENTITY,
+            })
+            .collect::<Vec<_>>();
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        preparer.preload_paths(&requests).unwrap();
+        let (mut uploaded, batches) = {
+            let initial = preparer.prepare(&frame);
+            assert_eq!(initial.stats.mega_path_count, 3);
+            let batches = (0..3)
+                .map(|index| match initial.observe_object(index).unwrap().primitive {
+                    RenderPrimitive::Path { batch } => batch,
+                    primitive => panic!("expected a retained source path, got {primitive:?}"),
+                })
+                .collect::<Vec<_>>();
+            (initial.mega_path_vertex_instances.to_vec(), batches)
+        };
+        let source_ranges = batches
+            .iter()
+            .map(|&batch| range_usize(&preparer.path_batch_vertex_ranges[batch]))
+            .collect::<Vec<_>>();
+        assert!(source_ranges[2].end <= source_ranges[1].start);
+        assert!(source_ranges[1].end <= source_ranges[0].start);
+        assert!(source_ranges.iter().all(|range| !range.is_empty()));
+        let expected_dirty_vertices = source_ranges[0].len() + source_ranges[2].len();
+
+        // Sorted source slots deliberately visit descending resident addresses.
+        // Copy only advertised dirty slices into a retained upload mirror: a CPU
+        // frame can look correct while a missed range leaves GPU data stale.
+        for (first_opacity, last_opacity) in [(0.25, 0.5), (1.0, 1.0), (0.6, 0.3)] {
+            frame.objects[0].style.opacity = first_opacity;
+            frame.objects[2].style.opacity = last_opacity;
+            let prepared =
+                preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0, 2]));
+            assert_eq!(prepared.stats.full_rebuilds, 0);
+            assert_eq!(prepared.stats.geometry_cache_misses, 0);
+            assert_eq!(prepared.stats.path_vertices_repacked, 0);
+            assert_eq!(prepared.stats.path_indices_repacked, 0);
+            assert!(!prepared.mega_path_index_dirty);
+            assert_eq!(
+                prepared.stats.mega_path_instance_vertices_repacked,
+                expected_dirty_vertices
+            );
+            assert!(prepared.mega_path_instance_dirty_ranges.iter().all(|range| {
+                range.end <= source_ranges[1].start || range.start >= source_ranges[1].end
+            }));
+            for range in prepared.mega_path_instance_dirty_ranges {
+                uploaded[range.clone()]
+                    .copy_from_slice(&prepared.mega_path_vertex_instances[range.clone()]);
+            }
+            assert_eq!(uploaded.as_slice(), prepared.mega_path_vertex_instances);
+        }
+
+        let clean = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![]));
+        assert!(clean.mega_path_instance_dirty_ranges.is_empty());
+        assert!(clean.mega_path_index_dirty_ranges.is_empty());
+        assert_eq!(clean.stats.full_rebuilds, 0);
+        let rebuilt = preparer.prepare(&frame);
+        assert_eq!(uploaded.as_slice(), rebuilt.mega_path_vertex_instances);
+    }
 }
