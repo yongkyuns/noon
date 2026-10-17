@@ -194,6 +194,7 @@ fn vector_path_boundaries_use_curve_anchors_while_base_queries_keep_all_points()
     assert_eq!(target.path_boundary_points().unwrap(), [(0., 0.), (1., 0.)]);
     assert_eq!(target.extremum_along_dim(0, 1.).unwrap(), 10.);
     assert_eq!(target.path_boundary_extremum_along_dim(0, 1.).unwrap(), 1.);
+    assert_eq!(target.path_boundary_extremum_along_dim(0, 0.).unwrap(), 0.5);
     assert_eq!(target.boundary_point(1., 0.).unwrap(), (10., 0.));
     assert_eq!(target.path_boundary_point(1., 0.).unwrap(), (1., 0.));
     assert_eq!(target.length_over_dim(0).unwrap(), 10.);

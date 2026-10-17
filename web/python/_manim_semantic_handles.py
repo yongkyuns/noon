@@ -650,6 +650,23 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
     return _clone_mobject(self)
 
 
+def _vmobject_path_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        return (
+            getattr(context, "queryMobjectPath", None) is not None
+            and getattr(
+                context, "queryMobjectPathBoundaryExtremumAlongDim", None
+            ) is not None
+        )
+    handle = _handle_for(value)
+    return (
+        handle is not None
+        and hasattr(handle, "pathQuery")
+        and hasattr(handle, "pathBoundaryExtremumAlongDim")
+    )
+
+
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     """Clone a detached target through Rust's explicit target-editor boundary."""
 
@@ -660,6 +677,11 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
+    if (
+        isinstance(self, _compat.VMobject)
+        and _vmobject_path_boundary_queries_available(self)
+    ):
+        return _get_critical_point(self, _base.ORIGIN)
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))

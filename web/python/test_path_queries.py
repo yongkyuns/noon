@@ -259,6 +259,20 @@ class PathQueryTests(unittest.TestCase):
             [(value, 0, -1.0), (value, 1, 1.0)],
         )
 
+    def test_vmobject_center_uses_anchor_critical_point(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(
+            semantic_handles, "_vmobject_path_boundary_queries_available", return_value=True
+        ), patch.object(
+            semantic_handles,
+            "_get_critical_point",
+            return_value=noon.Vec2(0.5, 1.0),
+        ) as critical_point:
+            self.assertEqual(semantic_handles._get_center(value), noon.Vec2(0.5, 1.0))
+        critical_point.assert_called_once_with(value, noon.ORIGIN)
+
     def test_extremum_along_dim_routes_default_points_to_rust(self):
         value = identity_only_wrapper(compat.VMobject)
         value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
