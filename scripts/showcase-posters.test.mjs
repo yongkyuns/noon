@@ -108,10 +108,13 @@ test("CUDA showcase has exact renderer-derived, source-bound supplementary poste
   const record = JSON.parse(await read("thumbnails/showcase/showcase-cuda-transpose-evidence.json"));
   const source = await read(entry.path), png = await read(entry.thumbnail);
   assertRetainedCudaFidelityPoster(entry, record, source, png);
+  assert.throws(() => assertRetainedCudaFidelityPoster(
+    { ...entry, duration: entry.duration + 1 }, record, source, png), /storyboard duration/);
   for (const mutate of [
     (copy) => { copy.capture.rendererBackend = "CPU"; },
     (copy) => { copy.capture.cudaValidated = true; },
     (copy) => { copy.capture.artifactId = 0; },
+    (copy) => { copy.capture.authoredDurationSeconds = 81.71; },
     (copy) => { copy.capture.runtimeBuildIdentity.buildId = "wrong"; },
     (copy) => { copy.sample.publishedTime += 1; },
     (copy) => { copy.image.pngSha256 = "0".repeat(64); },

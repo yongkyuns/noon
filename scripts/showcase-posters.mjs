@@ -102,6 +102,7 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(record.id, entry.id);
   assert.equal(record.sourcePath, entry.path);
   assert.equal(record.thumbnail, entry.thumbnail);
+  assert.match(record.sourceSha256, /^[a-f0-9]{64}$/, "source identity must be a full SHA-256");
   assert.equal(record.sourceSha256, hash(source), "CUDA poster source changed; recapture required");
   assert.equal(record.image.pngSha256, hash(png), "CUDA poster pixels differ from the captured renderer frame");
   assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
@@ -123,6 +124,9 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(capture.artifactId, 12110234543);
   assert.equal(capture.testedPrHead, "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d");
   assert.equal(capture.reportStatus, "passed");
+  assert.ok(Number.isFinite(capture.authoredDurationSeconds) &&
+    Math.abs(capture.authoredDurationSeconds - entry.duration) <= 1e-9,
+    "CUDA poster storyboard duration differs from the completed source");
   assert.equal(capture.positiveCases, 3);
   assert.equal(capture.negativeControls, 6);
   assert.equal(capture.oracle, "independent-cpu-closed-form");

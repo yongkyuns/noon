@@ -384,11 +384,12 @@
         "padding",
         "syntax-highlighted code"
       ],
-      "duration": 81.71,
+      "duration": 76.14,
       "thumbnail_time": 64.0499998399999,
       "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
       "thumbnail_alt": "Actual Noon-rendered padded CUDA transpose: the highlighted tile read sends 32 numbered requests to 32 separate shared-memory banks",
       "playback_capability": "deterministic-retained-replay",
+      "still_intervals": [[72.64, 76.14]],
       "beats": [
         {
           "time": 6.29,
@@ -403,7 +404,7 @@
           "label": "Padded column read distributes lanes across all 32 banks"
         },
         {
-          "time": 79,
+          "time": 73,
           "label": "Compare padded and unpadded read rounds"
         }
       ]
