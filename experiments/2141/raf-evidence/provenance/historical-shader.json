@@ -1,0 +1,215 @@
+{
+  "schema": 1,
+  "purpose": "Historical shader performance provenance; distinguish from current frozen-10000-vector end-to-end profiling.",
+  "repository": "yongkyuns/noon",
+  "issue": 2056,
+  "pullRequest": 2057,
+  "shaderCommit": "e55ba8dae61aafd633575033b59c0224abafa458",
+  "baseline": {
+    "sourceRevision": "6c6c0398c97fbbb0b09deb9a6e7485660ffdd5ed",
+    "buildId": "e33bf8f91e3f3930ce8cffa584b10f2178bac12822147bbfc8fd132c0c2bb7cb"
+  },
+  "candidate": {
+    "sourceRevision": "3567f45cf651a429ac02d0668b83896120afc46f",
+    "buildId": "29c247f0765587227a596fcb360e496f9cfc750a114c7a2a6889688d06cfd908"
+  },
+  "evidence": {
+    "runId": 38509400537,
+    "jobId": 115674194479,
+    "url": "https://github.com/yongkyuns/noon/actions/runs/38509400537/job/115674194479",
+    "artifactId": 11870172551,
+    "archivePath": "raw/historical-shader.zip",
+    "archiveSha256": "0a70f6f8623901df4246ba92c9ae81c1a1fb3c3ba758bc87a489a6e19eb84557",
+    "reportMember": "browser-smoke-artifacts/triangle-profile/renderer/report.json",
+    "expiresAt": "2026-10-21T04:42:40Z"
+  },
+  "sourceComparison": {
+    "url": "https://github.com/yongkyuns/noon/compare/6c6c0398c97fbbb0b09deb9a6e7485660ffdd5ed...3567f45cf651a429ac02d0668b83896120afc46f",
+    "status": "ahead",
+    "files": [
+      {
+        "filename": ".github/ci/README.md",
+        "status": "modified",
+        "additions": 12,
+        "deletions": 0
+      },
+      {
+        "filename": ".github/workflows/playground-showcase-qualification.yml",
+        "status": "modified",
+        "additions": 14,
+        "deletions": 0
+      },
+      {
+        "filename": ".github/workflows/playground-triangle-light-profile.yml",
+        "status": "added",
+        "additions": 121,
+        "deletions": 0
+      },
+      {
+        "filename": ".github/workflows/playground-triangle-light-review.yml",
+        "status": "added",
+        "additions": 100,
+        "deletions": 0
+      },
+      {
+        "filename": "README.md",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "filename": "crates/noon-render-wgpu/src/polygon_coverage.wgsl",
+        "status": "modified",
+        "additions": 32,
+        "deletions": 166
+      },
+      {
+        "filename": "crates/noon-render-wgpu/tests/polygon_fill_coverage.rs",
+        "status": "added",
+        "additions": 191,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-candidate.mjs",
+        "status": "added",
+        "additions": 80,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-candidate.test.mjs",
+        "status": "added",
+        "additions": 64,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-deps.py",
+        "status": "added",
+        "additions": 53,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-deps.test.py",
+        "status": "added",
+        "additions": 83,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-motion.mjs",
+        "status": "added",
+        "additions": 41,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-motion.test.mjs",
+        "status": "added",
+        "additions": 39,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-preview.py",
+        "status": "added",
+        "additions": 132,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-preview.test.py",
+        "status": "added",
+        "additions": 73,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-profile-cadence.mjs",
+        "status": "added",
+        "additions": 94,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-profile-renderer.mjs",
+        "status": "added",
+        "additions": 97,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-profile.mjs",
+        "status": "added",
+        "additions": 151,
+        "deletions": 0
+      },
+      {
+        "filename": "scripts/showcase-triangle-light-profile.test.mjs",
+        "status": "added",
+        "additions": 47,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/examples/showcase_triangle_light.candidate.json",
+        "status": "added",
+        "additions": 70,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/examples/showcase_triangle_light.py",
+        "status": "added",
+        "additions": 601,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/test_showcase_triangle_light.py",
+        "status": "added",
+        "additions": 268,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/test_showcase_triangle_light_failures.py",
+        "status": "added",
+        "additions": 53,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/test_showcase_triangle_light_review.py",
+        "status": "added",
+        "additions": 132,
+        "deletions": 0
+      },
+      {
+        "filename": "web/python/test_showcase_triangle_light_visibility.py",
+        "status": "added",
+        "additions": 50,
+        "deletions": 0
+      },
+      {
+        "filename": "web/scene-perf.js",
+        "status": "modified",
+        "additions": 9,
+        "deletions": 0
+      }
+    ]
+  },
+  "shaderIdentities": [
+    {
+      "sourceRevision": "6af9661a2bf551170a0835aac9eeb32feb32dff5",
+      "blobSha": "f9ac542b89ea3c714afc0dfd89a0d3df625921e0",
+      "implementation": "ClippedPolygon / clip_polygon_axis"
+    },
+    {
+      "sourceRevision": "3567f45cf651a429ac02d0668b83896120afc46f",
+      "blobSha": "4e5cfa3217fc95080552cc49c09a063e2b165b2f",
+      "implementation": "CoveragePolygon / bounded perimeter integral"
+    },
+    {
+      "sourceRevision": "798ae68bd29a4e22571f5f850261cf8739abe090",
+      "blobSha": "4e5cfa3217fc95080552cc49c09a063e2b165b2f",
+      "implementation": "CoveragePolygon / bounded perimeter integral"
+    }
+  ],
+  "interpretation": {
+    "supported": "Large-fill and public Triangle-light scene cadence improved about3x with essentially unchanged CPU calls and draw counts, in the original software-renderer diagnostic. The only changed production Rust/renderer source file between these baseline/candidate revisions is polygon_coverage.wgsl. PR2175 already has the same new shader bytes; research6af has the old implementation.",
+    "limits": [
+      "Replay sampling diagnostic, not ordinary frozen10000-vector playback.",
+      "Same source per pair, Chrome151.0.7922.34, forced SwiftShader1152x648, optimized release packages; not a physical-GPU claim.",
+      "Fixed baseline-then-candidate order per case; no isolated dependency-lock comparison retained for original baseline.",
+      "Do not ascribe current cross-environment timing differences solely to the shader or claim all remaining bottlenecks eliminated."
+    ],
+    "runtimeArchiveAvailability": "Original release artifact11827693078 now404; original Pages artifact expired; research6af has no runtime artifact. Available triangle previews are dev builds."
+  }
+}

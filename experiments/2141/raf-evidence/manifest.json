@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "hash_algorithm": "SHA256",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 9949,
+      "sha256": "b31bd08b4c31fbb61e6074ad92849715e33a62091eb7b5c7e7cdc4509c430f16"
+    },
+    {
+      "path": "harness/endpoint-admission.mjs",
+      "bytes": 1743,
+      "sha256": "506b34ba4f1e051abf8e33d94c71696e83b6d5e1edf766794f7fb4c43f796d96"
+    },
+    {
+      "path": "harness/frozen-scene-profile.mjs",
+      "bytes": 12174,
+      "sha256": "6171bdc2e73b65670f9a110919db77dd89a0d2ad6c49749fdcd512f16f33e639"
+    },
+    {
+      "path": "harness/profile-probe.js",
+      "bytes": 2544,
+      "sha256": "940351f26b3fa1b91de53ab5de6263d1ff5c8f0b319f09cb4946a3735fa169c5"
+    },
+    {
+      "path": "package.json",
+      "bytes": 245,
+      "sha256": "09121d6fc6b298e0b841d1798fad2e31c6215ef97ae9193dac7bf258583f0f6f"
+    },
+    {
+      "path": "provenance/historical-shader.json",
+      "bytes": 7262,
+      "sha256": "c66c6d74408fda7e2132b61411d01cb6a19c601e57bcb1d9762ecf0469bcc31d"
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 4224,
+      "sha256": "10746c7edb683bc20aa22f40f3fda571bf6b321bff9edee42f1b6803e00566a2"
+    },
+    {
+      "path": "raw/historical-shader.zip",
+      "bytes": 385599,
+      "sha256": "0a70f6f8623901df4246ba92c9ae81c1a1fb3c3ba758bc87a489a6e19eb84557"
+    },
+    {
+      "path": "raw/local-chromium151-report.json.gz",
+      "bytes": 230299,
+      "sha256": "9f6e3e47f140dbe62983533f4739dca2a4e1a94b09118034175e843313537efa"
+    },
+    {
+      "path": "raw/local-frame-0.png",
+      "bytes": 351000,
+      "sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1"
+    },
+    {
+      "path": "raw/local-frame-1.png",
+      "bytes": 351000,
+      "sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1"
+    },
+    {
+      "path": "raw/prior-frozen-vector.zip",
+      "bytes": 631417,
+      "sha256": "02eb11737879b1d5dd40bcfef62733c9b285d45673a0fc71c3bd44949498248d"
+    },
+    {
+      "path": "summaries/findings.json",
+      "bytes": 9502,
+      "sha256": "c4b3d422efb512da56bb74e1c133b94aa70356465c126147cadcc36fb0be555b"
+    },
+    {
+      "path": "tools/analyze-instrumented.py",
+      "bytes": 20543,
+      "sha256": "67ccb880854a8850b7219beb19f6c9f2789c78c9f6e4b16fea348a0738b55024"
+    },
+    {
+      "path": "tools/analyze-prior.py",
+      "bytes": 15706,
+      "sha256": "4ffa71cb5d75c195093123e96b4af0a54c9fc4005ba379e27f5e6c1daad56992"
+    },
+    {
+      "path": "tools/analyze-shader.py",
+      "bytes": 5418,
+      "sha256": "8cf2e1cc66fe8971081272f7c3863831951192b967c5d28fafc71081f72dd169"
+    },
+    {
+      "path": "tools/prepare-site.py",
+      "bytes": 5384,
+      "sha256": "571bb03ae9a5b1b04fcffa568d5dabd396416eaa030a139ebe4dab96eafdc964"
+    },
+    {
+      "path": "tools/reproduce.py",
+      "bytes": 3997,
+      "sha256": "b281a232c1b71819bdbab69638b4a0e1abaa57685b0d8e9bc9def4088fd04f7a"
+    },
+    {
+      "path": "workload/scene.py",
+      "bytes": 29435,
+      "sha256": "32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e"
+    }
+  ]
+}

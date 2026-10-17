@@ -1,0 +1,10 @@
+{
+  "name": "noon-frozen-vector-research",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Temporary reproducible profiling evidence; no production changes",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

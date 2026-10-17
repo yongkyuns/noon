@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/yongkyuns/noon",
+  "scope": "Temporary research only; no production source changes. Current capture predates the follow-up PR 2175 fixes.",
+  "frozen_workload": {
+    "path": "workload/scene.py",
+    "sha256": "32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e",
+    "authored_seconds": 25,
+    "fast_flights": 80,
+    "fast_flight_authored_seconds": 8.2
+  },
+  "prior_frozen_artifact": {
+    "path": "raw/prior-frozen-vector.zip",
+    "sha256": "02eb11737879b1d5dd40bcfef62733c9b285d45673a0fc71c3bd44949498248d",
+    "candidate_revision": "6af9661a2bf551170a0835aac9eeb32feb32dff5",
+    "baseline_revision": "7627db6e8dbae54057ad86d2b1b6e82209f20262",
+    "status": "collected-unqualified",
+    "source_unchanged": true
+  },
+  "current_capture": {
+    "path": "raw/local-chromium151-report.json.gz",
+    "uncompressed_sha256": "6f6a856b204d200eb175560d8a6bb1df5e48eb7a16459f814565d8379ec59591",
+    "uncompressed_bytes": 5366051,
+    "started_at": "2026-10-17T13:04:10.702Z",
+    "status": "collected-unqualified",
+    "runtime": {
+      "buildId": "e8b96ad53b327bcec41dcfc5a660acb011f30e17cb564721706c94654fce80aa",
+      "revision": "68ef5ad7d0684e362fe070619506e59a38bc6168",
+      "files": {
+        "worker": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7",
+        "wasm": "abd53be2999138f054fe203ac738f3b0667c0ec0c4a14ed7cef52450fea67e12",
+        "glue": "d5bbb4c5a07bc2928bf1a422308b83e0cd370d8fcdecf9c17fd1404f78de1576",
+        "verifier": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "runtime_artifact": {
+      "id": 12083686108,
+      "archive_sha256": "4a560c2cd64d888e190eda1b1b5723fea995d14a098464693a73881a0cb16346",
+      "archive_bytes": 24090898,
+      "source_revision": "68ef5ad7d0684e362fe070619506e59a38bc6168",
+      "kind": "PR 2175 synthetic CI merge before follow-up fixes",
+      "included": false
+    },
+    "web_host_revision": "798ae68bd29a4e22571f5f850261cf8739abe090",
+    "web_host_audit": {
+      "tracked_files_compared": 753,
+      "unchanged": 751,
+      "missing": 0,
+      "modified_by_probe": 2
+    },
+    "probe": {
+      "path": "harness/profile-probe.js",
+      "sha256": "940351f26b3fa1b91de53ab5de6263d1ff5c8f0b319f09cb4946a3735fa169c5",
+      "event_cap_per_worker": 100000,
+      "dropped_events": 0
+    },
+    "instrumented_host_files": {
+      "authoring-render-controller.js": {
+        "original_sha256": "2cacd928942d90602f0084af092c85a5e2e5faf10ac4fba2e7a2237d57eeec95",
+        "captured_sha256": "f84b9f4fefafadda91e8d51d832eb957447e37121dd9e6991d77dc85790e2ce4"
+      },
+      "semantic-engine-endpoint.js": {
+        "original_sha256": "0521d8ce5142083b15ba75fff02d85cadc11a0fffb66e91678849d4cf0cbf22d",
+        "captured_sha256": "30e1f974ed982e5353273cdeb254ce2a430629fea56844f8f907fbe58cb010cf"
+      }
+    },
+    "browser": {
+      "version": "151.0.7922.34",
+      "archive_sha256": "ae8736ac28bc69278551500f219fc749575648263c43ec5990749eff43b9fcf8",
+      "archive_bytes": 193282658,
+      "included": false,
+      "playwright_version": "1.62.1",
+      "backend": "WebGL2 / forced ANGLE SwiftShader software rendering",
+      "viewport_css_pixels": [
+        1280,
+        800
+      ],
+      "canvas_backing_pixels": [
+        620,
+        348
+      ],
+      "device_pixel_ratio": 1
+    },
+    "runs": [
+      "cold",
+      "fresh-scene-same-page"
+    ],
+    "poll_interval_ms": 50,
+    "source_and_compiled_runtime_hashes_verified": true,
+    "ordinary_editor_run_path": true
+  },
+  "historical_shader_provenance": "provenance/historical-shader.json",
+  "interpretation_limits": [
+    "Local current and prior frozen runs are not a same-host controlled A/B; do not causally attribute their elapsed difference to the shader.",
+    "The separate historical shader experiment uses a different public full-scene source hash and replay cadence harness; it is not the frozen 10000-ray ordinary playback.",
+    "Renderer calls and presentation acknowledgements are CPU-side events, not GPU completion or physical scanout.",
+    "A near-25-second playback clock span does not imply every short flight has interior presentations."
+  ]
+}
