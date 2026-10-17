@@ -74,6 +74,14 @@ def point_count(value):
         query.free()
 
 
+def has_new_path_started(value):
+    query = _query(value)
+    try:
+        return bool(engine_call(query.hasNewPathStarted))
+    finally:
+        query.free()
+
+
 def curve_points(value, n):
     index = operator.index(n)
     if not 0 <= index <= 0xFFFFFFFF:

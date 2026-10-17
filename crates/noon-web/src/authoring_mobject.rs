@@ -1542,6 +1542,10 @@ mod wasm {
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
         }
+        #[wasm_bindgen(js_name = hasNewPathStarted)]
+        pub fn has_new_path_started(&self) -> bool {
+            self.value.has_new_path_started()
+        }
         pub fn direction(&self) -> String {
             self.value.direction().to_owned()
         }

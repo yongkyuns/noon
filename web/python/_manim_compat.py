@@ -303,6 +303,10 @@ class VMobject(Mobject):
         from _manim_path_queries import last_point
         return last_point(self)
 
+    def has_new_path_started(self) -> bool:
+        from _manim_path_queries import has_new_path_started
+        return has_new_path_started(self)
+
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
         return arc_length(self, sample_points_per_curve)

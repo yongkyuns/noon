@@ -99,6 +99,17 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(query.end.call_count, 1)
             self.assertEqual(query.free.call_count, 2)
 
+    def test_has_new_path_started_delegates_to_rust_and_releases_snapshots(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.hasNewPathStarted.side_effect = [False, True]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertFalse(value.has_new_path_started())
+            self.assertTrue(value.has_new_path_started())
+        self.assertEqual(observe.call_count, 2)
+        self.assertEqual(query.hasNewPathStarted.call_count, 2)
+        self.assertEqual(query.free.call_count, 2)
+
     def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(queries, '_typed_manim_observation') as observe:

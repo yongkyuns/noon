@@ -55,6 +55,12 @@ impl PathQuery {
         4 * self.curve_count() + usize::from(self.unfinished_anchor.is_some())
     }
 
+    /// Whether the path ends with a MoveTo anchor that has not joined a curve.
+    /// Noon stores each cubic with four points, matching Manim's default stride.
+    pub fn has_new_path_started(&self) -> bool {
+        self.point_count() % 4 == 1
+    }
+
     /// Cubic controls in this snapshot's coordinate space. Lines and quadratics
     /// are promoted exactly; the returned points are derived observations.
     pub fn curve_points(&self, index: usize) -> Result<[(f64, f64); 4], AuthoringError> {

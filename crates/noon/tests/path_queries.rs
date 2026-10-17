@@ -69,6 +69,39 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
 }
 
 #[test]
+fn new_path_started_tracks_the_unfinished_cubic_anchor() {
+    let mut scene = Scene::new();
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    assert!(!empty.path_query().unwrap().has_new_path_started());
+
+    let anchored = scene
+        .path(VectorPath::new().move_to(Vec2::ZERO), Default::default())
+        .unwrap();
+    assert!(anchored.path_query().unwrap().has_new_path_started());
+
+    let complete = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(!complete.path_query().unwrap().has_new_path_started());
+
+    let reopened = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.))
+                .move_to(Vec2::new(2., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(reopened.path_query().unwrap().has_new_path_started());
+}
+
+#[test]
 fn curve_length_piece_queries_match_sample_count_and_world_scale() {
     let mut scene = Scene::new();
     let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
