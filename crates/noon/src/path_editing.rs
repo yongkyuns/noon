@@ -308,6 +308,22 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_cubic_bezier_curves(
+        &mut self,
+        object: &Mobject,
+        curves: &[[Vec2; 4]],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CubicCurves(curves),
+            )
+        })
+    }
+
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Close)
@@ -379,6 +395,15 @@ pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError
     Ok(path)
 }
 
+fn append_cubic_curve(path: VectorPath, curve: [Vec2; 4]) -> VectorPath {
+    let [anchor1, handle1, handle2, anchor2] = curve;
+    if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
+        path.cubic_to(handle1, handle2, anchor2)
+    } else {
+        path.move_to(anchor1).cubic_to(handle1, handle2, anchor2)
+    }
+}
+
 pub(crate) fn path_replacement_state(
     mut state: SemanticObjectState,
 ) -> Result<SemanticObjectState, AuthoringError> {
@@ -420,6 +445,7 @@ pub(crate) enum PathEdit<'a> {
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
+    CubicCurves(&'a [[Vec2; 4]]),
     Close,
     Reverse,
     Subdivide(usize),
@@ -440,12 +466,23 @@ impl PathEdit<'_> {
             return Ok(Some(VectorPath::new()));
         }
         if let Self::CubicCurve(anchor1, handle1, handle2, anchor2) = self {
-            let mut path = world_path(store, state)?;
-            if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
-                path = path.cubic_to(handle1, handle2, anchor2);
-            } else {
-                path = path.move_to(anchor1).cubic_to(handle1, handle2, anchor2);
+            let path = append_cubic_curve(
+                world_path(store, state)?,
+                [anchor1, handle1, handle2, anchor2],
+            );
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
             }
+            return Ok(Some(path));
+        }
+        if let Self::CubicCurves(curves) = self {
+            if curves.is_empty() {
+                return Ok(None);
+            }
+            let path = curves
+                .iter()
+                .copied()
+                .fold(world_path(store, state)?, append_cubic_curve);
             if !path.is_finite() {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
@@ -541,6 +578,7 @@ impl PathEdit<'_> {
                 | Self::Reverse
                 | Self::Subdivide(_)
                 | Self::CubicCurve(_, _, _, _)
+                | Self::CubicCurves(_)
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -775,6 +813,10 @@ impl Mobject {
         anchor2: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2))
+    }
+    /// Append a batch of four-control-point cubic curves atomically.
+    pub fn add_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CubicCurves(curves))
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)

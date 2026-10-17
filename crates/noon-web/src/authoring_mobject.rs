@@ -2159,6 +2159,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addCubicBezierCurves)]
+        pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.handle
+                .add_cubic_bezier_curves(&curves)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setPointsSmoothly)]
         pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
             self.handle

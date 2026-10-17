@@ -248,6 +248,89 @@ fn cubic_curve_appends_connected_and_disconnected_segments_authored_and_live() {
 }
 
 #[test]
+fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+        let curves = [
+            [
+                Vec2::new(0., 0.),
+                Vec2::new(1., 0.),
+                Vec2::new(1., 1.),
+                Vec2::new(2., 1.),
+            ],
+            [
+                Vec2::new(2., 1.),
+                Vec2::new(3., 1.),
+                Vec2::new(3., 2.),
+                Vec2::new(4., 2.),
+            ],
+        ];
+        let revision = scene.revision();
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::CubicCurves {
+                    object: &object,
+                    curves: &curves,
+                },
+            )
+            .unwrap();
+        } else {
+            object.add_cubic_bezier_curves(&curves).unwrap();
+        }
+        assert_ne!(scene.revision(), revision);
+
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 2);
+        assert_eq!(query.subpaths().len(), 1);
+        assert_eq!(query.end().unwrap(), (4., 2.));
+
+        let invalid = [[
+            Vec2::new(4., 2.),
+            Vec2::new(f32::NAN, 0.),
+            Vec2::new(5., 3.),
+            Vec2::new(6., 3.),
+        ]];
+        let revision = scene.revision();
+        let result = if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::CubicCurves {
+                    object: &object,
+                    curves: &invalid,
+                },
+            )
+        } else {
+            object.add_cubic_bezier_curves(&invalid)
+        };
+        assert!(result.is_err());
+        assert_eq!(scene.revision(), revision);
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 2);
+        assert_eq!(query.end().unwrap(), (4., 2.));
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

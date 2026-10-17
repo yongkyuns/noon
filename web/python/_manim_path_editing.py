@@ -12,6 +12,30 @@ def clear_points(value):
     return edit_points(value, "clearPoints", "liveClearPoints", ())
 
 
+def add_cubic_bezier_curves(value, curves):
+    curves = list(curves)
+    if curves and _looks_like_point(curves[0]):
+        curves = [curves]
+    points = [point for curve in curves for point in curve]
+    return edit_points(
+        value,
+        "addCubicBezierCurves",
+        "liveAddCubicBezierCurves",
+        points,
+        array=True,
+    )
+
+
+def _looks_like_point(value):
+    if isinstance(value, _base.Vec2):
+        return True
+    try:
+        size = len(value)
+    except (TypeError, AttributeError):
+        return False
+    return size in (2, 3) and all(not hasattr(component, "__len__") for component in value)
+
+
 def edit_points(value, method, live_method, points, *, array=False):
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():

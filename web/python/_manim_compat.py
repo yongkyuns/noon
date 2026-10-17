@@ -161,6 +161,10 @@ class VMobject(Mobject):
             (anchor1, handle1, handle2, anchor2),
         )
 
+    def add_cubic_bezier_curves(self, curves):
+        from _manim_path_editing import add_cubic_bezier_curves
+        return add_cubic_bezier_curves(self, curves)
+
     def insert_n_curves(self, n):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)
