@@ -35,7 +35,13 @@ if (process.env.NOON_CUDA_CAPTURE) {
   assert.equal(validation.status, 0, validation.stdout + validation.stderr);
   capture = JSON.parse(await readFile(filename, 'utf8'));
   report.oracle = 'cuda-instrumented-accesses-and-original-kernel-output';
-  report.cudaValidated = true;
+  const verification = JSON.parse(validation.stdout);
+  assert.equal(verification.status, 'passed');
+  assert.equal(verification.cudaCaptureVerified, true);
+  assert.equal(verification.modelComparison.sceneSha256, report.sceneSha256, 'verified model differs from browser source');
+  assert.equal(verification.modelComparison.cases, 64);
+  report.cudaCaptureVerified = true;
+  report.modelComparison = verification.modelComparison;
   report.captureSha256 = sha256(await readFile(filename));
   report.cudaProvenance = capture.provenance;
 } else if (process.env.NOON_CUDA_REQUIRE_GPU === '1') {
@@ -70,11 +76,9 @@ const cases = [
   ...Object.keys(expectedFailure).map(fault => ({column:3, speed:1, fault})),
 ];
 function assembled(config) {
-  const gpu = capture ? capture.columns[String(config.column)] : null;
   return `${source}\n${probe}\nimport json as _cuda_json\nfrom js import console as _cuda_console\n` +
     `_cuda_config = _cuda_json.loads(${JSON.stringify(JSON.stringify(config))})\n` +
     `SPEED = _cuda_config['speed']\nCOLUMN = _cuda_config['column']\n` +
-    `GPU_TRACE = _cuda_json.loads(${JSON.stringify(JSON.stringify(gpu))})\n` +
     mutations[config.fault] +
     `_cuda_probe = CudaVisualProbe(_cuda_config, lambda message: _cuda_console.log('NOON_CUDA_AUDIT ' + _cuda_json.dumps(message, allow_nan=False)))\n` +
     `_original_cuda_construct = CudaTransposeBanks.construct\n` +
@@ -212,6 +216,7 @@ try {
     console.log(`${evidence.status}: ${name}`);
   }
   report.status='passed';
+  report.cudaValidated = capture !== null;
 } catch (error) {
   report.status='failed'; report.error=String(error?.stack ?? error); throw error;
 } finally {
