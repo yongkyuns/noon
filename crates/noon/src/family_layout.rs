@@ -623,6 +623,7 @@ pub(crate) fn effective_anchor_layout_measure(
 
 /// Validate that persistent composite placement can safely use an entry's state.
 /// Existing affine/reactive drivers cannot be baked into a new authored position.
+#[cfg(any(feature = "native-text", feature = "latex", test))]
 pub(crate) fn composite_entry_state(
     store: &Rc<RefCell<SemanticStore>>,
     execution: Option<&ExecutionSession>,

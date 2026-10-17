@@ -1029,6 +1029,7 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
+    #[cfg(any(feature = "native-text", feature = "latex"))]
     pub(crate) fn composite_entry_state(
         &self,
         source: &Mobject,

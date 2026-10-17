@@ -9,7 +9,7 @@ pub use compiler::TextCompilerDiagnostics;
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
 pub(crate) use semantic::prepare_native_text;
-#[cfg(feature = "latex")]
+#[cfg(all(feature = "native-text", feature = "latex"))]
 pub(crate) use semantic::PreparedDecimalLabels;
 #[cfg(feature = "typst")]
 pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
@@ -17,14 +17,18 @@ pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
 use std::sync::Arc;
 
 use noon_compile::CompileError;
+#[cfg(feature = "native-text")]
+use noon_core::TextSourceKind;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::Vec2;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::{Color, Transform2D, WHITE};
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
-    TextResourceValidationError, Transform2D, WHITE,
+    FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
+    TextResourceValidationError,
 };
 #[cfg(feature = "native-text")]
 use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
-#[cfg(any(feature = "native-text", feature = "typst"))]
-use noon_core::{TextSourceKind, Vec2};
 #[cfg(feature = "native-text")]
 pub use noon_text::shaping::{NativeFontFace, NativeFontMetricsProfile};
 #[cfg(feature = "native-text")]
@@ -54,6 +58,7 @@ pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
 #[cfg(feature = "native-text")]
 pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans Mono";
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 #[derive(Clone, Debug, PartialEq)]
 struct TextPresentation {
     color: Color,
@@ -61,6 +66,7 @@ struct TextPresentation {
     transform: Transform2D,
 }
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 impl Default for TextPresentation {
     fn default() -> Self {
         Self {
@@ -71,6 +77,7 @@ impl Default for TextPresentation {
     }
 }
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 impl TextPresentation {
     fn validate(&self) -> Result<(), TextAuthoringError> {
         if !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {
@@ -119,7 +126,7 @@ impl TypstSpec {
 
 #[cfg(feature = "typst")]
 macro_rules! typst_object {
-    ($name:ident, $mode:expr, $kind:expr) => {
+    ($name:ident, $mode:expr) => {
         #[derive(Clone, Debug, PartialEq)]
         pub struct $name(TypstSpec);
 
@@ -191,9 +198,9 @@ macro_rules! typst_object {
 }
 
 #[cfg(feature = "typst")]
-typst_object!(Typst, TypstMode::Markup, TextSourceKind::Typst);
+typst_object!(Typst, TypstMode::Markup);
 #[cfg(feature = "typst")]
-typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
+typst_object!(MathTypst, TypstMode::Math);
 
 /// Native plain text authored through the same semantic text-resource contract as Typst.
 ///

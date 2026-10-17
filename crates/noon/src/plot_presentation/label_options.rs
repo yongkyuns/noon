@@ -23,7 +23,6 @@ pub struct NumberLabelOptions {
     pub color: crate::Color,
 }
 
-#[cfg(any(feature = "native-text", feature = "latex"))]
 impl NumberLabelOptions {
     pub(crate) fn decimal_format(&self) -> noon_core::DecimalFormat {
         noon_core::DecimalFormat {

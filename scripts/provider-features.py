@@ -104,15 +104,15 @@ def run(command: list[str], *, env: dict[str, str], output: Path | None = None) 
 
 
 def facade_check_command(config: str, target: str) -> list[str]:
-    """Share the real all-target check with the provider-example regression."""
+    """Share the real all-target compilation/lint gate with the example regression."""
     if config not in CONFIGS:
         raise ValueError(f"unknown provider configuration: {config}")
-    command = ["cargo", "check", "--manifest-path", str(ROOT / "Cargo.toml"),
+    command = ["cargo", "clippy", "--manifest-path", str(ROOT / "Cargo.toml"),
                "-p", "noon", "--target", target, "--no-default-features"]
     features = "default" if config == "product" else CONFIGS[config]
     if features:
         command += ["--features", features]
-    return [*command, "--all-targets"]
+    return [*command, "--all-targets", "--", "-D", "warnings"]
 
 
 def main() -> None:
@@ -192,7 +192,7 @@ def main() -> None:
             test_command.append("--no-run")
         run(test_command, env=env)
         run(["cargo", "clippy", *common, "--all-targets", "--", "-D", "warnings"], env=env)
-        # Ordinary facade targets/examples must also compile independently.
+        # Lint the facade itself: dependency lint caps on the consumer do not cover it.
         run(facade_check_command(args.config, args.target), env=env)
     (output / "qualification-passed.txt").write_text("All requested checks completed successfully.\n")
 

@@ -40,6 +40,7 @@ concurrency:
 
 env:
   CARGO_BUILD_JOBS: '2'
+  CARGO_TARGET_DIR: target/provider-consumer
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
@@ -95,8 +96,11 @@ jobs:
       - name: Qualify the minimal public facade documentation and example
         if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          cargo test -p noon --no-default-features --doc
-          cargo run -p noon --no-default-features --example shared_authoring
+          cargo test -p noon --no-default-features --doc --target '${{ matrix.target }}'
+          cargo run -p noon --no-default-features --example shared_authoring --target '${{ matrix.target }}'
+      - name: Compile and lint the standalone LaTeX facade
+        if: matrix.config == 'native-text'
+        run: cargo clippy -p noon --no-default-features --features latex --lib --target '${{ matrix.target }}' -- -D warnings
       - name: Prove provider-dependent examples require feature guards
         if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
         env:
