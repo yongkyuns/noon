@@ -7030,25 +7030,22 @@
     },
     {
       "id": "reference-49083e27dd1c895b",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Code. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Code exports a shared Rust native highlighting and indentation profile. The exact pinned CodeFromString directive still needs canonical semantic/effective-state, timing, raster and replay qualification; the native/Python examples and exported class alone do not establish full Manim parity.",
       "owners": [
         "#83",
         "#89",
         "#185",
         "#256",
-        "#365"
+        "#365",
+        "#2193"
       ],
       "reference_provenance": {
         "source_path": "manim/mobject/text/code_mobject.py",
         "directive_line": 52,
         "name": "CodeFromString",
         "source_sha256": "327f2202cfcea2b30ebe3b1a81f3bb794835fa107d359a270eb21ae5981103af"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Code"
-      ]
+      }
     },
     {
       "id": "reference-69f08c961aa1a514",

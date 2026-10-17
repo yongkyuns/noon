@@ -546,13 +546,9 @@ impl RetainedTextQuadPreparer {
                     continue;
                 };
                 let run = &resource.runs[*run_index as usize];
-                let color = match plane {
-                    GlyphAtlasPlane::Mask => color_with_opacity(
-                        run.fill.or(object.style.fill).unwrap_or(Color::WHITE),
-                        object_opacity,
-                    ),
-                    GlyphAtlasPlane::Color => [1.0, 1.0, 1.0, object_opacity],
-                };
+                let paint =
+                    super::resolve_text_paint(run.fill, object.style.fill).unwrap_or(Color::WHITE);
+                let color = glyph_color_for_plane(paint, object_opacity, *plane);
                 let start = instance_range.start as usize;
                 let end = instance_range.end as usize;
                 let quads = match plane {
@@ -844,7 +840,7 @@ impl RetainedTextQuadPreparer {
         let requested_size = requested_raster_pixel_size(run, object_transform, metrics)?;
         let pixel_size = raster_size_bucket(requested_size);
         let pixels_to_local = run.font_size / pixel_size;
-        let mask_color = run.fill.or(object_fill).unwrap_or(Color::WHITE);
+        let paint = super::resolve_text_paint(run.fill, object_fill).unwrap_or(Color::WHITE);
 
         for glyph in run.glyphs.iter() {
             // Very large glyphs already use coarse geometric size buckets. Keep one
@@ -896,10 +892,7 @@ impl RetainedTextQuadPreparer {
             let world_axis_x = transform_vector(object_transform, resource_axis_x);
             let world_axis_y = transform_vector(object_transform, resource_axis_y);
 
-            let color = match atlas_image.plane {
-                GlyphAtlasPlane::Mask => color_with_opacity(mask_color, object_opacity),
-                GlyphAtlasPlane::Color => [1.0, 1.0, 1.0, object_opacity],
-            };
+            let color = glyph_color_for_plane(paint, object_opacity, atlas_image.plane);
             let quad = GlyphQuadInstance {
                 origin: [world_origin.x, world_origin.y],
                 axis_x: [world_axis_x.x, world_axis_x.y],
@@ -1111,6 +1104,15 @@ fn color_with_opacity(color: Color, opacity: f32) -> [f32; 4] {
     [color.red, color.green, color.blue, color.alpha * opacity]
 }
 
+fn glyph_color_for_plane(paint: Color, object_opacity: f32, plane: GlyphAtlasPlane) -> [f32; 4] {
+    match plane {
+        GlyphAtlasPlane::Mask => color_with_opacity(paint, object_opacity),
+        // Color glyphs keep their intrinsic RGB, but obey both fill alpha and
+        // the owning object's independent composite/appearance multiplier.
+        GlyphAtlasPlane::Color => [1.0, 1.0, 1.0, paint.alpha * object_opacity],
+    }
+}
+
 /// Select a bounded outline-raster phase when the glyph-to-device transform is a
 /// translation plus uniform axis-aligned scale. Rotated, skewed, or non-uniform
 /// bitmap quads keep phase zero and the established filtered affine path.
@@ -1307,6 +1309,107 @@ mod tests {
 
     fn metrics() -> TextDeviceMetrics {
         TextDeviceMetrics::uniform(67.5).unwrap()
+    }
+
+    #[test]
+    fn glyph_planes_keep_fill_alpha_and_object_opacity_independent() {
+        let intrinsic = Color::rgba(0.2, 0.6, 0.8, 0.5);
+        let owner_fill = Color::rgba(1.0, 0.0, 0.0, 0.25);
+        let paint = crate::text::resolve_text_paint(Some(intrinsic), Some(owner_fill)).unwrap();
+        assert_eq!(
+            glyph_color_for_plane(paint, 0.5, GlyphAtlasPlane::Mask),
+            [0.2, 0.6, 0.8, 0.0625]
+        );
+        assert_eq!(
+            glyph_color_for_plane(paint, 0.5, GlyphAtlasPlane::Color),
+            [1.0, 1.0, 1.0, 0.0625]
+        );
+        let inherited = crate::text::resolve_text_paint(None, Some(owner_fill)).unwrap();
+        assert_eq!(
+            glyph_color_for_plane(inherited, 0.5, GlyphAtlasPlane::Mask),
+            [1.0, 0.0, 0.0, 0.125]
+        );
+    }
+
+    #[test]
+    fn intrinsic_text_fill_alpha_updates_resident_quads_locally_and_restores_exactly() {
+        let mut artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        for run in std::sync::Arc::make_mut(&mut artifact.resource.runs) {
+            run.fill = Some(Color::rgba(0.2, 0.6, 0.8, 0.5));
+        }
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = two_text_frame(handle);
+        frame.objects[1].style.opacity = 0.5;
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
+        let (original, changed_range) = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            let range = prepared
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    PreparedTextItem::GlyphBatch {
+                        object_index: 1,
+                        instance_range,
+                        ..
+                    } => Some(instance_range.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            (
+                prepared.mask_quads.to_vec(),
+                range.start as usize..range.end as usize,
+            )
+        };
+        assert!(!changed_range.is_empty());
+        assert!(original[changed_range.clone()]
+            .iter()
+            .all(|quad| quad.color == [0.2, 0.6, 0.8, 0.25]));
+        let raster_before = preparer.raster_stats();
+        let atlas_before = preparer.atlas_stats();
+        for alpha in [0.25, 0.0, 1.0] {
+            frame.objects[1].style.fill = Some(Color::rgba(1.0, 0.0, 0.0, alpha));
+            let current = preparer
+                .prepare_with_changes(
+                    &device,
+                    &frame,
+                    &FrameChanges::objects(vec![1]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap()
+                .mask_quads
+                .to_vec();
+            for (index, (before, after)) in original.iter().zip(&current).enumerate() {
+                if changed_range.contains(&index) {
+                    assert_eq!(after.origin, before.origin);
+                    assert_eq!(after.color, [0.2, 0.6, 0.8, 0.25 * alpha]);
+                } else {
+                    assert_eq!(after, before);
+                }
+            }
+            let mut fresh = RetainedTextQuadPreparer::new(128).unwrap();
+            let fresh = fresh
+                .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
+                .unwrap();
+            assert_eq!(current, fresh.mask_quads);
+            if alpha == 1.0 {
+                assert_eq!(current, original);
+            }
+        }
+        assert_eq!(preparer.raster_stats(), raster_before);
+        assert_eq!(preparer.atlas_stats(), atlas_before);
     }
 
     #[test]

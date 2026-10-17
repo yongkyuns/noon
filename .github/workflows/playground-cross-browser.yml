@@ -24,9 +24,11 @@ on:
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/code-*"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
       - "!web/**/*.test.mjs"
+      - "web/code-block-bootstrap.test.mjs"
   pull_request:
     paths:
       - ".github/workflows/playground-cross-browser.yml"
@@ -48,9 +50,11 @@ on:
       - "scripts/playground-python-family-transform-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/code-*"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
       - "!web/**/*.test.mjs"
+      - "web/code-block-bootstrap.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -175,6 +179,20 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-family-transform
         run: ${{ matrix.display }} node scripts/playground-python-family-transform-smoke.mjs
+      - name: Qualify native Code pixels and Python live authoring on both GPU backends
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 5
+        env:
+          NOON_CODE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
+        run: node scripts/code-qualification.mjs
+      - name: Retain Code rendering and lifecycle evidence
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
+          if-no-files-found: warn
+          retention-days: 3
       - name: Test gallery click animation and idle restoration
         timeout-minutes: 5
         env:
