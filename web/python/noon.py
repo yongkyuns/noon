@@ -485,6 +485,11 @@ class Mobject:
     def has_no_points(self) -> bool:
         return not self.has_points()
 
+    def reset_points(self) -> Mobject:
+        """Clear this object's authored points through the shared path editor."""
+        from _manim_path_editing import clear_points
+        return clear_points(self)
+
     def throw_error_if_no_points(self) -> None:
         if self.has_no_points():
             import sys

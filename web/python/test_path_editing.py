@@ -8,6 +8,15 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathEditingTests(unittest.TestCase):
+    def test_base_reset_points_uses_shared_path_clear(self):
+        value = identity_only_wrapper(compat.Mobject)
+        handle = Mock()
+        with patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.reset_points(), value)
+        handle.clearPoints.assert_called_once_with()
+
     def test_authored_and_live_dispatch_preserve_wrapper_identity(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
