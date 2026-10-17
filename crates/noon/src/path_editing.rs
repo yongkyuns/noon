@@ -255,6 +255,22 @@ impl crate::Scene {
         })
     }
 
+    pub fn set_cubic_bezier_curves(
+        &mut self,
+        object: &Mobject,
+        curves: &[[Vec2; 4]],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SetCubicCurves(curves),
+            )
+        })
+    }
+
     pub fn start_new_path(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Start(point))
@@ -533,6 +549,7 @@ pub(crate) enum PathEdit<'a> {
     Cubic(Vec2, Vec2, Vec2),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
     CubicCurves(&'a [[Vec2; 4]]),
+    SetCubicCurves(&'a [[Vec2; 4]]),
     AppendVectorized(&'a SemanticObjectState),
     Close,
     Reverse,
@@ -574,6 +591,20 @@ impl PathEdit<'_> {
             if !path.is_finite() {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
+            return Ok(Some(path));
+        }
+        if let Self::SetCubicCurves(curves) = self {
+            if curves
+                .iter()
+                .flatten()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let path = curves
+                .iter()
+                .copied()
+                .fold(VectorPath::new(), append_cubic_curve);
             return Ok(Some(path));
         }
         if let Self::AppendCorners(points) = self {
@@ -701,6 +732,7 @@ impl PathEdit<'_> {
                 | Self::Subdivide(_)
                 | Self::CubicCurve(_, _, _, _)
                 | Self::CubicCurves(_)
+                | Self::SetCubicCurves(_)
                 | Self::AppendCorners(_)
                 | Self::AppendVectorized(_)
                 | Self::Partial { .. } => {
@@ -901,6 +933,10 @@ impl Mobject {
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Corners(points))
+    }
+    /// Replace the path with cubic curves defined by four points each.
+    pub fn set_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SetCubicCurves(curves))
     }
     /// Remove this object's path while retaining its semantic identity and style.
     pub fn clear_points(&mut self) -> Result<(), AuthoringError> {

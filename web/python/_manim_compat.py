@@ -169,6 +169,10 @@ class VMobject(Mobject):
         from _manim_path_editing import add_subpath
         return add_subpath(self, points)
 
+    def set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2):
+        from _manim_path_editing import set_anchors_and_handles
+        return set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2)
+
     def append_vectorized_mobject(self, source):
         from _manim_path_editing import append_vectorized_mobject
         return append_vectorized_mobject(self, source)

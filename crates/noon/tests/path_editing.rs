@@ -331,6 +331,86 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
 }
 
 #[test]
+fn set_cubic_bezier_curves_replaces_paths_authored_and_live() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(
+                ManimGeometryOptions::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(10., 10.))
+                        .line_to(Vec2::new(11., 10.)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+        let curves = [
+            [
+                Vec2::new(0., 0.),
+                Vec2::new(1., 0.),
+                Vec2::new(1., 1.),
+                Vec2::new(2., 1.),
+            ],
+            [
+                Vec2::new(2., 1.),
+                Vec2::new(3., 1.),
+                Vec2::new(3., 2.),
+                Vec2::new(4., 2.),
+            ],
+        ];
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::SetCubicCurves {
+                    object: &object,
+                    curves: &curves,
+                },
+            )
+            .unwrap();
+        } else {
+            object.set_cubic_bezier_curves(&curves).unwrap();
+        }
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 2);
+        assert_eq!(query.subpaths().len(), 1);
+        assert_eq!(query.start().unwrap(), (0., 0.));
+        assert_eq!(query.end().unwrap(), (4., 2.));
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::SetCubicCurves {
+                    object: &object,
+                    curves: &[],
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                noon::integration::effective_path_query(&store, &execution, &object)
+                    .unwrap()
+                    .curve_count(),
+                0
+            );
+        } else {
+            object.set_cubic_bezier_curves(&[]).unwrap();
+            assert_eq!(object.path_query().unwrap().curve_count(), 0);
+        }
+    }
+}
+
+#[test]
 fn add_points_as_corners_appends_atomically_authored_and_live() {
     for live_mode in [false, true] {
         let mut scene = Scene::new();

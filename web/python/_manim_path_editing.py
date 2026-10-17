@@ -42,6 +42,23 @@ def add_subpath(value, points):
     return add_cubic_bezier_curves(value, curves)
 
 
+def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
+    assert len(anchors1) == len(handles1) == len(handles2) == len(anchors2)
+    curves = [
+        [anchor1, handle1, handle2, anchor2]
+        for anchor1, handle1, handle2, anchor2 in zip(
+            anchors1, handles1, handles2, anchors2, strict=True
+        )
+    ]
+    return edit_points(
+        value,
+        "setCubicBezierCurves",
+        "liveSetCubicBezierCurves",
+        [point for curve in curves for point in curve],
+        array=True,
+    )
+
+
 def append_vectorized_mobject(value, source):
     from _manim_compat import VMobject
     from _manim_updaters import canonical_callback_phase_active

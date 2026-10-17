@@ -882,6 +882,18 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_cubic_bezier_curves(
+        &mut self,
+        source: &noon::Mobject,
+        curves: &[[noon_core::Vec2; 4]],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurves {
+            object: source,
+            curves,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_add_points_as_corners(
         &mut self,
         source: &noon::Mobject,

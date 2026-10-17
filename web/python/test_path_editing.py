@@ -134,6 +134,34 @@ class PathEditingTests(unittest.TestCase):
                 value.add_subpath(points[:-1])
             resolve.assert_not_called()
 
+    def test_set_anchors_and_handles_interleaves_and_replaces_through_one_edit(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        arrays = (
+            [(0, 0, 0), (2, 1, 0)],
+            [(1, 0, 0), (3, 1, 0)],
+            [(1, 1, 0), (3, 2, 0)],
+            [(2, 1, 0), (4, 2, 0)],
+        )
+        expected = [0., 0., 1., 0., 1., 1., 2., 1., 2., 1., 3., 1., 3., 2., 4., 2.]
+        for context in (None, Mock()):
+            with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+                 patch.object(editing, '_handle_for', return_value=handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(value.set_anchors_and_handles(*arrays), value)
+            if context is None:
+                handle.setCubicBezierCurves.assert_called_once_with(expected)
+            else:
+                context.liveSetCubicBezierCurves.assert_called_once_with(handle, expected)
+
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(AssertionError):
+                value.set_anchors_and_handles(arrays[0], arrays[1], arrays[2], arrays[3][:-1])
+            resolve.assert_not_called()
+
     def test_append_vectorized_mobject_dispatches_shared_source_in_authored_or_live_mode(self):
         value = identity_only_wrapper(compat.VMobject)
         source = identity_only_wrapper(compat.VMobject)
@@ -175,6 +203,8 @@ class PathEditingTests(unittest.TestCase):
                 value.add_points_as_corners([(1, 0), (2, 1)])
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.add_subpath([(0, 0), (1, 0), (1, 1), (2, 1)])
+            with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                value.set_anchors_and_handles([(0, 0)], [(1, 0)], [(1, 1)], [(2, 1)])
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.append_vectorized_mobject(identity_only_wrapper(compat.VMobject))
             resolve.assert_not_called()

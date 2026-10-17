@@ -8172,6 +8172,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetCubicBezierCurves)]
+        pub fn live_set_cubic_bezier_curves(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_cubic_bezier_curves(source.semantic_mobject(), &curves)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAddPointsAsCorners)]
         pub fn live_add_points_as_corners(
             &mut self,
