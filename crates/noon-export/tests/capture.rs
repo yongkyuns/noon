@@ -355,3 +355,45 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires software Vulkan; run by Native Host Smoke without DISPLAY"]
+fn native_capture_signal_trains_keep_rails_and_reproduce_seek_pixels() {
+    let mut session = noon::example_scenes::line_passing_flash::train_session().unwrap();
+    let mut capture = noon_export::SessionCapture::new(&session, software(640, 360)).unwrap();
+    let times = [0.0, 0.65, 0.9, 1.5, 2.0, 3.55, 4.2];
+    let mut forward = Vec::new();
+    for (index, time) in times.into_iter().enumerate() {
+        session.advance_to(time).unwrap();
+        let frame = capture.capture(&mut session).unwrap();
+        assert_eq!(frame.receipt.published_time, time);
+        let pixels = frame.rgba.as_chunks::<4>().0;
+        assert!(pixels.iter().all(|pixel| pixel[3] == 255));
+        let cyan = pixels
+            .iter()
+            .filter(|p| p[1] > 128 && p[2] > 128 && p[0] < 64)
+            .count();
+        let yellow = pixels
+            .iter()
+            .filter(|p| p[0] > 128 && p[1] > 100 && p[2] < 64)
+            .count();
+        if time > 0.5 && time < 3.7 {
+            assert!(cyan > 4, "missing forward signal at t={time}");
+            assert!(yellow > 4, "missing reverse signal at t={time}");
+        } else {
+            assert_eq!((cyan, yellow), (0, 0));
+        }
+        assert!(pixels.iter().any(|p| {
+            p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2]
+        }));
+        proof(&format!("signal-trains-{index:02}"), frame.rgba, 640, 360);
+        forward.push(frame.rgba.to_vec());
+    }
+    assert_ne!(forward[1], forward[2], "signals must visibly travel");
+    assert_eq!(forward[0], forward[6], "transient signals must leave the rails intact");
+    for index in [5, 2, 0, 4, 1, 6, 3] {
+        session.seek(times[index]).unwrap();
+        let frame = capture.capture(&mut session).unwrap();
+        assert_eq!(frame.rgba, forward[index], "seek pixels at t={}", times[index]);
+    }
+}

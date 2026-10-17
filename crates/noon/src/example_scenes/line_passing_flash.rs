@@ -114,6 +114,94 @@ pub fn program() -> Result<LiveProgram<LinePassingFlash>, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Duration of the finite travelling-signal example, including its two holds.
+pub const TRAIN_DURATION: f64 = 4.2;
+
+/// Compose two finite signal trains using the existing Rust animation scheduler.
+///
+/// The upper rail carries long cyan pulses from left to right; the lower rail
+/// carries short yellow pulses in the opposite direction. A separate dim rail
+/// stays visible before, during, and after the transient signals. Each train has
+/// nine signals lasting 1.6 seconds, staggered by 0.2 seconds (lag ratio 0.125).
+///
+/// This deliberately tests composition before adding a new flow primitive. It
+/// is not a dense/infinite patterned-stroke implementation, a round-dot profile,
+/// or a claim of support for moving/curved source paths. The same declarations,
+/// lowering, and timeline drive native Rust and the paired Python scene; no
+/// callback, private clock, or per-frame geometry reconstruction is installed.
+/// Pair: `web/python/examples/ordinary_signal_trains.py`.
+pub fn train_session() -> Result<crate::ExecutionSession, String> {
+    let build = || -> Result<_, Box<dyn std::error::Error>> {
+        use noon_core::{SemanticAnimationCompositionKind, SemanticAnimationIntent};
+
+        let mut scene = Scene::new();
+        let mut trains = Vec::new();
+        for (start, end, color, time_width) in [
+            ((-3.0, 1.0), (3.0, 1.0), (0.0, 1.0, 1.0), 0.12),
+            ((3.0, -1.0), (-3.0, -1.0), (1.0, 0.8, 0.0), 0.025),
+        ] {
+            let mut rail = scene.line(start, end)?;
+            rail.set_stroke_color(0.25, 0.25, 0.25, 1.0)?;
+            rail.set_stroke_width(0.025)?;
+            rail.set_stroke_cap("butt")?;
+            scene.add(&rail)?;
+
+            let mut signals = Vec::new();
+            for _ in 0..9 {
+                let mut signal = scene.line(start, end)?;
+                signal.set_stroke_color(color.0, color.1, color.2, 1.0)?;
+                signal.set_stroke_width(0.1)?;
+                signal.set_stroke_cap("butt")?;
+                let flash = scene.declare_passing_flash(
+                    &signal,
+                    time_width,
+                    AnimationOptions::new()
+                        .run_time(1.6)
+                        .rate_func(RateFunction::Linear),
+                )?;
+                signals.push(flash.node_id().into());
+            }
+            let train = scene.declare_animation(
+                SemanticAnimationIntent::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children: signals,
+                },
+                AnimationOptions::new()
+                    .lag_ratio(0.125)
+                    .rate_func(RateFunction::Linear),
+            )?;
+            trains.push(train.node_id().into());
+        }
+        let together = scene.declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children: trains,
+            },
+            AnimationOptions::new()
+                .run_time(3.2)
+                .lag_ratio(0.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+
+        let mut execution = scene.execution_session()?;
+        {
+            let mut live = scene.live(&mut execution);
+            let before = live.wait_segment(0.5)?;
+            live.advance_segment_to(before, before.end_time())?;
+            live.complete_segment(before)?;
+            let signals = live.play_animation(&together)?;
+            live.advance_segment_to(signals, signals.end_time())?;
+            live.complete_segment(signals)?;
+            let after = live.wait_segment(0.5)?;
+            live.advance_segment_to(after, after.end_time())?;
+            live.complete_segment(after)?;
+        }
+        execution.seek(0.0)?;
+        Ok(execution)
+    };
+    build().map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -230,5 +318,45 @@ mod tests {
         ));
         admit_completion(&mut program, &mut callbacks, 1.0);
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn finite_signal_trains_keep_the_rails_and_stagger_transient_signals() {
+        let mut session = super::train_session().unwrap();
+        let initial = session.frame().clone();
+        assert_eq!(initial.objects.len(), 20);
+        let identities: Vec<_> = initial.objects.iter().map(|object| object.id).collect();
+        // Independent schedule: nine 1.6-second signals per rail, starting at
+        // 0.5 + i * 0.2. Exact starts/ends have zero visible window.
+        for (time, expected_signals) in [(0.0, 0), (1.5, 10), (2.0, 16), (4.2, 0)] {
+            let frame = session.advance_to(time).unwrap();
+            assert_eq!(frame.objects.len(), 20);
+            assert_eq!(
+                frame.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+                identities
+            );
+            for rail in 0..2 {
+                assert!(frame.is_present(rail));
+                assert_eq!(frame.objects[rail], initial.objects[rail]);
+                assert_eq!(frame.reveal(rail), 1.0);
+            }
+            let visible = (2..frame.objects.len())
+                .filter(|&index| frame.is_present(index) && frame.reveal(index) > 1.0e-5)
+                .count();
+            assert_eq!(visible, expected_signals, "signal schedule at t={time}");
+        }
+        assert!((session.frame().time - super::TRAIN_DURATION).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn finite_signal_trains_seek_and_replay_without_a_callback_clock() {
+        let mut session = super::train_session().unwrap();
+        let mut forward = Vec::new();
+        for time in [0.0, 0.55, 0.9, 1.5, 2.0, 2.6, 3.55, 3.9, 4.2] {
+            forward.push(session.advance_to(time).unwrap().clone());
+        }
+        for expected in forward.iter().rev().chain(forward.iter()) {
+            assert_eq!(session.seek(expected.time).unwrap(), expected);
+        }
     }
 }
