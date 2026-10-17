@@ -669,6 +669,17 @@ class Mobject:
         from _manim_path_queries import extremum_along_dim
         return extremum_along_dim(self, points, dim, key)
 
+    def get_center_of_mass(self) -> Vec2:
+        from _manim_path_queries import center_of_mass
+        return center_of_mass(self)
+
+    def get_boundary_point(self, direction: object) -> Vec2:
+        from _manim_path_queries import boundary_point
+        return boundary_point(self, direction)
+
+    def get_midpoint(self) -> Vec2:
+        return self.point_from_proportion(0.5)
+
     def become(
         self,
         mobject: Mobject,

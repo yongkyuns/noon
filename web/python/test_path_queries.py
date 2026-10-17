@@ -110,6 +110,61 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 0, -1.0), 2.0)
         family.extremumAlongDim.assert_called_once_with(0, -1.0)
 
+    def test_shared_family_point_queries_use_live_query_or_authored_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+        context = Mock()
+        context.queryFamilyCenterOfMass.return_value = [1.0, 2.0]
+        context.queryFamilyBoundaryPoint.return_value = [3.0, 4.0]
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertEqual(
+                semantic_handles._center_of_mass_observation(value),
+                [1.0, 2.0],
+            )
+            self.assertEqual(
+                semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+                [3.0, 4.0],
+            )
+        context.queryFamilyCenterOfMass.assert_called_once_with(family)
+        context.queryFamilyBoundaryPoint.assert_called_once_with(family, 0.0, 1.0)
+        family.centerOfMass.assert_not_called()
+        family.boundaryPoint.assert_not_called()
+
+    def test_mobject_point_queries_use_live_context_or_authored_handle(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        handle.centerOfMass.return_value = [1.0, 2.0]
+        handle.boundaryPoint.return_value = [3.0, 4.0]
+        value._semantic_handle = handle
+        value._semantic_handle_fresh = True
+        self.assertEqual(semantic_handles._center_of_mass_observation(value), [1.0, 2.0])
+        self.assertEqual(
+            semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+            [3.0, 4.0],
+        )
+        handle.centerOfMass.assert_called_once_with()
+        handle.boundaryPoint.assert_called_once_with(0.0, 1.0)
+
+        context = Mock()
+        context.queryMobjectCenterOfMass.return_value = [5.0, 6.0]
+        context.queryMobjectBoundaryPoint.return_value = [7.0, 8.0]
+        scene = Mock()
+        scene._canonical_authoring_context = context
+        value._scene = scene
+        value._object = Mock()
+        self.assertEqual(semantic_handles._center_of_mass_observation(value), [5.0, 6.0])
+        self.assertEqual(
+            semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+            [7.0, 8.0],
+        )
+        context.queryMobjectCenterOfMass.assert_called_once_with(handle)
+        context.queryMobjectBoundaryPoint.assert_called_once_with(handle, 0.0, 1.0)
+
     def test_extremum_along_dim_routes_default_points_to_rust(self):
         value = identity_only_wrapper(compat.VMobject)
         value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
@@ -131,6 +186,21 @@ class PathQueryTests(unittest.TestCase):
         value.get_points_defining_boundary.assert_not_called()
         with self.assertRaises(IndexError):
             value.get_extremum_along_dim(dim=3)
+
+    def test_center_of_mass_and_boundary_point_route_to_rust(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with (
+            patch.object(queries, "_center_of_mass_observation", return_value=[1.5, -0.5]),
+            patch.object(queries, "_boundary_point_observation", return_value=[2.0, 3.0]) as point,
+        ):
+            self.assertEqual(value.get_center_of_mass(), noon.Vec2(1.5, -0.5))
+            self.assertEqual(
+                value.get_boundary_point([0.0, 0.0, 1.0]),
+                noon.Vec2(2.0, 3.0),
+            )
+        point.assert_called_once_with(value, 0.0, 0.0)
 
     def test_extremum_along_dim_flattens_custom_points_for_rust_reducer(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -183,9 +253,17 @@ class PathQueryTests(unittest.TestCase):
         self.assertIn("get_num_points", noon.Mobject.__dict__)
         self.assertIn("has_points", noon.Mobject.__dict__)
         self.assertIn("has_no_points", noon.Mobject.__dict__)
+        self.assertIn("get_extremum_along_dim", noon.Mobject.__dict__)
+        self.assertIn("get_center_of_mass", noon.Mobject.__dict__)
+        self.assertIn("get_boundary_point", noon.Mobject.__dict__)
+        self.assertIn("get_midpoint", noon.Mobject.__dict__)
         self.assertIs(compat.VMobject.get_num_points, noon.Mobject.get_num_points)
 
         value = identity_only_wrapper(compat.VMobject)
+        value.point_from_proportion = Mock(return_value=noon.Vec2(2.0, -1.0))
+        self.assertEqual(value.get_midpoint(), noon.Vec2(2.0, -1.0))
+        value.point_from_proportion.assert_called_once_with(0.5)
+
         query = Mock()
         query.start.return_value = [1.0, 2.0]
         query.end.return_value = [3.0, 4.0]

@@ -1155,6 +1155,28 @@ mod wasm {
             reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
         }
 
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = allPoints)]
         pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;
@@ -1818,6 +1840,26 @@ mod wasm {
             key: f64,
         ) -> Result<f64, JsValue> {
             reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = allPoints)]

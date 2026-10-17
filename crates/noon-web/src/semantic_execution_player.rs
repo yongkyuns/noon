@@ -1937,6 +1937,40 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_center_of_mass(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_center_of_mass(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_manim_color(
         &mut self,
         mobject: &noon::Mobject,

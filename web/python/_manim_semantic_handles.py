@@ -1896,6 +1896,55 @@ def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
     return engine_call(handle.extremumAlongDim, dim, key)
 
 
+def _point_query_observation(value: _base.Mobject, operation: str, *arguments):
+    handle_method = operation[0].lower() + operation[1:]
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(
+                getattr(context, f"queryFamily{operation}"),
+                family,
+                *arguments,
+            )
+        return engine_call(getattr(family, handle_method), *arguments)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, f"queryMobject{operation}", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, *arguments)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(getattr(handle, handle_method), *arguments)
+
+
+def _center_of_mass_observation(value: _base.Mobject):
+    return _point_query_observation(value, "CenterOfMass")
+
+
+def _boundary_point_observation(
+    value: _base.Mobject,
+    direction_x: float,
+    direction_y: float,
+):
+    return _point_query_observation(
+        value,
+        "BoundaryPoint",
+        direction_x,
+        direction_y,
+    )
+
+
 def _extremum_from_points_observation(
     value: _base.Mobject,
     coordinates: list[float],

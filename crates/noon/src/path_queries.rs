@@ -512,6 +512,20 @@ impl MobjectTarget<'_> {
     pub fn extremum_along_dim(&self, dim: usize, key: f64) -> Result<f64, AuthoringError> {
         extremum_for_xy_points(&self.all_points()?, dim, key)
     }
+
+    /// Return the arithmetic mean of this object's or family's points.
+    pub fn center_of_mass(&self) -> Result<(f64, f64), AuthoringError> {
+        center_of_mass_for_xy_points(&self.all_points()?)
+    }
+
+    /// Return the boundary point with the greatest projection along a direction.
+    pub fn boundary_point(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        boundary_point_for_xy_points(&self.all_points()?, direction_x, direction_y)
+    }
 }
 
 /// Observe current effective points for all object occurrences below a target.
@@ -547,6 +561,30 @@ pub fn effective_extremum_along_dim(
     key: f64,
 ) -> Result<f64, AuthoringError> {
     extremum_for_xy_points(&effective_all_points(store, execution, target)?, dim, key)
+}
+
+/// Observe the average point position from the current execution publication.
+pub fn effective_center_of_mass(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<(f64, f64), AuthoringError> {
+    center_of_mass_for_xy_points(&effective_all_points(store, execution, target)?)
+}
+
+/// Observe the current boundary point with the greatest directional projection.
+pub fn effective_boundary_point(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    direction_x: f64,
+    direction_y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    boundary_point_for_xy_points(
+        &effective_all_points(store, execution, target)?,
+        direction_x,
+        direction_y,
+    )
 }
 
 /// Reduce caller-supplied flattened point rows in Rust, using Manim's key rule:
@@ -607,6 +645,42 @@ fn extremum_for_xy_points(
     }
     let coordinates = points.iter().flat_map(|&(x, y)| [x, y]).collect::<Vec<_>>();
     reduce_point_extremum(&coordinates, 2, dim, key)
+}
+
+fn center_of_mass_for_xy_points(points: &[(f64, f64)]) -> Result<(f64, f64), AuthoringError> {
+    if points.is_empty() {
+        return Ok((f64::NAN, f64::NAN));
+    }
+    let (sum_x, sum_y) = points
+        .iter()
+        .fold((0.0, 0.0), |(sum_x, sum_y), &(x, y)| (sum_x + x, sum_y + y));
+    let count = points.len() as f64;
+    Ok((sum_x / count, sum_y / count))
+}
+
+fn boundary_point_for_xy_points(
+    points: &[(f64, f64)],
+    direction_x: f64,
+    direction_y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    let Some(&first) = points.first() else {
+        return Err(AuthoringError::PathQuery(PathProportionError::EmptyPath));
+    };
+    let mut boundary = first;
+    let mut projection = first.0 * direction_x + first.1 * direction_y;
+    for &point in &points[1..] {
+        let next_projection = point.0 * direction_x + point.1 * direction_y;
+        if next_projection.is_nan() {
+            if !projection.is_nan() {
+                boundary = point;
+                projection = next_projection;
+            }
+        } else if !projection.is_nan() && next_projection > projection {
+            boundary = point;
+            projection = next_projection;
+        }
+    }
+    Ok(boundary)
 }
 
 /// Observe one object's exact current path from an existing coherent execution.

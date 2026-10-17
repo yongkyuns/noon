@@ -937,6 +937,40 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_center_of_mass(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).center_of_mass(),
+            |player, handle| {
+                player.live_effective_center_of_mass(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_boundary_point(
+        &mut self,
+        handle: &noon::Mobject,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).boundary_point(direction_x, direction_y),
+            |player, handle| {
+                player.live_effective_boundary_point(
+                    noon::MobjectTarget::from(handle),
+                    direction_x,
+                    direction_y,
+                )
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn family_all_points(
         &mut self,
         family: &noon::MobjectFamily,
@@ -983,6 +1017,56 @@ impl CanonicalAuthoringScene {
         }
         target
             .extremum_along_dim(dim, key)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_center_of_mass(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_center_of_mass(target);
+            }
+        }
+        target.center_of_mass().map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_boundary_point(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_boundary_point(target, direction_x, direction_y);
+            }
+        }
+        target
+            .boundary_point(direction_x, direction_y)
             .map_err(AuthoringFailure::from)
     }
 
@@ -7029,6 +7113,30 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyCenterOfMass)]
+        pub fn query_family_center_of_mass(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_center_of_mass(&handle.semantic_family()?)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyBoundaryPoint)]
+        pub fn query_family_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_boundary_point(&handle.semantic_family()?, direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_move_family_to_point(
@@ -7364,6 +7472,30 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .mobject_extremum_along_dim(handle.semantic_mobject(), dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectCenterOfMass)]
+        pub fn query_mobject_center_of_mass(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_center_of_mass(handle.semantic_mobject())
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectBoundaryPoint)]
+        pub fn query_mobject_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_boundary_point(handle.semantic_mobject(), direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
                 .map_err(typed_js_error)
         }
 

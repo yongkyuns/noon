@@ -570,6 +570,36 @@ impl Scene {
         crate::path_queries::effective_extremum_along_dim(&self.store, execution, target, dim, key)
     }
 
+    /// Query the effective center of mass from the current Runtime publication.
+    pub fn effective_center_of_mass(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_center_of_mass(&self.store, execution, target)
+    }
+
+    /// Query the effective boundary point farthest along a direction.
+    pub fn effective_boundary_point(
+        &self,
+        target: MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_boundary_point(
+            &self.store,
+            execution,
+            target,
+            direction_x,
+            direction_y,
+        )
+    }
+
     /// Read one persistent authored/base object declaration.
     ///
     /// This deliberately does not inspect the running Runtime. Use

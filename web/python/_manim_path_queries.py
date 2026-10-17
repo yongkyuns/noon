@@ -5,6 +5,8 @@ import _noon_ir as _ir
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _all_points_observation,
+    _boundary_point_observation,
+    _center_of_mass_observation,
     _extremum_along_dim_observation,
     _extremum_from_points_observation,
     _family_point_count_observation,
@@ -92,6 +94,33 @@ def all_points(value):
     except ImportError:
         return _points(coordinates)
     return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+
+
+def center_of_mass(value):
+    coordinates = _center_of_mass_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_center_of_mass requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def _point_direction_xy(direction):
+    try:
+        dimensions = len(direction)
+    except (TypeError, AttributeError):
+        return _base._as_vec2(direction)
+    if dimensions == 2:
+        return _base._as_vec2(direction)
+    if dimensions == 3:
+        return _base.Vec2(float(direction[0]), float(direction[1]))
+    raise TypeError("expected a two- or three-component vector")
+
+
+def boundary_point(value, direction):
+    axis = _point_direction_xy(direction)
+    coordinates = _boundary_point_observation(value, axis.x, axis.y)
+    if coordinates is None:
+        raise NotImplementedError("get_boundary_point requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
 
 
 def _normalize_point_dimension(dim, point_dimensions):

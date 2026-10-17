@@ -129,6 +129,22 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     expected.extend(second_points);
     expected.extend(first_points);
     assert_eq!(MobjectTarget::from(&root).all_points().unwrap(), expected);
+    let expected_center = (
+        expected.iter().map(|point| point.0).sum::<f64>() / expected.len() as f64,
+        expected.iter().map(|point| point.1).sum::<f64>() / expected.len() as f64,
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).center_of_mass().unwrap(),
+        expected_center
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).boundary_point(1., 0.).unwrap(),
+        (3., 0.)
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).boundary_point(0., 0.).unwrap(),
+        expected[0]
+    );
     assert_eq!(
         MobjectTarget::from(&root)
             .extremum_along_dim(0, 0.)
@@ -148,6 +164,10 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
 
     let empty = scene.family(&[]).unwrap();
     assert!(MobjectTarget::from(&empty).all_points().unwrap().is_empty());
+    let empty_center = MobjectTarget::from(&empty).center_of_mass().unwrap();
+    assert!(empty_center.0.is_nan());
+    assert!(empty_center.1.is_nan());
+    assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
 }
 
 #[test]
@@ -430,6 +450,28 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
             .unwrap();
     assert_eq!(points, expected);
     assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
+    let expected_center = (
+        points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64,
+        points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
+    );
+    assert_eq!(
+        noon::integration::effective_center_of_mass(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+        )
+        .unwrap(),
+        expected_center
+    );
+    let effective_top = noon::integration::effective_boundary_point(
+        scene.integration_store(),
+        &session,
+        MobjectTarget::from(&family),
+        0.,
+        1.,
+    )
+    .unwrap();
+    assert_eq!(effective_top.1, 1.5);
     assert_eq!(
         MobjectTarget::from(&family)
             .extremum_along_dim(1, 1.)
