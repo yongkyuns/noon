@@ -159,10 +159,6 @@ class VMobject(Mobject):
         from _manim_path_queries import curve_count
         return curve_count(self)
 
-    def get_num_points(self):
-        from _manim_path_queries import point_count
-        return point_count(self)
-
     def get_nth_curve_points(self, n):
         from _manim_path_queries import curve_points
         return curve_points(self, n)

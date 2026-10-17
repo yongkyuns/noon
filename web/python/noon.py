@@ -418,6 +418,19 @@ class Mobject:
         from _manim_semantic_handles import _get_family
         return _get_family(self)
 
+    def get_num_points(self) -> int:
+        """Return the point-buffer length owned by this Mobject, excluding children."""
+        from _manim_path_queries import point_count
+        return point_count(self)
+
+    def has_points(self) -> bool:
+        """Whether this Mobject itself owns any points, excluding its children."""
+        return self.get_num_points() > 0
+
+    def has_no_points(self) -> bool:
+        """Whether this Mobject itself owns no points, excluding its children."""
+        return not self.has_points()
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())

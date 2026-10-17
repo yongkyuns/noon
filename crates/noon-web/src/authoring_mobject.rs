@@ -1740,6 +1740,14 @@ mod wasm {
             self.handle.stroke_width().map_err(js_error)
         }
 
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            self.handle
+                .get_num_points()
+                .map(|count| count as u32)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
             let colors = super::gradient_colors(values).map_err(js_error)?;

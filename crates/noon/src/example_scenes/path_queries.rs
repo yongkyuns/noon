@@ -8,11 +8,13 @@ pub fn session() -> Result<ExecutionSession, String> {
         rectangle.set_scale(2., 1.)?;
         rectangle.rotate(0.25)?;
         rectangle.shift(-2.5, 0.)?;
+        assert_eq!(rectangle.get_num_points()?, 16);
         rectangle.disable_fill()?;
         rectangle.set_stroke_color(1., 1., 1., 1.)?;
         let mut ellipse = scene.circle(0.8)?;
         ellipse.set_scale(1.5, 1.)?;
         ellipse.shift(2.5, 0.)?;
+        assert_eq!(ellipse.get_num_points()?, 32);
         ellipse.disable_fill()?;
         ellipse.set_stroke_color(1., 1., 1., 1.)?;
         for shape in [&rectangle, &ellipse] {

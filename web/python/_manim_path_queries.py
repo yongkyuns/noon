@@ -56,11 +56,21 @@ def curve_count(value):
 
 
 def point_count(value):
-    query = _query(value)
-    try:
-        return int(query.pointCount)
-    finally:
-        query.free()
+    family = getattr(value, "_semantic_family_handle", None)
+    if family is not None:
+        # A Manim Group's own points buffer is empty even when it contains
+        # members. Touch the Rust-owned count to validate the family handle.
+        engine_call(getattr, family, "memberCount", operation="Mobject.get_num_points")
+        return 0
+    count = _typed_manim_observation(
+        value,
+        "pointCount",
+        "queryMobjectPointCount",
+        handle_property=True,
+    )
+    if count is None:
+        raise RuntimeError("point-count queries require the shared Rust authoring host")
+    return int(count)
 
 
 def curve_points(value, n):

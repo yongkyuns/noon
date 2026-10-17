@@ -6,6 +6,28 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_base_mobject_point_count_uses_rust_and_groups_count_only_their_own_points(self):
+        value = identity_only_wrapper(compat.Mobject)
+        with patch.object(queries, "_typed_manim_observation", return_value=17) as observe:
+            self.assertEqual(value.get_num_points(), 17)
+        observe.assert_called_once_with(
+            value, "pointCount", "queryMobjectPointCount", handle_property=True
+        )
+
+        group = identity_only_wrapper(compat.Group)
+        group._semantic_family_handle = Mock(memberCount=2)
+        self.assertEqual(group.get_num_points(), 0)
+        self.assertFalse(group.has_points())
+        self.assertTrue(group.has_no_points())
+        self.assertEqual(group._semantic_family_handle.memberCount, 2)
+
+        with patch.object(value, "get_num_points", side_effect=[1, 1, 0, 0]) as count:
+            self.assertTrue(value.has_points())
+            self.assertFalse(value.has_no_points())
+            self.assertFalse(value.has_points())
+            self.assertTrue(value.has_no_points())
+        self.assertEqual(count.call_count, 4)
+
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
@@ -54,7 +76,13 @@ class PathQueryTests(unittest.TestCase):
         query.firstHandles.return_value = [1., 2., 3.3, 0.]
         query.secondHandles.return_value = [2., 2., 3.6, 0.]
         query.anchors.return_value = [0., 0., 3., 0., 3., 0., 4., 0.]
-        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
+        def observation(_value, method, _context, *, handle_property=False):
+            if method == "pointCount":
+                self.assertTrue(handle_property)
+                return 9
+            return query
+
+        with patch.object(queries, '_typed_manim_observation', side_effect=observation) as observe:
             self.assertEqual(value.get_num_curves(), 2)
             self.assertEqual(value.get_num_points(), 9)
             self.assertEqual(value.get_nth_curve_points(0), [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
@@ -64,10 +92,10 @@ class PathQueryTests(unittest.TestCase):
             columns = value.get_anchors_and_handles()
             self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
             self.assertEqual(observe.call_count, 7)
-            self.assertEqual(query.free.call_count, 7)
+            self.assertEqual(query.free.call_count, 6)
             query.curvePoints.side_effect = ValueError('curve index out of bounds')
             with self.assertRaises(ValueError): value.get_nth_curve_points(4)
-            self.assertEqual(query.free.call_count, 8)
+            self.assertEqual(query.free.call_count, 7)
 
 
 class SubpathQueryTests(unittest.TestCase):
