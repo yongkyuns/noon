@@ -21,6 +21,23 @@ const adjacent = job("measure-adjacent");
 const cumulative = job("measure-cumulative");
 const gate = job("compare");
 
+test("Noon integration tests use Rust qualification without selecting product measurements", async () => {
+  const events = workflow.split("on:\n")[1]?.split("\npermissions:")[0];
+  assert.match(events, /      - "crates\/noon\/\*\*"\n      - "!crates\/noon\/tests\/\*\*"/,
+    "exclude test-only paths after their production selector");
+  assert.doesNotMatch(events, /      - "!crates\/noon\/\*\*"/,
+    "production and mixed changes must retain product qualification");
+  for (const input of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/**",
+    "crates/noon-core/**", "crates/noon-web/**"]) {
+    assert.ok(events.includes('      - "' + input + '"'), input + " still selects product qualification");
+  }
+  const fast = await readFile(new URL("../workflows/pr-fast.yml", import.meta.url), "utf8");
+  assert.match(fast, /on:\n  pull_request:\n\npermissions:/,
+    "Rust qualification must still run on test-only pull requests");
+  assert.match(fast, /run: cargo test --workspace --all-features --lib --test family\n/,
+    "keep every workspace library and the shared CPU family target in one feature-unified invocation");
+});
+
 test("both immutable-source measurement cohorts depend only on the common producer", () => {
   for (const [name, section] of [["adjacent", adjacent], ["cumulative", cumulative]]) {
     assert.match(section, /^    needs: build$/m, name + " must not wait for the other cohort");

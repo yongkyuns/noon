@@ -85,7 +85,7 @@ jobs:
           version: v0.16.0
 
       - name: Run fast Rust tests
-        run: cargo test --workspace --all-features --lib
+        run: cargo test --workspace --all-features --lib --test family
 
   web-preflight:
     name: Web static and unit checks
