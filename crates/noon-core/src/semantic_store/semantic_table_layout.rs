@@ -1,6 +1,6 @@
 //! Sparse authored Table layout declarations on ordinary family roots.
 
-use crate::Color;
+use crate::{Color, StrokeCap, StrokeJoin};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SemanticTableLayout {
@@ -12,6 +12,8 @@ pub struct SemanticTableLayout {
     line_stroke_color: Color,
     line_stroke_width: f64,
     line_stroke_opacity: f64,
+    line_stroke_join: StrokeJoin,
+    line_stroke_cap: StrokeCap,
 }
 impl SemanticTableLayout {
     pub const fn new(h_buff: f64, v_buff: f64, label_buff: f64, include_outer_lines: bool) -> Self {
@@ -24,6 +26,8 @@ impl SemanticTableLayout {
             line_stroke_color: Color::WHITE,
             line_stroke_width: 0.04,
             line_stroke_opacity: 1.0,
+            line_stroke_join: StrokeJoin::Miter,
+            line_stroke_cap: StrokeCap::Butt,
         }
     }
     pub const fn with_inner_lines(mut self, include_inner_lines: bool) -> Self {
@@ -34,6 +38,11 @@ impl SemanticTableLayout {
         self.line_stroke_color = color;
         self.line_stroke_width = width;
         self.line_stroke_opacity = opacity;
+        self
+    }
+    pub const fn with_line_geometry(mut self, join: StrokeJoin, cap: StrokeCap) -> Self {
+        self.line_stroke_join = join;
+        self.line_stroke_cap = cap;
         self
     }
     pub const fn h_buff(self) -> f64 {
@@ -59,6 +68,12 @@ impl SemanticTableLayout {
     }
     pub const fn line_stroke_opacity(self) -> f64 {
         self.line_stroke_opacity
+    }
+    pub const fn line_stroke_join(self) -> StrokeJoin {
+        self.line_stroke_join
+    }
+    pub const fn line_stroke_cap(self) -> StrokeCap {
+        self.line_stroke_cap
     }
     /// Apply the world-axis factors from a direct Table family scale.
     ///

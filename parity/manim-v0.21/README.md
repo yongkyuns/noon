@@ -86,12 +86,11 @@ Rust/WASM and Python-worker captures are pixel-identical on WebGPU and WebGL2;
 the strict pinned Cairo differential passes unchanged limits on both backends
 with exact duration and 0.18% worst differing pixels.
 
-`table-line-config-stroke` covers the supported `line_config` subset for grid
-stroke color, width, and opacity. The paired retained Rust/WASM and Python
-example exercises that configuration, and the strict pinned Cairo fixture
-passes the unchanged thresholds on WebGPU and WebGL2 with exact duration and
-0.11% worst differing pixels. Paired Rust/WASM and Python-worker captures are
-pixel-identical on both backends. Other line configuration keys, including
+`table-line-config-stroke` covers grid stroke color, width, opacity, joint type,
+and cap style through the pinned ManimCE `Line` constructor options. The paired
+retained Rust/WASM and Python example exercises this subset on both backends;
+strict pinned Cairo comparison passes unchanged thresholds with exact duration
+and 0.22% worst differing pixels. Other line configuration keys, including
 background stroke styling, and remaining table variants stay open under #2014.
 
 `Table.get_horizontal_lines()` and `Table.get_vertical_lines()` now return

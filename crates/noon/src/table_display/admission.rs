@@ -331,6 +331,8 @@ fn table_line_style(options: TableOptions) -> SemanticStyle {
         stroke: Some(noon_core::SemanticPaint::Solid(options.line_stroke_color)),
         stroke_width: options.line_stroke_width,
         stroke_opacity: options.line_stroke_opacity,
+        stroke_join: options.line_stroke_join,
+        stroke_cap: options.line_stroke_cap,
         ..line_style()
     }
 }
@@ -471,7 +473,8 @@ fn stage(
             options.line_stroke_color,
             options.line_stroke_width,
             options.line_stroke_opacity,
-        ),
+        )
+        .with_line_geometry(options.line_stroke_join, options.line_stroke_cap),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);

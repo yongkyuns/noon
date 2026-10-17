@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import PropertyMock, patch
 
 import _manim_table as table
+from _manim_enums import CapStyleType, LineJointType
 
 
 class _Handle:
@@ -317,7 +318,7 @@ class TableFacadeTests(unittest.TestCase):
         handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
         def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines,
-                   red, green, blue, alpha, width, opacity, _context):
+                   red, green, blue, alpha, width, opacity, join, cap, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
             self.assertEqual(row_labels, [row_label._semantic_family_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
@@ -325,6 +326,7 @@ class TableFacadeTests(unittest.TestCase):
             self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
             self.assertTrue(inner_lines)
             self.assertEqual((red, green, blue, alpha, width, opacity), (1.0, 1.0, 1.0, 1.0, .04, 1.0))
+            self.assertEqual((join, cap), ("miter", "butt"))
             return handle
 
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -480,7 +482,7 @@ class TableFacadeTests(unittest.TestCase):
         calls = []
 
         def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff,
-                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, _context):
+                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, join, cap, _context):
             calls.append((rows, row_labels, column_labels, top_left_entries))
             self.assertEqual(rows, [["a"]])
             self.assertEqual(row_labels, [row_label._semantic_handle])
@@ -537,10 +539,13 @@ class TableFacadeTests(unittest.TestCase):
                 table._options({"top_left_entry": _FakeMobject(2)})
 
     def test_include_inner_lines_is_forwarded_and_defaults_to_manimce_true(self):
-        self.assertEqual(table._options({}), (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0))
+        self.assertEqual(
+            table._options({}),
+            (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt"),
+        )
         self.assertEqual(
             table._options({"include_outer_lines": True, "include_inner_lines": False}),
-            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0),
+            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0, "miter", "butt"),
         )
 
     def test_line_config_stroke_subset_is_forwarded_with_manim_width_units(self):
@@ -550,6 +555,24 @@ class TableFacadeTests(unittest.TestCase):
         )
         args = self.context.calls[0][1]
         self.assertEqual(args[5:11], (1.0, 0.0, 170 / 255, 1.0, .02, .25))
+        self.assertEqual(args[11:13], ("miter", "butt"))
+
+    def test_line_config_joint_and_cap_styles_accept_manim_enums(self):
+        self.assertEqual(
+            table._options({"line_config": {
+                "joint_type": LineJointType.BEVEL,
+                "cap_style": CapStyleType.SQUARE,
+            }})[-2:],
+            ("bevel", "square"),
+        )
+        self.assertEqual(
+            table._options({"line_config": {"joint_type": "auto", "cap_style": "auto"}})[-2:],
+            ("miter", "butt"),
+        )
+        with self.assertRaisesRegex(ValueError, "joint_type"):
+            table._options({"line_config": {"joint_type": "not-a-join"}})
+        with self.assertRaisesRegex(ValueError, "cap_style"):
+            table._options({"line_config": {"cap_style": "not-a-cap"}})
 
     def test_unqualified_line_config_options_remain_explicit(self):
         with self.assertRaisesRegex(NotImplementedError, "background_stroke_width"):

@@ -8,7 +8,7 @@ mod admission;
 
 use crate::{
     AuthoringError, Color, CompositeEntryHandle, Mobject, MobjectFamily, MobjectTarget, Scene,
-    TextAuthoringError,
+    StrokeCap, StrokeJoin, TextAuthoringError,
 };
 #[cfg(feature = "latex")]
 use crate::{DecimalFormat, LatexBackend, NumericAuthoringError};
@@ -41,6 +41,8 @@ pub struct TableOptions {
     pub line_stroke_width: f64,
     /// Stroke opacity in the inclusive range [0, 1].
     pub line_stroke_opacity: f64,
+    pub line_stroke_join: StrokeJoin,
+    pub line_stroke_cap: StrokeCap,
 }
 
 impl Default for TableOptions {
@@ -54,6 +56,8 @@ impl Default for TableOptions {
             line_stroke_color: Color::WHITE,
             line_stroke_width: 0.04,
             line_stroke_opacity: 1.0,
+            line_stroke_join: StrokeJoin::Miter,
+            line_stroke_cap: StrokeCap::Butt,
         }
     }
 }
@@ -257,6 +261,8 @@ impl Table {
                 line_stroke_color: layout.line_stroke_color(),
                 line_stroke_width: layout.line_stroke_width(),
                 line_stroke_opacity: layout.line_stroke_opacity(),
+                line_stroke_join: layout.line_stroke_join(),
+                line_stroke_cap: layout.line_stroke_cap(),
             })
             .ok_or(TableAuthoringError::InvalidStructure)
     }
@@ -1393,6 +1399,8 @@ mod tests {
                 line_stroke_color: Color::rgba(0.25, 0.5, 0.75, 0.8),
                 line_stroke_width: 0.06,
                 line_stroke_opacity: 0.35,
+                line_stroke_join: StrokeJoin::Bevel,
+                line_stroke_cap: StrokeCap::Square,
                 ..Default::default()
             },
         )
@@ -1424,6 +1432,8 @@ mod tests {
         );
         assert_eq!(line_state.style.stroke_width, 0.06);
         assert_eq!(line_state.style.stroke_opacity, 0.35);
+        assert_eq!(line_state.style.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(line_state.style.stroke_cap, StrokeCap::Square);
         drop(semantic);
         let rehydrated = Table::from_family(table.family().clone()).unwrap();
         let options = rehydrated.options().unwrap();
@@ -1432,6 +1442,8 @@ mod tests {
         assert_eq!(options.line_stroke_color, Color::rgba(0.25, 0.5, 0.75, 0.8));
         assert_eq!(options.line_stroke_width, 0.06);
         assert_eq!(options.line_stroke_opacity, 0.35);
+        assert_eq!(options.line_stroke_join, StrokeJoin::Bevel);
+        assert_eq!(options.line_stroke_cap, StrokeCap::Square);
     }
 
     #[test]

@@ -2,7 +2,8 @@
 
 use crate::{
     Color, DecimalFormat, DecimalTable, ExecutionSession, LatexBackend, MathTable, MathTex,
-    Mobject, MobjectFamily, MobjectTable, MobjectTarget, Scene, Table, TableOptions,
+    Mobject, MobjectFamily, MobjectTable, MobjectTarget, Scene, StrokeCap, StrokeJoin, Table,
+    TableOptions,
 };
 
 /// Scene counterpart of the Python fixture that exercises group-valued table
@@ -106,6 +107,40 @@ pub fn labels_session() -> Result<ExecutionSession, String> {
         },
     )
     .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[table.family().into()])
+        .map_err(|error| error.to_string())?;
+    scene.execution_session().map_err(|error| error.to_string())
+}
+
+/// Retained counterpart of the ManimCE line-config fixture, including cap and
+/// join style values that are carried through Table's sparse layout.
+pub fn line_config_session() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let first_circle = scene.circle(0.3).map_err(|error| error.to_string())?;
+    let first_square = scene.square(0.5).map_err(|error| error.to_string())?;
+    let second_square = scene.square(0.4).map_err(|error| error.to_string())?;
+    let second_circle = scene.circle(0.2).map_err(|error| error.to_string())?;
+    let table = MobjectTable::from_rows_with_options(
+        &mut scene,
+        vec![
+            vec![first_circle, first_square],
+            vec![second_square, second_circle],
+        ],
+        TableOptions {
+            h_buff: 0.7,
+            v_buff: 0.45,
+            include_outer_lines: true,
+            line_stroke_color: Color::RED,
+            line_stroke_width: 0.06,
+            line_stroke_opacity: 0.6,
+            line_stroke_join: StrokeJoin::Bevel,
+            line_stroke_cap: StrokeCap::Square,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?
+    .into_table();
     scene
         .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;

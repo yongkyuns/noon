@@ -31,7 +31,9 @@ except ImportError:
 
 
 _OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines", "line_config"}
-_LINE_CONFIG_NAMES = {"color", "stroke_color", "stroke_width", "stroke_opacity"}
+_LINE_CONFIG_NAMES = {
+    "color", "stroke_color", "stroke_width", "stroke_opacity", "joint_type", "cap_style"
+}
 _DECIMAL_CONFIG_NAMES = {
     "num_decimal_places", "include_sign", "group_with_commas", "show_ellipsis", "unit"
 }
@@ -58,6 +60,14 @@ def _options(kwargs):
     line_opacity = _compat._opacity(
         "line_config.stroke_opacity", line_config.get("stroke_opacity", 1.0)
     )
+    line_join = _table_style_enum(
+        "line_config.joint_type", line_config.get("joint_type", "auto"),
+        {"auto", "round", "miter", "bevel"}, "miter",
+    )
+    line_cap = _table_style_enum(
+        "line_config.cap_style", line_config.get("cap_style", "auto"),
+        {"auto", "round", "butt", "square"}, "butt",
+    )
     return (
         kwargs.get("v_buff", .8),
         kwargs.get("h_buff", 1.3),
@@ -69,7 +79,24 @@ def _options(kwargs):
         line_color.alpha,
         line_width,
         line_opacity,
+        line_join,
+        line_cap,
     )
+
+
+def _table_style_enum(name, value, allowed, auto_value):
+    if value is None:
+        value = "auto"
+    elif hasattr(value, "value") and isinstance(value.value, str):
+        value = value.value
+    elif hasattr(value, "name") and isinstance(value.name, str):
+        value = value.name
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string or Manim enum")
+    value = value.rsplit(".", 1)[-1].lower()
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {', '.join(sorted(allowed))}")
+    return auto_value if value == "auto" else value
 
 
 def _decimal_format(config):

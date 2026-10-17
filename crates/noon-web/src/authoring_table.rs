@@ -50,6 +50,36 @@ impl WasmTableOptions {
     pub fn set_line_stroke_opacity(&mut self, opacity: f64) {
         self.options.line_stroke_opacity = opacity;
     }
+
+    #[wasm_bindgen(js_name = setLineStrokeJoin)]
+    pub fn set_line_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
+        self.options.line_stroke_join = match join {
+            "round" => noon::StrokeJoin::Round,
+            "miter" | "auto" => noon::StrokeJoin::Miter,
+            "bevel" => noon::StrokeJoin::Bevel,
+            _ => {
+                return Err(js_error(
+                    "line_config.joint_type must be auto, round, miter, or bevel",
+                ))
+            }
+        };
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeCap)]
+    pub fn set_line_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
+        self.options.line_stroke_cap = match cap {
+            "round" => noon::StrokeCap::Round,
+            "butt" | "auto" => noon::StrokeCap::Butt,
+            "square" => noon::StrokeCap::Square,
+            _ => {
+                return Err(js_error(
+                    "line_config.cap_style must be auto, round, butt, or square",
+                ))
+            }
+        };
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
@@ -107,6 +137,16 @@ pub async fn create_table_labels_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::labels_session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the Table line-configuration fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createTableLineConfigRenderer)]
+pub async fn create_table_line_config_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::line_config_session().map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

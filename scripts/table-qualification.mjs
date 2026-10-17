@@ -17,6 +17,9 @@ await qualifyPairedAuthoring({
   }, {
     id: "mobject-table-family-labels", file: "mobject_table_family_labels.py", scene: "MobjectTableFamilyLabelsExample",
     factory: "createMobjectTableFamilyLabelsRenderer", duration: 0.2,
+  }, {
+    id: "table-line-config", file: "table_line_config.py", scene: "TableLineConfigExample",
+    factory: "createTableLineConfigRenderer", duration: 0.2,
   }],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
     const source = `from noon import *
