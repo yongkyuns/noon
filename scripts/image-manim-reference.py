@@ -5,10 +5,11 @@ from pathlib import Path
 
 import manim
 import numpy as np
-from PIL import Image
+from PIL import Image, __version__ as pillow_version
 from manim import Camera, ImageMobject, FadeIn, FadeOut, Transform, linear, tempconfig
 
 assert manim.__version__ == "0.21.0", manim.__version__
+assert pillow_version == "12.3.0", pillow_version
 output = Path(sys.argv[1])
 output.mkdir(parents=True, exist_ok=True)
 pixels = np.array([[[255, 0, 0, 255], [0, 255, 0, 128]],
@@ -18,7 +19,7 @@ Image.fromarray(pixels[:, :, :3]).save(output / "fixture.jpg", quality=95)
 input_gray = np.array([[32, 96, 160], [64, 128, 224]], dtype=np.uint8)
 Image.fromarray(input_gray).save(output / "input-fixture.png")
 Image.fromarray(input_gray).save(output / "input-fixture.jpg", quality=100)
-report = {"manim": manim.__version__, "samples": [], "lifecycle": []}
+report = {"manim": manim.__version__, "pillow": pillow_version, "samples": [], "lifecycle": []}
 with tempconfig({"pixel_width": 256, "pixel_height": 256, "frame_width": 8.0,
                  "frame_height": 8.0, "background_color": "#14283c"}):
     input_camera = Camera()
