@@ -547,7 +547,10 @@ mod tests {
         assert_eq!(appended.stats.full_rebuilds, 0);
         assert_eq!(appended.stats.mega_path_count, 1);
         assert_eq!(appended.stats.unsupported_count, 0);
-        assert_eq!(appended.mega_path_vertex_instances, packed_prefix.as_slice());
+        assert_eq!(
+            appended.mega_path_vertex_instances,
+            packed_prefix.as_slice()
+        );
         assert_eq!(appended.mega_path_instance_dirty_ranges.len(), 0);
         assert!(appended
             .ordered_render_batches()
