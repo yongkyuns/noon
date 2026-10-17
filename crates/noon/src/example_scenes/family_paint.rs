@@ -51,6 +51,30 @@ pub fn session() -> Result<ExecutionSession, String> {
         live.advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
+        // Align the current shared paint with Manim's preserved Mobject.color
+        // cache before checking the bounded fade_to behavior.
+        live.set_family_color(&family, 1.0, 1.0, 1.0, 1.0)
+            .map_err(|e| e.to_string())?;
+        live.fade_to_family(&family, Color::rgb(1.0, 0.0, 0.0), 0.5)
+            .map_err(|e| e.to_string())?;
+        for (object, color, opacity) in [
+            (&a, Color::rgba(1.0, 0.5, 0.5, 0.0625), 0.0625),
+            (&b, Color::rgba(1.0, 0.5, 0.5, 0.25), 0.25),
+        ] {
+            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            assert_eq!(effective.style.fill, Some(color));
+            assert_eq!(effective.fill_opacity(), opacity);
+            assert_eq!(effective.style.stroke, Some(color));
+            assert_eq!(effective.stroke_opacity(), opacity);
+        }
     }
     Ok(session)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fade_and_fade_to_fixture_matches_recursive_family_expectations() {
+        super::session().unwrap();
+    }
 }

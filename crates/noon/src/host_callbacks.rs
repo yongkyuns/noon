@@ -436,6 +436,16 @@ pub fn effective_style_with_fade(
     Ok(style)
 }
 
+/// Interpolate callback-local paint toward a Manim color without publishing authored state.
+pub fn effective_style_with_fade_to(
+    mut style: Style,
+    color: crate::Color,
+    amount: f64,
+) -> Result<Style, crate::AuthoringError> {
+    crate::semantic_mobject::edit_fade_to(&mut style, color, amount)?;
+    Ok(style)
+}
+
 /// Apply shared Manim opacity-only fill semantics to an effective runtime style.
 pub fn effective_style_with_fill_opacity(
     mut style: Style,
