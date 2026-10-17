@@ -160,21 +160,12 @@ class BrowserRunnerContracts(unittest.TestCase):
                      'CUDA_PIXELS','expected-rejection'):
             self.assertIn(term,s)
         self.assertNotIn('waitForTimeout(',s)
-        self.assertIn('result.construct()',s)
+        self.assertIn('async def _qualified_cuda_construct(self)',s)
+        self.assertIn('await _original_cuda_construct(self)',s)
+        self.assertIn('CudaTransposeBanks.construct = _qualified_cuda_construct',s)
+        self.assertNotIn('result.construct()',s)
         for mutation in ('wrong_bank','wrong_highlight','detached_label','invisible_packet','early_store','dim_highlight'):
             self.assertIn(mutation,s)
-
-    def test_existing_browser_ci_job_runs_validator_and_retains_evidence(self):
-        workflow=(ROOT/'.github/workflows/ci.yml').read_text()
-        section=workflow.split('  browser-authoring:',1)[1].split('  browser-reactive:',1)[0]
-        self.assertIn('needs: web-build',section)
-        self.assertIn('node scripts/cuda-transpose-qualification.mjs',section)
-        self.assertIn('python3 tests/cuda_visual_validation_test.py',section)
-        self.assertIn('node --test scripts/cuda-transpose-pixels.test.mjs',section)
-        self.assertIn('if: always()',section)
-        self.assertIn('name: cuda-transpose-fidelity',section)
-        self.assertNotIn('continue-on-error',section)
-        self.assertIn('"scripts/cuda-transpose*.mjs"',workflow)
 
     def test_missing_gpu_evidence_cannot_pass_strict_mode(self):
         s=(ROOT/'scripts/cuda-transpose-qualification.mjs').read_text()

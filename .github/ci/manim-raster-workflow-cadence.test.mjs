@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { needsFullCiQualification } from "../../scripts/ci-qualification-scope.mjs";
+import { needsCudaDemoQualification, needsFullCiQualification } from "../../scripts/ci-qualification-scope.mjs";
 
 const workflow = await readFile(
   new URL("../workflows/manim-raster-differential.yml", import.meta.url),
@@ -217,7 +217,7 @@ test("real Git and CLI classify docs and a rename into runtime source", t => {
   const env = { ...process.env, GITHUB_EVENT_NAME: "push", BEFORE_REVISION: before,
     GITHUB_SHA: after, GITHUB_OUTPUT: output };
   execFileSync(process.execPath, [script], { cwd: root, env, stdio: "pipe" });
-  assert.equal(readFileSync(output, "utf8"), "full=false\n");
+  assert.equal(readFileSync(output, "utf8"), "full=false\ncuda_demo=false\n");
   // Keep generated Action output outside the committed source fixture.
   rmSync(output);
   mkdirSync(join(root, "crates"));
@@ -225,5 +225,52 @@ test("real Git and CLI classify docs and a rename into runtime source", t => {
   execFileSync(process.execPath, [script], {
     cwd: root, stdio: "pipe", env: { ...env, BEFORE_REVISION: after, GITHUB_SHA: commit() },
   });
-  assert.equal(readFileSync(output, "utf8"), "full=true\n");
+  assert.equal(readFileSync(output, "utf8"), "full=true\ncuda_demo=false\n");
+});
+
+
+test("CUDA fidelity is selected for source, controls, renames and cadence changes", () => {
+  for (const path of ["web/python/examples/cuda_transpose_banks.py", "scripts/cuda-transpose-qualification.mjs",
+    "scripts/cuda-transpose-pixels.test.mjs", "tests/cuda_visual_validation_test.py",
+    "tools/cuda-transpose/visual_probe.py", ".github/workflows/ci.yml",
+    ".github/workflows/manim-raster-differential.yml", "scripts/ci-qualification-scope.mjs"]) {
+    assert.equal(needsCudaDemoQualification(revisions, diffFixture(["docs/old.md", path])), true, path);
+  }
+  assert.equal(needsCudaDemoQualification(revisions, diffFixture(["crates/noon/src/lib.rs"])), false,
+    "generic engine edits retain ordinary full CI and nightly CUDA fidelity");
+  for (const event of ["workflow_dispatch", "schedule", "unknown"]) {
+    assert.equal(needsCudaDemoQualification({ ...revisions, event }, () => assert.fail("no diff needed")), true);
+  }
+});
+
+test("CUDA PR scope uses the actual merge parent even with stale event base metadata", () => {
+  const base = "c".repeat(40), head = "d".repeat(40), calls = [];
+  const runGit = (command, args) => {
+    calls.push([command, args]);
+    if (args[0] === "cat-file") return Buffer.from(`tree ${"e".repeat(40)}\nparent ${base}\nparent ${head}\n\nparent ${revisions.before}\n`);
+    return diffFixture(["web/main.js"])(command, args);
+  };
+  assert.equal(needsCudaDemoQualification({ ...revisions, event: "pull_request" }, runGit), false);
+  assert.deepEqual(calls[1][1], ["fetch", "--no-tags", "--depth=1", "origin", base]);
+  assert.deepEqual(calls[2][1], ["diff", "--name-only", "--no-renames", "-z", base, revisions.after]);
+});
+
+test("missing or malformed CUDA scope evidence cannot skip the full fidelity suite", () => {
+  for (const output of [Buffer.alloc(0), Buffer.from("README.md"), Buffer.from("README.md\0\0"), "README.md\0"]) {
+    assert.equal(needsCudaDemoQualification(revisions, (_command, args) => args[0] === "diff" ? output : Buffer.alloc(0)), true);
+  }
+  for (const output of [Buffer.from("tree x\n\nmessage"), Buffer.from(`parent ${revisions.before}\n\nmessage`), "not a buffer"]) {
+    assert.equal(needsCudaDemoQualification({ ...revisions, event: "pull_request" }, () => output), true);
+  }
+  assert.equal(needsCudaDemoQualification(revisions, () => { throw new Error("missing history"); }), true);
+});
+
+test("CUDA selection reaches the browser consumer through the existing build output", async () => {
+  const ci = await readFile(new URL("../workflows/ci.yml", import.meta.url), "utf8");
+  const build = ci.split("  web-build:\n")[1].split("  browser-authoring:")[0];
+  const consumer = ci.split("  browser-authoring:\n")[1].split("  browser-reactive:")[0];
+  assert.match(build, /cuda_demo: \$\{\{ needs\.qualification\.outputs\.cuda_demo \}\}/);
+  assert.match(consumer, /needs: web-build/);
+  assert.match(consumer, /if: \$\{\{ needs\.web-build\.outputs\.cuda_demo != 'false' \}\}/,
+    "missing classifier output must execute the suite, not skip it");
 });

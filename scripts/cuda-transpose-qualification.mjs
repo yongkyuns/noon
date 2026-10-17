@@ -12,11 +12,13 @@ import {serveRepository} from './browser-test-server.mjs';
 import {browserArgs} from './manim-raster-support.mjs';
 import {checkSample, checkHighlight, checkTextRegions} from './cuda-transpose-pixels.mjs';
 import {stringifyEvidence} from './cuda-transpose-report.mjs';
+import {createPyodideResourceCache} from './pyodide-resource-cache.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifactDir = path.resolve(process.env.NOON_CUDA_ARTIFACTS ?? path.join(root, 'cuda-transpose-qualification'));
 const sourcePath = 'web/python/examples/cuda_transpose_banks.py';
 const source = await readFile(path.join(root, sourcePath), 'utf8');
+const resourceCache = createPyodideResourceCache(await readFile(path.join(root, 'web/python-worker.js'), 'utf8'));
 const probe = await readFile(path.join(root, 'tools/cuda-transpose/visual_probe.py'), 'utf8');
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const report = {schema: 1, status: 'running', sceneSha256: sha256(source),
@@ -44,11 +46,11 @@ if (process.env.NOON_CUDA_CAPTURE) {
 const mutations = {
   none: '',
   wrong_bank: `_original_bank_point = bank_point\ndef bank_point(bank):\n    return _original_bank_point((bank + 1) % 32)\n`,
-  wrong_highlight: `_original_focus = CudaTransposeBanks.focus\ndef _bad_focus(self, step):\n    return _original_focus(self, 'store' if step == 'read' else step)\nCudaTransposeBanks.focus = _bad_focus\n`,
+  wrong_highlight: `_original_focus = CudaTransposeBanks.focus\nasync def _bad_focus(self, step):\n    return await _original_focus(self, 'store' if step == 'read' else step)\nCudaTransposeBanks.focus = _bad_focus\n`,
   detached_label: `_original_packet_motion = packet_motion\ndef packet_motion(parts, destination, scale=1.0):\n    return _original_packet_motion(parts[:1], destination, scale)\n`,
   invisible_packet: `_original_packet = packet\ndef packet(lane, point, scale=1.0):\n    parts = _original_packet(lane, point, scale)\n    if lane == 9:\n        parts[0].set_fill(opacity=0.0)\n    return parts\n`,
-  early_store: `def _early_store(self, trace, requests):
-    self.move_step('store', *(a for i, parts in enumerate(requests)
+  early_store: `async def _early_store(self, trace, requests):
+    await self.move_step('store', *(a for i, parts in enumerate(requests)
         for a in packet_motion(parts, output_point(i, COLUMN), scale=0.20)),
         seconds=0.5, proof={'kind':'store', 'trace':trace, 'packets':requests})
 CudaTransposeBanks.bank_replay = _early_store
@@ -75,7 +77,9 @@ function assembled(config) {
     `GPU_TRACE = _cuda_json.loads(${JSON.stringify(JSON.stringify(gpu))})\n` +
     mutations[config.fault] +
     `_cuda_probe = CudaVisualProbe(_cuda_config, lambda message: _cuda_console.log('NOON_CUDA_AUDIT ' + _cuda_json.dumps(message, allow_nan=False)))\n` +
-    `result = CudaTransposeBanks()\nresult._cuda_probe = _cuda_probe\nresult.construct()\n_cuda_probe.finish(result)\n`;
+    `_original_cuda_construct = CudaTransposeBanks.construct\n` +
+    `async def _qualified_cuda_construct(self):\n    self._cuda_probe = _cuda_probe\n    await _original_cuda_construct(self)\n    _cuda_probe.finish(self)\n` +
+    `CudaTransposeBanks.construct = _qualified_cuda_construct\n`;
 }
 function eventQueue() {
   const events = []; let pending = null;
@@ -97,6 +101,7 @@ try {
     const evidence = {name, ...config, status:'running', intervals:0, semanticObservations:0, pixelSamples:[], checkpoints:[]};
     const queue = eventQueue(); const observations = [];
     const page = await browser.newPage({viewport:{width:1280,height:720}, deviceScaleFactor:1});
+    await resourceCache.install(page.context());
     let failure = null;
     page.on('console', message => {
       const text = message.text();
@@ -118,8 +123,11 @@ try {
         const authoring = new PythonAuthoringClient();
         let resolve, reject;
         const attached = new Promise((a,b) => {resolve=a;reject=b;});
+        let rejectFailure;
+        const failure = new Promise((_, reject) => { rejectFailure = reject; });
+        failure.catch(() => {});
         const execution = new AuthoringExecutionClient(canvas, {onError(error, owner) {
-          const text = `${owner}: ${error}`; reject(new Error(text)); void window.__cudaFailure(text);
+          const text = `${owner}: ${error}`; reject(new Error(text)); rejectFailure(new Error(text)); void window.__cudaFailure(text);
         }});
         const authored = authoring.run(code, {}, {async onSemanticContinuation(registration) {
           try { await execution.startSemanticExecution(registration.semanticExecution, {
@@ -127,9 +135,10 @@ try {
             transportMode:'transferable', pacing:'external_samples'}); resolve(); }
           catch (error) { reject(error); throw error; }
         }});
-        authored.catch(error => {reject(error); void window.__cudaFailure(String(error));});
-        window.cudaQualification = {authoring, execution, authored};
-        await attached;
+        authored.catch(error => {reject(error); rejectFailure(error); void window.__cudaFailure(String(error));});
+        window.cudaQualification = {authoring, execution, authored, failure,
+          sample: time => Promise.race([execution.sampleToAuthoredTime(time), failure])};
+        await Promise.race([attached, failure]);
       }, assembled(config));
       let completed = false;
       let midpointChecks = 0;
@@ -141,7 +150,7 @@ try {
         if (event.type === 'checkpoint') {
           evidence.checkpoints.push(event);
           if (event.highlights || event.text_regions) {
-            await page.evaluate(time => window.cudaQualification.execution.sampleToAuthoredTime(time), event.time);
+            await page.evaluate(time => window.cudaQualification.sample(time), event.time);
             const bytes = await page.locator('#scene').screenshot();
             await writeFile(path.join(dir, `checkpoint-${event.name}-${event.stride}.png`), bytes);
             const image = PNG.sync.read(bytes);
@@ -158,7 +167,7 @@ try {
               event.batch.some(lane => [0,9,31].includes(lane));
             const receipt = await page.evaluate(async ({time, retain}) => {
               const h = window.cudaQualification;
-              const state = await h.execution.sampleToAuthoredTime(time);
+              const state = await h.sample(time);
               const metrics = await h.execution.metrics();
               return {state, metrics:metrics.metrics, frame:retain ? await h.execution.debugFrame() : null};
             }, {time, retain});
@@ -175,9 +184,9 @@ try {
             evidence.pixelSamples.push({id:event.id, kind:event.kind, stride:event.stride, time, alpha, ...checked});
           }
         }
-        await page.evaluate(time => window.cudaQualification.execution.sampleToAuthoredTime(time), event.end);
+        await page.evaluate(time => window.cudaQualification.sample(time), event.end);
       }
-      await page.evaluate(() => window.cudaQualification.authored.then(result => ({duration:result.duration})));
+      await page.evaluate(() => { const h = window.cudaQualification; return Promise.race([h.authored, h.failure]).then(result => ({duration:result.duration})); });
       assert.ok(evidence.semanticObservations >= 76, 'incomplete packet endpoint coverage');
       assert.ok(midpointChecks > 32, 'insufficient unoccluded midpoint coverage');
       assert.deepEqual(evidence.completion.layouts, [32,33]);
@@ -207,5 +216,6 @@ try {
   report.status='failed'; report.error=String(error?.stack ?? error); throw error;
 } finally {
   await browser?.close(); await server?.close();
+  report.pyodideResourceCache = resourceCache.stats();
   await writeFile(path.join(artifactDir,'report.json'), stringifyEvidence(report));
 }

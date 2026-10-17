@@ -89,6 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       full: ${{ steps.scope.outputs.full }}
+      cuda_demo: ${{ steps.scope.outputs.cuda_demo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -212,6 +213,8 @@ jobs:
 
   web-build:
     needs: qualification
+    outputs:
+      cuda_demo: ${{ needs.qualification.outputs.cuda_demo }}
     if: ${{ !cancelled() && (needs.qualification.result != 'success' || needs.qualification.outputs.full != 'false') }}
     name: Web package
     runs-on: ubuntu-latest
@@ -285,13 +288,15 @@ jobs:
       - name: Test executable Manim tutorial corpus
         run: node scripts/manim-tutorial-smoke.mjs
       - name: Test CUDA demo CPU-backed visual fidelity
+        id: cuda_fidelity
+        if: ${{ needs.web-build.outputs.cuda_demo != 'false' }}
         timeout-minutes: 15
         run: |
           python3 tests/cuda_visual_validation_test.py
           node --test scripts/cuda-transpose-pixels.test.mjs scripts/cuda-transpose-report.test.mjs
           node scripts/cuda-transpose-qualification.mjs
       - name: Preserve CUDA demo fidelity evidence
-        if: always()
+        if: ${{ always() && steps.cuda_fidelity.outcome != 'skipped' }}
         uses: actions/upload-artifact@v7
         with:
           name: cuda-transpose-fidelity

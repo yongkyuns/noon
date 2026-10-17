@@ -291,21 +291,21 @@ def packet_motion(parts, destination, scale=1.0):
 class CudaTransposeBanks(Scene):
     """One retained scene, ordinary Noon animations, no frame callbacks."""
 
-    def play_for(self, *animations, seconds=0.5, proof=None):
+    async def play_for(self, *animations, seconds=0.5, proof=None):
         # Optional test observer only: it cannot schedule or interpolate the scene.
         # Ordinary gallery playback does not install a probe.
         probe = getattr(self, "_cuda_probe", None)
         if probe is not None:
             probe.before(self, seconds / SPEED, proof)
-        self.play(*animations, run_time=seconds / SPEED)
+        await self.play(*animations, run_time=seconds / SPEED)
         if probe is not None:
             probe.after(self, proof)
 
-    def pause(self, seconds=0.7):
+    async def pause(self, seconds=0.7):
         probe = getattr(self, "_cuda_probe", None)
         if probe is not None:
             probe.before(self, seconds / SPEED, None)
-        self.wait(seconds / SPEED)
+        await self.wait(seconds / SPEED)
         if probe is not None:
             probe.after(self, None)
 
@@ -314,31 +314,31 @@ class CudaTransposeBanks(Scene):
         if probe is not None:
             probe.checkpoint(self, event, **values)
 
-    def fade(self, objects, seconds=0.30):
+    async def fade(self, objects, seconds=0.30):
         if objects:
-            self.play_for(*(FadeOut(o) for o in objects), seconds=seconds)
+            await self.play_for(*(FadeOut(o) for o in objects), seconds=seconds)
 
-    def narrate(self, title, detail="", color=INK):
+    async def narrate(self, title, detail="", color=INK):
         new = [label(title, y=-3.01, size=23, color=color),
                label(detail or " ", y=-3.44, size=15, color=MUTED)]
-        self.play_for(*(FadeOut(o) for o in self.captions),
+        await self.play_for(*(FadeOut(o) for o in self.captions),
                       *(FadeIn(o) for o in new), seconds=0.22)
         self.captions = new
 
-    def status(self, message, color=MUTED):
+    async def status(self, message, color=MUTED):
         new = label(message, -3.53, -2.35, 14, color, width=5.8)
-        self.play_for(FadeOut(self.status_text), FadeIn(new), seconds=0.14)
+        await self.play_for(FadeOut(self.status_text), FadeIn(new), seconds=0.14)
         self.status_text = new
 
-    def phase(self, name, stride):
+    async def phase(self, name, stride):
         new = label("%s  /  stride %d" % (name, stride),
                     -3.50, 2.55, 16, CYAN, width=6.0)
-        self.play_for(FadeOut(self.phase_text), FadeIn(new), seconds=0.18)
+        await self.play_for(FadeOut(self.phase_text), FadeIn(new), seconds=0.18)
         self.phase_text = new
 
-    def show_code(self, page, stride):
+    async def show_code(self, page, stride):
         """Common font scale, explicit indentation, and one Text per code line."""
-        self.fade(self.code_objects, 0.25)
+        await self.fade(self.code_objects, 0.25)
         entries = code_entries(page, stride)
         size = 16
         # Measuring two equal glyph strings yields monospace *advance*, not ink width.
@@ -379,25 +379,25 @@ class CudaTransposeBanks(Scene):
         self.active_keys = ()
         # Add transparent markers first; only glyphs/gutter fade in.
         self.add(*(self.code_objects[i] for i in range(0, len(self.code_objects), 3)))
-        self.play_for(*(FadeIn(o) for i, o in enumerate(self.code_objects) if i % 3),
+        await self.play_for(*(FadeIn(o) for i, o in enumerate(self.code_objects) if i % 3),
                       seconds=0.40)
 
-    def focus(self, step):
+    async def focus(self, step):
         keys = SOURCE_STEPS[step]
         if any(key not in self.highlights for key in keys):
             raise ValueError("source step %r is missing from the displayed CUDA page" % step)
         if keys != self.active_keys:
-            self.play_for(
+            await self.play_for(
                 *(self.highlights[k].animate.set_fill(opacity=0.0) for k in self.active_keys),
                 *(self.highlights[k].animate.set_fill(opacity=CODE_HIGHLIGHT_FILL) for k in keys),
                 seconds=0.16,
             )
         self.active_keys = keys
 
-    def move_step(self, step, *animations, seconds=0.5, proof=None):
+    async def move_step(self, step, *animations, seconds=0.5, proof=None):
         # The source focus is established BEFORE the corresponding data movement.
-        self.focus(step)
-        self.play_for(*animations, seconds=seconds, proof=proof)
+        await self.focus(step)
+        await self.play_for(*animations, seconds=seconds, proof=proof)
 
     def tile_grid(self, title):
         x, top, size = TILE_LEFT, TILE_TOP, 32 * CELL
@@ -417,7 +417,7 @@ class CudaTransposeBanks(Scene):
                               x + 0.45, -2.39, 11, MUTED)]
         return objects
 
-    def construct(self):
+    async def construct(self):
         if isinstance(SPEED, bool) or not isinstance(SPEED, (int, float)) or not 0 < SPEED < 100:
             raise ValueError("SPEED must be a finite number between 0 and 100.")
         if type(COLUMN) is not int or not 0 <= COLUMN < 32:
@@ -437,31 +437,31 @@ class CudaTransposeBanks(Scene):
                      y=-3.84, size=10, color=MUTED)
         self.phase_text = label("CUDA / one interior 32 x 32 tile", -3.5, 2.55, 15, CYAN)
         self.status_text = label("TILE_DIM = 32    BLOCK_ROWS = 8", -3.53, -2.35, 14, MUTED)
-        self.play_for(Write(title), FadeIn(meta), FadeIn(foot),
+        await self.play_for(Write(title), FadeIn(meta), FadeIn(foot),
                       FadeIn(self.phase_text), FadeIn(self.status_text), seconds=0.85)
-        self.narrate("Transpose the data. Then fix the memory layout.",
+        await self.narrate("Transpose the data. Then fix the memory layout.",
                      "One real CUDA statement stays connected to every visible transfer.")
-        self.pause(1.0)
+        await self.pause(1.0)
         for trace in traces:
-            self.load_tile(trace)
+            await self.load_tile(trace)
         self.observe("complete")
-        self.finish(traces)
+        await self.finish(traces)
 
-    def load_tile(self, trace):
+    async def load_tile(self, trace):
         self.observe("launch", trace=trace)
         stride = trace["stride"]
-        self.phase("EDIT LAYOUT" if stride == 33 else "01  LOAD ROWS", 32)
-        self.status("New launch  |  0 / 1,024 words ready")
-        self.show_code("load", 32)  # Deliberately show the one-line edit on the second run.
+        await self.phase("EDIT LAYOUT" if stride == 33 else "01  LOAD ROWS", 32)
+        await self.status("New launch  |  0 / 1,024 words ready")
+        await self.show_code("load", 32)  # Deliberately show the one-line edit on the second run.
         visual = self.tile_grid("GLOBAL INPUT  ->  SHARED TILE")
         source = [rect(tile_point(0, lane)[0], 2.08, 0.086, 0.082, CYAN, 1, 0)
                   for lane in range(32)]
         source_label = label("one input row / 32 adjacent words", 3.45, 2.29, 12, MUTED)
         visual += source + [source_label]
-        self.play_for(*(FadeIn(o) for o in visual), seconds=0.45)
-        self.focus("allocate")
+        await self.play_for(*(FadeIn(o) for o in visual), seconds=0.45)
+        await self.focus("allocate")
         if stride == 33:
-            self.narrate("Add one unused float to every row.",
+            await self.narrate("Add one unused float to every row.",
                          "This is a recompile and rerun, not a live GPU array resize.", GREEN)
             # Only the changed declaration is replaced; the rest of the page stays put.
             old = self.code_text["declaration"]
@@ -475,23 +475,23 @@ class CudaTransposeBanks(Scene):
             pad = rect(TILE_LEFT + 32.5 * CELL, TILE_TOP - 16 * CELL,
                        CELL, 32 * CELL, GREEN, 0.30, 1)
             pad_label = label("+1", TILE_LEFT + 32 * CELL + 0.53, 0.15, 15, GREEN)
-            self.play_for(FadeOut(old), Write(new), FadeIn(pad), FadeIn(pad_label), seconds=0.75)
+            await self.play_for(FadeOut(old), Write(new), FadeIn(pad), FadeIn(pad_label), seconds=0.75)
             self.code_objects[old_index] = new
             self.code_text["declaration"] = new
             visual += [pad, pad_label]
-            self.phase("01  LOAD ROWS", stride)
-            self.pause(1.6)
-        self.focus("coordinates")
-        self.status("block=(0,0)  x=lane  y=threadIdx.y")
-        self.narrate("Load adjacent words into a shared-memory row.",
+            await self.phase("01  LOAD ROWS", stride)
+            await self.pause(1.6)
+        await self.focus("coordinates")
+        await self.status("block=(0,0)  x=lane  y=threadIdx.y")
+        await self.narrate("Load adjacent words into a shared-memory row.",
                      "Color follows the input row group, not the writer's thread identity.")
-        self.pause(0.8 if stride == 32 else 0.4)
+        await self.pause(0.8 if stride == 32 else 0.4)
         bands = []
         for k, j in enumerate((0, 8, 16, 24)):
-            self.focus("loop")
-            self.status("j=%02d  |  rows %02d..%02d  |  %d words ready" %
+            await self.focus("loop")
+            await self.status("j=%02d  |  rows %02d..%02d  |  %d words ready" %
                         (j, j, j + 7, sum(trace["loads"][:k])))
-            self.focus("bounds")
+            await self.focus("bounds")
             row = j + COLUMN % 8
             color = ROW_COLORS[k]
             packets = [rect(tile_point(row, lane)[0], 2.08, 0.086, 0.082, color, 1, 0)
@@ -500,63 +500,63 @@ class CudaTransposeBanks(Scene):
                         32 * CELL, 8 * CELL, color, 0.23, 0)
             self.add(*packets)
             # Both halves of the assignment remain lit throughout the transfer.
-            self.move_step("copy", *(p.animate.move_to(tile_point(row, lane))
+            await self.move_step("copy", *(p.animate.move_to(tile_point(row, lane))
                                      for lane, p in enumerate(packets)),
                            FadeIn(band), seconds=0.95 if stride == 32 and k == 0 else 0.42,
                            proof={"kind": "load", "trace": trace, "j": j,
                                   "packets": [(p,) for p in packets], "band": band})
             self.remove(*packets)
             bands.append(band)
-            self.status("j=%02d complete  |  %d / 1,024 words ready" %
+            await self.status("j=%02d complete  |  %d / 1,024 words ready" %
                         (j, sum(trace["loads"][:k + 1])), color)
             self.observe("load_ready", trace=trace, j=j)
             if k == 0 and stride == 32:
-                self.pause(1.1)
-        self.status("j loop complete  |  1,024 words ready", GREEN)
-        self.phase("02  BLOCK BARRIER", stride)
-        self.focus("barrier")
-        self.narrate("Wait for every warp before reading the tile.",
+                await self.pause(1.1)
+        await self.status("j loop complete  |  1,024 words ready", GREEN)
+        await self.phase("02  BLOCK BARRIER", stride)
+        await self.focus("barrier")
+        await self.narrate("Wait for every warp before reading the tile.",
                      "__syncthreads() is a block barrier; warp order here is illustrative.", PINK)
         arrivals = [rect(1.53 + w * 0.52, -2.19, 0.39, 0.21, PINK, 0.30, 1)
                     for w in range(8)]
-        self.play_for(*(FadeIn(o) for o in arrivals), seconds=0.30)
-        self.play_for(*(o.animate.set_fill(PINK, opacity=0.85) for o in arrivals), seconds=0.65)
-        self.pause(1.8 if stride == 32 else 1.0)
+        await self.play_for(*(FadeIn(o) for o in arrivals), seconds=0.30)
+        await self.play_for(*(o.animate.set_fill(PINK, opacity=0.85) for o in arrivals), seconds=0.65)
+        await self.pause(1.8 if stride == 32 else 1.0)
         self.observe("barrier", trace=trace, arrivals=arrivals)
-        self.fade(arrivals, 0.18)
-        self.show_code("output", stride)
-        self.phase("03  READ A COLUMN", stride)
-        self.focus("output_coordinates")
-        self.status("selected warp ty=%d  |  selected j=%d" % (COLUMN % 8, COLUMN // 8 * 8))
-        self.narrate("The output swaps block coordinates.",
+        await self.fade(arrivals, 0.18)
+        await self.show_code("output", stride)
+        await self.phase("03  READ A COLUMN", stride)
+        await self.focus("output_coordinates")
+        await self.status("selected warp ty=%d  |  selected j=%d" % (COLUMN % 8, COLUMN // 8 * 8))
+        await self.narrate("The output swaps block coordinates.",
                      "This fixture uses block (0,0); follow one column of the completed tile.")
-        self.pause(1.0)
-        self.focus("output_bounds")
+        await self.pause(1.0)
+        await self.focus("output_bounds")
         selection = [rect(*tile_point(lane, COLUMN)[:2], 0.097, 0.097,
                           ROW_COLORS[lane // 8], 0.9, 0) for lane in range(32)]
-        self.move_step("read", *(FadeIn(o) for o in selection), seconds=0.45)
-        self.narrate("Lane r reads tile[r][%d]." % COLUMN,
+        await self.move_step("read", *(FadeIn(o) for o in selection), seconds=0.45)
+        await self.narrate("Lane r reads tile[r][%d]." % COLUMN,
                      "The same value and row-group color follow the request into its bank.")
-        self.pause(1.0)
+        await self.pause(1.0)
         # Retain the exact read/store statement, but clear the long page before
         # packets cross to the request tray. This avoids paths crossing source text.
-        self.show_code("read", stride)
-        self.focus("read")
+        await self.show_code("read", stride)
+        await self.focus("read")
         requests = [packet(lane, tile_point(lane, COLUMN), scale=0.20)
                     for lane in range(32)]
         self.add(*packet_leaves(requests))
         # The selected data keeps its identity while the grid opens into a request tray.
-        self.move_step("read", *(FadeOut(o) for o in visual + bands + selection),
+        await self.move_step("read", *(FadeOut(o) for o in visual + bands + selection),
                        *(animation for lane, parts in enumerate(requests)
                          for animation in packet_motion(parts, queue_point(lane), scale=5.0)),
                        seconds=0.80,
                        proof={"kind": "tray", "trace": trace, "packets": requests})
-        self.bank_replay(trace, requests)
+        await self.bank_replay(trace, requests)
 
-    def bank_replay(self, trace, requests):
+    async def bank_replay(self, trace, requests):
         stride, reads = trace["stride"], trace["reads"]
         batches = service_batches(reads)
-        self.focus("read")
+        await self.focus("read")
         facts = [
             label("word = %d + lane * %d + %d" % (trace["base_word"], stride, COLUMN), -3.46, 0.65, 16, AMBER, width=5.9),
             label("bank = word % 32", -3.46, 0.24, 16, MUTED),
@@ -575,58 +575,58 @@ class CudaTransposeBanks(Scene):
             register_objects.append(rect(x, y + 0.045, REGISTER_CELL_W,
                                          REGISTER_CELL_H, EDGE, 0.12, 1))
             register_objects.append(label(lane, x, y + 0.17, 9, MUTED))
-        self.play_for(*(FadeIn(o) for o in facts + bank_objects + register_objects), seconds=0.45)
+        await self.play_for(*(FadeIn(o) for o in facts + bank_objects + register_objects), seconds=0.45)
         self.observe("banks", trace=trace, banks=bank_objects, registers=register_objects)
         used = sorted({event[2] % 32 for event in reads})
         color = GREEN if len(batches) == 1 else CORAL
-        self.play_for(*(bank_boxes[b].animate.set_stroke(color, width=2) for b in used), seconds=0.3)
-        self.status("%d banks used  |  %d read rounds required" % (len(used), len(batches)), color)
+        await self.play_for(*(bank_boxes[b].animate.set_stroke(color, width=2) for b in used), seconds=0.3)
+        await self.status("%d banks used  |  %d read rounds required" % (len(used), len(batches)), color)
         if stride == 32:
-            self.narrate("32 distinct words request bank %d." % used[0],
+            await self.narrate("32 distinct words request bank %d." % used[0],
                          "These addresses differ, so the bank cannot broadcast one value.", CORAL)
         else:
-            self.narrate("The same 32 values now reach 32 different banks.",
+            await self.narrate("The same 32 values now reach 32 different banks.",
                          "Only the shared row stride changed: 32 -> 33.", GREEN)
         # Trace-derived examples, including a nonzero physical base from a GPU capture.
         example = label("lane 0: word %d -> B%02d" % (reads[0][2], reads[0][2] % 32),
                         -3.45, 1.01, 14, ROW_COLORS[0], width=5.9)
-        self.play_for(FadeIn(example), seconds=0.18)
-        self.pause(2.0)
+        await self.play_for(FadeIn(example), seconds=0.18)
+        await self.pause(2.0)
         # Move the mapping explanation to the caption band while requests travel.
         # The packet paths cannot obscure the formula or the CUDA statement.
-        self.fade(facts + [example], 0.25)
+        await self.fade(facts + [example], 0.25)
         mapping = "bank = (%d + lane * %d + %d) %% 32" % (trace["base_word"], stride, COLUMN)
-        self.narrate("One round." if len(batches) == 1 else "One bank. 32 serialized read rounds.",
+        await self.narrate("One round." if len(batches) == 1 else "One bank. 32 serialized read rounds.",
                      mapping + "  /  color follows the value", color)
         for batch in batches:
-            self.move_step("read",
+            await self.move_step("read",
                            *(animation for lane in batch
                              for animation in packet_motion(
                                  requests[lane], bank_point(reads[lane][2] % 32))),
                            seconds=ROUND_IN,
                            proof={"kind": "bank", "trace": trace,
                                   "batch": batch, "packets": requests})
-            self.move_step("read",
+            await self.move_step("read",
                            *(animation for lane in batch
                              for animation in packet_motion(
                                  requests[lane], register_point(lane), scale=REGISTER_SCALE)),
                            seconds=ROUND_OUT,
                            proof={"kind": "register", "trace": trace,
                                   "batch": batch, "packets": requests})
-        self.status("%d / %d read rounds complete" % (len(batches), len(batches)), color)
-        self.pause(0.7)
-        self.phase("04  STORE A ROW", stride)
-        self.narrate("The shared load completes. Now the warp stores.",
+        await self.status("%d / %d read rounds complete" % (len(batches), len(batches)), color)
+        await self.pause(0.7)
+        await self.phase("04  STORE A ROW", stride)
+        await self.narrate("The shared load completes. Now the warp stores.",
                      "All 32 lanes write consecutive global-memory words.", GREEN)
-        self.focus("store")
-        self.fade(bank_objects + register_objects, 0.35)
+        await self.focus("store")
+        await self.fade(bank_objects + register_objects, 0.35)
         output = self.tile_grid("GLOBAL OUTPUT  /  TRANSPOSED")
         band = rect(TILE_LEFT + 16 * CELL, output_point(0, COLUMN)[1],
                     32 * CELL, CELL, GREEN, 0.33, 1)
-        self.play_for(*(FadeIn(o) for o in output), FadeIn(band), seconds=0.4)
+        await self.play_for(*(FadeIn(o) for o in output), FadeIn(band), seconds=0.4)
         # Same packet objects, same values: column r becomes output row COLUMN.
         to_tile_scale = 0.20 / REGISTER_SCALE
-        self.move_step("store",
+        await self.move_step("store",
                        *(animation for lane, parts in enumerate(requests)
                          for animation in packet_motion(
                              parts, output_point(lane, COLUMN), scale=to_tile_scale)),
@@ -640,16 +640,16 @@ class CudaTransposeBanks(Scene):
                   label("%d read round%s" % (len(batches), "" if len(batches) == 1 else "s"),
                         -3.45, -1.12, 29, color),
                   label("Full fixture: 1,024 / 1,024 values match", -3.45, -1.77, 13, MUTED)]
-        self.play_for(*(FadeIn(o) for o in result), seconds=0.5)
+        await self.play_for(*(FadeIn(o) for o in result), seconds=0.5)
         self.observe("output_row", trace=trace, packets=requests, labels=result)
-        self.status("Shown: one output row. Validation covers the whole tile.", GREEN)
-        self.pause(2.2)
-        self.fade(output + [band] + result + packet_leaves(requests) + self.code_objects, 0.4)
+        await self.status("Shown: one output row. Validation covers the whole tile.", GREEN)
+        await self.pause(2.2)
+        await self.fade(output + [band] + result + packet_leaves(requests) + self.code_objects, 0.4)
         self.code_objects, self.highlights, self.active_keys = [], {}, ()
 
-    def finish(self, traces):
-        self.fade(self.panels + [self.phase_text, self.status_text], 0.4)
-        self.narrate("Same answer. Fewer shared-memory conflicts.",
+    async def finish(self, traces):
+        await self.fade(self.panels + [self.phase_text, self.status_text], 0.4)
+        await self.narrate("Same answer. Fewer shared-memory conflicts.",
                      "Bank-conflict reduction is not a measured whole-kernel speedup.", GREEN)
         objects = []
         for x, trace, accent, heading in ((-3.33, traces[0], CORAL, "UNPADDED"),
@@ -664,6 +664,6 @@ class CudaTransposeBanks(Scene):
                         label("schematic read round%s" % ("" if rounds == 1 else "s"), x, -0.34, 16, MUTED),
                         label("%s bytes / tile" % format(32 * stride * 4, ","), x, -0.98, 19)]
         cost = label("+128 bytes  /  +3.125% shared memory", y=-2.06, size=22, color=GREEN)
-        self.play_for(*(FadeIn(o) for o in objects), seconds=0.75)
-        self.play_for(Write(cost), seconds=0.7)
-        self.pause(3.5)
+        await self.play_for(*(FadeIn(o) for o in objects), seconds=0.75)
+        await self.play_for(Write(cost), seconds=0.7)
+        await self.pause(3.5)

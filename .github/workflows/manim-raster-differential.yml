@@ -301,6 +301,20 @@ jobs:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/shared-playback-raster.mjs
+      - name: Test complete CUDA demo visual fidelity
+        timeout-minutes: 15
+        run: |
+          python3 tests/cuda_visual_validation_test.py
+          node --test scripts/cuda-transpose-pixels.test.mjs scripts/cuda-transpose-report.test.mjs
+          node scripts/cuda-transpose-qualification.mjs
+      - name: Preserve CUDA demo fidelity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cuda-transpose-fidelity
+          path: cuda-transpose-qualification
+          if-no-files-found: warn
+          retention-days: 3
       - name: Upload Manim/Noon/diff artifacts
         if: always()
         uses: actions/upload-artifact@v7

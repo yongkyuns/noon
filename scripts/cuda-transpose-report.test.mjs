@@ -88,7 +88,20 @@ test('CI runs the report-codec regression before the actual browser validator', 
   const unit = job.indexOf('scripts/cuda-transpose-report.test.mjs');
   const browser = job.indexOf('node scripts/cuda-transpose-qualification.mjs');
   assert.ok(unit >= 0 && unit < browser);
-  assert.ok(job.includes('if: always()'));
+  assert.match(job, /always\(\).*cuda_fidelity/);
+  assert.match(job, /outputs\.cuda_demo != 'false'/);
   assert.ok(job.includes('name: cuda-transpose-fidelity'));
   assert.ok(!job.includes('continue-on-error'));
+});
+
+test('existing nightly/manual oracle retains every CUDA case without another WASM build', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/manim-raster-differential.yml', import.meta.url), 'utf8');
+  const oracle = workflow.split('  raster:')[1];
+  const suite = oracle.split('- name: Test complete CUDA demo visual fidelity')[1].split('- name: Upload Manim/Noon/diff artifacts')[0];
+  assert.ok(suite.includes('timeout-minutes: 15'));
+  assert.ok(suite.includes('node scripts/cuda-transpose-qualification.mjs'));
+  assert.ok(suite.includes('if: always()'));
+  assert.ok(suite.includes('retention-days: 3'));
+  assert.ok(!suite.includes('continue-on-error'));
+  assert.ok(!suite.includes('build-web-demo'));
 });
