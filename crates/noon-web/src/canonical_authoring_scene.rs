@@ -8042,6 +8042,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveClearPoints)]
+        pub fn live_clear_points(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_clear_points(source.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveStartNewPath)]
         pub fn live_start_new_path(
             &mut self,

@@ -2088,6 +2088,11 @@ mod wasm {
             self.handle.set_points_as_corners(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(&mut self) -> Result<(), JsValue> {
+            self.handle.clear_points().map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = startNewPath)]
         pub fn start_new_path(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;

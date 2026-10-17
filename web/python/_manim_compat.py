@@ -118,6 +118,10 @@ class VMobject(Mobject):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
 
+    def clear_points(self):
+        from _manim_path_editing import clear_points
+        return clear_points(self)
+
     def set_points_smoothly(self, points):
         from _manim_path_editing import edit_points
         return edit_points(self, "setPointsSmoothly", "liveSetPointsSmoothly", points, array=True)

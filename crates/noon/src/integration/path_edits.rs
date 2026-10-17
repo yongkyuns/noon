@@ -15,6 +15,9 @@ use std::{cell::RefCell, rc::Rc};
 /// All variants use the same coherent effective-state capture, validation,
 /// scoped immutable-resource rollback and semantic publication as Scene.
 pub enum BorrowedPathEdit<'a> {
+    Clear {
+        object: &'a Mobject,
+    },
     SmoothCorners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -82,6 +85,7 @@ pub fn publish_borrowed_path_edit(
     // Cross-object partial selection and family edits have their own coherent
     // capture requirements, but still publish through the same Rust authority.
     let (object, operation) = match edit {
+        BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
         }

@@ -772,6 +772,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_clear_points(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Clear {
+            object: source,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn publish_borrowed_path_edit(
         &mut self,
         edit: noon::integration::BorrowedPathEdit<'_>,

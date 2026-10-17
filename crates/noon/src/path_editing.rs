@@ -265,6 +265,12 @@ impl crate::Scene {
         })
     }
 
+    pub fn clear_points(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Clear)
+        })
+    }
+
     pub fn add_cubic_bezier_curve_to(
         &mut self,
         object: &Mobject,
@@ -386,6 +392,7 @@ pub(crate) fn path_is_unchanged(
 /// Inputs to shared authoring preparation, published using the normal content
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
+    Clear,
     Corners(&'a [Vec2]),
     SmoothCorners(&'a [Vec2]),
     AnchorMode(bool),
@@ -409,6 +416,9 @@ impl PathEdit<'_> {
         store: &SemanticStore,
         state: &SemanticObjectState,
     ) -> Result<Option<VectorPath>, AuthoringError> {
+        if matches!(self, Self::Clear) {
+            return Ok(Some(VectorPath::new()));
+        }
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
         }
@@ -493,6 +503,7 @@ impl PathEdit<'_> {
                 }
                 Self::Corners(_)
                 | Self::SmoothCorners(_)
+                | Self::Clear
                 | Self::AnchorMode(_)
                 | Self::Start(_)
                 | Self::Reverse
@@ -695,6 +706,10 @@ impl Mobject {
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Corners(points))
+    }
+    /// Remove this object's path while retaining its semantic identity and style.
+    pub fn clear_points(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Clear)
     }
     /// Begin a new world-space subpath without connecting it to the previous one.
     pub fn start_new_path(&mut self, point: Vec2) -> Result<(), AuthoringError> {

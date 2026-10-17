@@ -101,6 +101,76 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
 }
 
 #[test]
+fn clear_points_uses_shared_authored_and_live_transactions() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene.square(2.).unwrap();
+        object.shift(3., 4.).unwrap();
+        object.set_fill(0.2, 0.4, 0.8, 0.5).unwrap();
+        object.set_z_index(2.5).unwrap();
+        let copy = object.copy_handle().unwrap();
+        scene.add(&object).unwrap();
+        scene.add(&copy).unwrap();
+
+        let original = object.state().unwrap();
+        let original_id = object.node_id();
+        let original_point_count = object.path_query().unwrap().point_count();
+        assert!(original_point_count > 0);
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+        let revision = scene.revision();
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::Clear { object: &object },
+            )
+            .unwrap();
+            assert_eq!(
+                noon::integration::effective_path_query(&store, &execution, &object)
+                    .unwrap()
+                    .point_count(),
+                0
+            );
+        } else {
+            object.clear_points().unwrap();
+        }
+
+        assert_ne!(scene.revision(), revision);
+        assert_eq!(object.node_id(), original_id);
+        assert_eq!(object.path_query().unwrap().point_count(), 0);
+        assert_eq!(
+            copy.path_query().unwrap().point_count(),
+            original_point_count
+        );
+        let cleared = object.state().unwrap();
+        assert_eq!(cleared.style, original.style);
+        assert_eq!(cleared.presentation(), original.presentation());
+
+        let revision = scene.revision();
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::Clear { object: &object },
+            )
+            .unwrap();
+        } else {
+            object.clear_points().unwrap();
+        }
+        assert_eq!(
+            scene.revision(),
+            revision,
+            "clearing an empty path is a no-op"
+        );
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

@@ -19,10 +19,13 @@ class PathEditingTests(unittest.TestCase):
                  patch.object(editing, '_live_mutation_context', return_value=context), \
                  patch.object(editing, '_live_constructor_context', return_value=None):
                 self.assertIs(value.set_points_as_corners([(1, 2, 0), (3, 4, 0)]), value)
+                self.assertIs(value.clear_points(), value)
                 if context is None:
                     handle.setPointsAsCorners.assert_called_once_with([1., 2., 3., 4.])
+                    handle.clearPoints.assert_called_once_with()
                 else:
                     context.liveSetPointsAsCorners.assert_called_once_with(handle, [1., 2., 3., 4.])
+                    context.liveClearPoints.assert_called_once_with(handle)
 
     def test_callback_resource_edits_reject_before_crossing_the_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -30,6 +33,8 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_handle_for') as resolve:
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.set_points_as_corners([(1, 2), (3, 4)])
+            with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                value.clear_points()
             resolve.assert_not_called()
 
 

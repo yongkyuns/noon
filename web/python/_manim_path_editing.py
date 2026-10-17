@@ -8,6 +8,10 @@ def set_points_as_corners(value, points):
     return edit_points(value, "setPointsAsCorners", "liveSetPointsAsCorners", points, array=True)
 
 
+def clear_points(value):
+    return edit_points(value, "clearPoints", "liveClearPoints", ())
+
+
 def edit_points(value, method, live_method, points, *, array=False):
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():
