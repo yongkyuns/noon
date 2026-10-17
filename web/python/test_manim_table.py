@@ -204,6 +204,9 @@ class TableFacadeTests(unittest.TestCase):
             )
 
         children = value._test_submobjects
+        self.assertIs(value.row_labels[0], row_label)
+        self.assertIs(value.col_labels[0], column_label)
+        self.assertIs(value.top_left_entry, top_left_entry)
         self.assertIs(children[1].submobjects[0]._semantic_member_wrappers["1:1"], entry)
         self.assertIs(children[3]._semantic_member_wrappers["2:1"], row_label)
         self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)

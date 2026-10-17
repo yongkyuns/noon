@@ -97,6 +97,12 @@ class Table(_compat.VGroup):
         self._table_handle = handle
         self._horizontal_lines_cache = None
         self._vertical_lines_cache = None
+        if not hasattr(self, "row_labels"):
+            self.row_labels = None
+        if not hasattr(self, "col_labels"):
+            self.col_labels = None
+        if not hasattr(self, "top_left_entry"):
+            self.top_left_entry = None
         _attach_shared_family(self, engine_call(handle.family), context)
 
     def _rehydrate_semantic_family_handle(self):
@@ -280,6 +286,9 @@ class MobjectTable(Table):
             ),
             context,
         )
+        self.row_labels = row_label_mobjects or None
+        self.col_labels = column_label_mobjects or None
+        self.top_left_entry = top_left_entry
         for row_group, row in zip(self._entry_family().submobjects, source_rows):
             row_group._semantic_member_wrappers = {
                 _family_wrapper_key(value): value for value in row

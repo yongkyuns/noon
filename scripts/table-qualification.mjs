@@ -58,7 +58,15 @@ class TableLifecycle(Scene):
         assert labeled.submobjects[4].submobjects[0] is column_labels[0]
         assert labeled.submobjects[4].submobjects[1] is column_labels[1]
         assert labeled.submobjects[5].submobjects[0] is top_left_entry
+        assert labeled.row_labels[0] is row_label
+        assert labeled.col_labels[0] is column_labels[0]
+        assert labeled.top_left_entry is top_left_entry
         assert labeled.get_entries((1, 1)) is entry
+        labeled_copy = labeled.copy()
+        assert labeled_copy.row_labels[0] is not row_label
+        assert labeled_copy.col_labels[0] is not column_labels[0]
+        assert labeled_copy.top_left_entry is not top_left_entry
+        assert labeled_copy.get_entries((1, 1)) is not entry
         self.add(labeled)
         await self.wait(0.0625)
 `;

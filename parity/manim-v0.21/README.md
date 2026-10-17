@@ -40,6 +40,9 @@ Rust/WASM and Python-worker pixels match exactly on WebGPU and WebGL2, and the
 table lifecycle checks pass on both. Strict pinned ManimCE Cairo raster
 qualification passes the unchanged thresholds on both backends with exact
 duration and 0.33% worst differing pixels.
+The Python table also exposes the original `row_labels`, `col_labels`, and
+`top_left_entry` wrappers; a copied table gets independent wrappers over its
+copied semantic roots.
 
 `table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
 outer rules retained. The option defaults to `True`, travels through the Rust,
