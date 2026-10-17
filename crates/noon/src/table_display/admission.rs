@@ -169,17 +169,27 @@ struct GridLayout {
     column_offset: usize,
     options: TableOptions,
 }
+struct GridLabels<'a> {
+    rows: Option<&'a [Mobject]>,
+    row_bounds: Option<&'a [Bounds2D64]>,
+    columns: Option<&'a [Mobject]>,
+    column_bounds: Option<&'a [Bounds2D64]>,
+    top_left_bounds: Option<Bounds2D64>,
+}
 impl GridLayout {
     fn measure(
         entry_bounds: &[Bounds2D64],
         shape: TableShape,
-        row_labels: Option<&[Mobject]>,
-        row_bounds: Option<&[Bounds2D64]>,
-        column_labels: Option<&[Mobject]>,
-        column_bounds: Option<&[Bounds2D64]>,
-        top_left_bounds: Option<Bounds2D64>,
+        labels: GridLabels<'_>,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError> {
+        let GridLabels {
+            rows: row_labels,
+            row_bounds,
+            columns: column_labels,
+            column_bounds,
+            top_left_bounds,
+        } = labels;
         if top_left_bounds.is_some() && (row_labels.is_none() || column_labels.is_none()) {
             return Err(TableAuthoringError::TopLeftRequiresLabels);
         }
@@ -276,7 +286,7 @@ impl GridLayout {
                     start: noon_core::Vec2::new(min_x as f32, y as f32),
                     end: noon_core::Vec2::new(max_x as f32, y as f32),
                 });
-                s.style = line_style();
+                s.style = table_line_style(self.options);
                 output.push(s)
             }
         }
@@ -296,7 +306,7 @@ impl GridLayout {
                     start: noon_core::Vec2::new(x as f32, min_y as f32),
                     end: noon_core::Vec2::new(x as f32, max_y as f32),
                 });
-                s.style = line_style();
+                s.style = table_line_style(self.options);
                 output.push(s)
             }
         }
@@ -314,6 +324,14 @@ fn line_style() -> SemanticStyle {
         stroke_join: noon_core::StrokeJoin::Miter,
         stroke_cap: noon_core::StrokeCap::Butt,
         object_opacity: 1.0,
+    }
+}
+fn table_line_style(options: TableOptions) -> SemanticStyle {
+    SemanticStyle {
+        stroke: Some(noon_core::SemanticPaint::Solid(options.line_stroke_color)),
+        stroke_width: options.line_stroke_width,
+        stroke_opacity: options.line_stroke_opacity,
+        ..line_style()
     }
 }
 
@@ -388,14 +406,17 @@ fn make_table(
         },
     })
 }
+struct TableLabels<'a> {
+    rows: Option<&'a [Mobject]>,
+    columns: Option<&'a [Mobject]>,
+    top_left_entry: Option<&'a Mobject>,
+}
 fn stage(
     tx: &mut SemanticMutationTransaction,
     entries: Vec<noon_core::SemanticTransactionNodeRef>,
     shape: TableShape,
     lines: Vec<SemanticObjectState>,
-    rows: Option<&[Mobject]>,
-    columns: Option<&[Mobject]>,
-    top_left_entry: Option<&Mobject>,
+    labels: TableLabels<'_>,
     options: TableOptions,
 ) -> StagedTable {
     let entries_root = tx.create_node(SemanticNodeCreation::family());
@@ -412,21 +433,21 @@ fn stage(
         tx.add_member(lines_root, node);
     }
     let highlights = tx.create_node(SemanticNodeCreation::family());
-    let row_labels = rows.map(|items| {
+    let row_labels = labels.rows.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
             tx.add_member(family, item.node_id());
         }
         family
     });
-    let column_labels = columns.map(|items| {
+    let column_labels = labels.columns.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
             tx.add_member(family, item.node_id());
         }
         family
     });
-    let top_left_entry = top_left_entry.map(|item| {
+    let top_left_entry = labels.top_left_entry.map(|item| {
         let family = tx.create_node(SemanticNodeCreation::family());
         tx.add_member(family, item.node_id());
         family
@@ -445,7 +466,12 @@ fn stage(
             options.label_buff,
             options.include_outer_lines,
         )
-        .with_inner_lines(options.include_inner_lines),
+        .with_inner_lines(options.include_inner_lines)
+        .with_line_style(
+            options.line_stroke_color,
+            options.line_stroke_width,
+            options.line_stroke_opacity,
+        ),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);
@@ -617,11 +643,13 @@ fn commit_composite(
     let layout = GridLayout::measure(
         &entry_bounds,
         shape,
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        columns.as_deref(),
-        column_bounds.as_deref(),
-        top_left_bounds,
+        GridLabels {
+            rows: rows.as_deref(),
+            row_bounds: row_bounds.as_deref(),
+            columns: columns.as_deref(),
+            column_bounds: column_bounds.as_deref(),
+            top_left_bounds,
+        },
         options,
     )?;
     let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
@@ -694,9 +722,11 @@ fn commit_composite(
             entries.iter().map(|item| item.root().into()).collect(),
             shape,
             lines,
-            rows.as_deref(),
-            columns.as_deref(),
-            top_left_entry.as_ref(),
+            TableLabels {
+                rows: rows.as_deref(),
+                columns: columns.as_deref(),
+                top_left_entry: top_left_entry.as_ref(),
+            },
             options,
         );
         Ok(value.published(publish(semantic, tx)?))
@@ -775,11 +805,13 @@ fn publish_prepared_text_table(
     let layout = GridLayout::measure(
         &entry_bounds,
         shape,
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        columns.as_deref(),
-        column_bounds.as_deref(),
-        None,
+        GridLabels {
+            rows: rows.as_deref(),
+            row_bounds: row_bounds.as_deref(),
+            columns: columns.as_deref(),
+            column_bounds: column_bounds.as_deref(),
+            top_left_bounds: None,
+        },
         options,
     )?;
     let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
@@ -831,9 +863,11 @@ fn publish_prepared_text_table(
                     leaves,
                     shape,
                     lines,
-                    rows.as_deref(),
-                    columns.as_deref(),
-                    None,
+                    TableLabels {
+                        rows: rows.as_deref(),
+                        columns: columns.as_deref(),
+                        top_left_entry: None,
+                    },
                     options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
@@ -940,11 +974,13 @@ pub(super) fn publish_numeric_table(
                 let layout = GridLayout::measure(
                     &bounds,
                     shape,
-                    rows.as_deref(),
-                    row_bounds.as_deref(),
-                    columns.as_deref(),
-                    column_bounds.as_deref(),
-                    None,
+                    GridLabels {
+                        rows: rows.as_deref(),
+                        row_bounds: row_bounds.as_deref(),
+                        columns: columns.as_deref(),
+                        column_bounds: column_bounds.as_deref(),
+                        top_left_bounds: None,
+                    },
                     options,
                 )
                 .expect("validated nonempty table shape and label counts produce a grid");
@@ -974,9 +1010,11 @@ pub(super) fn publish_numeric_table(
                     leaves,
                     shape,
                     layout.line_states(),
-                    rows.as_deref(),
-                    columns.as_deref(),
-                    None,
+                    TableLabels {
+                        rows: rows.as_deref(),
+                        columns: columns.as_deref(),
+                        top_left_entry: None,
+                    },
                     options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))

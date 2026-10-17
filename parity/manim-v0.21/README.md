@@ -38,6 +38,12 @@ outer rules retained. The option defaults to `True`, travels through the Rust,
 WASM, and Python constructors, and survives table-family rehydration. Its direct
 Rust/WASM and Python-worker captures are pixel-identical on WebGPU and WebGL2;
 the strict pinned Cairo differential passes unchanged limits on both backends
-with exact duration and 0.18% worst differing pixels. Broader `line_config`,
-background styling, and remaining table variants stay open under #2014; this
-fixture does not claim those options.
+with exact duration and 0.18% worst differing pixels.
+
+`table-line-config-stroke` covers the supported `line_config` subset for grid
+stroke color, width, and opacity. The paired retained Rust/WASM and Python
+example exercises that configuration, and the strict pinned Cairo fixture
+passes the unchanged thresholds on WebGPU and WebGL2 with exact duration and
+0.11% worst differing pixels. Paired Rust/WASM and Python-worker captures are
+pixel-identical on both backends. Other line configuration keys, including
+background stroke styling, and remaining table variants stay open under #2014.

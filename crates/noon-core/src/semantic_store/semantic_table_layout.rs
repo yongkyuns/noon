@@ -1,5 +1,7 @@
 //! Sparse authored Table layout declarations on ordinary family roots.
 
+use crate::Color;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SemanticTableLayout {
     h_buff: f64,
@@ -7,6 +9,9 @@ pub struct SemanticTableLayout {
     label_buff: f64,
     include_outer_lines: bool,
     include_inner_lines: bool,
+    line_stroke_color: Color,
+    line_stroke_width: f64,
+    line_stroke_opacity: f64,
 }
 impl SemanticTableLayout {
     pub const fn new(h_buff: f64, v_buff: f64, label_buff: f64, include_outer_lines: bool) -> Self {
@@ -16,10 +21,19 @@ impl SemanticTableLayout {
             label_buff,
             include_outer_lines,
             include_inner_lines: true,
+            line_stroke_color: Color::WHITE,
+            line_stroke_width: 0.04,
+            line_stroke_opacity: 1.0,
         }
     }
     pub const fn with_inner_lines(mut self, include_inner_lines: bool) -> Self {
         self.include_inner_lines = include_inner_lines;
+        self
+    }
+    pub const fn with_line_style(mut self, color: Color, width: f64, opacity: f64) -> Self {
+        self.line_stroke_color = color;
+        self.line_stroke_width = width;
+        self.line_stroke_opacity = opacity;
         self
     }
     pub const fn h_buff(self) -> f64 {
@@ -37,6 +51,15 @@ impl SemanticTableLayout {
     pub const fn include_inner_lines(self) -> bool {
         self.include_inner_lines
     }
+    pub const fn line_stroke_color(self) -> Color {
+        self.line_stroke_color
+    }
+    pub const fn line_stroke_width(self) -> f64 {
+        self.line_stroke_width
+    }
+    pub const fn line_stroke_opacity(self) -> f64 {
+        self.line_stroke_opacity
+    }
     /// Apply the world-axis factors from a direct Table family scale.
     ///
     /// This declaration follows Manim's `Table.scale`: horizontal and vertical
@@ -50,9 +73,24 @@ impl SemanticTableLayout {
         }
     }
     pub fn is_valid(self) -> bool {
-        [self.h_buff, self.v_buff, self.label_buff]
-            .into_iter()
-            .all(|v| v.is_finite() && v >= 0.0)
+        [
+            self.h_buff,
+            self.v_buff,
+            self.label_buff,
+            self.line_stroke_width,
+            self.line_stroke_opacity,
+            f64::from(self.line_stroke_color.red),
+            f64::from(self.line_stroke_color.green),
+            f64::from(self.line_stroke_color.blue),
+            f64::from(self.line_stroke_color.alpha),
+        ]
+        .into_iter()
+        .all(|v| v.is_finite() && v >= 0.0)
+            && self.line_stroke_opacity <= 1.0
+            && self.line_stroke_color.red <= 1.0
+            && self.line_stroke_color.green <= 1.0
+            && self.line_stroke_color.blue <= 1.0
+            && self.line_stroke_color.alpha <= 1.0
     }
 }
 

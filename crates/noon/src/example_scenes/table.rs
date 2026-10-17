@@ -1,8 +1,8 @@
 //! One retained plain, math, and composite-entry table scene for every host.
 
 use crate::{
-    ExecutionSession, LatexBackend, MathTable, MathTex, MobjectFamily, MobjectTable, Scene, Table,
-    TableOptions,
+    Color, ExecutionSession, LatexBackend, MathTable, MathTex, MobjectFamily, MobjectTable, Scene,
+    Table, TableOptions,
 };
 
 pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
@@ -65,6 +65,9 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
     let top_left_entry = scene.text("i").map_err(|error| error.to_string())?;
     let composite_options = TableOptions {
         include_inner_lines: false,
+        line_stroke_color: Color::YELLOW,
+        line_stroke_width: 0.06,
+        line_stroke_opacity: 0.75,
         ..options
     };
     let composite = MobjectTable::from_target_rows_with_labels_and_top_left_entry(

@@ -346,33 +346,37 @@ async function initializePyodide() {
   self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
     context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
   self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
-  const tableOptions = (v, h, outer, inner) => {
+  const tableOptions = (v, h, outer, inner, red, green, blue, alpha, width, opacity) => {
     const options = new WasmTableOptions(v, h, outer);
     options.setIncludeInnerLines(inner);
+    options.setLineStrokeColor(red, green, blue, alpha);
+    options.setLineStrokeWidth(width);
+    options.setLineStrokeOpacity(opacity);
     return options;
   };
-  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, context) => {
-    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner));
+  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
+    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity));
   };
-  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, context) => {
+  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
-    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner), latexCompiler);
+    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
   };
-  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, context) => {
+  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
-    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner), latexCompiler);
+    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
   };
-  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, inner, context) => {
+  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
-    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner), latexCompiler);
+    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
   };
-  self.noonCreateAuthoringMobjectTableHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, context) => {
+  self.noonCreateAuthoringMobjectTableHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     const entries = compositeRows(rows);
     const rowLabelEntries = compositeRows(rowLabels.length ? [rowLabels] : []);
     const columnLabelEntries = compositeRows(columnLabels.length ? [columnLabels] : []);
     const topLeftEntryRows = compositeRows(topLeftEntry.length ? [topLeftEntry] : []);
     return context.liveCreateMobjectTableWithLabels(
-      entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows, tableOptions(v, h, outer, inner));
+      entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity));
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");

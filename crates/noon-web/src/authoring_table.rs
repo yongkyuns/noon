@@ -30,6 +30,26 @@ impl WasmTableOptions {
     pub fn set_include_inner_lines(&mut self, include_inner_lines: bool) {
         self.options.include_inner_lines = include_inner_lines;
     }
+
+    #[wasm_bindgen(js_name = setLineStrokeColor)]
+    pub fn set_line_stroke_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) {
+        self.options.line_stroke_color = noon::Color {
+            red: red as f32,
+            green: green as f32,
+            blue: blue as f32,
+            alpha: alpha as f32,
+        };
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeWidth)]
+    pub fn set_line_stroke_width(&mut self, width: f64) {
+        self.options.line_stroke_width = width;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeOpacity)]
+    pub fn set_line_stroke_opacity(&mut self, opacity: f64) {
+        self.options.line_stroke_opacity = opacity;
+    }
 }
 
 #[wasm_bindgen]

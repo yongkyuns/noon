@@ -152,13 +152,15 @@ class TableFacadeTests(unittest.TestCase):
         context = types.SimpleNamespace()
         handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
-        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines, _context):
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines,
+                   red, green, blue, alpha, width, opacity, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
             self.assertEqual(row_labels, [row_label._semantic_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
             self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
             self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
             self.assertTrue(inner_lines)
+            self.assertEqual((red, green, blue, alpha, width, opacity), (1.0, 1.0, 1.0, 1.0, .04, 1.0))
             return handle
 
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -204,11 +206,23 @@ class TableFacadeTests(unittest.TestCase):
                 table._options({"top_left_entry": _FakeMobject(2)})
 
     def test_include_inner_lines_is_forwarded_and_defaults_to_manimce_true(self):
-        self.assertEqual(table._options({}), (0.8, 1.3, False, True))
+        self.assertEqual(table._options({}), (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0))
         self.assertEqual(
             table._options({"include_outer_lines": True, "include_inner_lines": False}),
-            (0.8, 1.3, True, False),
+            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0),
         )
+
+    def test_line_config_stroke_subset_is_forwarded_with_manim_width_units(self):
+        table.Table(
+            [["a"]],
+            line_config={"color": "#FF00AA", "stroke_width": 2, "stroke_opacity": .25},
+        )
+        args = self.context.calls[0][1]
+        self.assertEqual(args[5:11], (1.0, 0.0, 170 / 255, 1.0, .02, .25))
+
+    def test_unqualified_line_config_options_remain_explicit(self):
+        with self.assertRaisesRegex(NotImplementedError, "background_stroke_width"):
+            table.Table([["a"]], line_config={"background_stroke_width": 1})
 
 
 if __name__ == "__main__":

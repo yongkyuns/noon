@@ -35,6 +35,11 @@ pub struct TableOptions {
     pub include_outer_lines: bool,
     pub include_inner_lines: bool,
     pub label_buff: f64,
+    pub line_stroke_color: Color,
+    /// Screen-space width; the Python facade maps ManimCE's width by 0.01.
+    pub line_stroke_width: f64,
+    /// Stroke opacity in the inclusive range [0, 1].
+    pub line_stroke_opacity: f64,
 }
 
 impl Default for TableOptions {
@@ -45,6 +50,9 @@ impl Default for TableOptions {
             include_outer_lines: false,
             include_inner_lines: true,
             label_buff: DEFAULT_TABLE_LABEL_BUFF,
+            line_stroke_color: Color::WHITE,
+            line_stroke_width: 0.04,
+            line_stroke_opacity: 1.0,
         }
     }
 }
@@ -55,10 +63,44 @@ impl TableOptions {
             ("h_buff", self.h_buff),
             ("v_buff", self.v_buff),
             ("label_buff", self.label_buff),
+            ("line_config.stroke_width", self.line_stroke_width),
+            ("line_config.stroke_opacity", self.line_stroke_opacity),
+            (
+                "line_config.color.red",
+                f64::from(self.line_stroke_color.red),
+            ),
+            (
+                "line_config.color.green",
+                f64::from(self.line_stroke_color.green),
+            ),
+            (
+                "line_config.color.blue",
+                f64::from(self.line_stroke_color.blue),
+            ),
+            (
+                "line_config.color.alpha",
+                f64::from(self.line_stroke_color.alpha),
+            ),
         ] {
             if !value.is_finite() || value < 0.0 {
                 return Err(TableAuthoringError::InvalidOption { name, value });
             }
+        }
+        if self.line_stroke_opacity > 1.0
+            || self.line_stroke_color.red > 1.0
+            || self.line_stroke_color.green > 1.0
+            || self.line_stroke_color.blue > 1.0
+            || self.line_stroke_color.alpha > 1.0
+        {
+            return Err(TableAuthoringError::InvalidOption {
+                name: "line_config opacity or color channel",
+                value: self
+                    .line_stroke_opacity
+                    .max(f64::from(self.line_stroke_color.red))
+                    .max(f64::from(self.line_stroke_color.green))
+                    .max(f64::from(self.line_stroke_color.blue))
+                    .max(f64::from(self.line_stroke_color.alpha)),
+            });
         }
         Ok(self)
     }
@@ -211,6 +253,9 @@ impl Table {
                 label_buff: layout.label_buff(),
                 include_outer_lines: layout.include_outer_lines(),
                 include_inner_lines: layout.include_inner_lines(),
+                line_stroke_color: layout.line_stroke_color(),
+                line_stroke_width: layout.line_stroke_width(),
+                line_stroke_opacity: layout.line_stroke_opacity(),
             })
             .ok_or(TableAuthoringError::InvalidStructure)
     }
@@ -1107,7 +1152,7 @@ mod tests {
     fn table_can_omit_inner_lines_and_rehydrates_the_option() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
-        let entries = vec![
+        let entries = [
             circle(&store, 0.3),
             circle(&store, 0.2),
             circle(&store, 0.25),
@@ -1122,25 +1167,46 @@ mod tests {
             TableOptions {
                 include_outer_lines: true,
                 include_inner_lines: false,
+                line_stroke_color: Color::rgba(0.25, 0.5, 0.75, 0.8),
+                line_stroke_width: 0.06,
+                line_stroke_opacity: 0.35,
                 ..Default::default()
             },
         )
         .unwrap()
         .into_table();
 
+        let line_nodes = store
+            .borrow()
+            .semantic_family_members_checked(table.line_family().node_id())
+            .unwrap();
         assert_eq!(
-            store
-                .borrow()
-                .semantic_family_members_checked(table.line_family().node_id())
-                .unwrap()
-                .len(),
+            line_nodes.len(),
             4,
             "outer rules remain while both inner rules are omitted"
         );
+        let semantic = store.borrow();
+        let line_state = semantic
+            .node(line_nodes[0])
+            .unwrap()
+            .semantic_object_state()
+            .unwrap();
+        assert_eq!(
+            line_state.style.stroke,
+            Some(noon_core::SemanticPaint::Solid(Color::rgba(
+                0.25, 0.5, 0.75, 0.8
+            )))
+        );
+        assert_eq!(line_state.style.stroke_width, 0.06);
+        assert_eq!(line_state.style.stroke_opacity, 0.35);
+        drop(semantic);
         let rehydrated = Table::from_family(table.family().clone()).unwrap();
         let options = rehydrated.options().unwrap();
         assert!(options.include_outer_lines);
         assert!(!options.include_inner_lines);
+        assert_eq!(options.line_stroke_color, Color::rgba(0.25, 0.5, 0.75, 0.8));
+        assert_eq!(options.line_stroke_width, 0.06);
+        assert_eq!(options.line_stroke_opacity, 0.35);
     }
 
     #[test]

@@ -133,6 +133,14 @@
       "notes": "Matches ManimCE include_inner_lines=False with both outer rules retained. The strict local pinned Cairo differential passes unchanged policy on WebGPU and WebGL2 with exact duration and 0.18% worst differing pixels. Direct Rust/WASM and Python-worker captures are pixel-identical on both backends."
     },
     {
+      "id": "table-line-config-stroke",
+      "scene": "TableLineConfigExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Qualifies line_config color, stroke_width, and stroke_opacity using ManimCE's line constructor on a retained MobjectTable. Strict pinned Cairo passes unchanged thresholds on WebGPU and WebGL2 with exact duration and 0.11% worst differing pixels; paired Rust/WASM and Python-worker captures are pixel-identical."
+    },
+    {
       "id": "table-highlights",
       "scene": "TableHighlightOrder",
       "source": "parity/manim-v0.21/core-examples/table.py",

@@ -28,18 +28,41 @@ except ImportError:
     _create_decimal_table = _create_mobject_table = _highlight_table = _get_highlighted_table = _table_cell = None
 
 
-_OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines"}
+_OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines", "line_config"}
+_LINE_CONFIG_NAMES = {"color", "stroke_color", "stroke_width", "stroke_opacity"}
 
 
 def _options(kwargs):
     unknown = set(kwargs) - _OPTION_NAMES
     if unknown:
         raise NotImplementedError("unsupported Table option(s): " + ", ".join(sorted(unknown)))
+    line_config = kwargs.get("line_config", {})
+    if not isinstance(line_config, dict):
+        raise TypeError("line_config must be a dict")
+    unknown_line_config = set(line_config) - _LINE_CONFIG_NAMES
+    if unknown_line_config:
+        raise NotImplementedError(
+            "unsupported Table line_config option(s): "
+            + ", ".join(sorted(unknown_line_config))
+        )
+    line_color = line_config.get("stroke_color", line_config.get("color", _base.WHITE))
+    line_color = _compat._as_color("line_config color", line_color)
+    # Match the renderer's shared Manim Cairo width conversion (default 4 -> .04).
+    line_width = _compat._manim_stroke_width(line_config.get("stroke_width", 4.0))
+    line_opacity = _compat._opacity(
+        "line_config.stroke_opacity", line_config.get("stroke_opacity", 1.0)
+    )
     return (
         kwargs.get("v_buff", .8),
         kwargs.get("h_buff", 1.3),
         kwargs.get("include_outer_lines", False),
         kwargs.get("include_inner_lines", True),
+        line_color.red,
+        line_color.green,
+        line_color.blue,
+        line_color.alpha,
+        line_width,
+        line_opacity,
     )
 
 
