@@ -444,6 +444,11 @@ class Mobject:
     def get_center(self) -> Vec2:
         return _callback_operations()._canonical_get_center(self)
 
+    def get_z_index_reference_point(self) -> Vec2:
+        """Return the center of this object's z-index grouping target."""
+        z_index_group = getattr(self, "z_index_group", self)
+        return z_index_group.get_center()
+
     def get_start(self) -> Vec2:
         """Return the first point of this object's path."""
         from _manim_path_queries import endpoint

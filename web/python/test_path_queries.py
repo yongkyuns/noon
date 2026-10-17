@@ -369,12 +369,23 @@ class PathQueryTests(unittest.TestCase):
         self.assertIn("get_center_of_mass", noon.Mobject.__dict__)
         self.assertIn("get_boundary_point", noon.Mobject.__dict__)
         self.assertIn("get_midpoint", noon.Mobject.__dict__)
+        self.assertIn("get_z_index_reference_point", noon.Mobject.__dict__)
         self.assertIs(compat.VMobject.get_num_points, noon.Mobject.get_num_points)
 
         value = identity_only_wrapper(compat.VMobject)
         value.point_from_proportion = Mock(return_value=noon.Vec2(2.0, -1.0))
         self.assertEqual(value.get_midpoint(), noon.Vec2(2.0, -1.0))
         value.point_from_proportion.assert_called_once_with(0.5)
+
+        own_center = Mock(return_value=noon.Vec2(1.0, 2.0))
+        value.get_center = own_center
+        self.assertEqual(value.get_z_index_reference_point(), noon.Vec2(1.0, 2.0))
+        own_center.assert_called_once_with()
+
+        group_center = Mock(return_value=noon.Vec2(-3.0, 4.0))
+        value.z_index_group = Mock(get_center=group_center)
+        self.assertEqual(value.get_z_index_reference_point(), noon.Vec2(-3.0, 4.0))
+        group_center.assert_called_once_with()
 
         query = Mock()
         query.start.return_value = [1.0, 2.0]
