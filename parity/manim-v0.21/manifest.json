@@ -901,6 +901,18 @@
       "notes": "The executable ManimCE/Noon pair asserts Mobject.get_num_points/has_points/has_no_points for an empty base object, Rectangle, Circle, an empty-point Group, and ImageMobject's four-corner quad. These operations inspect only the root object's own retained points; broader mesh/specialized object buffers remain separately scoped."
     },
     {
+      "id": "point-introspection",
+      "scene": "PointIntrospection",
+      "source": "parity/manim-v0.21/core-examples/point_introspection.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.0036,
+        "max_mean_absolute_channel_error": 0.1
+      },
+      "notes": "A static exact-source gate for root-only get_num_points/has_points/has_no_points across geometry, Group, ImageMobject and Text. Raster comparison covers only the displayed Rectangle and Circle; specialized mesh buffers remain separately scoped."
+    },
+    {
       "id": "animated-stroke-width",
       "scene": "OrdinaryAnimatedStrokeWidth",
       "source": "parity/manim-v0.21/core-examples/animated_stroke_width.py",
