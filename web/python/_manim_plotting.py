@@ -846,20 +846,9 @@ class Axes(_compat.Group):
             axis.scaling = config["scaling"] if config["scaling"] is not None else LinearBase()
             members.append(axis)
         _coordinate_family(self, handle, members)
+        self.axes = _compat.VGroup(*members)
         for axis, (_, config, _, range_values) in zip(members, axis_setups):
             _configure_axes_numeric_labels(axis, config, range_values)
-
-    @property
-    def axes(self):
-        axes = getattr(self, "_axes_group", None)
-        if axes is None:
-            axes = _compat.VGroup(self.x_axis, self.y_axis)
-            self._axes_group = axes
-        return axes
-
-    @axes.setter
-    def axes(self, value):
-        self._axes_group = value
 
     def get_axes(self):
         """Return a retained family grouping the two coordinate axes."""

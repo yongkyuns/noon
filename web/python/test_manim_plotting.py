@@ -484,7 +484,8 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]) as attach, \
-             patch.object(plotting, "_coordinate_family"):
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(plotting._compat, "VGroup", side_effect=lambda *members: members) as retain_axes:
             plotting.Axes(
                 axis_config={"scaling": common},
                 y_axis_config={"scaling": y_scale},
@@ -522,8 +523,9 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
-             patch.object(plotting, "_coordinate_family"):
-            plotting.Axes(
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(plotting._compat, "VGroup", side_effect=lambda *members: members) as retain_axes:
+            axes = plotting.Axes(
                 x_range=(-2, 2, 0.5), y_range=(-1, 1, 1),
                 axis_config={"include_numbers": True, "font_size": 30,
                              "line_to_number_buff": 0.25},
@@ -534,6 +536,8 @@ class PlottingAdapterTests(unittest.TestCase):
                                "decimal_number_config": {"num_decimal_places": 2}},
             )
 
+        retain_axes.assert_called_once_with(x_axis, y_axis)
+        self.assertEqual(axes.axes, (x_axis, y_axis))
         x_axis.add_numbers.assert_called_once_with(
             x_values=(-1.0, 1.0), excluding=[0.0], font_size=30.0,
             direction=plotting._base._as_vec2(plotting._base.UP), buff=0.25,
@@ -586,17 +590,14 @@ class PlottingAdapterTests(unittest.TestCase):
                 plotting._configure_axes_numeric_labels(axis, config, axis_range)
                 self.assertEqual(axis.number_label_decimal_places, expected)
 
-    def test_axes_get_axes_builds_one_retained_group_on_first_access(self):
-        x_axis, y_axis, group = object(), object(), object()
+    def test_axes_get_axes_reuses_the_retained_group_without_semantic_construction(self):
         axes = object.__new__(plotting.Axes)
-        with patch.object(plotting.Axes, "x_axis", new_callable=PropertyMock,
-                          return_value=x_axis), \
-             patch.object(plotting.Axes, "y_axis", new_callable=PropertyMock,
-                          return_value=y_axis), \
-             patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+        group = object()
+        axes.axes = group
+        with patch.object(plotting._compat, "VGroup", side_effect=AssertionError(
+                "axis access must not create a family during callbacks")):
             self.assertIs(axes.get_axes(), group)
             self.assertIs(axes.get_axes(), group)
-        make_group.assert_called_once_with(x_axis, y_axis)
 
     def test_axes_label_uses_existing_live_critical_point_path(self):
         edge = plotting._base.Vec2(1, -1)

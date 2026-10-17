@@ -96,7 +96,22 @@ class CoordinateAccessors(Scene):
         assert all(any(line is member for member in clone.background_lines.submobjects)
                    for line in clone.x_lines.submobjects + clone.y_lines.submobjects)
         self.add(plane, clone)
+        callback_axes = (Axes((-2, 2, 1), (-1, 1, 1), tips=False),
+                         NumberPlane((-2, 2, 1), (-1, 1, 1)),
+                         PolarPlane(radius_max=2, size=4))
+        callback_driver = Dot()
+        observed = []
+        def first_access(mob, dt):
+            for coordinate in callback_axes:
+                assert coordinate.get_axes() is coordinate.axes
+                assert coordinate.get_x_axis() is coordinate.x_axis
+                assert coordinate.get_y_axis() is coordinate.y_axis
+            observed.append(True)
+        callback_driver.add_updater(first_access)
+        self.add(*callback_axes, callback_driver)
         await self.wait(0.025)
+        assert observed
+        callback_driver.clear_updaters()
         assert clone.get_x_axis() is clone.x_axis
         assert abs(clone.get_x_unit_size() - clone.x_axis.get_unit_size()) < 1e-6
         await self.wait(0.025)

@@ -25,6 +25,7 @@ class LiveCoordinateAdapterTests(TestCase):
             side_effect=lambda wrapper, handle, **kwargs: wrapper,
         ).start()
         patch.object(plotting,"_coordinate_family",side_effect=lambda wrapper,handle,members:wrapper).start()
+        patch.object(plotting._compat,"VGroup",side_effect=lambda *members: members).start()
         patch.object(plotting,"_family",side_effect=lambda wrapper,handle,members:wrapper).start()
 
     def construct(self, axes=False):
