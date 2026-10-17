@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "source_control": "source-control.json",
+  "runtime_and_site_identity": "site-identities.json",
+  "optimizer_proof": "optimizer-proof.json",
+  "source_sha256": "32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e",
+  "cargo_lock_path": "build/Cargo.lock.gz",
+  "cargo_lock_uncompressed_sha256": "fdc4872fdf8ebc9ed9c7f634f95ee0dd98a2720b44bca3bfcf72c8ad0b5369f4",
+  "raw_captures": [
+    {
+      "block": "block-0-new",
+      "arm": "new",
+      "report_path": "raw/block-0-new-report.json.gz",
+      "uncompressed_sha256": "f146728ee439d4c95a633d4d639f9a612e091bf8d7246c46b10a8bd896680cd9",
+      "uncompressed_bytes": 5958948,
+      "frames": [
+        {
+          "path": "raw/block-0-new-frame-0.png",
+          "sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1"
+        },
+        {
+          "path": "raw/block-0-new-frame-1.png",
+          "sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1"
+        }
+      ]
+    },
+    {
+      "block": "block-1-old",
+      "arm": "old",
+      "report_path": "raw/block-1-old-report.json.gz",
+      "uncompressed_sha256": "443853579cc413b83494a27a62304b82209f62af077a6615aa1ea1a281151ebf",
+      "uncompressed_bytes": 3994390,
+      "frames": [
+        {
+          "path": "raw/block-1-old-frame-0.png",
+          "sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644"
+        },
+        {
+          "path": "raw/block-1-old-frame-1.png",
+          "sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644"
+        }
+      ]
+    },
+    {
+      "block": "block-2-old",
+      "arm": "old",
+      "report_path": "raw/block-2-old-report.json.gz",
+      "uncompressed_sha256": "c1e9884cc9cfb2dda62579b1ca69b188b69f2305b91bedb438ad4bdadd577455",
+      "uncompressed_bytes": 3991608,
+      "frames": [
+        {
+          "path": "raw/block-2-old-frame-0.png",
+          "sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644"
+        },
+        {
+          "path": "raw/block-2-old-frame-1.png",
+          "sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644"
+        }
+      ]
+    },
+    {
+      "block": "block-3-new",
+      "arm": "new",
+      "report_path": "raw/block-3-new-report.json.gz",
+      "uncompressed_sha256": "5bee1468431566687a45d6a5dbf6fa5d9fa91ff1f82cc13221eee0bf782b5f00",
+      "uncompressed_bytes": 5967765,
+      "frames": [
+        {
+          "path": "raw/block-3-new-frame-0.png",
+          "sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1"
+        },
+        {
+          "path": "raw/block-3-new-frame-1.png",
+          "sha256": "5d2f3126c96def42a82e4006051816b4346715c7f5705a07cb8769280f2cd28c"
+        }
+      ]
+    }
+  ],
+  "prior_frozen_evidence": {
+    "research_commit": "6b48919f52a1697d2f69abc7d1e579c81ee5f080",
+    "path": "experiments/2141/raf-evidence",
+    "frozen_surface_same_as_control": {
+      "backing": [
+        620,
+        348
+      ],
+      "css": [
+        621.671875,
+        349.6875
+      ],
+      "dpr": 1,
+      "browser": "151.0.7922.34"
+    },
+    "limitation": "Matching dimensions rule out resolution as the explanation of the historical 43-45 s fast-flight wall; other historical host/build differences remain unresolved."
+  },
+  "browser": {
+    "version": "151.0.7922.34",
+    "archive_sha256": "ae8736ac28bc69278551500f219fc749575648263c43ec5990749eff43b9fcf8",
+    "playwright_version": "1.62.1",
+    "viewport": [
+      1280,
+      800
+    ],
+    "canvas_backing": [
+      620,
+      348
+    ],
+    "dpr": 1,
+    "software_adapter_verified_by": "CDP SystemInfo.getInfo GPU devices after timed runs"
+  },
+  "preflight_exclusion": "One initial localhost listener attempt was denied by the filesystem/network sandbox before browser launch; it collected no timing. All included captures ran with authorized loopback/network access."
+}

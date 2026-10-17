@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Transparent Binaryen 132 subprocess audit for this controlled experiment."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+REAL = Path("/tmp/binaryen-version_132/bin/wasm-opt")
+
+
+def sections(path):
+    data = path.read_bytes()
+    if data[:8] != b"\0asm\x01\0\0\0":
+        raise ValueError("not a WASM module")
+    def uleb(index):
+        value = shift = 0
+        while True:
+            byte = data[index]
+            index += 1
+            value |= (byte & 127) << shift
+            if byte < 128:
+                return value, index
+            shift += 7
+    result = []
+    index = 8
+    while index < len(data):
+        kind = data[index]
+        length, start = uleb(index + 1)
+        end = start + length
+        if end > len(data):
+            raise ValueError("truncated WASM section")
+        result.append({"id": kind, "bytes": length, "sha256": hashlib.sha256(data[start:end]).hexdigest()})
+        index = end
+    return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "sections": result}
+
+
+args = sys.argv[1:]
+if "-o" not in args:
+    sys.exit(subprocess.run([str(REAL), *args]).returncode)
+source = Path(args[0]).resolve()
+output = Path(args[args.index("-o") + 1]).resolve()
+event = {"schema": 1, "started_epoch_seconds": time.time(), "cwd": os.getcwd(),
+         "real_binary": str(REAL), "real_binary_sha256": hashlib.sha256(REAL.read_bytes()).hexdigest(),
+         "args": args, "input": sections(source), "output_path": str(output),
+         "output_existed_before": output.exists()}
+status = subprocess.run([str(REAL), *args]).returncode
+event.update(exit_code=status, finished_epoch_seconds=time.time())
+try:
+    event["output"] = sections(output)
+except (ValueError, IndexError, OSError) as error:
+    event["output_validation_error"] = repr(error)
+    if status == 0:
+        status = 97
+with Path(os.environ["NOON_WASM_OPT_AUDIT_LOG"]).open("a") as stream:
+    stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+sys.exit(status)

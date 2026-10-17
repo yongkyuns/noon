@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "new_revision": "495580e2197022701a9190bae4f20047193f5be6",
+  "old_revision": "19dd538c61cd5f13a89e31aaa68ea383db958986",
+  "only_changed_source_file": "crates/noon-render-wgpu/src/polygon_coverage.wgsl",
+  "new_shader_git_blob": "4e5cfa3217fc95080552cc49c09a063e2b165b2f",
+  "old_shader_git_blob": "f9ac542b89ea3c714afc0dfd89a0d3df625921e0",
+  "old_shader_sha256": "a59d3b4e693ef77528f0be69c4f3f41832a9888317b60291aec2e20c2de4bc9f",
+  "old_shader_origin": "6af9661a2bf551170a0835aac9eeb32feb32dff5",
+  "cargo_lock_sha256": "fdc4872fdf8ebc9ed9c7f634f95ee0dd98a2720b44bca3bfcf72c8ad0b5369f4",
+  "cargo_lock_provenance": "Identical ignored Cargo.lock copied from the completed new-shader release checkout before the control build.",
+  "old_local_build_revision": "1170a0b3d8068777ce6dc65ab79af35ce13275a8",
+  "old_tree": "1d3c3810f0268774f6e4bed8c742c89b9c245305",
+  "new_tree": "432c64b62949bad018d587ade585b92986f80324",
+  "old_source_url": "https://github.com/yongkyuns/noon/compare/495580e2197022701a9190bae4f20047193f5be6...19dd538c61cd5f13a89e31aaa68ea383db958986"
+}

@@ -1,0 +1,256 @@
+{
+  "schema": 1,
+  "experiment": "same-host frozen-scene shader-only ABBA",
+  "source_sha256": "32f2c6ee607bf9670ed47c77dd1f321ace576b5f725a523069bdcad54026bd2e",
+  "chrome_version_command": "Google Chrome for Testing 151.0.7922.34",
+  "order": [
+    "new",
+    "old",
+    "old",
+    "new"
+  ],
+  "runs_per_block": 2,
+  "status": "complete",
+  "blocks": [
+    {
+      "index": 0,
+      "arm": "new",
+      "path": "block-0-new",
+      "runtime_revision": "495580e2197022701a9190bae4f20047193f5be6",
+      "runtime_build_id": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5",
+      "before": {
+        "epoch_seconds": 1792249673.0853744,
+        "load_average": [
+          0.70458984375,
+          1.6513671875,
+          1.3603515625
+        ],
+        "known_build_processes": []
+      },
+      "status": "complete",
+      "gpu_devices": [
+        {
+          "vendorId": 65535,
+          "deviceId": 65535,
+          "vendorString": "Google Inc. (Google)",
+          "deviceString": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+          "driverVendor": "SwANGLE",
+          "driverVersion": "5.0.0"
+        }
+      ],
+      "after": {
+        "epoch_seconds": 1792249733.203756,
+        "load_average": [
+          3.6865234375,
+          2.43603515625,
+          1.654296875
+        ],
+        "known_build_processes": []
+      },
+      "runs": [
+        {
+          "index": 0,
+          "kind": "cold",
+          "elapsed_ms": 30562.346601999998,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        },
+        {
+          "index": 1,
+          "kind": "fresh-scene-same-page",
+          "elapsed_ms": 26407.117319,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "arm": "old",
+      "path": "block-1-old",
+      "runtime_revision": "19dd538c61cd5f13a89e31aaa68ea383db958986",
+      "runtime_build_id": "c014fe29fe229a0cb86667adedf74d5f794de1f0cd28eced732acc2f803f0b48",
+      "before": {
+        "epoch_seconds": 1792249733.2639792,
+        "load_average": [
+          3.6865234375,
+          2.43603515625,
+          1.654296875
+        ],
+        "known_build_processes": []
+      },
+      "status": "complete",
+      "gpu_devices": [
+        {
+          "vendorId": 65535,
+          "deviceId": 65535,
+          "vendorString": "Google Inc. (Google)",
+          "deviceString": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+          "driverVendor": "SwANGLE",
+          "driverVersion": "5.0.0"
+        }
+      ],
+      "after": {
+        "epoch_seconds": 1792249804.8232892,
+        "load_average": [
+          5.0498046875,
+          3.26513671875,
+          2.0078125
+        ],
+        "known_build_processes": []
+      },
+      "runs": [
+        {
+          "index": 0,
+          "kind": "cold",
+          "elapsed_ms": 35978.884187999996,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        },
+        {
+          "index": 1,
+          "kind": "fresh-scene-same-page",
+          "elapsed_ms": 32675.485446,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "arm": "old",
+      "path": "block-2-old",
+      "runtime_revision": "19dd538c61cd5f13a89e31aaa68ea383db958986",
+      "runtime_build_id": "c014fe29fe229a0cb86667adedf74d5f794de1f0cd28eced732acc2f803f0b48",
+      "before": {
+        "epoch_seconds": 1792249804.893812,
+        "load_average": [
+          5.0498046875,
+          3.26513671875,
+          2.0078125
+        ],
+        "known_build_processes": []
+      },
+      "status": "complete",
+      "gpu_devices": [
+        {
+          "vendorId": 65535,
+          "deviceId": 65535,
+          "vendorString": "Google Inc. (Google)",
+          "deviceString": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+          "driverVendor": "SwANGLE",
+          "driverVersion": "5.0.0"
+        }
+      ],
+      "after": {
+        "epoch_seconds": 1792249876.3149447,
+        "load_average": [
+          7.0107421875,
+          4.244140625,
+          2.43994140625
+        ],
+        "known_build_processes": []
+      },
+      "runs": [
+        {
+          "index": 0,
+          "kind": "cold",
+          "elapsed_ms": 35830.240765999995,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        },
+        {
+          "index": 1,
+          "kind": "fresh-scene-same-page",
+          "elapsed_ms": 32512.248774999993,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "arm": "new",
+      "path": "block-3-new",
+      "runtime_revision": "495580e2197022701a9190bae4f20047193f5be6",
+      "runtime_build_id": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5",
+      "before": {
+        "epoch_seconds": 1792249876.3842924,
+        "load_average": [
+          7.0107421875,
+          4.244140625,
+          2.43994140625
+        ],
+        "known_build_processes": []
+      },
+      "status": "complete",
+      "gpu_devices": [
+        {
+          "vendorId": 65535,
+          "deviceId": 65535,
+          "vendorString": "Google Inc. (Google)",
+          "deviceString": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+          "driverVendor": "SwANGLE",
+          "driverVersion": "5.0.0"
+        }
+      ],
+      "after": {
+        "epoch_seconds": 1792249936.0566566,
+        "load_average": [
+          6.251953125,
+          4.52197265625,
+          2.6484375
+        ],
+        "known_build_processes": []
+      },
+      "runs": [
+        {
+          "index": 0,
+          "kind": "cold",
+          "elapsed_ms": 30330.376389,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        },
+        {
+          "index": 1,
+          "kind": "fresh-scene-same-page",
+          "elapsed_ms": 26383.73107,
+          "counters": {
+            "drawCalls": 154,
+            "instancesDrawn": 10430,
+            "objectCount": 10432
+          }
+        }
+      ]
+    }
+  ],
+  "identity_gate": {
+    "endpoint_counters": {
+      "drawCalls": 154,
+      "instancesDrawn": 10430,
+      "objectCount": 10432
+    },
+    "passed": true
+  }
+}

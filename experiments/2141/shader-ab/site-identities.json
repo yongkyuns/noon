@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "source_control": "source-control.json",
+  "common_uninstrumented_file_count": 762,
+  "excluded_build_intermediate": {
+    "arm": "new",
+    "path": "pkg/noon_web_bg.wasm-opt.wasm",
+    "bytes": 11561984,
+    "sha256": "67d971105c1bb1e5f8e6bbd1809cc11b16604c39a25275bff0a63ec32cb168f0",
+    "reason": "Truncated, unreferenced wasm-opt temporary output; retained only in original staged copy, omitted from timed sites."
+  },
+  "uninstrumented_runtime_differences": [
+    {
+      "path": "pkg/noon_web_bg.wasm",
+      "new_sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822",
+      "old_sha256": "49f6167ab264ee404e8b609989199bccbda7734b21b1a7707f2a1651729a5238"
+    },
+    {
+      "path": "runtime-build-identity.json",
+      "new_sha256": "1450c44ac95b949f979b7ba438e6e9c759650cb7592a74dced835fe462e0b1f9",
+      "old_sha256": "290419620b7b584f89f78feb529ca01ce327d6739eebdd4988d8af1c12950a44"
+    }
+  ],
+  "arms": {
+    "new": {
+      "runtime": {
+        "schema": 1,
+        "sourceRevision": "495580e2197022701a9190bae4f20047193f5be6",
+        "files": {
+          "worker": {
+            "path": "./python-worker.js",
+            "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+          },
+          "wasm": {
+            "path": "./pkg/noon_web_bg.wasm",
+            "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822"
+          },
+          "glue": {
+            "path": "./pkg/noon_web.js",
+            "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+          },
+          "verifier": {
+            "path": "./runtime-build-verifier.js",
+            "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+          }
+        },
+        "buildId": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5"
+      },
+      "wasm_bytes": 50121763,
+      "instrumented_host_sha256": {
+        "authoring-render-controller.js": "f84b9f4fefafadda91e8d51d832eb957447e37121dd9e6991d77dc85790e2ce4",
+        "semantic-engine-endpoint.js": "30e1f974ed982e5353273cdeb254ce2a430629fea56844f8f907fbe58cb010cf",
+        "profile-probe.js": "940351f26b3fa1b91de53ab5de6263d1ff5c8f0b319f09cb4946a3735fa169c5"
+      }
+    },
+    "old": {
+      "runtime": {
+        "schema": 1,
+        "sourceRevision": "19dd538c61cd5f13a89e31aaa68ea383db958986",
+        "files": {
+          "worker": {
+            "path": "./python-worker.js",
+            "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+          },
+          "wasm": {
+            "path": "./pkg/noon_web_bg.wasm",
+            "sha256": "49f6167ab264ee404e8b609989199bccbda7734b21b1a7707f2a1651729a5238"
+          },
+          "glue": {
+            "path": "./pkg/noon_web.js",
+            "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+          },
+          "verifier": {
+            "path": "./runtime-build-verifier.js",
+            "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+          }
+        },
+        "buildId": "c014fe29fe229a0cb86667adedf74d5f794de1f0cd28eced732acc2f803f0b48"
+      },
+      "wasm_bytes": 50133059,
+      "instrumented_host_sha256": {
+        "authoring-render-controller.js": "f84b9f4fefafadda91e8d51d832eb957447e37121dd9e6991d77dc85790e2ce4",
+        "semantic-engine-endpoint.js": "30e1f974ed982e5353273cdeb254ce2a430629fea56844f8f907fbe58cb010cf",
+        "profile-probe.js": "940351f26b3fa1b91de53ab5de6263d1ff5c8f0b319f09cb4946a3735fa169c5"
+      }
+    }
+  },
+  "timed_site_file_count": 763
+}

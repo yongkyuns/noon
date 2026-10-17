@@ -1,0 +1,287 @@
+{
+  "schema": 2,
+  "reference": "raw/block-0-new-frame-0.png",
+  "preview_panel_rectangle_xyxy": [
+    597,
+    202,
+    1263,
+    658
+  ],
+  "preview_panel_scope": "Coarse fixed image ROI, visually checked; encloses the scene and excludes the metrics row. Not exact backing-buffer or MSAA samples.",
+  "comparisons": [
+    {
+      "path": "raw/block-0-new-frame-0.png",
+      "file_sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      }
+    },
+    {
+      "path": "raw/block-0-new-frame-1.png",
+      "file_sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      }
+    },
+    {
+      "path": "raw/block-1-old-frame-0.png",
+      "file_sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 4.8828125e-07,
+        "rgb_difference_bounds": [
+          1118,
+          393,
+          1136,
+          400
+        ],
+        "pixel_exact_to_reference": false
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 1.6463832253305938e-06,
+        "rgb_difference_bounds": [
+          521,
+          191,
+          539,
+          198
+        ],
+        "pixel_exact_to_reference": false
+      }
+    },
+    {
+      "path": "raw/block-1-old-frame-1.png",
+      "file_sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 4.8828125e-07,
+        "rgb_difference_bounds": [
+          1118,
+          393,
+          1136,
+          400
+        ],
+        "pixel_exact_to_reference": false
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 1.6463832253305938e-06,
+        "rgb_difference_bounds": [
+          521,
+          191,
+          539,
+          198
+        ],
+        "pixel_exact_to_reference": false
+      }
+    },
+    {
+      "path": "raw/block-2-old-frame-0.png",
+      "file_sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 4.8828125e-07,
+        "rgb_difference_bounds": [
+          1118,
+          393,
+          1136,
+          400
+        ],
+        "pixel_exact_to_reference": false
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 1.6463832253305938e-06,
+        "rgb_difference_bounds": [
+          521,
+          191,
+          539,
+          198
+        ],
+        "pixel_exact_to_reference": false
+      }
+    },
+    {
+      "path": "raw/block-2-old-frame-1.png",
+      "file_sha256": "6b9698462781ea2b30cc758c3ce1c7e38aa132e6dc0f43935e2c75a5bb0d3644",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 4.8828125e-07,
+        "rgb_difference_bounds": [
+          1118,
+          393,
+          1136,
+          400
+        ],
+        "pixel_exact_to_reference": false
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 2,
+        "max_channel_error": 1,
+        "absolute_channel_error_sum": 2,
+        "mean_channel_error": 1.6463832253305938e-06,
+        "rgb_difference_bounds": [
+          521,
+          191,
+          539,
+          198
+        ],
+        "pixel_exact_to_reference": false
+      }
+    },
+    {
+      "path": "raw/block-3-new-frame-0.png",
+      "file_sha256": "8c930b2d8029f0034df2a05e26807b7899db04520b6732a1794e31253dbd17c1",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      }
+    },
+    {
+      "path": "raw/block-3-new-frame-1.png",
+      "file_sha256": "5d2f3126c96def42a82e4006051816b4346715c7f5705a07cb8769280f2cd28c",
+      "full_page": {
+        "width": 1280,
+        "height": 800,
+        "channels": "RGBA8",
+        "changed_channels": 918,
+        "max_channel_error": 235,
+        "absolute_channel_error_sum": 68470,
+        "mean_channel_error": 0.01671630859375,
+        "rgb_difference_bounds": [
+          1020,
+          689,
+          1070,
+          697
+        ],
+        "pixel_exact_to_reference": false
+      },
+      "preview_panel": {
+        "width": 666,
+        "height": 456,
+        "channels": "RGBA8",
+        "changed_channels": 0,
+        "max_channel_error": 0,
+        "absolute_channel_error_sum": 0,
+        "mean_channel_error": 0.0,
+        "rgb_difference_bounds": null,
+        "pixel_exact_to_reference": true
+      }
+    }
+  ],
+  "all_eight_full_pages_pixel_exact": false,
+  "all_eight_preview_panels_pixel_exact": false,
+  "maximum_preview_channel_error": 1,
+  "observed_old_shader_differences": [
+    {
+      "x": 1135,
+      "y": 393,
+      "channel": "G",
+      "new": 173,
+      "old": 172
+    },
+    {
+      "x": 1118,
+      "y": 399,
+      "channel": "G",
+      "new": 123,
+      "old": 124
+    }
+  ],
+  "observed_last_new_repeat_ui_difference": "Uploaded bytes changes from 0 B to 13.8 MiB; full-page difference bounds [1020,689,1070,697], outside preview panel.",
+  "scope": "Terminal full-page PNGs only. This is not exact cross-shader pixel parity and establishes no intermediate-frame, backing-buffer, physical-scanout, or MSAA-sample equivalence. Separate renderer oracles remain independent evidence."
+}

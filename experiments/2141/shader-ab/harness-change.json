@@ -1,0 +1,5 @@
+{
+  "original_harness_sha256": "6171bdc2e73b65670f9a110919db77dd89a0d2ad6c49749fdcd512f16f33e639",
+  "capture_harness_sha256": "6ce10b66a1a9db5be139c26b6c5cec13f48ff89d626e06914f3e56d706c6b030",
+  "difference": "Only collect CDP SystemInfo.getInfo after both measured runs and screenshots, before browser shutdown; no timed-loop/probe change."
+}

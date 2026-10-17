@@ -1,0 +1,322 @@
+{
+  "observed_utc": "2026-10-17T15:29:40Z",
+  "repository": "yongkyuns/noon",
+  "pull_request": 2175,
+  "pull_request_url": "https://github.com/yongkyuns/noon/pull/2175",
+  "head_sha": "aba3d4c6a27a24890ffac70fd4819ae7aff47009",
+  "head_tree_sha": "aa5f45c05e94ca62d181a910584768f7d6bdbf95",
+  "base_sha": "85b67388db42a073493583b341babd6fac1cfd5d",
+  "tested_merge_sha": "969cd9916d1dc5d77b5595d82086b6b2170b6a81",
+  "pull_request_state": {
+    "state": "open",
+    "draft": true,
+    "mergeable": null,
+    "mergeable_state": "unknown"
+  },
+  "scope": "Workflow runs returned for the exact PR head. This is a point-in-time observation; queued or running jobs are not passing evidence.",
+  "counts": {
+    "workflows": 19,
+    "success": 15,
+    "failure": 0,
+    "in_progress": 1,
+    "queued": 3
+  },
+  "workflows": [
+    {
+      "run_id": 39042285767,
+      "workflow_id": 348922531,
+      "name": "Architecture Ratchets",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285767"
+    },
+    {
+      "run_id": 39042285719,
+      "workflow_id": 360067284,
+      "name": "Arrow tip Manim regression",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285719"
+    },
+    {
+      "run_id": 39042285776,
+      "workflow_id": 337472786,
+      "name": "CI",
+      "status": "queued",
+      "conclusion": null,
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285776"
+    },
+    {
+      "run_id": 39042285756,
+      "workflow_id": 366128443,
+      "name": "Foreground matching qualification",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285756"
+    },
+    {
+      "run_id": 39042285701,
+      "workflow_id": 359716711,
+      "name": "Image raster qualification",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285701"
+    },
+    {
+      "run_id": 39042285780,
+      "workflow_id": 348965051,
+      "name": "Layer Dependency Ratchet",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285780"
+    },
+    {
+      "run_id": 39042285760,
+      "workflow_id": 341960666,
+      "name": "Manim raster differential",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285760"
+    },
+    {
+      "run_id": 39042285715,
+      "workflow_id": 377433024,
+      "name": "Native export file qualification",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285715"
+    },
+    {
+      "run_id": 39042285762,
+      "workflow_id": 350295334,
+      "name": "Native Host Smoke",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285762"
+    },
+    {
+      "run_id": 39042285748,
+      "workflow_id": 344280702,
+      "name": "Playground authoring recovery",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285748"
+    },
+    {
+      "run_id": 39042285796,
+      "workflow_id": 344301929,
+      "name": "Playground cross-browser matrix",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285796"
+    },
+    {
+      "run_id": 39042285778,
+      "workflow_id": 344799116,
+      "name": "Playground playback controls",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285778"
+    },
+    {
+      "run_id": 39042285793,
+      "workflow_id": 351174441,
+      "name": "Playground Product Gate",
+      "status": "in_progress",
+      "conclusion": null,
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285793"
+    },
+    {
+      "run_id": 39042285702,
+      "workflow_id": 344232325,
+      "name": "Playground resize recovery",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285702"
+    },
+    {
+      "run_id": 39042285707,
+      "workflow_id": 359265785,
+      "name": "Plotting qualification",
+      "status": "queued",
+      "conclusion": null,
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285707"
+    },
+    {
+      "run_id": 39042285764,
+      "workflow_id": 347052545,
+      "name": "PR Fast Gate",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285764"
+    },
+    {
+      "run_id": 39042285742,
+      "workflow_id": 353565558,
+      "name": "Provider feature isolation",
+      "status": "queued",
+      "conclusion": null,
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285742"
+    },
+    {
+      "run_id": 39042285789,
+      "workflow_id": 343983242,
+      "name": "Shared text authoring",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285789"
+    },
+    {
+      "run_id": 39042285736,
+      "workflow_id": 365195353,
+      "name": "Showcase qualification",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/yongkyuns/noon/actions/runs/39042285736"
+    }
+  ],
+  "cleared_original_blockers": [
+    {
+      "blocker": "ManimCE 0.21.0 image oracle crashed under Pillow 13 before Noon comparison.",
+      "resolution": "Use upstream shared .github/ci/manim-reference-constraints.txt pin pillow==12.3.0; reference script asserts and records the exact Pillow version.",
+      "evidence": [
+        {
+          "run_id": 39042285701,
+          "job_id": 117424028796,
+          "conclusion": "success",
+          "checks": [
+            "Pinned reference",
+            "Native retained images against same pinned reference",
+            "Direct Rust WASM and Python on WebGPU and WebGL2"
+          ]
+        }
+      ]
+    },
+    {
+      "blocker": "Packed geometry duplicated family scratch instance uploads (688 -> 13728 bytes) and Rust tests assumed individual Path representation.",
+      "resolution": "Preserve strict upload budget by excluding transient family geometry from duplicate packing and retaining exclusions through compaction; adapt representation assertions without weakening locality thresholds.",
+      "evidence": [
+        {
+          "run_id": 39042285764,
+          "job_id": 117424029012,
+          "conclusion": "success",
+          "check": "Rust unit tests"
+        },
+        {
+          "run_id": 39042285736,
+          "job_id": 117424029605,
+          "conclusion": "success",
+          "check": "Native callback/locality qualification"
+        },
+        {
+          "run_id": 39042285707,
+          "job_id": 117424028765,
+          "conclusion": "success",
+          "check": "Build source-bound plotting runtime; Validate full integrated repository"
+        }
+      ]
+    },
+    {
+      "blocker": "Transient anchors were not resolved inside packed MegaPath subranges; original Rust trap could be masked by disposal ownership error.",
+      "resolution": "Resolve source anchors at packed source spans and preserve painter ordering. All three exact originally failing cross-browser Gallery shard 0 reruns now pass; the complete cross-browser workflow also passes. Adjacent Product passed the exact previously failing release renderer initialization step and every other functional recheck; its measurement job remains in progress.",
+      "evidence": [
+        {
+          "run_id": 39042285764,
+          "job_id": 117424029443,
+          "conclusion": "success",
+          "checks": [
+            "Typed WASM/Python error boundary",
+            "Primary WebGPU rendering",
+            "WebGL rendering for renderer-critical changes",
+            "Canonical callback renderer observations on WebGL and WebGPU"
+          ]
+        },
+        {
+          "run_id": 39042285756,
+          "job_id": 117424029603,
+          "conclusion": "success",
+          "checks": [
+            "Real Python-worker and pinned Manim overlap captures",
+            "Actual overlap order and visible targets",
+            "Exact sparse/dense forward playback"
+          ]
+        },
+        {
+          "run_id": 39042285796,
+          "job_id": 117427139381,
+          "conclusion": "success",
+          "check": "Gallery chromium shard 0, including matching-shapes breadth scene"
+        },
+        {
+          "run_id": 39042285796,
+          "job_id": 117427139386,
+          "conclusion": "success",
+          "check": "Gallery firefox shard 0, including matching-shapes breadth scene"
+        },
+        {
+          "run_id": 39042285796,
+          "job_id": 117427139358,
+          "conclusion": "success",
+          "check": "Gallery webkit shard 0, including matching-shapes breadth scene"
+        },
+        {
+          "run_id": 39042285793,
+          "job_id": 117428733516,
+          "status": "in_progress",
+          "conclusion": null,
+          "completed_step": "Recheck release renderer initialization",
+          "step_conclusion": "success",
+          "remaining_step": "Measure three alternating product pairs"
+        }
+      ],
+      "remaining_exact_original_reruns": []
+    }
+  ],
+  "local_final_tree_gate": {
+    "tree_sha": "aa5f45c05e94ca62d181a910584768f7d6bdbf95",
+    "worktree": "/tmp/noon-reconcile",
+    "local_merge_commit": "77ae46d5120ec6e1efd53f56bdac42d58666e786",
+    "command": "env PATH=/tmp/noon-cargo/bin:$PATH RUSTUP_HOME=/tmp/noon-rustup CARGO_HOME=/tmp/noon-cargo CARGO_TARGET_DIR=/tmp/noon-target CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 bash scripts/check.sh fast",
+    "exit_code": 0,
+    "rust_library_suites": 11,
+    "rust_tests_passed": 3410,
+    "rust_tests_failed": 0,
+    "rust_tests_ignored": 33,
+    "python_visual_effects_references_passed": 25,
+    "other_checks": [
+      "Architecture",
+      "Formatting",
+      "Workspace all-target/all-feature check",
+      "Clippy -D warnings"
+    ],
+    "log": "/tmp/noon-check-fast-merged-2175-network.log"
+  },
+  "qualifications": [
+    "Manim raster differential success is PR policy/preflight, not the full nightly raster oracle.",
+    "Image raster and Foreground matching successes include their actual pinned-reference/browser comparison steps.",
+    "No currently failed workflows. All original failure mechanisms have passing exact rerun evidence, including the formerly failing adjacent Product initialization step; the adjacent Product measurement job has not finished. Remaining CI uncertainty: Playground Product Gate in progress, CI/Plotting qualification/Provider feature isolation queued. Queued/running workflows are not final passing evidence.",
+    "No source edits, remote reruns, or remote writes performed by the CI monitoring agent."
+  ],
+  "remaining_workflows": [
+    {
+      "run_id": 39042285776,
+      "name": "CI",
+      "status": "queued"
+    },
+    {
+      "run_id": 39042285793,
+      "name": "Playground Product Gate",
+      "status": "in_progress"
+    },
+    {
+      "run_id": 39042285707,
+      "name": "Plotting qualification",
+      "status": "queued"
+    },
+    {
+      "run_id": 39042285742,
+      "name": "Provider feature isolation",
+      "status": "queued"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "toolchain": {
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "wasm_pack": "0.15.0",
+    "wasm_pack_sha256": "53675bf239fee2c436d99d4a2e420978f2c3a1222169502466b19848c7c638c9",
+    "binaryen": "132",
+    "binaryen_sha256": "1014958e6f20d412f1542320b43970214b0fb1ed780595e8f7c0d8761ed53725",
+    "wasm_bindgen": "0.2.129"
+  },
+  "wrapper_sha256": "39eaaf06bc55f464c32cda999a08145cbc74ef8da455f516ebfc4efbf5ea1427",
+  "source_diff_files": [
+    "crates/noon-render-wgpu/src/polygon_coverage.wgsl"
+  ],
+  "arms": [
+    {
+      "arm": "old",
+      "audit_file": "optimizer-old.jsonl",
+      "selected_sha256": "49f6167ab264ee404e8b609989199bccbda7734b21b1a7707f2a1651729a5238",
+      "selected_bytes": 50133059,
+      "selected_equals_optimizer_output": true,
+      "temporary_absent_after_build": true,
+      "copied_lock_unchanged": true,
+      "original_staged_hash_reproduced": true,
+      "runtime": {
+        "schema": 1,
+        "sourceRevision": "19dd538c61cd5f13a89e31aaa68ea383db958986",
+        "files": {
+          "worker": {
+            "path": "./python-worker.js",
+            "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+          },
+          "wasm": {
+            "path": "./pkg/noon_web_bg.wasm",
+            "sha256": "49f6167ab264ee404e8b609989199bccbda7734b21b1a7707f2a1651729a5238"
+          },
+          "glue": {
+            "path": "./pkg/noon_web.js",
+            "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+          },
+          "verifier": {
+            "path": "./runtime-build-verifier.js",
+            "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+          }
+        },
+        "buildId": "c014fe29fe229a0cb86667adedf74d5f794de1f0cd28eced732acc2f803f0b48"
+      }
+    },
+    {
+      "arm": "new",
+      "audit_file": "optimizer-new.jsonl",
+      "selected_sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822",
+      "selected_bytes": 50121763,
+      "selected_equals_optimizer_output": true,
+      "temporary_absent_after_build": true,
+      "copied_lock_unchanged": true,
+      "original_staged_hash_reproduced": true,
+      "runtime": {
+        "schema": 1,
+        "sourceRevision": "495580e2197022701a9190bae4f20047193f5be6",
+        "files": {
+          "worker": {
+            "path": "./python-worker.js",
+            "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+          },
+          "wasm": {
+            "path": "./pkg/noon_web_bg.wasm",
+            "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822"
+          },
+          "glue": {
+            "path": "./pkg/noon_web.js",
+            "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+          },
+          "verifier": {
+            "path": "./runtime-build-verifier.js",
+            "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+          }
+        },
+        "buildId": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5"
+      }
+    }
+  ],
+  "note": "WASM section boundary validation checks completeness; Binaryen exit0, selected/output equality, and browser runtime admission form the validation chain."
+}
