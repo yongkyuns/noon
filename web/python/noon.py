@@ -361,9 +361,10 @@ class Mobject:
         if not 0 <= normalized_dim < 3:
             raise IndexError(f"index {dim} is out of bounds for axis 0 with size 3")
         if normalized_dim == 2:
-            return self.get_extremum_along_dim(dim=2, key=0)
-        point = self.get_critical_point(direction)
-        return float(point[normalized_dim])
+            key = 0
+        else:
+            key = direction[normalized_dim]
+        return self.get_extremum_along_dim(dim=normalized_dim, key=key)
 
     def get_x(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(0, direction)

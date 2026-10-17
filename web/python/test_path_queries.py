@@ -210,6 +210,18 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(value.get_critical_point.call_count, 2)
         value.get_critical_point.assert_called_with(noon.ORIGIN)
 
+    def test_get_coord_selects_each_point_extremum_from_its_direction_axis(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(value, "get_extremum_along_dim", side_effect=[-2.0, 3.0]) as extremum:
+            self.assertEqual(value.get_coord(0, (-1.0, 1.0, 1.0)), -2.0)
+            self.assertEqual(value.get_y(noon.UP), 3.0)
+        self.assertEqual(
+            [call.kwargs for call in extremum.call_args_list],
+            [{"dim": 0, "key": -1.0}, {"dim": 1, "key": 1.0}],
+        )
+
     def test_extremum_along_dim_routes_default_points_to_rust(self):
         value = identity_only_wrapper(compat.VMobject)
         value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
