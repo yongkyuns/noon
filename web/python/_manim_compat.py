@@ -165,6 +165,10 @@ class VMobject(Mobject):
         from _manim_path_editing import add_cubic_bezier_curves
         return add_cubic_bezier_curves(self, curves)
 
+    def add_subpath(self, points):
+        from _manim_path_editing import add_subpath
+        return add_subpath(self, points)
+
     def add_points_as_corners(self, points):
         from _manim_path_editing import add_points_as_corners
         return add_points_as_corners(self, points)

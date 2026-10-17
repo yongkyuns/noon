@@ -36,6 +36,12 @@ def add_points_as_corners(value, points):
     )
 
 
+def add_subpath(value, points):
+    assert len(points) % 4 == 0
+    curves = [points[index : index + 4] for index in range(0, len(points), 4)]
+    return add_cubic_bezier_curves(value, curves)
+
+
 def _looks_like_point(value):
     if isinstance(value, _base.Vec2):
         return True

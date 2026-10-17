@@ -111,6 +111,29 @@ class PathEditingTests(unittest.TestCase):
                     handle, [1., 0., 2., 1.]
                 )
 
+    def test_add_subpath_groups_four_points_and_keeps_manims_assertion(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        points = [
+            (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0),
+            (2, 1, 0), (3, 1, 0), (3, 2, 0), (4, 2, 0),
+        ]
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.add_subpath(points), value)
+            handle.addCubicBezierCurves.assert_called_once_with(
+                [0., 0., 1., 0., 1., 1., 2., 1., 2., 1., 3., 1., 3., 2., 4., 2.]
+            )
+
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(AssertionError):
+                value.add_subpath(points[:-1])
+            resolve.assert_not_called()
+
     def test_callback_resource_edits_reject_before_crossing_the_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch('_manim_updaters.canonical_callback_phase_active', return_value=True), \
@@ -123,6 +146,8 @@ class PathEditingTests(unittest.TestCase):
                 value.add_cubic_bezier_curves([[(0, 0), (1, 0), (1, 1), (2, 1)]])
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.add_points_as_corners([(1, 0), (2, 1)])
+            with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                value.add_subpath([(0, 0), (1, 0), (1, 1), (2, 1)])
             resolve.assert_not_called()
 
 
