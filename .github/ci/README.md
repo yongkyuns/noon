@@ -27,6 +27,12 @@ select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact
 product protocol and mixed production changes keep their existing qualification.
 Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
 
+Noon integration-test-only edits keep Rust qualification without selecting the
+Product Gate's four production builds and measurement cohorts. PR Fast Gate runs
+all workspace library tests and the shared CPU family target in one Cargo
+invocation; production, toolchain, Cargo configuration and mixed changes retain
+Product qualification.
+
 Master CI reads the complete before/after Git diff and skips its compiled/browser
 jobs only for documentation, named preflight-only policies or web unit tests.
 Unknown inputs, mixed changes, missing history and classification failures retain
