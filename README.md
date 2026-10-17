@@ -116,8 +116,9 @@ language for highlighting. `Code.get_languages_list()` and
 `vim`, `monokai`, `friendly`, and `emacs`. Unsupported names and Python Pygments
 style classes produce explicit errors.
 
-Spaces, trailing whitespace, and all empty lines are retained; this is a source
-display, not a formatter or automatic dedenter. `code_lines`, `line_numbers` when
+Spaces, trailing whitespace, and all empty lines are retained. `tab_width` accepts
+0 through 256; zero removes tabs. This is a source display, not a formatter or
+automatic dedenter. `code_lines`, `line_numbers` when
 enabled, and `background` are ordinary scene targets. In Rust, `line(index)`
 returns a retained text Mobject and `line_source(index)` reads its canonical
 expanded source. Family copies, transforms and animations reuse the existing

@@ -280,8 +280,8 @@ impl PreparedCode {
                 .map(|(index, color)| {
                     let mut state =
                         SemanticObjectState::new(StoredGeometry::Circle { radius: 0.1 });
-                    state.transform.translation.x = index as f64 * 0.3 - center_x - 0.1;
-                    state.transform.translation.y = row_top + 0.3 - center_y;
+                    state.transform.translation.x = index as f64 * 0.3 - center_x;
+                    state.transform.translation.y = row_top + 0.2 - center_y;
                     state.style.fill = Some(SemanticPaint::Solid(Color::from_hex(color)));
                     state
                 })
@@ -359,9 +359,9 @@ impl PreparedCode {
                 }
                 tx.add_member(root, code_lines);
                 let result = publish(store, tx).map_err(TextAuthoringError::Semantic)?;
-                result.resolve(root).ok_or_else(|| {
-                    TextAuthoringError::Semantic(AuthoringError::UnresolvedCreatedNode(root))
-                })
+                result.resolve(root).ok_or(TextAuthoringError::Semantic(
+                    AuthoringError::UnresolvedCreatedNode(root),
+                ))
             },
         )
     }

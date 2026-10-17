@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import initNoonWeb, * as wasm from "../web/pkg/noon_web.js";
+import { resolveAnimationOptionsPlain } from "../web/animation-options.js";
 import { PYTHON_COMPAT_MODULES } from "../web/python-compat-modules.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -34,12 +35,18 @@ try {
   const authoringStore = new wasm.WasmAuthoringStore();
   Object.assign(globalThis, {
     noonCreateCanonicalAuthoringSceneContext: () => authoringStore.createSceneContext(),
+    noonAuthoringGeometryOptions: wasm.WasmManimGeometryOptions,
+    noonAuthoringVectorPath: () => new wasm.WasmAuthoringVectorPath(),
+    noonCreateAuthoringGeometryHandle: options => authoringStore.createManimGeometry(options),
     noonAuthoringMembershipBatch: kind => new wasm.WasmSceneMembershipBatch(kind),
     noonCreateAuthoringFamilyHandle: (batch, zIndex) => authoringStore.createFamily(batch, zIndex),
     noonNativeFontFace: (...args) => new wasm.WasmNativeFontFace(...args),
     noonBundledNativeFontFace: family => wasm.WasmNativeFontFace.bundled(family),
     noonTextColorBatch: () => new wasm.WasmTextColorBatch(),
     noonCreateAuthoringTextHandle: (...args) => authoringStore.createManimText(...args),
+    noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
+    noonResolveCreateAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args),
+    noonResolveTransformAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveTransformAnimationOptions, ...args),
     noonCodeOptions: (...args) => new wasm.WasmCodeOptions(...args),
     noonCodeStylesList: () => wasm.noonCodeStylesList(),
     noonCodeLanguagesList: () => wasm.noonCodeLanguagesList(),

@@ -1,5 +1,5 @@
 """Actual Python/WASM contract; no mocked semantics or Python code layout."""
-from pathlib import Path
+from pathlib import Path as FilePath
 from noon import *
 
 
@@ -35,7 +35,7 @@ class CodeAuthoringContract(Scene):
 
         # File IO is performed in the authoring host; the Rust API receives UTF-8
         # and the path hint and performs the same code normalization/layout.
-        path = Path("/tmp/noon-code-contract.py")
+        path = FilePath("/tmp/noon-code-contract.py")
         path.write_text("π = 3\n\tprint(π)\n", encoding="utf-8")
         try:
             new = Code(code_file=path, code_string="ignored", add_line_numbers=False,

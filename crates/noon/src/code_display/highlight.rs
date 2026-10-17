@@ -425,7 +425,7 @@ fn theme(name: &str) -> Result<Theme, HighlightError> {
         ("keyword.control.import, keyword.control.from, keyword.control.include, keyword.control.namespace", 7),
         ("storage.type, support.type", 8),
         ("keyword.operator", 9),
-        ("keyword.operator.word", 5),
+        ("keyword.operator.word", if name == "monokai" { 9 } else { 5 }),
         ("entity.name.function", 10),
         ("entity.name.class, entity.name.struct, entity.name.type, entity.name.namespace", 11),
         ("support.function, support.variable, support.constant, variable.language", 12),
@@ -435,7 +435,8 @@ fn theme(name: &str) -> Result<Theme, HighlightError> {
         ("entity.name.tag", 16),
         ("string", 17),
         ("constant.character.escape", 18),
-        ("constant.numeric, constant.language", 19),
+        ("constant.numeric", 19),
+        ("constant.language", 5),
     ];
     Ok(Theme {
         name: Some(name.into()),
@@ -482,7 +483,9 @@ mod tests {
             "vim",
         )
         .unwrap();
-        assert_eq!(at(&result.lines[0], "def"), color(rgb(0x00cd00)));
+        // Pygments 2.19.2 PythonLexer classifies `def` as Token.Keyword,
+        // not Keyword.Declaration; VimStyle therefore paints it #cdcd00.
+        assert_eq!(at(&result.lines[0], "def"), color(rgb(0xcdcd00)));
         assert_eq!(at(&result.lines[1], "return"), color(rgb(0xcdcd00)));
         assert_eq!(at(&result.lines[1], "42"), color(rgb(0xcd00cd)));
         assert_eq!(at(&result.lines[1], "#"), color(rgb(0x000080)));
@@ -512,6 +515,22 @@ mod tests {
         .unwrap();
         assert_eq!(at(&rust.lines[1], "fn"), comment);
         assert_ne!(at(&rust.lines[1], "live"), comment);
+    }
+
+    #[test]
+    fn monokai_python_word_operator_and_constant_colors_match_pinned_pygments() {
+        // Pygments 2.19.2: Python `def`/`return`/`for` are Keyword,
+        // `in` is Operator.Word, and `True` is Keyword.Constant.
+        let result = highlight(
+            "return True if x in values else False",
+            Some("python"),
+            "monokai",
+        )
+        .unwrap();
+        assert_eq!(at(&result.lines[0], "return"), color(rgb(0x66d9ef)));
+        assert_eq!(at(&result.lines[0], "True"), color(rgb(0x66d9ef)));
+        assert_eq!(at(&result.lines[0], "in"), color(rgb(0xff4689)));
+        assert_eq!(at(&result.lines[0], "False"), color(rgb(0x66d9ef)));
     }
 
     #[test]

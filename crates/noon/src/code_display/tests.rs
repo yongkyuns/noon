@@ -210,7 +210,39 @@ fn numbers_are_optional_and_window_buttons_are_ordinary_geometry() {
             state.content.geometry(),
             Some(StoredGeometry::Circle { radius: 0.1 })
         );
-        assert_eq!(state.style.fill, Some(Color::from_hex(color).into()));
+        assert_eq!(
+            state.style.fill,
+            Some(noon_core::SemanticPaint::Solid(Color::from_hex(color)))
+        );
+    }
+}
+
+#[test]
+fn zero_buff_window_keeps_its_buttons_inside_the_native_panel() {
+    let mut scene = Scene::new();
+    let code = Code::new(
+        &mut scene,
+        "",
+        CodeOptions {
+            add_line_numbers: false,
+            background: CodeBackground::Window,
+            background_config: CodeBackgroundConfig {
+                buff: 0.0,
+                corner_radius: 0.0,
+                ..Default::default()
+            },
+            ..plain()
+        },
+    )
+    .unwrap();
+    let background = members(code.background());
+    let panel = background[0].layout_bounds().unwrap().unwrap();
+    for button in &background[1..] {
+        let bounds = button.layout_bounds().unwrap().unwrap();
+        assert!(panel.min_x <= bounds.min_x + 1.0e-6);
+        assert!(panel.max_x >= bounds.max_x - 1.0e-6);
+        assert!(panel.min_y <= bounds.min_y + 1.0e-6);
+        assert!(panel.max_y >= bounds.max_y - 1.0e-6);
     }
 }
 
@@ -269,40 +301,41 @@ fn invalid_construction_preserves_scene_and_all_resource_arenas() {
     let state = unrelated.state().unwrap();
     let revision = scene.revision();
     let before = counts(&scene);
-    let mut invalid = Vec::new();
-    invalid.push(CodeOptions {
-        tab_width: usize::MAX,
-        ..plain()
-    });
-    invalid.push(CodeOptions {
-        language: Some("noon-missing-language".into()),
-        ..plain()
-    });
-    invalid.push(CodeOptions {
-        formatter_style: "noon-missing-style".into(),
-        ..plain()
-    });
-    invalid.push(CodeOptions {
-        paragraph_config: CodeParagraphConfig {
-            font: "Noon Missing Font".into(),
-            ..Default::default()
+    let invalid = [
+        CodeOptions {
+            tab_width: usize::MAX,
+            ..plain()
         },
-        ..plain()
-    });
-    invalid.push(CodeOptions {
-        paragraph_config: CodeParagraphConfig {
-            font_size: f32::NAN,
-            ..Default::default()
+        CodeOptions {
+            language: Some("noon-missing-language".into()),
+            ..plain()
         },
-        ..plain()
-    });
-    invalid.push(CodeOptions {
-        background_config: CodeBackgroundConfig {
-            fill_opacity: 2.0,
-            ..Default::default()
+        CodeOptions {
+            formatter_style: "noon-missing-style".into(),
+            ..plain()
         },
-        ..plain()
-    });
+        CodeOptions {
+            paragraph_config: CodeParagraphConfig {
+                font: "Noon Missing Font".into(),
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            paragraph_config: CodeParagraphConfig {
+                font_size: f32::NAN,
+                ..Default::default()
+            },
+            ..plain()
+        },
+        CodeOptions {
+            background_config: CodeBackgroundConfig {
+                fill_opacity: 2.0,
+                ..Default::default()
+            },
+            ..plain()
+        },
+    ];
     for options in invalid {
         assert!(Code::new(&mut scene, "def untouched():\n    pass", options).is_err());
         assert_eq!(scene.revision(), revision);

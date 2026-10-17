@@ -21,6 +21,27 @@ fn retain(name: &str, pixels: &[u8], width: u32, height: u32) {
     }
 }
 
+fn assert_pixels_equal(actual: &[u8], expected: &[u8], label: &str) {
+    assert_eq!(actual.len(), expected.len());
+    if actual == expected {
+        return;
+    }
+    let pairs = || {
+        actual
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0)
+    };
+    let count = pairs()
+        .filter(|(actual, expected)| actual != expected)
+        .count();
+    let first = pairs()
+        .enumerate()
+        .find(|(_, (actual, expected))| actual != expected);
+    panic!("{label}: {count} changed pixels; first mismatch {first:?}");
+}
+
 fn assert_same_marker_region(before: &[u8], after: &[u8], size: u32) {
     let x = ((3.2 / WORLD_SIZE + 0.5) * size as f32) as usize;
     let y = ((0.5 - 3.2 / WORLD_SIZE) * size as f32) as usize;
@@ -69,8 +90,8 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         .add_many(&[code.family().into()])
         .unwrap();
     let original = raster.capture(&session.take_renderer_publication());
-    assert_ne!(
-        original, marker_only,
+    assert!(
+        original != marker_only,
         "Code must render through retained text and geometry"
     );
     assert_same_marker_region(&marker_only, &original, SIZE);
@@ -103,7 +124,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         "syntax colors must survive actual rasterization: {colorful:?}"
     );
     let repeated = raster.capture(&session.take_renderer_publication());
-    assert_eq!(repeated, original, "a static redraw must be pixel-stable");
+    assert_pixels_equal(&repeated, &original, "a static redraw must be pixel-stable");
     assert_eq!(raster.last_scene_upload_bytes, 0);
     assert_eq!(raster.last_scene_repacked, 0);
     retain("code-original", &original, SIZE, SIZE);
@@ -113,8 +134,8 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         .shift_family(code.family(), 0.5, -0.5)
         .unwrap();
     let shifted = raster.capture(&session.take_renderer_publication());
-    assert_ne!(
-        shifted, original,
+    assert!(
+        shifted != original,
         "ordinary live family translation must move Code pixels"
     );
     assert_same_marker_region(&original, &shifted, SIZE);
@@ -129,22 +150,27 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         .set_family_opacity(code.family(), 0.0)
         .unwrap();
     let hidden = raster.capture(&session.take_renderer_publication());
-    assert_eq!(
-        hidden, marker_only,
-        "zero family opacity must hide background, numbers, and intrinsic glyph colors"
+    retain("code-hidden", &hidden, SIZE, SIZE);
+    retain("code-marker-only", &marker_only, SIZE, SIZE);
+    assert_pixels_equal(
+        &hidden,
+        &marker_only,
+        "zero family opacity must hide background, numbers, and intrinsic glyph colors",
     );
     scene
         .live(&mut session)
         .set_family_opacity(code.family(), 1.0)
         .unwrap();
     let restored = raster.capture(&session.take_renderer_publication());
-    assert_eq!(
-        restored, shifted,
-        "restoring opacity must retain syntax paint and the live transform"
+    assert_pixels_equal(
+        &restored,
+        &shifted,
+        "restoring opacity must retain syntax paint and the live transform",
     );
-    assert_eq!(
-        raster.capture(&session.take_renderer_publication()),
-        restored
+    assert_pixels_equal(
+        &raster.capture(&session.take_renderer_publication()),
+        &restored,
+        "restored frame must settle",
     );
     assert_eq!(raster.last_scene_upload_bytes, 0);
     eprintln!("Code retained raster: syntax_pixels={colorful:?}, size={SIZE}x{SIZE}, static_uploads=0, family_hide_restore=exact");
@@ -166,7 +192,11 @@ fn paired_code_example_renders_python_and_cuda_in_the_native_engine() {
         changed > 20_000,
         "the paired scene must contain substantial visible text and panels"
     );
-    assert_eq!(raster.capture(&session.take_renderer_publication()), pixels);
+    assert_pixels_equal(
+        &raster.capture(&session.take_renderer_publication()),
+        &pixels,
+        "paired scene must settle",
+    );
     assert_eq!(raster.last_scene_upload_bytes, 0);
     retain("code-blocks-native", &pixels, 1280, 720);
     eprintln!(
