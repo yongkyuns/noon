@@ -10,6 +10,7 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.pointFromProportion.return_value = [2.5, -1.0]
+        query.proportionFromPoint.return_value = 0.25
         query.arcLength.return_value = 7.25
         query.start.return_value = [1., 2.]
         query.end.return_value = [3., 4.]
@@ -17,13 +18,15 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(value.point_from_proportion(0.25), (2.5, -1.0))
             observe.assert_called_with(value, 'pathQuery', 'queryMobjectPath')
             query.pointFromProportion.assert_called_with(0.25)
+            self.assertEqual(value.proportion_from_point((2.5, -1.0)), 0.25)
+            query.proportionFromPoint.assert_called_with([2.5, -1.0])
             self.assertEqual(value.get_start(), (1., 2.))
             query.start.assert_called_once_with()
             self.assertEqual(value.get_end(), (3., 4.))
             query.end.assert_called_once_with()
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.arcLength.assert_called_with(20)
-            self.assertEqual(query.free.call_count, 4)
+            self.assertEqual(query.free.call_count, 5)
 
     def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -35,6 +38,8 @@ class PathQueryTests(unittest.TestCase):
                 value.get_arc_length(2.5)
             with self.assertRaises(ValueError):
                 value.point_from_proportion(float('nan'))
+            with self.assertRaises(NotImplementedError):
+                value.proportion_from_point((0, 0, 1))
             observe.assert_not_called()
         query = Mock()
         query.pointFromProportion.side_effect = ValueError('invalid proportion')
@@ -42,6 +47,10 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 value.point_from_proportion(-1)
             query.free.assert_called_once()
+            query.proportionFromPoint.side_effect = ValueError('point is off path')
+            with self.assertRaises(ValueError):
+                value.proportion_from_point((2, 3))
+            self.assertEqual(query.free.call_count, 2)
 
     def test_curve_queries_share_one_snapshot_and_release_it(self):
         value = identity_only_wrapper(compat.VMobject)

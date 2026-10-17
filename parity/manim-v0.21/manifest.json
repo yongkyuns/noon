@@ -893,6 +893,7 @@
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",
       "expected_duration": 2.2,
+      "notes": "Checks point_from_proportion/proportion_from_point round trips on transformed Rectangle and Circle paths, the greatest matching root at a closed cubic seam, and rejection of an off-path point.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.0036,

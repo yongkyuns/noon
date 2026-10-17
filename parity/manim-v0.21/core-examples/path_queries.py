@@ -11,7 +11,17 @@ class OrdinaryPathQueries(Scene):
             self.add(shape)
             assert shape.get_arc_length() > 0
             for alpha in (0.125, 0.375, 0.625, 0.875):
-                self.add(Dot(shape.point_from_proportion(alpha), color="#ffcc44"))
+                point = shape.point_from_proportion(alpha)
+                assert abs(shape.proportion_from_point(point) - alpha) < 1e-5
+                self.add(Dot(point, color="#ffcc44"))
+        try:
+            rectangle.proportion_from_point(ORIGIN)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an off-path point must be rejected")
+        loop = CubicBezier(ORIGIN, (1, 1, 0), (-1, 1, 0), ORIGIN)
+        assert abs(loop.proportion_from_point(ORIGIN) - 1.0) < 1e-6
         target = rectangle.copy().stretch(1.2, 0)
         self.play(Transform(rectangle, target), run_time=1, rate_func=linear)
         self.wait(0.2)

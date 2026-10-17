@@ -268,6 +268,10 @@ class VMobject(Mobject):
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
 
+    def proportion_from_point(self, point) -> float:
+        from _manim_path_queries import proportion_from_point
+        return proportion_from_point(self, point)
+
     def get_start(self) -> _base.Vec2:
         from _manim_path_queries import endpoint
         return endpoint(self, False)

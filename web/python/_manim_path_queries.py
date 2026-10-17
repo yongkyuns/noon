@@ -23,6 +23,15 @@ def point_from_proportion(value, alpha):
         query.free()
 
 
+def proportion_from_point(value, point):
+    point = _base._as_vec2(point)
+    query = _query(value)
+    try:
+        return float(engine_call(query.proportionFromPoint, [point.x, point.y]))
+    finally:
+        query.free()
+
+
 def arc_length(value, sample_points_per_curve):
     samples = None if sample_points_per_curve is None else operator.index(sample_points_per_curve)
     if samples is not None and not 2 <= samples <= 0xFFFFFFFF:

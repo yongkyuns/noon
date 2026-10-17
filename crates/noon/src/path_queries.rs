@@ -4,12 +4,15 @@ use noon_core::{
     GeometryRef, GeometryResource, SemanticObjectContent, SemanticStore, SemanticTransform2_5D,
     StoredGeometry, VectorPath,
 };
-use noon_geometry::{canonical_outline_path, PathProportionError, PathProportionPlan};
+use noon_geometry::{
+    canonical_outline_path, proportions_on_cubic_for_point, PathProportionError, PathProportionPlan,
+};
 use std::{cell::RefCell, rc::Rc};
 
 /// A reusable snapshot of one path and its coordinate-space transform.
-/// Preparation is O(path curves); proportion queries are O(log curves). This
-/// observation owns derived query data, never scene or runtime authority.
+/// Preparation is O(path curves); forward proportion queries are O(log curves)
+/// and inverse point queries scan the curves in path order. This observation
+/// owns derived query data, never scene or runtime authority.
 #[derive(Clone, Debug)]
 pub struct PathQuery {
     plan: Option<PathProportionPlan>,
@@ -176,6 +179,42 @@ impl PathQuery {
             .point_f64(alpha)
             .map_err(AuthoringError::PathQuery)?;
         Ok(self.transform_point(point.x, point.y))
+    }
+
+    /// Return the Manim-compatible arc-length proportion for a point on this
+    /// snapshot. Matching curves are searched in path order, with the greatest
+    /// matching Bezier parameter selected on the first matching curve.
+    pub fn proportion_from_point(&self, point: (f64, f64)) -> Result<f64, AuthoringError> {
+        if !point.0.is_finite() || !point.1.is_finite() {
+            return Err(AuthoringError::PathQuery(PathProportionError::InvalidPoint));
+        }
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
+        let total_length = plan.total_length();
+        if !total_length.is_finite() || total_length <= 0.0 {
+            return Err(AuthoringError::PathQuery(
+                PathProportionError::InvalidMetric,
+            ));
+        }
+        let mut preceding_length = 0.0;
+        for index in 0..plan.curve_count() {
+            let controls = self
+                .curve_points(index)?
+                .map(|(x, y)| noon_core::SemanticVec3::new(x, y, 0.0));
+            let roots = proportions_on_cubic_for_point(controls, point);
+            let curve_length = plan
+                .curve_length(index)
+                .map_err(AuthoringError::PathQuery)?;
+            if let Some(parameter) = roots.into_iter().max_by(f64::total_cmp) {
+                return Ok((preceding_length + curve_length * parameter) / total_length);
+            }
+            preceding_length += curve_length;
+        }
+        Err(AuthoringError::PathQuery(
+            PathProportionError::PointNotOnPath,
+        ))
     }
 
     fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
