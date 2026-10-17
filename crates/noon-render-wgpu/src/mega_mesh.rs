@@ -432,11 +432,11 @@ mod tests {
     fn high_address_preload_falls_back_on_real_limited_device() {
         const LIMIT: usize = 65_536;
         let (_, _, _, sample_ranges) = preloaded_prefix_fixture(1);
-        let vertices_per_path = sample_ranges[0].end as usize;
+        let vertices_per_path = sample_ranges[0].end;
         let count = LIMIT / (vertices_per_path * std::mem::size_of::<crate::PathVertex>());
         assert!(count > 1);
         let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(count);
-        let high_end = ranges[count - 1].end as usize;
+        let high_end = ranges[count - 1].end;
         assert_eq!(preparer.path_vertices.len(), high_end);
         assert!(
             crate::buffer_growth_capacity(high_end * std::mem::size_of::<crate::PathVertex>())
@@ -523,7 +523,7 @@ mod tests {
         use noon_runtime::FrameChanges;
 
         let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(32);
-        let first_end = ranges[0].end as usize;
+        let first_end = ranges[0].end;
         let limit = crate::buffer_growth_capacity(first_end * std::mem::size_of::<PathInstance>());
         preparer.set_packed_path_buffer_limit(limit as u64);
         append_fixture_row(&mut frame, rows[0].clone());
