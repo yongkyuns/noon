@@ -106,3 +106,7 @@ class MobjectTableFamilyLabelsExample(Scene):
         )
         self.add(table)
         self.wait(0.2)
+
+# The compatibility gallery executes this file as its single Table + MathTable example.
+# Keep the other scenes above available to parity tools without making selection ambiguous.
+result = RetainedTable()
