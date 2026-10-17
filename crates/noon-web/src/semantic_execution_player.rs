@@ -866,6 +866,18 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_handle_to_anchor_distances(
+        &mut self,
+        source: &noon::Mobject,
+        factor: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ScaleHandles {
+            object: source,
+            factor,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_add_cubic_bezier_curve(
         &mut self,
         source: &noon::Mobject,
@@ -1979,7 +1991,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_all_points(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -1992,7 +2004,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_points(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2005,7 +2017,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_extremum_along_dim(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2020,7 +2032,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_extremum_along_dim(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2041,7 +2053,7 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_length_over_dim(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2074,7 +2086,7 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_center_of_mass(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2087,7 +2099,7 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_boundary_point(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -2108,7 +2120,7 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_point(
         &mut self,
         target: noon::MobjectTarget<'_>,

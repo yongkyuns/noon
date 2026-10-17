@@ -1125,6 +1125,10 @@ def _path_editing(api):
             "anchors": [_point_observation(point) for point in value.get_anchors()],
             "subpaths": [[_point_observation(point) for point in subpath]
                          for subpath in value.get_subpaths()],
+            "curve_points": [
+                [_point_observation(point) for point in value.get_nth_curve_points(index)]
+                for index in range(value.get_num_curves())
+            ],
         }
 
     corners = api.VMobject().set_points_as_corners([(-2, 0, 0), (0, 0, 0)])
@@ -1166,6 +1170,34 @@ def _path_editing(api):
     source = api.VMobject().set_points_as_corners([(3, 0, 0), (4, 1, 0)])
     destination.append_vectorized_mobject(source)
 
+    scaled_line = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    scaled_line.scale_handle_to_anchor_distances(0.5)
+    scaled_quadratic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_quadratic.add_quadratic_bezier_curve_to(api.UP * 3, api.RIGHT * 6)
+    scaled_quadratic.scale_handle_to_anchor_distances(0.5)
+    scaled_cubic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_cubic.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    scaled_cubic.scale_handle_to_anchor_distances(1.5)
+    scaled_closed = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (3, 0, 0), (3, 3, 0)]
+    ).close_path()
+    scaled_closed.scale_handle_to_anchor_distances(0.25)
+    unchanged_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    unchanged_handles.scale_handle_to_anchor_distances(1.0)
+    collapsed_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    collapsed_handles.scale_handle_to_anchor_distances(0.0)
+    reversed_handles = api.VMobject().start_new_path(api.ORIGIN)
+    reversed_handles.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    reversed_handles.scale_handle_to_anchor_distances(-0.5)
+
     return {
         "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
         "append_corners": observe(corners),
@@ -1176,6 +1208,13 @@ def _path_editing(api):
         "smooth_curve_after_cubic": observe(smooth_after_cubic),
         "smooth_curve_pending_subpath": observe(smooth_pending),
         "append_vectorized_mobject": observe(destination),
+        "scaled_line_handles": observe(scaled_line),
+        "scaled_quadratic_handles": observe(scaled_quadratic),
+        "scaled_cubic_handles": observe(scaled_cubic),
+        "scaled_closed_handles": observe(scaled_closed),
+        "unit_handle_scale": observe(unchanged_handles),
+        "zero_handle_scale": observe(collapsed_handles),
+        "negative_handle_scale": observe(reversed_handles),
     }
 
 

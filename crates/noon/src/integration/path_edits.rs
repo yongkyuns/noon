@@ -87,6 +87,10 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         additional: usize,
     },
+    ScaleHandles {
+        object: &'a Mobject,
+        factor: f64,
+    },
     Partial {
         object: &'a Mobject,
         source: &'a Mobject,
@@ -163,6 +167,9 @@ pub fn publish_borrowed_path_edit(
         }
         BorrowedPathEdit::Subdivide { object, additional } => {
             (object, PathEdit::Subdivide(additional))
+        }
+        BorrowedPathEdit::ScaleHandles { object, factor } => {
+            (object, PathEdit::ScaleHandles(factor))
         }
         BorrowedPathEdit::Partial {
             object,

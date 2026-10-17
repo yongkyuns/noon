@@ -54,6 +54,31 @@ def add_smooth_curve_to(value, *points):
     )
 
 
+def scale_handle_to_anchor_distances(value, factor):
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    factor = float(factor)
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("path editing requires a shared semantic handle")
+    context = _live_mutation_context(value) or _live_constructor_context("path")
+    if context is None:
+        engine_call(
+            handle.scaleHandleToAnchorDistances,
+            factor,
+            operation="VMobject.scale_handle_to_anchor_distances",
+        )
+    else:
+        engine_call(
+            context.liveScaleHandleToAnchorDistances,
+            handle,
+            factor,
+            operation="VMobject.scale_handle_to_anchor_distances",
+        )
+    return value
+
+
 def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
     assert len(anchors1) == len(handles1) == len(handles2) == len(anchors2)
     curves = [

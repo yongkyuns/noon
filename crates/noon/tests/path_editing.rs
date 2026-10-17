@@ -783,3 +783,99 @@ fn paired_path_editing_uses_the_shared_execution_session() {
     session.seek(0.2).unwrap();
     assert_eq!(session.frame().objects, start);
 }
+
+#[test]
+fn handle_distance_scaling_matches_cubic_controls_in_authored_and_live_paths() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .path(
+                VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                    Vec2::new(2., 0.),
+                    Vec2::new(4., 0.),
+                    Vec2::new(6., 0.),
+                ),
+                Default::default(),
+            )
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::ScaleHandles {
+                    object: &object,
+                    factor: 0.5,
+                },
+            )
+            .unwrap();
+        } else {
+            object.scale_handle_to_anchor_distances(0.5).unwrap();
+        }
+        let query = if live_mode {
+            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+                .unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(
+            query.curve_points(0).unwrap(),
+            [(0., 0.), (1., 0.), (5., 0.), (6., 0.)]
+        );
+
+        let revision = scene.revision();
+        object.scale_handle_to_anchor_distances(1.0).unwrap();
+        assert_eq!(scene.revision(), revision, "factor one must be a no-op");
+
+        let state = object.state().unwrap();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        assert!(object.scale_handle_to_anchor_distances(f64::NAN).is_err());
+        assert_eq!(object.state().unwrap(), state);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            resources
+        );
+    }
+}
+
+#[test]
+fn handle_distance_scaling_promotes_lines_and_quadratics_exactly() {
+    let mut scene = Scene::new();
+    let mut line = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(6., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    line.scale_handle_to_anchor_distances(0.5).unwrap();
+    assert_eq!(
+        line.path_query().unwrap().curve_points(0).unwrap(),
+        [(0., 0.), (1., 0.), (5., 0.), (6., 0.)]
+    );
+
+    let mut quadratic = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .quadratic_to(Vec2::new(3., 3.), Vec2::new(6., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    quadratic.scale_handle_to_anchor_distances(0.5).unwrap();
+    assert_eq!(
+        quadratic.path_query().unwrap().curve_points(0).unwrap(),
+        [(0., 0.), (1., 1.), (5., 1.), (6., 0.)]
+    );
+}

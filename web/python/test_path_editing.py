@@ -90,6 +90,28 @@ class PathEditingTests(unittest.TestCase):
             ):
                 value.add_smooth_curve_to(*points)
 
+    def test_handle_distance_scaling_dispatches_one_authored_or_live_edit(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        for context in (None, Mock()):
+            with patch.object(editing, '_handle_for', return_value=handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(value.scale_handle_to_anchor_distances(0.5), value)
+            if context is None:
+                handle.scaleHandleToAnchorDistances.assert_called_once_with(0.5)
+            else:
+                context.liveScaleHandleToAnchorDistances.assert_called_once_with(handle, 0.5)
+            handle.reset_mock()
+
+    def test_handle_distance_scaling_rejects_callback_before_resolving_handle(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch('_manim_updaters.canonical_callback_phase_active', return_value=True), \
+             patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                value.scale_handle_to_anchor_distances(0.5)
+            resolve.assert_not_called()
+
     def test_cubic_curve_batches_flatten_to_one_authored_or_live_edit(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

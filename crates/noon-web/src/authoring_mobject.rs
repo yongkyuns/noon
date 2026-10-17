@@ -2155,6 +2155,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = scaleHandleToAnchorDistances)]
+        pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), JsValue> {
+            self.handle
+                .scale_handle_to_anchor_distances(factor)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = addCubicBezierCurve)]
         pub fn add_cubic_bezier_curve(
             &mut self,

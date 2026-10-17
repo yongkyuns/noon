@@ -245,6 +245,22 @@ impl crate::Scene {
         })
     }
 
+    pub fn scale_handle_to_anchor_distances(
+        &mut self,
+        object: &Mobject,
+        factor: f64,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::ScaleHandles(factor),
+            )
+        })
+    }
+
     pub fn set_points_as_corners(
         &mut self,
         object: &Mobject,
@@ -617,6 +633,7 @@ pub(crate) enum PathEdit<'a> {
     Close,
     Reverse,
     Subdivide(usize),
+    ScaleHandles(f64),
     Partial {
         source: &'a SemanticObjectState,
         a: f32,
@@ -632,6 +649,9 @@ impl PathEdit<'_> {
     ) -> Result<Option<VectorPath>, AuthoringError> {
         if matches!(self, Self::Clear) {
             return Ok(Some(VectorPath::new()));
+        }
+        if matches!(&self, Self::ScaleHandles(factor) if *factor == 1.0) {
+            return Ok(None);
         }
         if let Self::CubicCurve(anchor1, handle1, handle2, anchor2) = self {
             let path = append_cubic_curve(
@@ -789,6 +809,9 @@ impl PathEdit<'_> {
                 .map(Some)
                 .map_err(AuthoringError::PathQuery);
         }
+        if let Self::ScaleHandles(factor) = self {
+            return scale_handle_distances(&path, factor).map(Some);
+        }
         if let Self::Reverse = self {
             return Ok(Some(noon_geometry::reverse_path(&path)));
         }
@@ -838,6 +861,7 @@ impl PathEdit<'_> {
                 | Self::Start(_)
                 | Self::Reverse
                 | Self::Subdivide(_)
+                | Self::ScaleHandles(_)
                 | Self::CubicCurve(_, _, _, _)
                 | Self::SmoothCurve { .. }
                 | Self::CubicCurves(_)
@@ -902,6 +926,108 @@ pub(crate) fn world_path(
     };
     let path = crate::path_queries::content_path(store, state.content)?.transformed(transform);
     Ok(path)
+}
+
+/// Scale each cubic handle around its associated anchor, promoting lines and
+/// quadratic segments to their exact cubic representation first. Manim stores
+/// all VMobject curves as four-point cubics, while Noon retains compact line
+/// and quadratic commands until an edit needs handle-level control.
+fn scale_handle_distances(path: &VectorPath, factor: f64) -> Result<VectorPath, AuthoringError> {
+    if !factor.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let factor = factor as f32;
+    if !factor.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    if factor == 1.0 {
+        return Ok(path.clone());
+    }
+
+    let mut result = VectorPath::new();
+    let mut current = None;
+    let mut subpath_start = None;
+    for command in path.commands().iter().copied() {
+        match command {
+            noon_core::PathCommand::MoveTo { to } => {
+                result = result.move_to(to);
+                current = Some(to);
+                subpath_start = Some(to);
+            }
+            noon_core::PathCommand::LineTo { to } => {
+                if let Some(from) = current {
+                    let delta = to - from;
+                    let handle1 = from + delta * (1.0 / 3.0);
+                    let handle2 = from + delta * (2.0 / 3.0);
+                    result = result.cubic_to(
+                        scale_control(from, handle1, factor),
+                        scale_control(to, handle2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.line_to(to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::QuadraticTo { control, to } => {
+                if let Some(from) = current {
+                    let handle1 = from + (control - from) * (2.0 / 3.0);
+                    let handle2 = to + (control - to) * (2.0 / 3.0);
+                    result = result.cubic_to(
+                        scale_control(from, handle1, factor),
+                        scale_control(to, handle2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.quadratic_to(control, to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                if let Some(from) = current {
+                    result = result.cubic_to(
+                        scale_control(from, control1, factor),
+                        scale_control(to, control2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.cubic_to(control1, control2, to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {
+                if let (Some(from), Some(to)) = (current, subpath_start) {
+                    if from != to {
+                        let delta = to - from;
+                        let handle1 = from + delta * (1.0 / 3.0);
+                        let handle2 = from + delta * (2.0 / 3.0);
+                        result = result.cubic_to(
+                            scale_control(from, handle1, factor),
+                            scale_control(to, handle2, factor),
+                            to,
+                        );
+                    }
+                }
+                result = result.close();
+                current = subpath_start;
+            }
+        }
+    }
+    if let Some(target) = path.morph_target() {
+        result = result.with_morph_target(scale_handle_distances(target, f64::from(factor))?);
+    }
+    if !result.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(result)
+}
+
+fn scale_control(anchor: Vec2, handle: Vec2, factor: f32) -> Vec2 {
+    anchor + (handle - anchor) * factor
 }
 
 pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringError> {
@@ -1036,6 +1162,12 @@ impl Mobject {
     }
     pub fn make_jagged(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::AnchorMode(false))
+    }
+
+    /// Scale cubic handles around their associated anchors. A factor of one is
+    /// a path-preserving no-op; zero and negative factors follow ManimCE.
+    pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::ScaleHandles(factor))
     }
 
     /// Set a polyline from world-space corners, preserving identity and paint.

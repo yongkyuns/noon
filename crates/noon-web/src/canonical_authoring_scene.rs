@@ -904,7 +904,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_all_points(
         &mut self,
         handle: &noon::Mobject,
@@ -916,7 +916,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_points(
         &mut self,
         handle: &noon::Mobject,
@@ -930,7 +930,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_extremum_along_dim(
         &mut self,
         handle: &noon::Mobject,
@@ -950,7 +950,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_extremum_along_dim(
         &mut self,
         handle: &noon::Mobject,
@@ -970,7 +970,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_length_over_dim(
         &mut self,
         handle: &noon::Mobject,
@@ -985,7 +985,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_center_of_mass(
         &mut self,
         handle: &noon::Mobject,
@@ -999,7 +999,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_boundary_point(
         &mut self,
         handle: &noon::Mobject,
@@ -1019,7 +1019,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_point(
         &mut self,
         handle: &noon::Mobject,
@@ -1041,7 +1041,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn family_all_points(
         &mut self,
         family: &noon::MobjectFamily,
@@ -1064,7 +1064,7 @@ impl CanonicalAuthoringScene {
         target.all_points().map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn family_extremum_along_dim(
         &mut self,
         family: &noon::MobjectFamily,
@@ -1091,7 +1091,7 @@ impl CanonicalAuthoringScene {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn family_length_over_dim(
         &mut self,
         family: &noon::MobjectFamily,
@@ -1115,7 +1115,7 @@ impl CanonicalAuthoringScene {
         target.length_over_dim(dim).map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn family_center_of_mass(
         &mut self,
         family: &noon::MobjectFamily,
@@ -1138,7 +1138,7 @@ impl CanonicalAuthoringScene {
         target.center_of_mass().map_err(AuthoringFailure::from)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn family_boundary_point(
         &mut self,
         family: &noon::MobjectFamily,
@@ -8148,6 +8148,19 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_add_smooth_curve_to(source.semantic_mobject(), handle2, anchor)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveScaleHandleToAnchorDistances)]
+        pub fn live_scale_handle_to_anchor_distances(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            factor: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
                 .map_err(typed_js_error)
         }
 
