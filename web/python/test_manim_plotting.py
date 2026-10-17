@@ -160,7 +160,7 @@ class PlottingAdapterTests(unittest.TestCase):
         labels = object()
 
         def make_labels(line, values, **options):
-            line.numbers = labels
+            setattr(line, options.get("attribute", "numbers"), labels)
             return labels
 
         with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
@@ -177,12 +177,26 @@ class PlottingAdapterTests(unittest.TestCase):
 
         factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 10.0)
         self.assertIs(line.labels, labels)
-        self.assertIs(line.numbers, labels)
+        self.assertFalse(hasattr(line, "numbers"))
         self.assertEqual(add.call_args.args[:2], (line, None))
         self.assertEqual(add.call_args.kwargs["excluding"], ())
         self.assertEqual(add.call_args.kwargs["log_base"], 10.0)
         self.assertIs(add.call_args.kwargs["number_class"], Integer)
         self.assertEqual(add.call_args.kwargs["config"]["decimal_places"], 2)
+
+    def test_explicit_add_numbers_on_a_log_line_keeps_values_and_numeric_profile(self):
+        line = object.__new__(plotting.NumberLine)
+        line.scaling = plotting.LogBase(base=2)
+        line.decimal_number_config = {"num_decimal_places": 1}
+        line.font_size = 36
+        line.label_direction = plotting._base.DOWN
+        line.line_to_number_buff = 0.25
+        line.numbers_to_exclude = ()
+        with patch.object(number_labels, "number_mobjects") as build:
+            self.assertIs(line.add_numbers((0.5, 4.0)), line)
+        self.assertEqual(build.call_args.args, (line, (0.5, 4.0)))
+        self.assertNotIn("log_base", build.call_args.kwargs)
+        self.assertNotIn("number_class", build.call_args.kwargs)
 
     def test_number_line_rejects_unsupported_scaling_before_host_admission(self):
         with patch.object(plotting, "_coordinate_constructor_context") as context, \
@@ -645,7 +659,7 @@ class PlottingAdapterTests(unittest.TestCase):
         handle = SimpleNamespace(coordinateAxis=Mock(side_effect=["x-axis", "y-axis"]))
 
         def build_labels(line, values, **options):
-            line.numbers = labels
+            setattr(line, options.get("attribute", "numbers"), labels)
             return labels
 
         with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
@@ -666,7 +680,7 @@ class PlottingAdapterTests(unittest.TestCase):
             )
 
         factory.axes.return_value.setAxesScale.assert_any_call(0, "log", 2.0)
-        self.assertIs(x_axis.numbers, labels)
+        self.assertFalse(hasattr(x_axis, "numbers"))
         self.assertIs(x_axis.labels, labels)
         self.assertEqual(build.call_args.args[:2], (x_axis, None))
         self.assertEqual(build.call_args.kwargs["log_base"], 2.0)

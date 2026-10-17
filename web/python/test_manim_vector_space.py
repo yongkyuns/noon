@@ -254,8 +254,8 @@ class ManimVectorSpaceTests(unittest.TestCase):
             labels._options = make_options
             families, remembered = [], []
             labels._family = lambda handle, size, color: (handle, size, color)
-            def remember(axis, family):
-                axis.numbers = family
+            def remember(axis, family, *, attribute="numbers"):
+                setattr(axis, attribute, family)
                 remembered.append((axis, family))
             labels._remember = remember
 

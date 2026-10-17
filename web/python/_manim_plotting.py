@@ -399,7 +399,12 @@ def _configure_axes_numeric_labels(axis, config, range_values):
     decimal_config = dict(config.get("decimal_number_config", {}))
     decimal_config.setdefault("num_decimal_places", places)
     axis.decimal_number_config = decimal_config
-    if axis.include_numbers or axis.numbers_to_include is not None:
+    if (axis.include_numbers or axis.numbers_to_include is not None) and _number_line_scale(
+        getattr(axis, "scaling", None)
+    )[2]:
+        from _manim_number_labels import logarithmic_labels
+        logarithmic_labels(axis, decimal_places=places)
+    elif axis.include_numbers or axis.numbers_to_include is not None:
         axis.add_numbers(
             x_values=axis.numbers_to_include,
             excluding=axis.numbers_to_exclude,
@@ -588,7 +593,10 @@ class NumberLine(_compat.Group):
         decimal_number_config.setdefault("num_decimal_places", decimal_places)
         self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
-        if self.include_numbers or numbers_to_include is not None:
+        if (self.include_numbers or numbers_to_include is not None) and custom_scale_labels:
+            from _manim_number_labels import logarithmic_labels
+            logarithmic_labels(self, decimal_places=decimal_places)
+        elif self.include_numbers or numbers_to_include is not None:
             self.add_numbers(
                 x_values=numbers_to_include,
                 excluding=numbers_to_exclude,
@@ -796,33 +804,15 @@ class NumberLine(_compat.Group):
 
         Repeated calls append another label family, rather than replacing the
         earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
-        into the native-Text subset. LogBase(custom_labels=True) uses Integer
-        exponent labels for the generated logarithmic ticks.
+        into the native-Text subset. Explicit values keep ordinary numeric labels
+        even when the line has logarithmic scaling.
         """
         from _manim_number_labels import number_mobjects
         config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         if excluding is None:
             excluding = getattr(self, "numbers_to_exclude", ())
-        log_base = None
-        number_class = None
-        if _number_line_scale(getattr(self, "scaling", None))[2]:
-            from _manim_numbers import Integer
-
-            log_base = self.scaling.base
-            number_class = Integer
-            x_values = None
-            excluding = ()
-        if log_base is not None:
-            labels = number_mobjects(
-                self, x_values, attach=True, config=config, excluding=excluding,
-                log_base=log_base, number_class=number_class,
-            )
-            self.labels = labels
-        else:
-            number_mobjects(
-                self, x_values, attach=True, config=config, excluding=excluding,
-            )
+        number_mobjects(self, x_values, attach=True, config=config, excluding=excluding)
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):

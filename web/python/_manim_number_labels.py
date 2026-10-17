@@ -97,15 +97,15 @@ def _decimal_family(handle, color, number_class=None):
     return _plot._family(object.__new__(_compat.VGroup), handle, members)
 
 
-def _remember(axis, labels):
+def _remember(axis, labels, *, attribute="numbers"):
     # Only register aliases to the new Rust-owned family. Membership and order
     # have already committed in Rust; Python does not repeat the attachment.
     axis._semantic_member_wrappers[_shared._family_wrapper_key(labels)] = labels
-    axis.numbers = labels
+    setattr(axis, attribute, labels)
 
 
 def number_mobjects(axis, values, *, attach, config, excluding=None,
-                    log_base=None, number_class=None):
+                    log_base=None, number_class=None, attribute="numbers"):
     _cold_labels()
     native_text = "font" in config
     if native_text and log_base is not None:
@@ -143,8 +143,23 @@ def number_mobjects(axis, values, *, attach, config, excluding=None,
             else _decimal_family(handle, color, number_class=number_class)
         )
     if attach:
-        _remember(axis, labels)
+        _remember(axis, labels, attribute=attribute)
     return labels
+
+
+def logarithmic_labels(axis, *, decimal_places=0):
+    """Select the pinned generated-label profile; Rust formats and places it."""
+    from _manim_numbers import Integer
+
+    return number_mobjects(
+        axis, None, attach=True, excluding=(), log_base=axis.scaling.base,
+        number_class=Integer, attribute="labels", config={
+            "font_size": getattr(axis, "font_size", 36),
+            "direction": getattr(axis, "label_direction", _base.DOWN),
+            "buff": getattr(axis, "line_to_number_buff", _base.MED_SMALL_BUFF),
+            "decimal_places": decimal_places, "exclude_zero": False,
+        },
+    )
 
 
 def custom_labels(axis, labels, *, config):
@@ -217,9 +232,14 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
             "mapping coordinate labels require an explicit font for native Text; "
             "default TeX mappings are not yet supported"
         )
-    custom_log_labels = any(
-        _plot._number_line_scale(getattr(axis, "scaling", None))[2] for axis in axes
-    )
+    generated_log_labels = [
+        value is None and _plot._number_line_scale(getattr(axes[index], "scaling", None))[2]
+        for index, value in enumerate(values)
+    ]
+    if any(generated and native_profiles[index]
+           for index, generated in enumerate(generated_log_labels)):
+        raise NotImplementedError("generated LogBase labels require the DecimalNumber profile")
+    custom_log_labels = any(generated_log_labels)
     if (len(values) == 2 and native_profiles[0] == native_profiles[1]
             and not custom_log_labels and not any(isinstance(value, Mapping) for value in values)):
         if native_profiles[0]:
@@ -242,6 +262,8 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
         if isinstance(value, Mapping):
             _add_axis_custom_labels(axis, value, settings)
             families.append(axis.labels)
+        elif generated_log_labels[index]:
+            families.append(logarithmic_labels(axis))
         elif plane and not native_profiles[index]:
             settings.setdefault("exclude_zero", False)
             families.append(number_mobjects(axis, value, attach=True, config=settings,

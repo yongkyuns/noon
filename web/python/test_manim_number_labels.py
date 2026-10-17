@@ -195,23 +195,23 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(self.axis.labels, family)
         self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
 
-    def test_log_axes_coordinate_labels_use_per_axis_number_line_addition(self):
+    def test_log_axes_defaults_select_exponents_and_explicit_values_keep_numeric_labels(self):
         axes = self.axes()
         axes.x_axis.scaling = plotting.LogBase(base=2)
         axes.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
-            axes.x_axis, "numbers", "log-labels"
-        ))
+            axes.x_axis, "numbers", "explicit-labels"))
         axes.y_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
-            axes.y_axis, "numbers", "linear-labels"
-        ))
-
-        result = labels.add_coordinates(axes, config={})
-
-        self.assertIs(result, axes)
-        axes.x_axis.add_numbers.assert_called_once()
-        axes.y_axis.add_numbers.assert_called_once()
-        self.assertEqual(axes.coordinate_labels, ("log-labels", "linear-labels"))
-        self.assertEqual(self.calls, [])
+            axes.y_axis, "numbers", "linear-labels"))
+        with patch.object(labels, "logarithmic_labels", return_value="log-labels") as custom:
+            self.assertIs(labels.add_coordinates(axes, config={}), axes)
+            custom.assert_called_once_with(axes.x_axis)
+            axes.x_axis.add_numbers.assert_not_called()
+            self.assertEqual(axes.coordinate_labels, ("log-labels", "linear-labels"))
+        with patch.object(labels, "logarithmic_labels") as custom:
+            self.assertIs(labels.add_coordinates(axes, (0.5, 4.0), config={}), axes)
+            custom.assert_not_called()
+            self.assertEqual(axes.x_axis.add_numbers.call_args.args, ((0.5, 4.0),))
+            self.assertEqual(axes.coordinate_labels, ("explicit-labels",))
 
     def test_custom_labels_reject_unsupported_objects_before_allocating(self):
         with self.assertRaises(NotImplementedError):

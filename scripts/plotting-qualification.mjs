@@ -98,14 +98,17 @@ class LogBaseNumberLineLabels(Scene):
             (-2, 2, 1), scaling=LogBase(base=10), include_numbers=True,
             decimal_number_config={"num_decimal_places": 0},
         )
-        assert tuple(label._source for label in line.numbers) == (
+        assert tuple(label._source for label in line.labels) == (
             "10^{-2}", "10^{-1}", "10^{0}", "10^{1}", "10^{2}",
         )
-        assert all(isinstance(label, Integer) for label in line.numbers)
-        assert tuple(label.get_value() for label in line.numbers) == (10, 10, 10, 10, 10)
-        for label, coordinate in zip(line.numbers, (0.01, 0.1, 1, 10, 100)):
+        assert all(isinstance(label, Integer) for label in line.labels)
+        assert tuple(label.get_value() for label in line.labels) == (10, 10, 10, 10, 10)
+        for label, coordinate in zip(line.labels, (0.01, 0.1, 1, 10, 100)):
             assert abs(label.get_center().x - line.number_to_point(coordinate).x) < 1e-6
-        assert line.labels is line.numbers
+        line.add_numbers((0.1, 10.0), excluding=(0.1,))
+        assert tuple(label.get_value() for label in line.numbers) == (10.0,)
+        assert all(isinstance(label, DecimalNumber) and not isinstance(label, Integer)
+                   for label in line.numbers)
         self.add(line, linear)
         await self.wait(0.05)
 `;
@@ -127,7 +130,7 @@ class AxesLogBaseLabels(Scene):
             x_axis_config={"scaling": LogBase(base=2), "include_numbers": True},
             y_axis_config={"include_numbers": True, "numbers_to_exclude": []},
         )
-        x_labels = axes.x_axis.numbers
+        x_labels = axes.x_axis.labels
         assert tuple(label._source for label in x_labels) == (
             "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
         )
@@ -141,9 +144,13 @@ class AxesLogBaseLabels(Scene):
             x_axis_config={"scaling": LogBase(base=2)}, tips=False,
         )
         coordinate_axes.add_coordinates()
-        assert tuple(label._source for label in coordinate_axes.x_axis.numbers) == (
+        assert tuple(label._source for label in coordinate_axes.x_axis.labels) == (
             "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
         )
+        coordinate_axes.add_coordinates((0.5, 4.0))
+        assert tuple(label.get_value() for label in coordinate_axes.x_axis.numbers) == (0.5, 4.0)
+        assert all(isinstance(label, DecimalNumber) and not isinstance(label, Integer)
+                   for label in coordinate_axes.x_axis.numbers)
         self.add(axes, coordinate_axes)
         await self.wait(0.05)
 `;
@@ -628,8 +635,8 @@ class NumberLineDecimalNumberLabels(Scene):
         assert tuple(label.get_value() for label in detached) == (1, -1, 1)
         assert len(line.submobjects) == 2
         assert line.add_numbers((0, 1, -1), excluding=(0,)) is line
-        assert tuple(label.get_value() for label in line.numbers) == (1, -1)
-        assert all(isinstance(label, DecimalNumber) for label in line.numbers)
+        assert tuple(label.get_value() for label in line.labels) == (1, -1)
+        assert all(isinstance(label, DecimalNumber) for label in line.labels)
         self.add(line, detached)
         await self.wait(0.05)
 `;
