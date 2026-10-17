@@ -49,10 +49,20 @@ node --test scripts/cuda-transpose-pixels.test.mjs
 node scripts/cuda-transpose-qualification.mjs
 ```
 
-The existing `browser-authoring` CI job runs these commands after downloading
-and verifying its normal `web-pkg` artifact. There is no second WASM build and no
-GPU dependency for this CPU-backed job. Failures are fatal. Reports and selected
-PNG/debug-frame evidence are uploaded even after failure.
+The existing `browser-authoring` CI job runs these commands for changes to the
+CUDA scene, controls, or qualification wiring after verifying its normal web
+package. The existing nightly/manual raster oracle also runs the full suite
+against generic engine changes. Both reuse their built WASM package; failures
+remain fatal and original reports and PNG/debug frames are retained. Missing
+classification evidence keeps the CUDA suite enabled. The fifteen-minute
+qualification budget and every positive/negative case are unchanged.
+
+The scene uses explicit async construction and awaited animation helpers. The
+normal source runner owns construct execution; the observer wraps that entry to
+install read-only checks. Renderer sampling races the actual authoring failure
+promise, so a failed check cannot leave a sample waiting on a stopped source.
+The existing pinned Pyodide resource cache reuses immutable downloads across
+fresh per-case contexts without sharing scene or interpreter state.
 
 The default report explicitly says `oracle: independent-cpu-closed-form` and
 `cudaValidated: false`. Passing it is **not** evidence that CUDA executed.

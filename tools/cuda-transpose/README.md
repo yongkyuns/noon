@@ -10,7 +10,8 @@ This example is **reproduced with Noon for demonstration purposes**, based on
 - [Original unpadded shared-memory kernel](https://github.com/ourarash/cuda-algorithm-lab/blob/main/matrix_transpose/02_shared_memory/02_transpose_shared_memory.cu)
 
 The animation adapts the explanation into a non-interactive, Manim-style Noon
-scene. The full third-party copyright and MIT permission notice is retained in
+scene. Explicit async construction awaits the normal play/wait continuations on
+browsers with or without JavaScript Promise Integration. The full third-party copyright and MIT permission notice is retained in
 [`cuda_transpose_banks.LICENSE`](../../web/python/examples/cuda_transpose_banks.LICENSE),
 separate from the scene's short attribution header. Keep that notice with
 redistributed copies of the scene or instrumented CUDA kernel.
@@ -28,7 +29,7 @@ GPU_TRACE = None          # Explicitly labeled CPU reference replay
 SYNTAX_HIGHLIGHT = True
 ```
 
-This is the user-approved scene with syntax-colored CUDA statements, a request
+The scene uses syntax-colored CUDA statements, a request
 tray, bank cards, lane registers, and consistent source-row-group colors.
 Source focus is established before each corresponding movement. The global
 store follows completion of all read batches.
@@ -38,8 +39,7 @@ in parallel without submitting multiple family Transforms in one activation.
 The active code-line background is a muted blue-gray with 20% fill and no outline;
 syntax colors and data colors are independent of that emphasis.
 
-[`syntax_highlighting_smoke.py`](syntax_highlighting_smoke.py) isolates the
-`Text(t2c=...)` capability for manual testing. The scene uses Noon's
+The scene uses Noon's
 `color_from_hex` helper and is not advertised as an import-only Manim port.
 
 ## Optional CUDA-recorded addresses and values
@@ -69,19 +69,21 @@ execution and is not a benchmark.
 From the repository root:
 
 ```bash
-python3 -m py_compile web/python/examples/cuda_transpose_banks.py tools/cuda-transpose/syntax_highlighting_smoke.py
+python3 -m py_compile web/python/examples/cuda_transpose_banks.py
 python3 tests/cuda_transpose_banks_test.py
 node --test web/cuda-transpose-banks.test.mjs
 ```
 
-The 39 checks cover 320 trace configurations, broadcasts, producer/consumer
+The 40 checks cover 320 trace configurations, broadcasts, producer/consumer
 correspondence, invalid traces, syntax token ranges, source sequencing,
 authored geometry, independent packet animation arguments, subtle highlighting,
 and attribution. Helper tests use call spies, not a simulated Noon runtime.
 These tests do not qualify rendering, replay/seek, frame rate, or CUDA execution.
 
-The user approved the manually tested scene before this PR update. Automated
-full Noon/browser qualification, CUDA recorder compilation/execution, and a
-renderer-generated gallery thumbnail remain separate outstanding checks.
-This update does not register or publish a gallery entry. Tracking: #2125;
+The full scene and the wrong-highlight rejection pass in desktop WebKit with
+JSPI disabled; all three original positive cases and six negative controls pass
+in Chromium. These are real Python-worker/renderer functional checks, not
+physical iPhone frame-pacing or CUDA hardware qualification. The existing CI and
+nightly/manual oracle retain the same fifteen-minute budget. Gallery registration
+and its renderer-generated thumbnail remain outside this change. Tracking: #2125;
 PR: #2126.
