@@ -344,6 +344,46 @@ impl Table {
     pub fn line_family(&self) -> &MobjectFamily {
         &self.line_family
     }
+    /// Return the retained horizontal grid lines in ManimCE's creation order.
+    pub fn get_horizontal_lines(&self) -> Result<Vec<Mobject>, TableAuthoringError> {
+        let horizontal_count = self.horizontal_line_count()?;
+        let lines = self.line_members()?;
+        if horizontal_count > lines.len() {
+            return Err(TableAuthoringError::InvalidStructure);
+        }
+        Ok(lines.into_iter().take(horizontal_count).collect())
+    }
+    /// Return the retained vertical grid lines in ManimCE's creation order.
+    pub fn get_vertical_lines(&self) -> Result<Vec<Mobject>, TableAuthoringError> {
+        let horizontal_count = self.horizontal_line_count()?;
+        let lines = self.line_members()?;
+        if horizontal_count > lines.len() {
+            return Err(TableAuthoringError::InvalidStructure);
+        }
+        Ok(lines.into_iter().skip(horizontal_count).collect())
+    }
+    fn horizontal_line_count(&self) -> Result<usize, TableAuthoringError> {
+        let (rows, _) = self.shape()?;
+        let options = self.options()?;
+        Ok(usize::from(options.include_outer_lines) * 2
+            + if options.include_inner_lines {
+                rows.saturating_sub(1)
+            } else {
+                0
+            })
+    }
+    fn line_members(&self) -> Result<Vec<Mobject>, TableAuthoringError> {
+        let store = Rc::clone(self.line_family.integration_store());
+        self.line_family.validate()?;
+        let nodes = store
+            .borrow()
+            .semantic_family_members_checked(self.line_family.node_id())
+            .map_err(AuthoringError::from)?;
+        nodes
+            .into_iter()
+            .map(|node| Mobject::from_node(Rc::clone(&store), node).map_err(Into::into))
+            .collect()
+    }
     pub fn highlight_family(&self) -> &MobjectFamily {
         &self.highlight_family
     }
@@ -1193,6 +1233,28 @@ mod tests {
                 .len(),
             6
         );
+        let horizontal_lines = table.get_horizontal_lines().unwrap();
+        let vertical_lines = table.get_vertical_lines().unwrap();
+        assert_eq!(horizontal_lines.len(), 3);
+        assert_eq!(vertical_lines.len(), 3);
+        let line_nodes = store
+            .borrow()
+            .semantic_family_members_checked(table.line_family().node_id())
+            .unwrap();
+        assert_eq!(
+            horizontal_lines
+                .iter()
+                .map(Mobject::node_id)
+                .collect::<Vec<_>>(),
+            line_nodes[..3]
+        );
+        assert_eq!(
+            vertical_lines
+                .iter()
+                .map(Mobject::node_id)
+                .collect::<Vec<_>>(),
+            line_nodes[3..]
+        );
         assert_eq!(
             store
                 .borrow()
@@ -1289,6 +1351,8 @@ mod tests {
             4,
             "outer rules remain while both inner rules are omitted"
         );
+        assert_eq!(table.get_horizontal_lines().unwrap().len(), 2);
+        assert_eq!(table.get_vertical_lines().unwrap().len(), 2);
         let semantic = store.borrow();
         let line_state = semantic
             .node(line_nodes[0])

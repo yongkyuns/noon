@@ -95,6 +95,8 @@ class Table(_compat.VGroup):
 
     def _initialize_table(self, handle, context):
         self._table_handle = handle
+        self._horizontal_lines_cache = None
+        self._vertical_lines_cache = None
         _attach_shared_family(self, engine_call(handle.family), context)
 
     def _rehydrate_semantic_family_handle(self):
@@ -126,6 +128,28 @@ class Table(_compat.VGroup):
 
     def _entry_family(self):
         return self.submobjects[1]
+
+    def _line_family(self):
+        return self.submobjects[2]
+
+    def _line_group(self, method_name, cache_name):
+        cached = getattr(self, cache_name)
+        if cached is not None:
+            return cached
+        known = {
+            _handle_key(_handle_for(item)): item
+            for item in self._line_family().submobjects
+        }
+        handles = engine_call(getattr(self._table_handle, method_name))
+        group = _compat.VGroup(*[known[_handle_key(handle)] for handle in handles])
+        setattr(self, cache_name, group)
+        return group
+
+    def get_horizontal_lines(self):
+        return self._line_group("getHorizontalLines", "_horizontal_lines_cache")
+
+    def get_vertical_lines(self):
+        return self._line_group("getVerticalLines", "_vertical_lines_cache")
 
     def get_rows(self):
         return _compat.VGroup(*self._entry_family().submobjects)

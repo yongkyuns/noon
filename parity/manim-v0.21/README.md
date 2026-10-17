@@ -55,3 +55,8 @@ passes the unchanged thresholds on WebGPU and WebGL2 with exact duration and
 0.11% worst differing pixels. Paired Rust/WASM and Python-worker captures are
 pixel-identical on both backends. Other line configuration keys, including
 background stroke styling, and remaining table variants stay open under #2014.
+
+`Table.get_horizontal_lines()` and `Table.get_vertical_lines()` now return
+cached `VGroup` views over the original retained line handles, split in
+ManimCE's horizontal-then-vertical creation order. The browser lifecycle suite
+checks the 2x2 line counts and stable group identity on both WebGPU and WebGL2.

@@ -32,6 +32,12 @@ class _TableHandle:
     def columns(self):
         return [[self.a, self.c], [self.b, self.d]]
 
+    def getHorizontalLines(self):
+        return [self.a, self.b]
+
+    def getVerticalLines(self):
+        return [self.c, self.d]
+
 
 class _Context:
     def __init__(self, handle):
@@ -143,6 +149,20 @@ class TableFacadeTests(unittest.TestCase):
         with patch.object(self.handle, "entryAt", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
+
+    def test_horizontal_and_vertical_line_groups_reuse_retained_wrappers(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        lines = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
+        line_family = types.SimpleNamespace(submobjects=lines)
+        with patch.object(table, "_handle_for", side_effect=lambda item: item._semantic_handle), \
+                patch.object(table.Table, "submobjects", new_callable=PropertyMock,
+                             return_value=[None, None, line_family]):
+            horizontal = value.get_horizontal_lines()
+            vertical = value.get_vertical_lines()
+            self.assertIs(value.get_horizontal_lines(), horizontal)
+            self.assertIs(value.get_vertical_lines(), vertical)
+        self.assertEqual(horizontal.submobjects, lines[:2])
+        self.assertEqual(vertical.submobjects, lines[2:])
 
     def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
         entry = _FakeMobject(1)

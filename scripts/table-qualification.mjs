@@ -19,6 +19,12 @@ class TableLifecycle(Scene):
         table = Table([["a", "b"], ["c", "d"]], h_buff=0.9, v_buff=0.4,
                       include_outer_lines=True)
         self.add(table)
+        horizontal_lines = table.get_horizontal_lines()
+        vertical_lines = table.get_vertical_lines()
+        assert len(horizontal_lines) == 3
+        assert len(vertical_lines) == 3
+        assert table.get_horizontal_lines() is horizontal_lines
+        assert table.get_vertical_lines() is vertical_lines
         await self.wait(0.0625)
         table.shift(RIGHT * 1.5).scale(0.8)
         center = table.get_entries((1, 1)).get_center()

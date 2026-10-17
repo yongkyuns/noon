@@ -135,6 +135,22 @@ impl WasmTableHandle {
         }
         Ok(result)
     }
+    #[wasm_bindgen(js_name = getHorizontalLines)]
+    pub fn get_horizontal_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_horizontal_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = getVerticalLines)]
+    pub fn get_vertical_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_vertical_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
+        }
+        Ok(result)
+    }
     #[wasm_bindgen(js_name = shape)]
     pub fn shape(&self) -> Result<js_sys::Array, JsValue> {
         let (rows, columns) = self.table.shape().map_err(js_error)?;
