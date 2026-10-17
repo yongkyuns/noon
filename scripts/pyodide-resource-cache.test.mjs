@@ -5,14 +5,28 @@ import { LATEX_ASSETS } from '../web/latex/assets.js';
 
 const source = 'import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";';
 const url = 'https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.asm.wasm';
+const editorModules = [
+  'https://esm.sh/codemirror@6.0.2',
+  'https://esm.sh/@codemirror/lang-python@6.2.1/es2022/lang-python.mjs',
+  'https://esm.sh/@lezer/python@1.1.18/es2022/python.mjs',
+  'https://esm.sh/style-mod@4.1.2/es2022/style-mod.mjs',
+];
 async function attach(cache) {
   let handler;
   await cache.install({ async route(pattern, callback) {
     assert.equal(pattern(new URL(url)), true);
     assert.equal(pattern(new URL(LATEX_ASSETS.bundle)), true);
     assert.equal(pattern(new URL(LATEX_ASSETS.metrics)), true);
+    for (const asset of editorModules) assert.equal(pattern(new URL(asset)), true);
     assert.equal(pattern(new URL('https://example.com/python-worker.js')), false);
     assert.equal(pattern(new URL(LATEX_ASSETS.bundle.replace('1.0.5.tgz', '1.0.6.tgz'))), false);
+    for (const unpinned of [
+      'https://esm.sh/codemirror',
+      'https://esm.sh/@codemirror/lang-python@^6.2.1',
+      'https://esm.sh/@codemirror/lang-python@6',
+      'https://esm.sh/unrelated@6.2.1/module.mjs',
+      'https://example.com/@codemirror/lang-python@6.2.1/module.mjs',
+    ]) assert.equal(pattern(new URL(unpinned)), false);
     handler = callback;
   } });
   return handler;
@@ -189,4 +203,22 @@ test('pinned optional LaTeX assets share unchanged response bytes across context
   }
   assert.equal(fetches, 2);
   assert.equal(cache.stats().hits, 2);
+});
+
+test('pinned editor modules reuse their original bytes across fresh gallery contexts', async () => {
+  const cache = createPyodideResourceCache(source);
+  const first = await attach(cache), second = await attach(cache);
+  let fetches = 0;
+  for (const asset of editorModules) {
+    const bytes = Buffer.from(`// unchanged module: ${asset}`);
+    const upstream = async () => { fetches++; return response(bytes); };
+    const a = request(upstream, 'GET', asset), b = request(upstream, 'GET', asset);
+    await Promise.all([first(a), second(b)]);
+    assert.deepEqual(a.result.response.body, bytes);
+    assert.deepEqual(b.result.response.body, bytes);
+    assert.equal(b.result.response.headers['access-control-allow-origin'], '*');
+    assert.equal(b.result.response.headers['set-cookie'], undefined);
+  }
+  assert.equal(fetches, 4);
+  assert.equal(cache.stats().hits, 4);
 });
