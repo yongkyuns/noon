@@ -132,7 +132,8 @@ pub const TRAIN_DURATION: f64 = 4.2;
 /// Pair: `web/python/examples/ordinary_signal_trains.py`.
 pub fn train_session() -> Result<crate::ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
-        use noon_core::{SemanticAnimationCompositionKind, SemanticAnimationIntent};
+        use crate::AnimationCompositionRequest;
+        use noon_core::SemanticAnimationCompositionKind;
 
         let mut scene = Scene::new();
         let mut trains = Vec::new();
@@ -152,36 +153,39 @@ pub fn train_session() -> Result<crate::ExecutionSession, String> {
                 signal.set_stroke_color(color.0, color.1, color.2, 1.0)?;
                 signal.set_stroke_width(0.1)?;
                 signal.set_stroke_cap("butt")?;
-                let flash = scene.declare_passing_flash(
-                    &signal,
-                    time_width,
-                    AnimationOptions::new()
-                        .run_time(1.6)
-                        .rate_func(RateFunction::Linear),
-                )?;
-                signals.push(flash.node_id().into());
+                signals.push(signal);
             }
-            let train = scene.declare_animation(
-                SemanticAnimationIntent::Composition {
-                    kind: SemanticAnimationCompositionKind::Parallel,
-                    children: signals,
-                },
-                AnimationOptions::new()
-                    .lag_ratio(0.125)
-                    .rate_func(RateFunction::Linear),
-            )?;
-            trains.push(train.node_id().into());
+            trains.push((signals, time_width));
         }
-        let together = scene.declare_animation(
-            SemanticAnimationIntent::Composition {
-                kind: SemanticAnimationCompositionKind::Parallel,
-                children: trains,
-            },
-            AnimationOptions::new()
+        // Requests are inert: detached pulses are not scheduled at bootstrap.
+        // The live operation below admits all targets and declares their tracks
+        // together, through the same atomic composition used by the frontends.
+        let together = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: trains
+                .iter()
+                .map(|(signals, time_width)| AnimationCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children: signals
+                        .iter()
+                        .map(|signal| AnimationCompositionRequest::PassingFlash {
+                            target: signal,
+                            time_width: *time_width,
+                            options: AnimationOptions::new()
+                                .run_time(1.6)
+                                .rate_func(RateFunction::Linear),
+                        })
+                        .collect(),
+                    options: AnimationOptions::new()
+                        .lag_ratio(0.125)
+                        .rate_func(RateFunction::Linear),
+                })
+                .collect(),
+            options: AnimationOptions::new()
                 .run_time(3.2)
                 .lag_ratio(0.0)
                 .rate_func(RateFunction::Linear),
-        )?;
+        };
 
         let mut execution = scene.execution_session()?;
         {
@@ -189,7 +193,8 @@ pub fn train_session() -> Result<crate::ExecutionSession, String> {
             let before = live.wait_segment(0.5)?;
             live.advance_segment_to(before, before.end_time())?;
             live.complete_segment(before)?;
-            let signals = live.play_animation(&together)?;
+            let signals =
+                live.declare_and_activate_composition(&together, AnimationOptions::new())?;
             live.advance_segment_to(signals, signals.end_time())?;
             live.complete_segment(signals)?;
             let after = live.wait_segment(0.5)?;
@@ -332,7 +337,11 @@ mod tests {
             let frame = session.advance_to(time).unwrap();
             assert_eq!(frame.objects.len(), 20);
             assert_eq!(
-                frame.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+                frame
+                    .objects
+                    .iter()
+                    .map(|object| object.id)
+                    .collect::<Vec<_>>(),
                 identities
             );
             for rail in 0..2 {

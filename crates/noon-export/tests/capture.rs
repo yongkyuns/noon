@@ -383,17 +383,24 @@ fn native_capture_signal_trains_keep_rails_and_reproduce_seek_pixels() {
         } else {
             assert_eq!((cyan, yellow), (0, 0));
         }
-        assert!(pixels.iter().any(|p| {
-            p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2]
-        }));
+        assert!(pixels
+            .iter()
+            .any(|p| { p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2] }));
         proof(&format!("signal-trains-{index:02}"), frame.rgba, 640, 360);
         forward.push(frame.rgba.to_vec());
     }
     assert_ne!(forward[1], forward[2], "signals must visibly travel");
-    assert_eq!(forward[0], forward[6], "transient signals must leave the rails intact");
+    assert_eq!(
+        forward[0], forward[6],
+        "transient signals must leave the rails intact"
+    );
     for index in [5, 2, 0, 4, 1, 6, 3] {
         session.seek(times[index]).unwrap();
         let frame = capture.capture(&mut session).unwrap();
-        assert_eq!(frame.rgba, forward[index], "seek pixels at t={}", times[index]);
+        assert_eq!(
+            frame.rgba, forward[index],
+            "seek pixels at t={}",
+            times[index]
+        );
     }
 }
