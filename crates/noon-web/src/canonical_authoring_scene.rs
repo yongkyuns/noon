@@ -8186,6 +8186,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAppendVectorizedMobject)]
+        pub fn live_append_vectorized_mobject(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_append_vectorized_mobject(
+                    object.semantic_mobject(),
+                    source.semantic_mobject(),
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetPointsSmoothly)]
         pub fn live_set_points_smoothly(
             &mut self,

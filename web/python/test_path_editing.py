@@ -134,6 +134,33 @@ class PathEditingTests(unittest.TestCase):
                 value.add_subpath(points[:-1])
             resolve.assert_not_called()
 
+    def test_append_vectorized_mobject_dispatches_shared_source_in_authored_or_live_mode(self):
+        value = identity_only_wrapper(compat.VMobject)
+        source = identity_only_wrapper(compat.VMobject)
+        handle, source_handle = Mock(), Mock()
+        with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.append_vectorized_mobject(source), value)
+        handle.appendVectorizedMobject.assert_called_once_with(source_handle)
+
+        context = Mock()
+        with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
+             patch.object(editing, '_live_mutation_context', side_effect=lambda obj: context if obj is source else None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.append_vectorized_mobject(source), value)
+        context.liveAppendVectorizedMobject.assert_called_once_with(handle, source_handle)
+
+    def test_append_vectorized_mobject_rejects_nonvector_source_and_callback_before_bridge(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(TypeError):
+                value.append_vectorized_mobject(object())
+            with patch('_manim_updaters.canonical_callback_phase_active', return_value=True):
+                with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                    value.append_vectorized_mobject(identity_only_wrapper(compat.VMobject))
+            resolve.assert_not_called()
+
     def test_callback_resource_edits_reject_before_crossing_the_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch('_manim_updaters.canonical_callback_phase_active', return_value=True), \
@@ -148,6 +175,8 @@ class PathEditingTests(unittest.TestCase):
                 value.add_points_as_corners([(1, 0), (2, 1)])
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.add_subpath([(0, 0), (1, 0), (1, 1), (2, 1)])
+            with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
+                value.append_vectorized_mobject(identity_only_wrapper(compat.VMobject))
             resolve.assert_not_called()
 
 

@@ -435,6 +435,63 @@ fn add_points_as_corners_uses_pending_new_path_anchor() {
 }
 
 #[test]
+fn append_vectorized_mobject_appends_source_and_drops_pending_destination_anchor() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut destination = scene
+            .geometry(
+                ManimGeometryOptions::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(0., 0.))
+                        .line_to(Vec2::new(1., 0.))
+                        .move_to(Vec2::new(2., 0.)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let source = scene
+            .geometry(
+                ManimGeometryOptions::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(4., 0.))
+                        .line_to(Vec2::new(5., 1.)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&destination).unwrap();
+        scene.add(&source).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::AppendVectorized {
+                    object: &destination,
+                    source: &source,
+                },
+            )
+            .unwrap();
+        } else {
+            destination.append_vectorized_mobject(&source).unwrap();
+        }
+
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &destination).unwrap()
+        } else {
+            destination.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 2);
+        assert_eq!(query.subpaths().len(), 2);
+        assert_eq!(query.end().unwrap(), (5., 1.));
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

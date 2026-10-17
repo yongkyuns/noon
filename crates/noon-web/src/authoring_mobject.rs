@@ -2173,6 +2173,16 @@ mod wasm {
             self.handle.add_points_as_corners(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = appendVectorizedMobject)]
+        pub fn append_vectorized_mobject(
+            &mut self,
+            source: &WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .append_vectorized_mobject(source.semantic_mobject())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setPointsSmoothly)]
         pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
             self.handle

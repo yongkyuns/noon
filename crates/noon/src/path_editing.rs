@@ -143,6 +143,25 @@ pub(crate) fn publish_running_pointwise_partial(
     )
 }
 
+/// Append a source vector object's current effective path to one destination.
+pub(crate) fn publish_running_append_vectorized_mobject(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    source: &Mobject,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, source)?;
+    let source = crate::effective_capture::capture_mobject_state(store, execution, source)?;
+    publish_running_object_edit(
+        store,
+        root,
+        execution,
+        object,
+        PathEdit::AppendVectorized(&source),
+    )
+}
+
 /// Change every authoritative family leaf between smooth and jagged anchors.
 pub(crate) fn publish_running_family_anchor_mode(
     store: &Rc<RefCell<SemanticStore>>,
@@ -340,6 +359,16 @@ impl crate::Scene {
         })
     }
 
+    pub fn append_vectorized_mobject(
+        &mut self,
+        object: &Mobject,
+        source: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_append_vectorized_mobject(store, root, execution, object, source)
+        })
+    }
+
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Close)
@@ -420,6 +449,47 @@ fn append_cubic_curve(path: VectorPath, curve: [Vec2; 4]) -> VectorPath {
     }
 }
 
+fn append_path_command(path: VectorPath, command: noon_core::PathCommand) -> VectorPath {
+    match command {
+        noon_core::PathCommand::MoveTo { to } => path.move_to(to),
+        noon_core::PathCommand::LineTo { to } => path.line_to(to),
+        noon_core::PathCommand::QuadraticTo { control, to } => path.quadratic_to(control, to),
+        noon_core::PathCommand::CubicTo {
+            control1,
+            control2,
+            to,
+        } => path.cubic_to(control1, control2, to),
+        noon_core::PathCommand::Close => path.close(),
+    }
+}
+
+fn append_vectorized_path(destination: VectorPath, source: &VectorPath) -> VectorPath {
+    let morph_target = (destination.morph_target().is_some() || source.morph_target().is_some())
+        .then(|| {
+            let destination_target = destination
+                .morph_target()
+                .cloned()
+                .unwrap_or_else(|| destination.clone());
+            let source_target = source
+                .morph_target()
+                .cloned()
+                .unwrap_or_else(|| source.clone());
+            append_vectorized_path(destination_target, &source_target)
+        });
+    let mut destination_commands = destination.commands().to_vec();
+    if matches!(
+        destination_commands.last(),
+        Some(noon_core::PathCommand::MoveTo { .. })
+    ) {
+        destination_commands.pop();
+    }
+    let path = destination_commands
+        .into_iter()
+        .chain(source.commands().iter().copied())
+        .fold(VectorPath::new(), append_path_command);
+    morph_target.map_or(path.clone(), |target| path.with_morph_target(target))
+}
+
 pub(crate) fn path_replacement_state(
     mut state: SemanticObjectState,
 ) -> Result<SemanticObjectState, AuthoringError> {
@@ -463,6 +533,7 @@ pub(crate) enum PathEdit<'a> {
     Cubic(Vec2, Vec2, Vec2),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
     CubicCurves(&'a [[Vec2; 4]]),
+    AppendVectorized(&'a SemanticObjectState),
     Close,
     Reverse,
     Subdivide(usize),
@@ -525,6 +596,15 @@ impl PathEdit<'_> {
             for point in points {
                 path = path.line_to(*point);
             }
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::AppendVectorized(source) = self {
+            let destination = world_path(store, state)?;
+            let source = world_path(store, source)?;
+            let path = append_vectorized_path(destination, &source);
             if !path.is_finite() {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
@@ -622,6 +702,7 @@ impl PathEdit<'_> {
                 | Self::CubicCurve(_, _, _, _)
                 | Self::CubicCurves(_)
                 | Self::AppendCorners(_)
+                | Self::AppendVectorized(_)
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -864,6 +945,12 @@ impl Mobject {
     /// Append straight segments from the current endpoint through each corner.
     pub fn add_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::AppendCorners(points))
+    }
+    /// Append another vector object's current world-space path.
+    pub fn append_vectorized_mobject(&mut self, source: &Mobject) -> Result<(), AuthoringError> {
+        self.require_same_store(source)?;
+        let source = source.state()?;
+        self.edit_path(PathEdit::AppendVectorized(&source))
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)

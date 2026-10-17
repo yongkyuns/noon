@@ -42,6 +42,37 @@ def add_subpath(value, points):
     return add_cubic_bezier_curves(value, curves)
 
 
+def append_vectorized_mobject(value, source):
+    from _manim_compat import VMobject
+    from _manim_updaters import canonical_callback_phase_active
+    if not isinstance(source, VMobject):
+        raise TypeError("append_vectorized_mobject requires a VMobject")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    handle, source_handle = _handle_for(value), _handle_for(source)
+    if handle is None or source_handle is None:
+        raise RuntimeError("path editing requires shared semantic handles")
+    context = (
+        _live_mutation_context(value)
+        or _live_mutation_context(source)
+        or _live_constructor_context("path")
+    )
+    if context is None:
+        engine_call(
+            handle.appendVectorizedMobject,
+            source_handle,
+            operation="VMobject.append_vectorized_mobject",
+        )
+    else:
+        engine_call(
+            context.liveAppendVectorizedMobject,
+            handle,
+            source_handle,
+            operation="VMobject.append_vectorized_mobject",
+        )
+    return value
+
+
 def _looks_like_point(value):
     if isinstance(value, _base.Vec2):
         return True
