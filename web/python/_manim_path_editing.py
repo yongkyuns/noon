@@ -42,6 +42,18 @@ def add_subpath(value, points):
     return add_cubic_bezier_curves(value, curves)
 
 
+def add_smooth_curve_to(value, *points):
+    if len(points) not in (1, 2):
+        raise ValueError("Only call add_smooth_curve_to with 1 or 2 points")
+    return edit_points(
+        value,
+        "addSmoothCurveTo",
+        "liveAddSmoothCurveTo",
+        points,
+        array=True,
+    )
+
+
 def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
     assert len(anchors1) == len(handles1) == len(handles2) == len(anchors2)
     curves = [

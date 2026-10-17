@@ -324,6 +324,23 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_smooth_curve_to(
+        &mut self,
+        object: &Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SmoothCurve { handle2, anchor },
+            )
+        })
+    }
+
     pub fn add_cubic_bezier_curve(
         &mut self,
         object: &Mobject,
@@ -506,6 +523,48 @@ fn append_vectorized_path(destination: VectorPath, source: &VectorPath) -> Vecto
     morph_target.map_or(path.clone(), |target| path.with_morph_target(target))
 }
 
+fn last_cubic_second_control(path: &VectorPath) -> Option<Vec2> {
+    let mut current = None;
+    let mut subpath_start = None;
+    let mut control2 = None;
+    for command in path.commands() {
+        match *command {
+            noon_core::PathCommand::MoveTo { to } => {
+                current = Some(to);
+                subpath_start = Some(to);
+                control2 = None;
+            }
+            noon_core::PathCommand::LineTo { to } => {
+                if let Some(from) = current {
+                    control2 = Some(from + (to - from) * (2.0 / 3.0));
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::QuadraticTo { control, to } => {
+                control2 = Some(control * (2.0 / 3.0) + to * (1.0 / 3.0));
+                current = Some(to);
+            }
+            noon_core::PathCommand::CubicTo {
+                control2: next_control2,
+                to,
+                ..
+            } => {
+                control2 = Some(next_control2);
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {
+                if let (Some(from), Some(start)) = (current, subpath_start) {
+                    if from != start {
+                        control2 = Some(from + (start - from) * (2.0 / 3.0));
+                    }
+                    current = Some(start);
+                }
+            }
+        }
+    }
+    control2
+}
+
 pub(crate) fn path_replacement_state(
     mut state: SemanticObjectState,
 ) -> Result<SemanticObjectState, AuthoringError> {
@@ -548,6 +607,10 @@ pub(crate) enum PathEdit<'a> {
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
+    SmoothCurve {
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    },
     CubicCurves(&'a [[Vec2; 4]]),
     SetCubicCurves(&'a [[Vec2; 4]]),
     AppendVectorized(&'a SemanticObjectState),
@@ -636,6 +699,51 @@ impl PathEdit<'_> {
             let destination = world_path(store, state)?;
             let source = world_path(store, source)?;
             let path = append_vectorized_path(destination, &source);
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::SmoothCurve { handle2, anchor } = self {
+            if !anchor.x.is_finite()
+                || !anchor.y.is_finite()
+                || handle2.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let mut path = world_path(store, state)?;
+            if path.endpoints().is_none() {
+                return Err(AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::EmptyPath,
+                ));
+            }
+            if matches!(
+                path.commands().last(),
+                Some(noon_core::PathCommand::MoveTo { .. })
+            ) {
+                // Manim treats a pending one-point subpath as a straight line,
+                // even when the optional second control point was supplied.
+                path = path.line_to(anchor);
+            } else {
+                let (_, last) = path.endpoints().expect("the path was checked above");
+                let last_handle2 = last_cubic_second_control(&path).ok_or(
+                    AuthoringError::PathQuery(noon_geometry::PathProportionError::EmptyPath),
+                )?;
+                let tangent = last - last_handle2;
+                let handle1 = last + tangent;
+                let handle2 = handle2.unwrap_or_else(|| {
+                    let direction = anchor - last;
+                    // Manim rotates the incoming tangent by pi about the
+                    // anchor-to-anchor axis. In the planar model this is the
+                    // reflection across that axis; a zero axis leaves it
+                    // unchanged, matching Manim's zero-rotvec fallback.
+                    let reflected = direction.normalized().map_or(tangent, |axis| {
+                        axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y)) - tangent
+                    });
+                    anchor - reflected
+                });
+                path = path.open_last_subpath().cubic_to(handle1, handle2, anchor);
+            }
             if !path.is_finite() {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
@@ -731,6 +839,7 @@ impl PathEdit<'_> {
                 | Self::Reverse
                 | Self::Subdivide(_)
                 | Self::CubicCurve(_, _, _, _)
+                | Self::SmoothCurve { .. }
                 | Self::CubicCurves(_)
                 | Self::SetCubicCurves(_)
                 | Self::AppendCorners(_)
@@ -963,6 +1072,13 @@ impl Mobject {
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Cubic(control1, control2, anchor))
+    }
+    pub fn add_smooth_curve_to(
+        &mut self,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SmoothCurve { handle2, anchor })
     }
     /// Append a cubic curve from its start anchor and two controls.
     pub fn add_cubic_bezier_curve(

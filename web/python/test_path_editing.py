@@ -56,6 +56,40 @@ class PathEditingTests(unittest.TestCase):
                     handle, 0., 1., 2., 3., 4., 5., 6., 7.
                 )
 
+    def test_smooth_curve_dispatch_accepts_anchor_or_handle_and_anchor(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        cases = [
+            (((1, 2, 0),), [1., 2.]),
+            (((1, 2, 0), (3, 4, 0)), [1., 2., 3., 4.]),
+        ]
+        for points, expected in cases:
+            for context in (None, Mock()):
+                with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+                     patch.object(editing, '_handle_for', return_value=handle), \
+                     patch.object(editing, '_live_mutation_context', return_value=context), \
+                     patch.object(editing, '_live_constructor_context', return_value=None):
+                    self.assertIs(value.add_smooth_curve_to(*points), value)
+                if context is None:
+                    self.assertEqual(handle.addSmoothCurveTo.call_args.args, (expected,))
+                else:
+                    self.assertEqual(
+                        context.liveAddSmoothCurveTo.call_args.args,
+                        (handle, expected),
+                    )
+                handle.reset_mock()
+
+    def test_smooth_curve_rejects_invalid_arity_with_manim_error(self):
+        value = identity_only_wrapper(compat.VMobject)
+        for points in ((), ((1, 2, 0), (3, 4, 0), (5, 6, 0))):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"^Only call add_smooth_curve_to with 1 or 2 points$",
+            ):
+                value.add_smooth_curve_to(*points)
+
     def test_cubic_curve_batches_flatten_to_one_authored_or_live_edit(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

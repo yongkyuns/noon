@@ -2138,6 +2138,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addSmoothCurveTo)]
+        pub fn add_smooth_curve_to(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let (handle2, anchor) = match points.as_slice() {
+                [anchor] => (None, *anchor),
+                [handle2, anchor] => (Some(*handle2), *anchor),
+                _ => {
+                    return Err(JsValue::from_str(
+                        "Only call add_smooth_curve_to with 1 or 2 points",
+                    ));
+                }
+            };
+            self.handle
+                .add_smooth_curve_to(handle2, anchor)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = addCubicBezierCurve)]
         pub fn add_cubic_bezier_curve(
             &mut self,

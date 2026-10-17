@@ -331,6 +331,106 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
 }
 
 #[test]
+fn smooth_curve_to_calculates_or_accepts_the_second_handle_authored_and_live() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(
+                ManimGeometryOptions::path(
+                    VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(3., 0.)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let publish =
+            |object: &mut noon::Mobject, session: &mut noon::ExecutionSession, handle2, anchor| {
+                if live_mode {
+                    noon::integration::publish_borrowed_path_edit(
+                        scene.integration_store(),
+                        scene.root(),
+                        session,
+                        noon::integration::BorrowedPathEdit::SmoothCurve {
+                            object,
+                            handle2,
+                            anchor,
+                        },
+                    )
+                } else {
+                    object.add_smooth_curve_to(handle2, anchor)
+                }
+            };
+
+        publish(&mut object, &mut session, None, Vec2::new(6., 3.)).unwrap();
+        let query = if live_mode {
+            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+                .unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        let curve = query.curve_points(1).unwrap();
+        let expected = [(3., 0.), (4., 0.), (6., 2.), (6., 3.)];
+        for (actual, expected) in curve.into_iter().zip(expected) {
+            assert!((actual.0 - expected.0).abs() < 1e-5);
+            assert!((actual.1 - expected.1).abs() < 1e-5);
+        }
+
+        publish(
+            &mut object,
+            &mut session,
+            Some(Vec2::new(6., 0.)),
+            Vec2::new(7., -2.),
+        )
+        .unwrap();
+        let query = if live_mode {
+            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+                .unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        let curve = query.curve_points(2).unwrap();
+        let expected = [(6., 3.), (6., 4.), (6., 0.), (7., -2.)];
+        for (actual, expected) in curve.into_iter().zip(expected) {
+            assert!((actual.0 - expected.0).abs() < 1e-5);
+            assert!((actual.1 - expected.1).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn smooth_curve_to_pending_path_is_a_line_and_empty_path_rejects() {
+    let mut scene = Scene::new();
+    let mut object = scene
+        .geometry(
+            ManimGeometryOptions::path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1., 0.))
+                    .move_to(Vec2::new(2., 0.)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    object
+        .add_smooth_curve_to(Some(Vec2::new(20., 20.)), Vec2::new(4., 0.))
+        .unwrap();
+    let curve = object.path_query().unwrap().curve_points(1).unwrap();
+    let expected = [(2., 0.), (8. / 3., 0.), (10. / 3., 0.), (4., 0.)];
+    for (actual, expected) in curve.into_iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-5);
+        assert!((actual.1 - expected.1).abs() < 1e-5);
+    }
+
+    let mut empty = scene
+        .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+        .unwrap();
+    assert!(empty.add_smooth_curve_to(None, Vec2::new(1., 1.)).is_err());
+}
+
+#[test]
 fn set_cubic_bezier_curves_replaces_paths_authored_and_live() {
     for live_mode in [false, true] {
         let mut scene = Scene::new();

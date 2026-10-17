@@ -55,6 +55,11 @@ pub enum BorrowedPathEdit<'a> {
         control2: Vec2,
         anchor: Vec2,
     },
+    SmoothCurve {
+        object: &'a Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    },
     CubicCurve {
         object: &'a Mobject,
         anchor1: Vec2,
@@ -129,6 +134,11 @@ pub fn publish_borrowed_path_edit(
             control2,
             anchor,
         } => (object, PathEdit::Cubic(control1, control2, anchor)),
+        BorrowedPathEdit::SmoothCurve {
+            object,
+            handle2,
+            anchor,
+        } => (object, PathEdit::SmoothCurve { handle2, anchor }),
         BorrowedPathEdit::CubicCurve {
             object,
             anchor1,

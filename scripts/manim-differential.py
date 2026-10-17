@@ -1143,6 +1143,24 @@ def _path_editing(api):
         [(0, 0, 0), (2, 0, 0)],
     )
 
+    smooth_default = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_default.add_smooth_curve_to((6, 3, 0))
+
+    smooth_explicit = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_explicit.add_smooth_curve_to((6, 0, 0), (7, -2, 0))
+
+    smooth_after_cubic = api.VMobject().start_new_path(api.LEFT * 3)
+    smooth_after_cubic.add_cubic_bezier_curve_to(
+        api.LEFT * 2 + api.UP * 2,
+        api.LEFT + api.UP * 2,
+        api.UP,
+    )
+    smooth_after_cubic.add_smooth_curve_to(api.RIGHT * 3 + api.UP)
+
+    smooth_pending = api.VMobject()
+    smooth_pending.start_new_path(api.RIGHT * 2)
+    smooth_pending.add_smooth_curve_to(api.UP * 20 + api.RIGHT * 4)
+
     destination = api.VMobject().set_points_as_corners([(-1, 0, 0), (0, 0, 0)])
     destination.start_new_path((1, 0, 0))
     source = api.VMobject().set_points_as_corners([(3, 0, 0), (4, 1, 0)])
@@ -1153,6 +1171,10 @@ def _path_editing(api):
         "append_corners": observe(corners),
         "subpath": observe(subpath),
         "set_anchors_and_handles": observe(anchors),
+        "smooth_curve_default_handle": observe(smooth_default),
+        "smooth_curve_explicit_handle": observe(smooth_explicit),
+        "smooth_curve_after_cubic": observe(smooth_after_cubic),
+        "smooth_curve_pending_subpath": observe(smooth_pending),
         "append_vectorized_mobject": observe(destination),
     }
 
