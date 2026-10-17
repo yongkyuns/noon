@@ -46,7 +46,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             },
             _ => Default::default(),
         };
-        let angle = scene.geometry(ManimGeometryOptions::angle_from_endpoints(
+        let mut angle = scene.geometry(ManimGeometryOptions::angle_from_endpoints(
             [a.start, a.end],
             [b.start, b.end],
             options,
@@ -57,6 +57,9 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
                     < 1e-9
             );
         }
+        let nominal = (index + 1) as f64 / 8.0;
+        angle.set_angle_value(nominal)?;
+        assert_eq!(angle.angle_value(false)?, nominal);
         scene.add_many(&[(&lines[0]).into(), (&lines[1]).into(), (&angle).into()])?;
     }
     Ok(scene)

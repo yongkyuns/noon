@@ -472,6 +472,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::SetAngleValue { .. }
                 | SemanticMutation::AddUpdater { .. }
                 | SemanticMutation::RemoveUpdater { .. }
                 | SemanticMutation::ClearUpdaters { .. }
@@ -1254,6 +1255,7 @@ fn lower_semantic_publication(
             // commits coherently but has no renderable object value projection.
             SemanticMutation::SetFamilyColor { .. }
             | SemanticMutation::SetBarMetadata { .. }
+            | SemanticMutation::SetAngleValue { .. }
             | SemanticMutation::UpdateEffect { .. } => {}
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }

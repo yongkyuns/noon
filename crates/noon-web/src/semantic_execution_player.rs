@@ -726,6 +726,16 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_angle_value(
+        &mut self,
+        mobject: &noon::Mobject,
+        radians: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_angle_value(mobject, radians))
+            .map(|_| ())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_move_to(
         &mut self,

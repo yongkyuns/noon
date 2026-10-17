@@ -106,6 +106,11 @@ pub enum SemanticMutation {
         camera_frame: Option<SemanticTransactionNodeRef>,
         capture_own_display: bool,
     },
+    /// Replace the nominal constructor value of one Manim Angle.
+    SetAngleValue {
+        object: SemanticTransactionNodeRef,
+        radians: f64,
+    },
     SetSpatialCompositionDomain {
         object: SemanticTransactionNodeRef,
         domain: SemanticSpatialCompositionDomain,
@@ -261,6 +266,7 @@ impl SemanticMutation {
             } => std::iter::once(*object)
                 .chain(camera_frame.iter().copied())
                 .collect(),
+            Self::SetAngleValue { object, .. } => vec![*object],
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
@@ -327,6 +333,7 @@ impl SemanticMutation {
             | Self::SetBarMetadata { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::SetInset2DView { object, .. }
+            | Self::SetAngleValue { object, .. }
             | Self::SetSpatialCompositionDomain { object, .. }
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
@@ -371,6 +378,7 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::ObjectBarMetadata(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
+            Self::SetAngleValue { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::SetSpatialCompositionDomain { object, .. } => {
                 Some(SemanticMutationKey::SpatialCompositionDomain(*object))
             }
@@ -843,6 +851,19 @@ impl SemanticMutationTransaction {
             object: object.into(),
             camera_frame: None,
             capture_own_display: false,
+        });
+        self
+    }
+
+    /// Replace one Manim Angle's nominal angle value without changing its path.
+    pub fn set_angle_value(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        radians: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetAngleValue {
+            object: object.into(),
+            radians,
         });
         self
     }
@@ -2572,6 +2593,28 @@ impl SemanticMutationTransaction {
                     } else {
                         state.set_role(SemanticObjectRole::Ordinary);
                     }
+                }
+                SemanticMutation::SetAngleValue { object, radians } => {
+                    if !radians.is_finite() {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if !matches!(state.role(), SemanticObjectRole::Angle(_)) {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    let role =
+                        SemanticObjectRole::Angle(crate::SemanticAngleRole::new(Some(*radians)));
+                    changed.push(state.role() != role);
+                    state.set_role(role);
                 }
                 SemanticMutation::SetSpatialCompositionDomain {
                     object,

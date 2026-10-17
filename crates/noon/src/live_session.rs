@@ -2600,6 +2600,18 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Set the nominal Manim Angle value through the active publication boundary.
+    pub fn set_angle_value(
+        &mut self,
+        mobject: &Mobject,
+        radians: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_angle_value(mobject.node_id(), radians);
+        self.apply(transaction)
+    }
+
     pub fn set_translation(
         &mut self,
         mobject: &Mobject,
@@ -3188,7 +3200,8 @@ mod tests {
     use crate::execution_session::CallbackAdvance;
     use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
-        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticObjectRole, SemanticPaint,
+        SemanticVec3,
     };
 
     #[test]
@@ -3254,6 +3267,67 @@ mod tests {
         };
         assert_eq!(observed.transform.translation.x, 2.0);
         assert_eq!(session.frame().objects.len(), 1);
+    }
+
+    #[test]
+    fn live_angle_value_override_publishes_nominal_metadata_without_changing_render_state() {
+        let mut scene = Scene::new();
+        let angle = scene
+            .geometry(
+                crate::ManimGeometryOptions::angle_from_endpoints(
+                    [(-1.0, 0.0), (1.0, 0.0)],
+                    [(0.0, -1.0), (0.0, 1.0)],
+                    Default::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&angle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let frame_before = session.frame().clone();
+        let publication_before = session.publication_context();
+
+        {
+            let mut live = scene.live(&mut session);
+            live.set_angle_value(&angle, -0.75).unwrap();
+            assert_eq!(
+                live.authored(&angle).unwrap().role(),
+                SemanticObjectRole::Angle(noon_core::SemanticAngleRole::new(Some(-0.75)),)
+            );
+            assert_eq!(angle.angle_value(false).unwrap(), -0.75);
+            assert_ne!(live.session.publication_context(), publication_before);
+            let publication_after = live.session.publication_context();
+            assert!(live.set_angle_value(&angle, f64::NAN).is_err());
+            assert_eq!(live.session.publication_context(), publication_after);
+        }
+
+        assert_eq!(session.frame(), &frame_before);
+
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(angle.node_id(), HostCallbackId::new(9), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+        };
+        let publication = live.session.publication_context();
+        assert!(matches!(
+            live.set_angle_value(&angle, 0.5),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::RequiredCallbackPending
+            ))
+        ));
+        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(angle.angle_value(false).unwrap(), -0.75);
+        live.session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        live.set_angle_value(&angle, 0.5).unwrap();
+        assert_eq!(angle.angle_value(false).unwrap(), 0.5);
     }
 
     #[test]

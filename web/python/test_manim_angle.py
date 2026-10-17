@@ -90,6 +90,30 @@ class AngleAdapters(unittest.TestCase):
             self.assertEqual(obj.angle_value,1.5707963267948966)
         self.assertEqual(calls,[True,False])
 
+    def test_value_override_uses_semantic_or_live_publication(self):
+        direct_calls=[]
+        live_calls=[]
+        handle=types.SimpleNamespace(setAngleValue=lambda radians:direct_calls.append(radians))
+        context=types.SimpleNamespace(liveSetAngleValue=lambda target,radians:live_calls.append((target,radians)))
+        obj=object.__new__(angle.Angle)
+        with patch.object(angle._shared,"_handle_for",return_value=handle), \
+             patch.object(angle._shared,"_live_mutation_context",return_value=None):
+            obj.angle_value=1.25
+        with patch.object(angle._shared,"_handle_for",return_value=handle), \
+             patch.object(angle._shared,"_live_mutation_context",return_value=context):
+            obj.angle_value=-0.5
+        self.assertEqual(direct_calls,[1.25])
+        self.assertEqual(live_calls,[(handle,-0.5)])
+
+    def test_value_override_rejects_non_finite_values_before_engine_calls(self):
+        calls=[]
+        handle=types.SimpleNamespace(setAngleValue=lambda radians:calls.append(radians))
+        obj=object.__new__(angle.Angle)
+        with patch.object(angle._shared,"_handle_for",return_value=handle), \
+             patch.object(angle._shared,"_live_mutation_context",return_value=None):
+            with self.assertRaises(ValueError):obj.angle_value=float("nan")
+        self.assertEqual(calls,[])
+
     def test_dot_profile_is_rejected_before_geometry_or_line_observation(self):
         first=FakeLine((-1,0),(1,0));second=FakeLine((0,-1),(0,1))
         with patch.object(angle,"_require_geometry_host"), patch.object(first,"get_start",side_effect=AssertionError("observed before guard")):
