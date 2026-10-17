@@ -219,7 +219,7 @@ class RasterManifestTests(unittest.TestCase):
         fixture = matches[0]
         self.assertEqual(fixture["scene"], "TableLabelsExample")
         self.assertEqual(fixture["expected_duration"], 0.2)
-        self.assertEqual(fixture["noon_source"], "web/python/examples/table.py")
+        self.assertEqual(fixture["noon_source"], "web/python/examples/table_labels.py")
         self.assertNotIn("tolerance", fixture)
         source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
         self.assertIn("table = Table(", source)

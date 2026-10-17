@@ -226,6 +226,20 @@ class Table(_compat.VGroup):
             for column in engine_call(self._table_handle.columns)
         ])
 
+    def get_row_labels(self):
+        return _compat.VGroup(*(self.row_labels or []))
+
+    def get_col_labels(self):
+        return _compat.VGroup(*(self.col_labels or []))
+
+    def get_labels(self):
+        labels = []
+        if self.top_left_entry is not None:
+            labels.append(self.top_left_entry)
+        labels.extend(self.col_labels or [])
+        labels.extend(self.row_labels or [])
+        return _compat.VGroup(*labels)
+
     def _rectangle_wrapper(self, handle):
         wrapper = object.__new__(_compat.Rectangle)
         _attach_shared_handle(wrapper, handle)

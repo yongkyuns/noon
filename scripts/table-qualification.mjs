@@ -8,10 +8,10 @@ await qualifyPairedAuthoring({
     factory: "createTableRenderer", objectCount: 31,
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }, {
-    id: "table-labels", file: "table.py", scene: "TableLabelsExample",
+    id: "table-labels", file: "table_labels.py", scene: "TableLabelsExample",
     factory: "createTableLabelsRenderer", duration: 0.2,
   }, {
-    id: "mobject-table-family-labels", file: "table.py", scene: "MobjectTableFamilyLabelsExample",
+    id: "mobject-table-family-labels", file: "mobject_table_family_labels.py", scene: "MobjectTableFamilyLabelsExample",
     factory: "createMobjectTableFamilyLabelsRenderer", duration: 0.2,
   }],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {

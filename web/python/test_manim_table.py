@@ -169,6 +169,25 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(horizontal.submobjects, lines[:2])
         self.assertEqual(vertical.submobjects, lines[2:])
 
+    def test_label_queries_keep_manims_group_order_and_original_wrappers(self):
+        value = table.Table([["a"]])
+        row = object()
+        column = object()
+        corner = object()
+        value.row_labels = [row]
+        value.col_labels = [column]
+        value.top_left_entry = corner
+
+        self.assertEqual(value.get_row_labels().submobjects, [row])
+        self.assertEqual(value.get_col_labels().submobjects, [column])
+        self.assertEqual(value.get_labels().submobjects, [corner, column, row])
+
+    def test_absent_label_queries_return_empty_groups(self):
+        value = table.Table([["a"]])
+        self.assertEqual(value.get_row_labels().submobjects, [])
+        self.assertEqual(value.get_col_labels().submobjects, [])
+        self.assertEqual(value.get_labels().submobjects, [])
+
     def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
         entry = _FakeMobject(1)
         row_label = _FakeFamily(2)
