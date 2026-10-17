@@ -133,10 +133,14 @@ class AxesLabels(Scene):
                                           direction=DOWN, buff=0.2)
         explicit_y = axes.get_y_axis_label("y", edge=LEFT,
                                           direction=LEFT, buff=0.2)
-        labels = axes.get_axis_labels("x", Text("y-values"))
+        retained_y = Text("y-values")
+        labels = axes.get_axis_labels("x", retained_y)
         assert axes.axis_labels is labels
         assert len(labels.submobjects) == 2
+        assert isinstance(labels.submobjects[0], MathTex)
+        assert labels.submobjects[1] is retained_y
         assert all(getattr(label, "_semantic_family_handle", None) is not None
+                   or getattr(label, "_semantic_handle", None) is not None
                    for label in labels.submobjects)
 
         plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
