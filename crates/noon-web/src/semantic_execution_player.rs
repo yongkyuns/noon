@@ -772,6 +772,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_clear_points(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Clear {
+            object: source,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn publish_borrowed_path_edit(
         &mut self,
         edit: noon::integration::BorrowedPathEdit<'_>,
@@ -838,6 +848,98 @@ impl SemanticExecutionPlayer {
             control1,
             control2,
             anchor,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_smooth_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        handle2: Option<noon_core::Vec2>,
+        anchor: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SmoothCurve {
+            object: source,
+            handle2,
+            anchor,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_handle_to_anchor_distances(
+        &mut self,
+        source: &noon::Mobject,
+        factor: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ScaleHandles {
+            object: source,
+            factor,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curve(
+        &mut self,
+        source: &noon::Mobject,
+        anchor1: noon_core::Vec2,
+        handle1: noon_core::Vec2,
+        handle2: noon_core::Vec2,
+        anchor2: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurve {
+            object: source,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curves(
+        &mut self,
+        source: &noon::Mobject,
+        curves: &[[noon_core::Vec2; 4]],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurves {
+            object: source,
+            curves,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_cubic_bezier_curves(
+        &mut self,
+        source: &noon::Mobject,
+        curves: &[[noon_core::Vec2; 4]],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurves {
+            object: source,
+            curves,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_points_as_corners(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCorners {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_append_vectorized_mobject(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendVectorized {
+            object,
+            source,
         })
     }
 
@@ -1889,6 +1991,82 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_all_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_all_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_extremum_along_dim(&semantics, &self.session, target, dim, key)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_extremum_along_dim(
+            &semantics,
+            &self.session,
+            target,
+            dim,
+            key,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_length_over_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_length_over_dim(&semantics, &self.session, target, dim)
+            .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
@@ -1905,6 +2083,61 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_line_endpoints(mobject)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_center_of_mass(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_center_of_mass(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
         .map_err(AuthoringFailure::from)
     }
 

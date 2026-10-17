@@ -4,13 +4,339 @@ import unittest
 from unittest.mock import Mock, patch
 import _manim_compat as compat
 import _manim_path_queries as queries
+import _manim_semantic_handles as semantic_handles
 from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
+        value = identity_only_wrapper(compat.VMobject)
+        self.assertEqual(value.n_points_per_curve, 4)
+
+    def test_all_points_returns_a_two_column_array_and_boundary_aliases_it(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only array shape check")
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(
+            queries,
+            "_all_points_observation",
+            return_value=[0., 0., 1., 0., 2., 0., 3., 0.],
+        ) as observe, patch.object(
+            queries,
+            "_path_boundary_points_observation",
+            return_value=[0., 0., 3., 0.],
+        ) as boundary_observe:
+            points = value.get_all_points()
+            self.assertIsInstance(points, np.ndarray)
+            self.assertEqual(points.shape, (4, 2))
+            np.testing.assert_array_equal(points, [[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
+            boundary = value.get_points_defining_boundary()
+            self.assertEqual(boundary.shape, (2, 2))
+            np.testing.assert_array_equal(boundary, [[0., 0.], [3., 0.]])
+        self.assertEqual(observe.call_count, 1)
+        boundary_observe.assert_called_once_with(value)
+
+    def test_all_points_uses_vec2_list_when_numpy_is_unavailable(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with (
+            patch.object(
+                queries,
+                "_all_points_observation",
+                return_value=[0., 0., 1., 2.],
+            ),
+            patch.dict("sys.modules", {"numpy": None}),
+        ):
+            self.assertEqual(value.get_all_points(), [noon.Vec2(0., 0.), noon.Vec2(1., 2.)])
+
+    def test_shared_family_all_points_uses_live_or_authored_rust_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+        coordinates = [0., 0., 1., 2.]
+
+        context = Mock()
+        context.queryFamilyAllPoints.return_value = coordinates
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
+        context.queryFamilyAllPoints.assert_called_once_with(family)
+        family.allPoints.assert_not_called()
+
+        family.allPoints.return_value = coordinates
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=None,
+        ):
+            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
+        family.allPoints.assert_called_once_with()
+
+    def test_group_point_count_excludes_descendant_points(self):
+        for cls in (compat.Group, compat.VGroup):
+            with self.subTest(cls=cls.__name__):
+                value = identity_only_wrapper(cls)
+                family = Mock()
+                family.pointCount.return_value = 0
+                value._semantic_family_handle = family
+
+                self.assertEqual(value.get_num_points(), 0)
+                self.assertFalse(value.has_points())
+                self.assertTrue(value.has_no_points())
+                self.assertEqual(family.pointCount.call_count, 3)
+
+    def test_shared_family_extremum_uses_live_query_or_authored_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+
+        context = Mock()
+        context.queryFamilyExtremumAlongDim.return_value = 4.0
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 1, 1.0), 4.0)
+        context.queryFamilyExtremumAlongDim.assert_called_once_with(family, 1, 1.0)
+        family.extremumAlongDim.assert_not_called()
+
+        family.extremumAlongDim.return_value = 2.0
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=None,
+        ):
+            self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 0, -1.0), 2.0)
+        family.extremumAlongDim.assert_called_once_with(0, -1.0)
+
+    def test_shared_family_point_queries_use_live_query_or_authored_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+        context = Mock()
+        context.queryFamilyCenterOfMass.return_value = [1.0, 2.0]
+        context.queryFamilyBoundaryPoint.return_value = [3.0, 4.0]
+        context.queryFamilyLengthOverDim.return_value = 5.0
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertEqual(
+                semantic_handles._center_of_mass_observation(value),
+                [1.0, 2.0],
+            )
+            self.assertEqual(
+                semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+                [3.0, 4.0],
+            )
+            self.assertEqual(
+                semantic_handles._length_over_dim_observation(value, 1),
+                5.0,
+            )
+        context.queryFamilyCenterOfMass.assert_called_once_with(family)
+        context.queryFamilyBoundaryPoint.assert_called_once_with(family, 0.0, 1.0)
+        context.queryFamilyLengthOverDim.assert_called_once_with(family, 1)
+        family.centerOfMass.assert_not_called()
+        family.boundaryPoint.assert_not_called()
+        family.lengthOverDim.assert_not_called()
+
+    def test_mobject_point_queries_use_live_context_or_authored_handle(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        handle.centerOfMass.return_value = [1.0, 2.0]
+        handle.pathBoundaryPoint.return_value = [3.0, 4.0]
+        handle.lengthOverDim.return_value = 2.5
+        value._semantic_handle = handle
+        value._semantic_handle_fresh = True
+        self.assertEqual(semantic_handles._center_of_mass_observation(value), [1.0, 2.0])
+        self.assertEqual(
+            semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+            [3.0, 4.0],
+        )
+        self.assertEqual(semantic_handles._length_over_dim_observation(value, 0), 2.5)
+        handle.centerOfMass.assert_called_once_with()
+        handle.pathBoundaryPoint.assert_called_once_with(0.0, 1.0)
+        handle.lengthOverDim.assert_called_once_with(0)
+
+        context = Mock()
+        context.queryMobjectCenterOfMass.return_value = [5.0, 6.0]
+        context.queryMobjectPathBoundaryPoint.return_value = [7.0, 8.0]
+        context.queryMobjectPathBoundaryExtremumAlongDim.return_value = 9.0
+        context.queryMobjectPathBoundaryPoints.return_value = [0.0, 0.0, 1.0, 1.0]
+        context.queryMobjectLengthOverDim.return_value = 4.5
+        scene = Mock()
+        scene._canonical_authoring_context = context
+        value._scene = scene
+        value._object = Mock()
+        self.assertEqual(semantic_handles._center_of_mass_observation(value), [5.0, 6.0])
+        self.assertEqual(
+            semantic_handles._boundary_point_observation(value, 0.0, 1.0),
+            [7.0, 8.0],
+        )
+        self.assertEqual(
+            semantic_handles._extremum_along_dim_observation(value, 1, 1.0),
+            9.0,
+        )
+        self.assertEqual(
+            semantic_handles._path_boundary_points_observation(value),
+            [0.0, 0.0, 1.0, 1.0],
+        )
+        self.assertEqual(semantic_handles._length_over_dim_observation(value, 2), 4.5)
+        context.queryMobjectCenterOfMass.assert_called_once_with(handle)
+        context.queryMobjectPathBoundaryPoint.assert_called_once_with(handle, 0.0, 1.0)
+        context.queryMobjectPathBoundaryExtremumAlongDim.assert_called_once_with(handle, 1, 1.0)
+        context.queryMobjectPathBoundaryPoints.assert_called_once_with(handle)
+        context.queryMobjectLengthOverDim.assert_called_once_with(handle, 2)
+
+    def test_length_over_dim_uses_rust_and_accepts_negative_dimensions(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(
+            queries,
+            "_length_over_dim_observation",
+            return_value=3.25,
+        ) as observe:
+            self.assertEqual(value.length_over_dim(-3), 3.25)
+        observe.assert_called_once_with(value, 0)
+        with self.assertRaises(IndexError):
+            value.length_over_dim(3)
+
+    def test_planar_z_helpers_match_the_3d_compatibility_surface(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(value, "get_extremum_along_dim", return_value=0.0) as extremum:
+            self.assertEqual(value.get_coord(2), 0.0)
+            self.assertEqual(value.get_z(noon.OUT), 0.0)
+            self.assertEqual(value.get_coord(-1), 0.0)
+        self.assertEqual(extremum.call_args_list[0].kwargs, {"dim": 2, "key": 0})
+        self.assertEqual(extremum.call_args_list[1].kwargs, {"dim": 2, "key": 0})
+        self.assertEqual(extremum.call_args_list[2].kwargs, {"dim": 2, "key": 0})
+        with self.assertRaises(IndexError):
+            value.get_coord(3)
+
+        value.get_critical_point = Mock(return_value=noon.Vec2(1.0, 2.0))
+        self.assertEqual(value.get_zenith(), noon.Vec2(1.0, 2.0))
+        self.assertEqual(value.get_nadir(), noon.Vec2(1.0, 2.0))
+        self.assertEqual(value.get_critical_point.call_count, 2)
+        value.get_critical_point.assert_called_with(noon.ORIGIN)
+
+    def test_get_coord_selects_each_point_extremum_from_its_direction_axis(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(value, "get_extremum_along_dim", side_effect=[-2.0, 3.0]) as extremum:
+            self.assertEqual(value.get_coord(0, (-1.0, 1.0, 1.0)), -2.0)
+            self.assertEqual(value.get_y(noon.UP), 3.0)
+        self.assertEqual(
+            [call.kwargs for call in extremum.call_args_list],
+            [{"dim": 0, "key": -1.0}, {"dim": 1, "key": 1.0}],
+        )
+
+    def test_vmobject_critical_point_uses_anchor_extrema(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_num_points = Mock(return_value=4)
+        with patch.object(
+            semantic_handles,
+            "_path_boundary_extremum_along_dim_observation",
+            side_effect=[-2.0, 3.0],
+        ) as observe:
+            self.assertEqual(
+                semantic_handles._get_critical_point(value, (-1.0, 1.0)),
+                noon.Vec2(-2.0, 3.0),
+            )
+        self.assertEqual(
+            [call.args for call in observe.call_args_list],
+            [(value, 0, -1.0), (value, 1, 1.0)],
+        )
+
+    def test_vmobject_center_uses_anchor_critical_point(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(
+            semantic_handles, "_vmobject_path_boundary_queries_available", return_value=True
+        ), patch.object(
+            semantic_handles,
+            "_get_critical_point",
+            return_value=noon.Vec2(0.5, 1.0),
+        ) as critical_point:
+            self.assertEqual(semantic_handles._get_center(value), noon.Vec2(0.5, 1.0))
+        critical_point.assert_called_once_with(value, noon.ORIGIN)
+
+    def test_extremum_along_dim_routes_default_points_to_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
+        with patch.object(
+            queries,
+            "_extremum_along_dim_observation",
+            return_value=3.5,
+        ) as observe:
+            self.assertEqual(value.get_extremum_along_dim(dim=1, key=1), 3.5)
+        observe.assert_called_once_with(value, 1, 1.0)
+
+        with patch.object(
+            queries,
+            "_extremum_along_dim_observation",
+            return_value=0.0,
+        ) as observe:
+            self.assertEqual(value.get_extremum_along_dim(dim=-1, key=1), 0.0)
+        observe.assert_called_once_with(value, 2, 1.0)
+        value.get_points_defining_boundary.assert_not_called()
+        with self.assertRaises(IndexError):
+            value.get_extremum_along_dim(dim=3)
+
+    def test_center_of_mass_and_boundary_point_route_to_rust(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with (
+            patch.object(queries, "_center_of_mass_observation", return_value=[1.5, -0.5]),
+            patch.object(queries, "_boundary_point_observation", return_value=[2.0, 3.0]) as point,
+        ):
+            self.assertEqual(value.get_center_of_mass(), noon.Vec2(1.5, -0.5))
+            self.assertEqual(
+                value.get_boundary_point([0.0, 0.0, 1.0]),
+                noon.Vec2(2.0, 3.0),
+            )
+        point.assert_called_once_with(value, 0.0, 0.0)
+
+    def test_extremum_along_dim_flattens_custom_points_for_rust_reducer(self):
+        value = identity_only_wrapper(compat.VMobject)
+        points = [(-2., 3.), (4., -1.)]
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        with patch.object(queries, "_extremum_from_points_observation", return_value=3.0) as observe:
+            self.assertEqual(value.get_extremum_along_dim(points, dim=1, key=1), 3.0)
+        if np is not None:
+            observe.assert_called_once_with(value, [3., -1.], 1, 0, 1.0)
+        else:
+            observe.assert_called_once_with(value, [-2., 3., 4., -1.], 2, 1, 1.0)
+
+        with (
+            patch.dict("sys.modules", {"numpy": None}),
+            patch.object(queries, "_extremum_from_points_observation", return_value=-2.0) as observe,
+        ):
+            self.assertEqual(value.get_extremum_along_dim(points, dim=-2, key=-1), -2.0)
+        observe.assert_called_once_with(value, [-2., 3., 4., -1.], 2, 0, -1.0)
+        with self.assertRaises(IndexError):
+            value.get_extremum_along_dim(points, dim=3)
+
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
+        query.pointCount = 4
         query.pointFromProportion.return_value = [2.5, -1.0]
         query.arcLength.return_value = 7.25
         query.start.return_value = [1., 2.]
@@ -25,7 +351,155 @@ class PathQueryTests(unittest.TestCase):
             query.end.assert_called_once_with()
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.arcLength.assert_called_with(20)
+        self.assertEqual(query.free.call_count, 6)
+
+    def test_start_and_end_are_base_methods_and_keep_dynamic_getter_dispatch(self):
+        import noon
+
+        self.assertIn("get_start", noon.Mobject.__dict__)
+        self.assertIn("get_end", noon.Mobject.__dict__)
+        self.assertIn("get_start_and_end", noon.Mobject.__dict__)
+        self.assertIn("get_num_points", noon.Mobject.__dict__)
+        self.assertIn("has_points", noon.Mobject.__dict__)
+        self.assertIn("has_no_points", noon.Mobject.__dict__)
+        self.assertIn("throw_error_if_no_points", noon.Mobject.__dict__)
+        self.assertIn("get_extremum_along_dim", noon.Mobject.__dict__)
+        self.assertIn("length_over_dim", noon.Mobject.__dict__)
+        self.assertIn("get_z", noon.Mobject.__dict__)
+        self.assertIn("get_zenith", noon.Mobject.__dict__)
+        self.assertIn("get_nadir", noon.Mobject.__dict__)
+        self.assertIn("split", noon.Mobject.__dict__)
+        self.assertIn("nonempty_submobjects", noon.Mobject.__dict__)
+        self.assertIn("family_members_with_points", noon.Mobject.__dict__)
+        self.assertIn("get_center_of_mass", noon.Mobject.__dict__)
+        self.assertIn("get_boundary_point", noon.Mobject.__dict__)
+        self.assertIn("get_midpoint", noon.Mobject.__dict__)
+        self.assertIn("get_z_index_reference_point", noon.Mobject.__dict__)
+        self.assertIs(compat.VMobject.get_num_points, noon.Mobject.get_num_points)
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.point_from_proportion = Mock(return_value=noon.Vec2(2.0, -1.0))
+        self.assertEqual(value.get_midpoint(), noon.Vec2(2.0, -1.0))
+        value.point_from_proportion.assert_called_once_with(0.5)
+
+        own_center = Mock(return_value=noon.Vec2(1.0, 2.0))
+        value.get_center = own_center
+        self.assertEqual(value.get_z_index_reference_point(), noon.Vec2(1.0, 2.0))
+        own_center.assert_called_once_with()
+
+        group_center = Mock(return_value=noon.Vec2(-3.0, 4.0))
+        value.z_index_group = Mock(get_center=group_center)
+        self.assertEqual(value.get_z_index_reference_point(), noon.Vec2(-3.0, 4.0))
+        group_center.assert_called_once_with()
+
+        query = Mock()
+        query.pointCount = 4
+        query.start.return_value = [1.0, 2.0]
+        query.end.return_value = [3.0, 4.0]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(
+                value.get_start_and_end(),
+                (noon.Vec2(1.0, 2.0), noon.Vec2(3.0, 4.0)),
+            )
+            self.assertEqual(observe.call_count, 4)
+            self.assertEqual(query.start.call_count, 1)
+            self.assertEqual(query.end.call_count, 1)
             self.assertEqual(query.free.call_count, 4)
+
+        line = identity_only_wrapper(compat.Line)
+        line.get_start = Mock(return_value=noon.Vec2(-1.0, 0.0))
+        line.get_end = Mock(return_value=noon.Vec2(2.0, 5.0))
+        self.assertEqual(
+            line.get_start_and_end(),
+            (noon.Vec2(-1.0, 0.0), noon.Vec2(2.0, 5.0)),
+        )
+        line.get_start.assert_called_once_with()
+        line.get_end.assert_called_once_with()
+
+    def test_family_split_filters_point_owners_in_pinned_order(self):
+        from unittest.mock import Mock
+        import noon
+
+        root = Mock()
+        root.has_points.return_value = False
+        leaf = Mock(get_num_points=Mock(return_value=4), submobjects=[])
+        second_leaf = Mock(get_num_points=Mock(return_value=2), submobjects=[])
+        empty = Mock(get_num_points=Mock(return_value=0), submobjects=[])
+        nested = Mock(get_num_points=Mock(return_value=0), submobjects=[empty])
+        root.submobjects = [nested, empty, leaf, second_leaf]
+
+        self.assertEqual(noon.Mobject.split(root), [nested, empty, leaf, second_leaf])
+        self.assertEqual(noon.Mobject.nonempty_submobjects(root), [nested, leaf, second_leaf])
+        empty.get_num_points.assert_called_once_with()
+        nested.get_num_points.assert_called_once_with()
+        leaf.get_num_points.assert_called_once_with()
+        second_leaf.get_num_points.assert_called_once_with()
+
+        root.has_points.return_value = True
+        self.assertEqual(noon.Mobject.split(root), [root, nested, empty, leaf, second_leaf])
+
+        root.get_family.return_value = [root, nested, empty, leaf, second_leaf]
+        root.get_num_points.return_value = 0
+        self.assertEqual(noon.Mobject.family_members_with_points(root), [leaf, second_leaf])
+
+    def test_empty_path_guards_keep_manim_caller_names(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_num_points = Mock(return_value=0)
+
+        for method, caller in ((value.get_start, "get_start"), (value.get_end, "get_end")):
+            with self.subTest(method=caller), self.assertRaisesRegex(
+                Exception,
+                f"Cannot call Mobject.{caller} for a Mobject with no points",
+            ):
+                method()
+
+    def test_base_point_count_queries_share_the_path_snapshot_contract(self):
+        import noon
+
+        value = identity_only_wrapper(noon.Mobject)
+        query = Mock()
+        query.pointCount = 4
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(value.get_num_points(), 4)
+            self.assertTrue(value.has_points())
+            self.assertFalse(value.has_no_points())
+            query.pointCount = 0
+            self.assertFalse(value.has_points())
+            self.assertTrue(value.has_no_points())
+        self.assertEqual(observe.call_count, 5)
+        self.assertEqual(query.free.call_count, 5)
+
+    def test_get_last_point_returns_the_final_anchor_and_matches_empty_index_error(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.pointCount = 4
+        query.end.return_value = [7.0, -2.0]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(value.get_last_point(), noon.Vec2(7.0, -2.0))
+            self.assertEqual(observe.call_count, 1)
+            query.end.assert_called_once_with()
+            self.assertEqual(query.free.call_count, 1)
+
+            query.pointCount = 0
+            with self.assertRaisesRegex(
+                IndexError, "index -1 is out of bounds for axis 0 with size 0"
+            ):
+                value.get_last_point()
+            self.assertEqual(query.end.call_count, 1)
+            self.assertEqual(query.free.call_count, 2)
+
+    def test_has_new_path_started_delegates_to_rust_and_releases_snapshots(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.hasNewPathStarted.side_effect = [False, True]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertFalse(value.has_new_path_started())
+            self.assertTrue(value.has_new_path_started())
+        self.assertEqual(observe.call_count, 2)
+        self.assertEqual(query.hasNewPathStarted.call_count, 2)
+        self.assertEqual(query.free.call_count, 2)
 
     def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)

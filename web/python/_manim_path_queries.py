@@ -3,7 +3,17 @@ import operator
 import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
-from _manim_semantic_handles import _typed_manim_observation
+from _manim_semantic_handles import (
+    _all_points_observation,
+    _boundary_point_observation,
+    _center_of_mass_observation,
+    _extremum_along_dim_observation,
+    _extremum_from_points_observation,
+    _family_point_count_observation,
+    _length_over_dim_observation,
+    _path_boundary_points_observation,
+    _typed_manim_observation,
+)
 
 
 def _query(value):
@@ -43,6 +53,17 @@ def endpoint(value, end):
         query.free()
 
 
+def last_point(value):
+    query = _query(value)
+    try:
+        if int(query.pointCount) == 0:
+            raise IndexError("index -1 is out of bounds for axis 0 with size 0")
+        coordinates = engine_call(query.end)
+        return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+    finally:
+        query.free()
+
+
 def _points(coordinates):
     return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
 
@@ -56,9 +77,131 @@ def curve_count(value):
 
 
 def point_count(value):
+    family_count = _family_point_count_observation(value)
+    if family_count is not None:
+        return family_count
     query = _query(value)
     try:
         return int(query.pointCount)
+    finally:
+        query.free()
+
+
+def all_points(value):
+    coordinates = _all_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_all_points requires a valid shared Rust handle")
+    return _format_points(coordinates)
+
+
+def boundary_points(value):
+    coordinates = _path_boundary_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError(
+            "get_points_defining_boundary requires a valid shared Rust handle"
+        )
+    return _format_points(coordinates)
+
+
+def _format_points(coordinates):
+    try:
+        import numpy as np
+    except ImportError:
+        return _points(coordinates)
+    return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+
+
+def center_of_mass(value):
+    coordinates = _center_of_mass_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_center_of_mass requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def _point_direction_xy(direction):
+    try:
+        dimensions = len(direction)
+    except (TypeError, AttributeError):
+        return _base._as_vec2(direction)
+    if dimensions == 2:
+        return _base._as_vec2(direction)
+    if dimensions == 3:
+        return _base.Vec2(float(direction[0]), float(direction[1]))
+    raise TypeError("expected a two- or three-component vector")
+
+
+def boundary_point(value, direction):
+    axis = _point_direction_xy(direction)
+    coordinates = _boundary_point_observation(value, axis.x, axis.y)
+    if coordinates is None:
+        raise NotImplementedError("get_boundary_point requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def length_over_dim(value, dim):
+    dim = _normalize_point_dimension(dim, 3)
+    result = _length_over_dim_observation(value, dim)
+    if result is None:
+        raise NotImplementedError("length_over_dim requires a valid shared Rust handle")
+    return float(result)
+
+
+def _normalize_point_dimension(dim, point_dimensions):
+    dim = operator.index(dim)
+    normalized = dim if dim >= 0 else point_dimensions + dim
+    if not 0 <= normalized < point_dimensions:
+        raise IndexError(
+            f"index {dim} is out of bounds for axis 1 with size {point_dimensions}"
+        )
+    return normalized
+
+
+def extremum_along_dim(value, points=None, dim=0, key=0):
+    dim = operator.index(dim)
+    key = float(key)
+    if points is None:
+        dim = _normalize_point_dimension(dim, 3)
+        result = _extremum_along_dim_observation(value, dim, key)
+        if result is None:
+            raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+        return float(result)
+
+    try:
+        import numpy as np
+    except ImportError:
+        rows = [list(row) for row in points]
+        if not rows:
+            raise IndexError("too many indices for array: array is 1-dimensional, but 2 were indexed")
+        point_dimensions = len(rows[0])
+        if any(len(row) != point_dimensions for row in rows):
+            raise ValueError("point rows must have a consistent number of dimensions")
+        dim = _normalize_point_dimension(dim, point_dimensions)
+        coordinates = [float(coordinate) for row in rows for coordinate in row]
+    else:
+        array = np.asarray(points)
+        # Indexing only shapes the input like Manim's NumPy path; Rust performs
+        # the min/max/midpoint reduction over the selected coordinate values.
+        selected = array[:, dim]
+        coordinates = selected.astype(np.float64, copy=False).reshape(-1).tolist()
+        point_dimensions = 1
+        dim = 0
+
+    result = _extremum_from_points_observation(
+        value,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
+    if result is None:
+        raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+    return float(result)
+
+
+def has_new_path_started(value):
+    query = _query(value)
+    try:
+        return bool(engine_call(query.hasNewPathStarted))
     finally:
         query.free()
 

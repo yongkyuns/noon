@@ -143,6 +143,25 @@ pub(crate) fn publish_running_pointwise_partial(
     )
 }
 
+/// Append a source vector object's current effective path to one destination.
+pub(crate) fn publish_running_append_vectorized_mobject(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    source: &Mobject,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, source)?;
+    let source = crate::effective_capture::capture_mobject_state(store, execution, source)?;
+    publish_running_object_edit(
+        store,
+        root,
+        execution,
+        object,
+        PathEdit::AppendVectorized(&source),
+    )
+}
+
 /// Change every authoritative family leaf between smooth and jagged anchors.
 pub(crate) fn publish_running_family_anchor_mode(
     store: &Rc<RefCell<SemanticStore>>,
@@ -226,6 +245,22 @@ impl crate::Scene {
         })
     }
 
+    pub fn scale_handle_to_anchor_distances(
+        &mut self,
+        object: &Mobject,
+        factor: f64,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::ScaleHandles(factor),
+            )
+        })
+    }
+
     pub fn set_points_as_corners(
         &mut self,
         object: &Mobject,
@@ -233,6 +268,22 @@ impl crate::Scene {
     ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Corners(points))
+        })
+    }
+
+    pub fn set_cubic_bezier_curves(
+        &mut self,
+        object: &Mobject,
+        curves: &[[Vec2; 4]],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SetCubicCurves(curves),
+            )
         })
     }
 
@@ -265,6 +316,12 @@ impl crate::Scene {
         })
     }
 
+    pub fn clear_points(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Clear)
+        })
+    }
+
     pub fn add_cubic_bezier_curve_to(
         &mut self,
         object: &Mobject,
@@ -280,6 +337,84 @@ impl crate::Scene {
                 object,
                 PathEdit::Cubic(c1, c2, anchor),
             )
+        })
+    }
+
+    pub fn add_smooth_curve_to(
+        &mut self,
+        object: &Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SmoothCurve { handle2, anchor },
+            )
+        })
+    }
+
+    pub fn add_cubic_bezier_curve(
+        &mut self,
+        object: &Mobject,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
+            )
+        })
+    }
+
+    pub fn add_cubic_bezier_curves(
+        &mut self,
+        object: &Mobject,
+        curves: &[[Vec2; 4]],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CubicCurves(curves),
+            )
+        })
+    }
+
+    pub fn add_points_as_corners(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::AppendCorners(points),
+            )
+        })
+    }
+
+    pub fn append_vectorized_mobject(
+        &mut self,
+        object: &Mobject,
+        source: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_append_vectorized_mobject(store, root, execution, object, source)
         })
     }
 
@@ -354,6 +489,98 @@ pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError
     Ok(path)
 }
 
+fn append_cubic_curve(path: VectorPath, curve: [Vec2; 4]) -> VectorPath {
+    let [anchor1, handle1, handle2, anchor2] = curve;
+    if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
+        path.cubic_to(handle1, handle2, anchor2)
+    } else {
+        path.move_to(anchor1).cubic_to(handle1, handle2, anchor2)
+    }
+}
+
+fn append_path_command(path: VectorPath, command: noon_core::PathCommand) -> VectorPath {
+    match command {
+        noon_core::PathCommand::MoveTo { to } => path.move_to(to),
+        noon_core::PathCommand::LineTo { to } => path.line_to(to),
+        noon_core::PathCommand::QuadraticTo { control, to } => path.quadratic_to(control, to),
+        noon_core::PathCommand::CubicTo {
+            control1,
+            control2,
+            to,
+        } => path.cubic_to(control1, control2, to),
+        noon_core::PathCommand::Close => path.close(),
+    }
+}
+
+fn append_vectorized_path(destination: VectorPath, source: &VectorPath) -> VectorPath {
+    let morph_target = (destination.morph_target().is_some() || source.morph_target().is_some())
+        .then(|| {
+            let destination_target = destination
+                .morph_target()
+                .cloned()
+                .unwrap_or_else(|| destination.clone());
+            let source_target = source
+                .morph_target()
+                .cloned()
+                .unwrap_or_else(|| source.clone());
+            append_vectorized_path(destination_target, &source_target)
+        });
+    let mut destination_commands = destination.commands().to_vec();
+    if matches!(
+        destination_commands.last(),
+        Some(noon_core::PathCommand::MoveTo { .. })
+    ) {
+        destination_commands.pop();
+    }
+    let path = destination_commands
+        .into_iter()
+        .chain(source.commands().iter().copied())
+        .fold(VectorPath::new(), append_path_command);
+    morph_target.map_or(path.clone(), |target| path.with_morph_target(target))
+}
+
+fn last_cubic_second_control(path: &VectorPath) -> Option<Vec2> {
+    let mut current = None;
+    let mut subpath_start = None;
+    let mut control2 = None;
+    for command in path.commands() {
+        match *command {
+            noon_core::PathCommand::MoveTo { to } => {
+                current = Some(to);
+                subpath_start = Some(to);
+                control2 = None;
+            }
+            noon_core::PathCommand::LineTo { to } => {
+                if let Some(from) = current {
+                    control2 = Some(from + (to - from) * (2.0 / 3.0));
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::QuadraticTo { control, to } => {
+                control2 = Some(control * (2.0 / 3.0) + to * (1.0 / 3.0));
+                current = Some(to);
+            }
+            noon_core::PathCommand::CubicTo {
+                control2: next_control2,
+                to,
+                ..
+            } => {
+                control2 = Some(next_control2);
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {
+                if let (Some(from), Some(start)) = (current, subpath_start) {
+                    if from != start {
+                        control2 = Some(from + (start - from) * (2.0 / 3.0));
+                    }
+                    current = Some(start);
+                }
+            }
+        }
+    }
+    control2
+}
+
 pub(crate) fn path_replacement_state(
     mut state: SemanticObjectState,
 ) -> Result<SemanticObjectState, AuthoringError> {
@@ -386,16 +613,27 @@ pub(crate) fn path_is_unchanged(
 /// Inputs to shared authoring preparation, published using the normal content
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
+    Clear,
     Corners(&'a [Vec2]),
     SmoothCorners(&'a [Vec2]),
     AnchorMode(bool),
     Start(Vec2),
     Line(Vec2),
+    AppendCorners(&'a [Vec2]),
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
+    CubicCurve(Vec2, Vec2, Vec2, Vec2),
+    SmoothCurve {
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    },
+    CubicCurves(&'a [[Vec2; 4]]),
+    SetCubicCurves(&'a [[Vec2; 4]]),
+    AppendVectorized(&'a SemanticObjectState),
     Close,
     Reverse,
     Subdivide(usize),
+    ScaleHandles(f64),
     Partial {
         source: &'a SemanticObjectState,
         a: f32,
@@ -409,6 +647,128 @@ impl PathEdit<'_> {
         store: &SemanticStore,
         state: &SemanticObjectState,
     ) -> Result<Option<VectorPath>, AuthoringError> {
+        if matches!(self, Self::Clear) {
+            return Ok(Some(VectorPath::new()));
+        }
+        if matches!(&self, Self::ScaleHandles(factor) if *factor == 1.0) {
+            return Ok(None);
+        }
+        if let Self::CubicCurve(anchor1, handle1, handle2, anchor2) = self {
+            let path = append_cubic_curve(
+                world_path(store, state)?,
+                [anchor1, handle1, handle2, anchor2],
+            );
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::CubicCurves(curves) = self {
+            if curves.is_empty() {
+                return Ok(None);
+            }
+            let path = curves
+                .iter()
+                .copied()
+                .fold(world_path(store, state)?, append_cubic_curve);
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::SetCubicCurves(curves) = self {
+            if curves
+                .iter()
+                .flatten()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let path = curves
+                .iter()
+                .copied()
+                .fold(VectorPath::new(), append_cubic_curve);
+            return Ok(Some(path));
+        }
+        if let Self::AppendCorners(points) = self {
+            let mut path = world_path(store, state)?;
+            let Some((_, _)) = path.endpoints() else {
+                return Err(AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::EmptyPath,
+                ));
+            };
+            if points.is_empty() {
+                return Ok(None);
+            }
+            if points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            path = path.open_last_subpath();
+            for point in points {
+                path = path.line_to(*point);
+            }
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::AppendVectorized(source) = self {
+            let destination = world_path(store, state)?;
+            let source = world_path(store, source)?;
+            let path = append_vectorized_path(destination, &source);
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::SmoothCurve { handle2, anchor } = self {
+            if !anchor.x.is_finite()
+                || !anchor.y.is_finite()
+                || handle2.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let mut path = world_path(store, state)?;
+            if path.endpoints().is_none() {
+                return Err(AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::EmptyPath,
+                ));
+            }
+            if matches!(
+                path.commands().last(),
+                Some(noon_core::PathCommand::MoveTo { .. })
+            ) {
+                // Manim treats a pending one-point subpath as a straight line,
+                // even when the optional second control point was supplied.
+                path = path.line_to(anchor);
+            } else {
+                let (_, last) = path.endpoints().expect("the path was checked above");
+                let last_handle2 = last_cubic_second_control(&path).ok_or(
+                    AuthoringError::PathQuery(noon_geometry::PathProportionError::EmptyPath),
+                )?;
+                let tangent = last - last_handle2;
+                let handle1 = last + tangent;
+                let handle2 = handle2.unwrap_or_else(|| {
+                    let direction = anchor - last;
+                    // Manim rotates the incoming tangent by pi about the
+                    // anchor-to-anchor axis. In the planar model this is the
+                    // reflection across that axis; a zero axis leaves it
+                    // unchanged, matching Manim's zero-rotvec fallback.
+                    let reflected = direction.normalized().map_or(tangent, |axis| {
+                        axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y)) - tangent
+                    });
+                    anchor - reflected
+                });
+                path = path.open_last_subpath().cubic_to(handle1, handle2, anchor);
+            }
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
         }
@@ -448,6 +808,9 @@ impl PathEdit<'_> {
             return noon_geometry::subdivide_path(&path, additional)
                 .map(Some)
                 .map_err(AuthoringError::PathQuery);
+        }
+        if let Self::ScaleHandles(factor) = self {
+            return scale_handle_distances(&path, factor).map(Some);
         }
         if let Self::Reverse = self {
             return Ok(Some(noon_geometry::reverse_path(&path)));
@@ -493,10 +856,18 @@ impl PathEdit<'_> {
                 }
                 Self::Corners(_)
                 | Self::SmoothCorners(_)
+                | Self::Clear
                 | Self::AnchorMode(_)
                 | Self::Start(_)
                 | Self::Reverse
                 | Self::Subdivide(_)
+                | Self::ScaleHandles(_)
+                | Self::CubicCurve(_, _, _, _)
+                | Self::SmoothCurve { .. }
+                | Self::CubicCurves(_)
+                | Self::SetCubicCurves(_)
+                | Self::AppendCorners(_)
+                | Self::AppendVectorized(_)
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -555,6 +926,108 @@ pub(crate) fn world_path(
     };
     let path = crate::path_queries::content_path(store, state.content)?.transformed(transform);
     Ok(path)
+}
+
+/// Scale each cubic handle around its associated anchor, promoting lines and
+/// quadratic segments to their exact cubic representation first. Manim stores
+/// all VMobject curves as four-point cubics, while Noon retains compact line
+/// and quadratic commands until an edit needs handle-level control.
+fn scale_handle_distances(path: &VectorPath, factor: f64) -> Result<VectorPath, AuthoringError> {
+    if !factor.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let factor = factor as f32;
+    if !factor.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    if factor == 1.0 {
+        return Ok(path.clone());
+    }
+
+    let mut result = VectorPath::new();
+    let mut current = None;
+    let mut subpath_start = None;
+    for command in path.commands().iter().copied() {
+        match command {
+            noon_core::PathCommand::MoveTo { to } => {
+                result = result.move_to(to);
+                current = Some(to);
+                subpath_start = Some(to);
+            }
+            noon_core::PathCommand::LineTo { to } => {
+                if let Some(from) = current {
+                    let delta = to - from;
+                    let handle1 = from + delta * (1.0 / 3.0);
+                    let handle2 = from + delta * (2.0 / 3.0);
+                    result = result.cubic_to(
+                        scale_control(from, handle1, factor),
+                        scale_control(to, handle2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.line_to(to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::QuadraticTo { control, to } => {
+                if let Some(from) = current {
+                    let handle1 = from + (control - from) * (2.0 / 3.0);
+                    let handle2 = to + (control - to) * (2.0 / 3.0);
+                    result = result.cubic_to(
+                        scale_control(from, handle1, factor),
+                        scale_control(to, handle2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.quadratic_to(control, to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                if let Some(from) = current {
+                    result = result.cubic_to(
+                        scale_control(from, control1, factor),
+                        scale_control(to, control2, factor),
+                        to,
+                    );
+                } else {
+                    result = result.cubic_to(control1, control2, to);
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {
+                if let (Some(from), Some(to)) = (current, subpath_start) {
+                    if from != to {
+                        let delta = to - from;
+                        let handle1 = from + delta * (1.0 / 3.0);
+                        let handle2 = from + delta * (2.0 / 3.0);
+                        result = result.cubic_to(
+                            scale_control(from, handle1, factor),
+                            scale_control(to, handle2, factor),
+                            to,
+                        );
+                    }
+                }
+                result = result.close();
+                current = subpath_start;
+            }
+        }
+    }
+    if let Some(target) = path.morph_target() {
+        result = result.with_morph_target(scale_handle_distances(target, f64::from(factor))?);
+    }
+    if !result.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(result)
+}
+
+fn scale_control(anchor: Vec2, handle: Vec2, factor: f32) -> Vec2 {
+    anchor + (handle - anchor) * factor
 }
 
 pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringError> {
@@ -691,10 +1164,24 @@ impl Mobject {
         self.edit_path(PathEdit::AnchorMode(false))
     }
 
+    /// Scale cubic handles around their associated anchors. A factor of one is
+    /// a path-preserving no-op; zero and negative factors follow ManimCE.
+    pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::ScaleHandles(factor))
+    }
+
     /// Set a polyline from world-space corners, preserving identity and paint.
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Corners(points))
+    }
+    /// Replace the path with cubic curves defined by four points each.
+    pub fn set_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SetCubicCurves(curves))
+    }
+    /// Remove this object's path while retaining its semantic identity and style.
+    pub fn clear_points(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Clear)
     }
     /// Begin a new world-space subpath without connecting it to the previous one.
     pub fn start_new_path(&mut self, point: Vec2) -> Result<(), AuthoringError> {
@@ -717,6 +1204,37 @@ impl Mobject {
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Cubic(control1, control2, anchor))
+    }
+    pub fn add_smooth_curve_to(
+        &mut self,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SmoothCurve { handle2, anchor })
+    }
+    /// Append a cubic curve from its start anchor and two controls.
+    pub fn add_cubic_bezier_curve(
+        &mut self,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2))
+    }
+    /// Append a batch of four-control-point cubic curves atomically.
+    pub fn add_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CubicCurves(curves))
+    }
+    /// Append straight segments from the current endpoint through each corner.
+    pub fn add_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AppendCorners(points))
+    }
+    /// Append another vector object's current world-space path.
+    pub fn append_vectorized_mobject(&mut self, source: &Mobject) -> Result<(), AuthoringError> {
+        self.require_same_store(source)?;
+        let source = source.state()?;
+        self.edit_path(PathEdit::AppendVectorized(&source))
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)

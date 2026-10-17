@@ -1116,7 +1116,106 @@ def _path_editing(api):
     original = path.copy()
     path.shift(api.RIGHT * 4).rotate(0.6)
     path.set_points_as_corners([(1, -1, 0), (3, -1, 0), (2, 1, 0), (1, -1, 0)])
-    return [[_object_observation(obj), list(obj.get_start())[:2], list(obj.get_end())[:2], obj.get_arc_length()] for obj in (path, original)]
+
+    def observe(value):
+        return {
+            "curves": value.get_num_curves(),
+            "start": _point_observation(value.get_start()),
+            "end": _point_observation(value.get_end()),
+            "anchors": [_point_observation(point) for point in value.get_anchors()],
+            "subpaths": [[_point_observation(point) for point in subpath]
+                         for subpath in value.get_subpaths()],
+            "curve_points": [
+                [_point_observation(point) for point in value.get_nth_curve_points(index)]
+                for index in range(value.get_num_curves())
+            ],
+        }
+
+    corners = api.VMobject().set_points_as_corners([(-2, 0, 0), (0, 0, 0)])
+    corners.add_points_as_corners([(1, 1, 0), (2, 0, 0)])
+
+    subpath = api.VMobject()
+    subpath.add_subpath([
+        [0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 1, 0],
+        [2, 1, 0], [3, 1, 0], [3, 2, 0], [4, 2, 0],
+    ])
+
+    anchors = api.VMobject().set_anchors_and_handles(
+        [(-1, 0, 0), (1, 0, 0)],
+        [(-1, 1, 0), (1, 1, 0)],
+        [(0, 1, 0), (2, 1, 0)],
+        [(0, 0, 0), (2, 0, 0)],
+    )
+
+    smooth_default = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_default.add_smooth_curve_to((6, 3, 0))
+
+    smooth_explicit = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_explicit.add_smooth_curve_to((6, 0, 0), (7, -2, 0))
+
+    smooth_after_cubic = api.VMobject().start_new_path(api.LEFT * 3)
+    smooth_after_cubic.add_cubic_bezier_curve_to(
+        api.LEFT * 2 + api.UP * 2,
+        api.LEFT + api.UP * 2,
+        api.UP,
+    )
+    smooth_after_cubic.add_smooth_curve_to(api.RIGHT * 3 + api.UP)
+
+    smooth_pending = api.VMobject()
+    smooth_pending.start_new_path(api.RIGHT * 2)
+    smooth_pending.add_smooth_curve_to(api.UP * 20 + api.RIGHT * 4)
+
+    destination = api.VMobject().set_points_as_corners([(-1, 0, 0), (0, 0, 0)])
+    destination.start_new_path((1, 0, 0))
+    source = api.VMobject().set_points_as_corners([(3, 0, 0), (4, 1, 0)])
+    destination.append_vectorized_mobject(source)
+
+    scaled_line = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    scaled_line.scale_handle_to_anchor_distances(0.5)
+    scaled_quadratic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_quadratic.add_quadratic_bezier_curve_to(api.UP * 3, api.RIGHT * 6)
+    scaled_quadratic.scale_handle_to_anchor_distances(0.5)
+    scaled_cubic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_cubic.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    scaled_cubic.scale_handle_to_anchor_distances(1.5)
+    scaled_closed = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (3, 0, 0), (3, 3, 0)]
+    ).close_path()
+    scaled_closed.scale_handle_to_anchor_distances(0.25)
+    unchanged_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    unchanged_handles.scale_handle_to_anchor_distances(1.0)
+    collapsed_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    collapsed_handles.scale_handle_to_anchor_distances(0.0)
+    reversed_handles = api.VMobject().start_new_path(api.ORIGIN)
+    reversed_handles.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    reversed_handles.scale_handle_to_anchor_distances(-0.5)
+
+    return {
+        "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
+        "append_corners": observe(corners),
+        "subpath": observe(subpath),
+        "set_anchors_and_handles": observe(anchors),
+        "smooth_curve_default_handle": observe(smooth_default),
+        "smooth_curve_explicit_handle": observe(smooth_explicit),
+        "smooth_curve_after_cubic": observe(smooth_after_cubic),
+        "smooth_curve_pending_subpath": observe(smooth_pending),
+        "append_vectorized_mobject": observe(destination),
+        "scaled_line_handles": observe(scaled_line),
+        "scaled_quadratic_handles": observe(scaled_quadratic),
+        "scaled_cubic_handles": observe(scaled_cubic),
+        "scaled_closed_handles": observe(scaled_closed),
+        "unit_handle_scale": observe(unchanged_handles),
+        "zero_handle_scale": observe(collapsed_handles),
+        "negative_handle_scale": observe(reversed_handles),
+    }
 
 
 def _point_matching(api):
@@ -1333,6 +1432,7 @@ FIXTURES = [
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
+    "vmobject_add_cubic_bezier_curves": "ManimCE 0.21.0 flattens the input before appending it as 3D points, so ordinary four-point curve batches raise ValueError; excluded from common-success differential comparison.",
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
@@ -1386,6 +1486,18 @@ def load_noon_observations(path: Path) -> dict[str, Any]:
     return observations
 
 
+def _route_manim_logs_to_stderr() -> None:
+    """Keep Rich diagnostics from contaminating machine-readable JSON output."""
+    if manim is None:
+        return
+    for handler in manim.logger.handlers:
+        console = getattr(handler, "console", None)
+        if console is not None:
+            console.file = sys.stderr
+        elif hasattr(handler, "stream"):
+            handler.stream = sys.stderr
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="emit machine-readable results")
@@ -1396,6 +1508,8 @@ def main() -> int:
 
     if manim is None:
         raise SystemExit("Install the pinned ManimCE reference to compare observations")
+    if args.json:
+        _route_manim_logs_to_stderr()
     if manim.__version__ != PINNED_MANIM_VERSION:
         raise SystemExit(
             f"expected ManimCE {PINNED_MANIM_VERSION}, found {manim.__version__}; "

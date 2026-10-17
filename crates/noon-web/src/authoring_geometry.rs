@@ -445,6 +445,19 @@ pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
         .collect()
 }
 
+pub(crate) fn cubic_curves(values: &[f64]) -> Result<Vec<[Vec2; 4]>, JsValue> {
+    let points = points(values)?;
+    if points.len() % 4 != 0 {
+        return Err(js_error(
+            "cubic Bézier point data must contain complete groups of four",
+        ));
+    }
+    Ok(points
+        .chunks_exact(4)
+        .map(|points| [points[0], points[1], points[2], points[3]])
+        .collect())
+}
+
 #[cfg(all(
     feature = "renderer",
     any(debug_assertions, feature = "renderer-smoke")

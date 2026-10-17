@@ -7,6 +7,7 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
+import operator
 from functools import partialmethod
 from typing import Any, Callable
 from enum import Enum
@@ -346,19 +347,33 @@ class Mobject:
     def get_bottom(self: Mobject) -> Vec2:
         return self.get_critical_point(DOWN)
 
+    def get_zenith(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
+    def get_nadir(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
     def get_coord(
         self: Mobject, dim: int, direction: object = ORIGIN
     ) -> float:
-        if dim not in (0, 1):
-            raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
-        point = self.get_critical_point(direction)
-        return float(point[dim])
+        dim = operator.index(dim)
+        normalized_dim = dim if dim >= 0 else 3 + dim
+        if not 0 <= normalized_dim < 3:
+            raise IndexError(f"index {dim} is out of bounds for axis 0 with size 3")
+        if normalized_dim == 2:
+            key = 0
+        else:
+            key = direction[normalized_dim]
+        return self.get_extremum_along_dim(dim=normalized_dim, key=key)
 
     def get_x(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(0, direction)
 
     def get_y(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(1, direction)
+
+    def get_z(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(2, direction)
 
     def scale_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
@@ -418,6 +433,15 @@ class Mobject:
         from _manim_semantic_handles import _get_family
         return _get_family(self)
 
+    def split(self) -> list[Mobject]:
+        """Return this point-owning object, if any, followed by direct children."""
+        result = [self] if self.has_points() else []
+        return result + list(getattr(self, "submobjects", ()))
+
+    def family_members_with_points(self) -> list[Mobject]:
+        """Return point-owning family members in the shared family order."""
+        return [mobject for mobject in self.get_family() if mobject.get_num_points() > 0]
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
@@ -428,6 +452,67 @@ class Mobject:
 
     def get_center(self) -> Vec2:
         return _callback_operations()._canonical_get_center(self)
+
+    def get_z_index_reference_point(self) -> Vec2:
+        """Return the center of this object's z-index grouping target."""
+        z_index_group = getattr(self, "z_index_group", self)
+        return z_index_group.get_center()
+
+    def get_start(self) -> Vec2:
+        """Return the first point of this object's path."""
+        self.throw_error_if_no_points()
+        from _manim_path_queries import endpoint
+        return endpoint(self, False)
+
+    def get_end(self) -> Vec2:
+        """Return the last point of this object's path."""
+        self.throw_error_if_no_points()
+        from _manim_path_queries import endpoint
+        return endpoint(self, True)
+
+    def get_start_and_end(self) -> tuple[Vec2, Vec2]:
+        """Return the starting and ending point of this object's path."""
+        return self.get_start(), self.get_end()
+
+    def get_num_points(self) -> int:
+        """Return the number of points in this object's path."""
+        from _manim_path_queries import point_count
+        return point_count(self)
+
+    def has_points(self) -> bool:
+        return self.get_num_points() > 0
+
+    def has_no_points(self) -> bool:
+        return not self.has_points()
+
+    def reset_points(self) -> Mobject:
+        """Clear this object's authored points through the shared path editor."""
+        from _manim_path_editing import clear_points
+        return clear_points(self)
+
+    def throw_error_if_no_points(self) -> None:
+        if self.has_no_points():
+            import sys
+            caller_name = sys._getframe(1).f_code.co_name
+            raise Exception(
+                f"Cannot call Mobject.{caller_name} for a Mobject with no points"
+            )
+
+    def nonempty_submobjects(self) -> list[Mobject]:
+        return [
+            submobject
+            for submobject in getattr(self, "submobjects", ())
+            if submobject.get_num_points() > 0
+            or bool(getattr(submobject, "submobjects", ()))
+        ]
+
+    def get_all_points(self):
+        """Return this object's and its family's authored point arrays."""
+        from _manim_path_queries import all_points
+        return all_points(self)
+
+    def get_points_defining_boundary(self):
+        return self.get_all_points()
 
     @property
     def width(self) -> float:
@@ -631,6 +716,25 @@ class Mobject:
 
     def get_critical_point(self, direction: object) -> Vec2:
         return _semantic_operations()._get_critical_point(self, direction)
+
+    def get_extremum_along_dim(self, points=None, dim: int = 0, key: int = 0):
+        from _manim_path_queries import extremum_along_dim
+        return extremum_along_dim(self, points, dim, key)
+
+    def get_center_of_mass(self) -> Vec2:
+        from _manim_path_queries import center_of_mass
+        return center_of_mass(self)
+
+    def length_over_dim(self, dim: int) -> float:
+        from _manim_path_queries import length_over_dim
+        return length_over_dim(self, dim)
+
+    def get_boundary_point(self, direction: object) -> Vec2:
+        from _manim_path_queries import boundary_point
+        return boundary_point(self, direction)
+
+    def get_midpoint(self) -> Vec2:
+        return self.point_from_proportion(0.5)
 
     def become(
         self,

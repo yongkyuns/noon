@@ -655,10 +655,14 @@ impl Mobject {
                     .ok_or(AuthoringError::MissingGeometryResource(handle))?
                 {
                     GeometryResource::Mesh(_) => Ok(true),
-                    GeometryResource::VectorPath(path) => Ok(matches!(
-                        path.commands().last(),
-                        Some(noon_core::PathCommand::MoveTo { .. })
-                    ) || path.has_drawable_segments()),
+                    GeometryResource::VectorPath(path) => {
+                        Ok(crate::path_queries::PathQuery::prepare(
+                            path,
+                            noon_core::SemanticTransform2_5D::default(),
+                        )?
+                        .point_count()
+                            > 0)
+                    }
                 }
             }
             // Analytic primitives retain control points even when degenerate.

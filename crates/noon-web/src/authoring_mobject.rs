@@ -1129,6 +1129,71 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            self.semantic_family()?;
+            Ok(0)
+        }
+
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .length_over_dim(dim as usize)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.semantic_family()?;
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimColor)]
         pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
             self.semantic_family()?
@@ -1526,6 +1591,20 @@ mod wasm {
             .collect()
     }
 
+    fn flat_points(points: Vec<(f64, f64)>) -> Vec<f64> {
+        points.into_iter().flat_map(|(x, y)| [x, y]).collect()
+    }
+
+    fn reduce_point_extremum_from_values(
+        coordinates: Vec<f64>,
+        point_dimensions: u32,
+        dim: u32,
+        key: f64,
+    ) -> Result<f64, JsValue> {
+        noon::reduce_point_extremum(&coordinates, point_dimensions as usize, dim as usize, key)
+            .map_err(js_error)
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -1541,6 +1620,10 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
+        }
+        #[wasm_bindgen(js_name = hasNewPathStarted)]
+        pub fn has_new_path_started(&self) -> bool {
+            self.value.has_new_path_started()
         }
         pub fn direction(&self) -> String {
             self.value.direction().to_owned()
@@ -1749,6 +1832,86 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoints)]
+        pub fn path_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryExtremumAlongDim)]
+        pub fn path_boundary_extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .length_over_dim(dim as usize)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoint)]
+        pub fn path_boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
@@ -1925,6 +2088,11 @@ mod wasm {
             self.handle.set_points_as_corners(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(&mut self) -> Result<(), JsValue> {
+            self.handle.clear_points().map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = startNewPath)]
         pub fn start_new_path(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;
@@ -1967,6 +2135,83 @@ mod wasm {
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.handle
                 .add_cubic_bezier_curve_to(control1, control2, anchor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addSmoothCurveTo)]
+        pub fn add_smooth_curve_to(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let (handle2, anchor) = match points.as_slice() {
+                [anchor] => (None, *anchor),
+                [handle2, anchor] => (Some(*handle2), *anchor),
+                _ => {
+                    return Err(JsValue::from_str(
+                        "Only call add_smooth_curve_to with 1 or 2 points",
+                    ));
+                }
+            };
+            self.handle
+                .add_smooth_curve_to(handle2, anchor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleHandleToAnchorDistances)]
+        pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), JsValue> {
+            self.handle
+                .scale_handle_to_anchor_distances(factor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addCubicBezierCurve)]
+        pub fn add_cubic_bezier_curve(
+            &mut self,
+            anchor1_x: f64,
+            anchor1_y: f64,
+            handle1_x: f64,
+            handle1_y: f64,
+            handle2_x: f64,
+            handle2_y: f64,
+            anchor2_x: f64,
+            anchor2_y: f64,
+        ) -> Result<(), JsValue> {
+            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            self.handle
+                .add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addCubicBezierCurves)]
+        pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.handle
+                .add_cubic_bezier_curves(&curves)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setCubicBezierCurves)]
+        pub fn set_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.handle
+                .set_cubic_bezier_curves(&curves)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addPointsAsCorners)]
+        pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.add_points_as_corners(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendVectorizedMobject)]
+        pub fn append_vectorized_mobject(
+            &mut self,
+            source: &WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .append_vectorized_mobject(source.semantic_mobject())
                 .map_err(js_error)
         }
 

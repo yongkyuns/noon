@@ -8,6 +8,135 @@ def set_points_as_corners(value, points):
     return edit_points(value, "setPointsAsCorners", "liveSetPointsAsCorners", points, array=True)
 
 
+def clear_points(value):
+    return edit_points(value, "clearPoints", "liveClearPoints", ())
+
+
+def add_cubic_bezier_curves(value, curves):
+    curves = list(curves)
+    if curves and _looks_like_point(curves[0]):
+        curves = [curves]
+    points = [point for curve in curves for point in curve]
+    return edit_points(
+        value,
+        "addCubicBezierCurves",
+        "liveAddCubicBezierCurves",
+        points,
+        array=True,
+    )
+
+
+def add_points_as_corners(value, points):
+    return edit_points(
+        value,
+        "addPointsAsCorners",
+        "liveAddPointsAsCorners",
+        points,
+        array=True,
+    )
+
+
+def add_subpath(value, points):
+    assert len(points) % 4 == 0
+    curves = [points[index : index + 4] for index in range(0, len(points), 4)]
+    return add_cubic_bezier_curves(value, curves)
+
+
+def add_smooth_curve_to(value, *points):
+    if len(points) not in (1, 2):
+        raise ValueError("Only call add_smooth_curve_to with 1 or 2 points")
+    return edit_points(
+        value,
+        "addSmoothCurveTo",
+        "liveAddSmoothCurveTo",
+        points,
+        array=True,
+    )
+
+
+def scale_handle_to_anchor_distances(value, factor):
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    factor = float(factor)
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("path editing requires a shared semantic handle")
+    context = _live_mutation_context(value) or _live_constructor_context("path")
+    if context is None:
+        engine_call(
+            handle.scaleHandleToAnchorDistances,
+            factor,
+            operation="VMobject.scale_handle_to_anchor_distances",
+        )
+    else:
+        engine_call(
+            context.liveScaleHandleToAnchorDistances,
+            handle,
+            factor,
+            operation="VMobject.scale_handle_to_anchor_distances",
+        )
+    return value
+
+
+def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
+    assert len(anchors1) == len(handles1) == len(handles2) == len(anchors2)
+    curves = [
+        [anchor1, handle1, handle2, anchor2]
+        for anchor1, handle1, handle2, anchor2 in zip(
+            anchors1, handles1, handles2, anchors2, strict=True
+        )
+    ]
+    return edit_points(
+        value,
+        "setCubicBezierCurves",
+        "liveSetCubicBezierCurves",
+        [point for curve in curves for point in curve],
+        array=True,
+    )
+
+
+def append_vectorized_mobject(value, source):
+    from _manim_compat import VMobject
+    from _manim_updaters import canonical_callback_phase_active
+    if not isinstance(source, VMobject):
+        raise TypeError("append_vectorized_mobject requires a VMobject")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    handle, source_handle = _handle_for(value), _handle_for(source)
+    if handle is None or source_handle is None:
+        raise RuntimeError("path editing requires shared semantic handles")
+    context = (
+        _live_mutation_context(value)
+        or _live_mutation_context(source)
+        or _live_constructor_context("path")
+    )
+    if context is None:
+        engine_call(
+            handle.appendVectorizedMobject,
+            source_handle,
+            operation="VMobject.append_vectorized_mobject",
+        )
+    else:
+        engine_call(
+            context.liveAppendVectorizedMobject,
+            handle,
+            source_handle,
+            operation="VMobject.append_vectorized_mobject",
+        )
+    return value
+
+
+def _looks_like_point(value):
+    if isinstance(value, _base.Vec2):
+        return True
+    try:
+        size = len(value)
+    except (TypeError, AttributeError):
+        return False
+    return size in (2, 3) and all(not hasattr(component, "__len__") for component in value)
+
+
 def edit_points(value, method, live_method, points, *, array=False):
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():

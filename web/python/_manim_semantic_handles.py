@@ -650,6 +650,23 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
     return _clone_mobject(self)
 
 
+def _vmobject_path_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        return (
+            getattr(context, "queryMobjectPath", None) is not None
+            and getattr(
+                context, "queryMobjectPathBoundaryExtremumAlongDim", None
+            ) is not None
+        )
+    handle = _handle_for(value)
+    return (
+        handle is not None
+        and hasattr(handle, "pathQuery")
+        and hasattr(handle, "pathBoundaryExtremumAlongDim")
+    )
+
+
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     """Clone a detached target through Rust's explicit target-editor boundary."""
 
@@ -660,6 +677,11 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
+    if (
+        isinstance(self, _compat.VMobject)
+        and _vmobject_path_boundary_queries_available(self)
+    ):
+        return _get_critical_point(self, _base.ORIGIN)
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
@@ -675,6 +697,13 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
+    if isinstance(self, _compat.VMobject):
+        if self.get_num_points() == 0:
+            return _base.ORIGIN
+        return _base.Vec2(
+            _path_boundary_extremum_along_dim_observation(self, 0, axis.x),
+            _path_boundary_extremum_along_dim_observation(self, 1, axis.y),
+        )
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
@@ -1845,6 +1874,166 @@ def _group_layout_observation(value: _compat.Group):
     if layout is None:
         raise RuntimeError("family layout requires a current shared Rust semantic handle")
     return layout
+
+
+def _all_points_observation(value: _base.Mobject):
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyAllPoints, family)
+        return engine_call(family.allPoints)
+    return _typed_manim_observation(
+        value,
+        "allPoints",
+        "queryMobjectAllPoints",
+    )
+
+
+def _family_point_count_observation(value: _base.Mobject) -> int | None:
+    if not _is_shared_family(value):
+        return None
+    # Family nodes own membership but no point array of their own, matching
+    # Mobject.get_num_points() on Manim Group/VGroup instances.
+    return int(engine_call(value._semantic_family_handle.pointCount))
+
+
+def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
+    if isinstance(value, _compat.VMobject):
+        return _point_query_observation(
+            value,
+            "PathBoundaryExtremumAlongDim",
+            dim,
+            key,
+        )
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyExtremumAlongDim, family, dim, key)
+        return engine_call(family.extremumAlongDim, dim, key)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, "queryMobjectExtremumAlongDim", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, dim, key)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(handle.extremumAlongDim, dim, key)
+
+
+def _point_query_observation(value: _base.Mobject, operation: str, *arguments):
+    handle_method = operation[0].lower() + operation[1:]
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(
+                getattr(context, f"queryFamily{operation}"),
+                family,
+                *arguments,
+            )
+        return engine_call(getattr(family, handle_method), *arguments)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, f"queryMobject{operation}", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, *arguments)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(getattr(handle, handle_method), *arguments)
+
+
+def _center_of_mass_observation(value: _base.Mobject):
+    return _point_query_observation(value, "CenterOfMass")
+
+
+def _boundary_point_observation(
+    value: _base.Mobject,
+    direction_x: float,
+    direction_y: float,
+):
+    if isinstance(value, _compat.VMobject):
+        return _point_query_observation(
+            value,
+            "PathBoundaryPoint",
+            direction_x,
+            direction_y,
+        )
+    return _point_query_observation(
+        value,
+        "BoundaryPoint",
+        direction_x,
+        direction_y,
+    )
+
+
+def _path_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "PathBoundaryPoints")
+
+
+def _path_boundary_extremum_along_dim_observation(
+    value: _base.Mobject,
+    dim: int,
+    key: float,
+):
+    return _point_query_observation(
+        value,
+        "PathBoundaryExtremumAlongDim",
+        dim,
+        key,
+    )
+
+
+def _length_over_dim_observation(value: _base.Mobject, dim: int):
+    return _point_query_observation(value, "LengthOverDim", dim)
+
+
+def _extremum_from_points_observation(
+    value: _base.Mobject,
+    coordinates: list[float],
+    point_dimensions: int,
+    dim: int,
+    key: float,
+):
+    if _is_shared_family(value):
+        return engine_call(
+            value._semantic_family_handle.extremumFromPoints,
+            coordinates,
+            point_dimensions,
+            dim,
+            key,
+        )
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    return engine_call(
+        handle.extremumFromPoints,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
 
 
 def _is_shared_family(value: object) -> bool:

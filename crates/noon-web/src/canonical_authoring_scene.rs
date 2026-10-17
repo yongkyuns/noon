@@ -904,6 +904,267 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_all_points(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).all_points(),
+            |player, handle| player.live_effective_all_points(noon::MobjectTarget::from(handle)),
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_path_boundary_points(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).path_boundary_points(),
+            |player, handle| {
+                player.live_effective_path_boundary_points(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_extremum_along_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).extremum_along_dim(dim, key),
+            |player, handle| {
+                player.live_effective_extremum_along_dim(
+                    noon::MobjectTarget::from(handle),
+                    dim,
+                    key,
+                )
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_path_boundary_extremum_along_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).path_boundary_extremum_along_dim(dim, key),
+            |player, handle| {
+                player.live_effective_path_boundary_extremum_along_dim(
+                    noon::MobjectTarget::from(handle),
+                    dim,
+                    key,
+                )
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_length_over_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).length_over_dim(dim),
+            |player, handle| {
+                player.live_effective_length_over_dim(noon::MobjectTarget::from(handle), dim)
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_center_of_mass(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).center_of_mass(),
+            |player, handle| {
+                player.live_effective_center_of_mass(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_boundary_point(
+        &mut self,
+        handle: &noon::Mobject,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).boundary_point(direction_x, direction_y),
+            |player, handle| {
+                player.live_effective_boundary_point(
+                    noon::MobjectTarget::from(handle),
+                    direction_x,
+                    direction_y,
+                )
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_path_boundary_point(
+        &mut self,
+        handle: &noon::Mobject,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| {
+                noon::MobjectTarget::from(handle).path_boundary_point(direction_x, direction_y)
+            },
+            |player, handle| {
+                player.live_effective_path_boundary_point(
+                    noon::MobjectTarget::from(handle),
+                    direction_x,
+                    direction_y,
+                )
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_all_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_all_points(target);
+            }
+        }
+        target.all_points().map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_extremum_along_dim(
+        &mut self,
+        family: &noon::MobjectFamily,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_extremum_along_dim(target, dim, key);
+            }
+        }
+        target
+            .extremum_along_dim(dim, key)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_length_over_dim(
+        &mut self,
+        family: &noon::MobjectFamily,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_length_over_dim(target, dim);
+            }
+        }
+        target.length_over_dim(dim).map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_center_of_mass(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_center_of_mass(target);
+            }
+        }
+        target.center_of_mass().map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_boundary_point(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_boundary_point(target, direction_x, direction_y);
+            }
+        }
+        target
+            .boundary_point(direction_x, direction_y)
+            .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_line_endpoints(
         &mut self,
@@ -6924,6 +7185,64 @@ mod wasm {
             })
         }
 
+        #[wasm_bindgen(js_name = queryFamilyAllPoints)]
+        pub fn query_family_all_points(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_all_points(&handle.semantic_family()?)
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyExtremumAlongDim)]
+        pub fn query_family_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .family_extremum_along_dim(&handle.semantic_family()?, dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyLengthOverDim)]
+        pub fn query_family_length_over_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            dim: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .family_length_over_dim(&handle.semantic_family()?, dim as usize)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyCenterOfMass)]
+        pub fn query_family_center_of_mass(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_center_of_mass(&handle.semantic_family()?)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyBoundaryPoint)]
+        pub fn query_family_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_boundary_point(&handle.semantic_family()?, direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_move_family_to_point(
@@ -7236,6 +7555,104 @@ mod wasm {
             self.inner
                 .mobject_path_query(handle.semantic_mobject())
                 .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectAllPoints)]
+        pub fn query_mobject_all_points(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_all_points(handle.semantic_mobject())
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryPoints)]
+        pub fn query_mobject_path_boundary_points(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_path_boundary_points(handle.semantic_mobject())
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectExtremumAlongDim)]
+        pub fn query_mobject_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_extremum_along_dim(handle.semantic_mobject(), dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryExtremumAlongDim)]
+        pub fn query_mobject_path_boundary_extremum_along_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_path_boundary_extremum_along_dim(
+                    handle.semantic_mobject(),
+                    dim as usize,
+                    key,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectLengthOverDim)]
+        pub fn query_mobject_length_over_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_length_over_dim(handle.semantic_mobject(), dim as usize)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectCenterOfMass)]
+        pub fn query_mobject_center_of_mass(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_center_of_mass(handle.semantic_mobject())
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectBoundaryPoint)]
+        pub fn query_mobject_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_boundary_point(handle.semantic_mobject(), direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryPoint)]
+        pub fn query_mobject_path_boundary_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_path_boundary_point(handle.semantic_mobject(), direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
                 .map_err(typed_js_error)
         }
 
@@ -7625,6 +8042,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveClearPoints)]
+        pub fn live_clear_points(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_clear_points(source.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveStartNewPath)]
         pub fn live_start_new_path(
             &mut self,
@@ -7695,6 +8124,130 @@ mod wasm {
                     control1,
                     control2,
                     anchor,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddSmoothCurveTo)]
+        pub fn live_add_smooth_curve_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let (handle2, anchor) = match points.as_slice() {
+                [anchor] => (None, *anchor),
+                [handle2, anchor] => (Some(*handle2), *anchor),
+                _ => {
+                    return Err(JsValue::from_str(
+                        "Only call add_smooth_curve_to with 1 or 2 points",
+                    ));
+                }
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_smooth_curve_to(source.semantic_mobject(), handle2, anchor)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveScaleHandleToAnchorDistances)]
+        pub fn live_scale_handle_to_anchor_distances(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            factor: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddCubicBezierCurve)]
+        pub fn live_add_cubic_bezier_curve(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            anchor1_x: f64,
+            anchor1_y: f64,
+            handle1_x: f64,
+            handle1_y: f64,
+            handle2_x: f64,
+            handle2_y: f64,
+            anchor2_x: f64,
+            anchor2_y: f64,
+        ) -> Result<(), JsValue> {
+            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_cubic_bezier_curve(
+                    source.semantic_mobject(),
+                    anchor1,
+                    handle1,
+                    handle2,
+                    anchor2,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddCubicBezierCurves)]
+        pub fn live_add_cubic_bezier_curves(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_cubic_bezier_curves(source.semantic_mobject(), &curves)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetCubicBezierCurves)]
+        pub fn live_set_cubic_bezier_curves(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_cubic_bezier_curves(source.semantic_mobject(), &curves)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddPointsAsCorners)]
+        pub fn live_add_points_as_corners(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_points_as_corners(source.semantic_mobject(), &points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAppendVectorizedMobject)]
+        pub fn live_append_vectorized_mobject(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_append_vectorized_mobject(
+                    object.semantic_mobject(),
+                    source.semantic_mobject(),
                 )
                 .map_err(typed_js_error)
         }

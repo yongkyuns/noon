@@ -544,6 +544,124 @@ impl Scene {
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
+    /// Capture the effective point arrays for an object or family in the
+    /// current Runtime publication, preserving recursive alias multiplicity.
+    pub fn effective_all_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_all_points(&self.store, execution, target)
+    }
+
+    /// Query the effective min, midpoint, or max boundary coordinate for a
+    /// dimension from the current Runtime publication.
+    pub fn effective_extremum_along_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_extremum_along_dim(&self.store, execution, target, dim, key)
+    }
+
+    /// Query the effective center of mass from the current Runtime publication.
+    pub fn effective_center_of_mass(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_center_of_mass(&self.store, execution, target)
+    }
+
+    /// Query the effective boundary point farthest along a direction.
+    pub fn effective_boundary_point(
+        &self,
+        target: MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_boundary_point(
+            &self.store,
+            execution,
+            target,
+            direction_x,
+            direction_y,
+        )
+    }
+
+    /// Query the effective point extent along one coordinate dimension.
+    pub fn effective_length_over_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_length_over_dim(&self.store, execution, target, dim)
+    }
+
+    /// Capture effective vector-path boundary anchors for an object or the
+    /// ordinary recursive points for a family target.
+    pub fn effective_path_boundary_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_boundary_points(&self.store, execution, target)
+    }
+
+    /// Query a vector-path boundary anchor extremum from the current publication.
+    pub fn effective_path_boundary_extremum_along_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_boundary_extremum_along_dim(
+            &self.store,
+            execution,
+            target,
+            dim,
+            key,
+        )
+    }
+
+    /// Query the vector-path boundary anchor farthest along a direction.
+    pub fn effective_path_boundary_point(
+        &self,
+        target: MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_boundary_point(
+            &self.store,
+            execution,
+            target,
+            direction_x,
+            direction_y,
+        )
+    }
+
     /// Read one persistent authored/base object declaration.
     ///
     /// This deliberately does not inspect the running Runtime. Use

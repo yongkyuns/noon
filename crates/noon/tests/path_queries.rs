@@ -1,5 +1,5 @@
 use noon::{
-    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, MobjectTarget, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 
@@ -25,7 +25,7 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
             VectorPath::new()
                 .move_to(Vec2::ZERO)
                 .move_to(Vec2::new(2., 1.)),
-            1,
+            5,
         ),
         (cubic.clone(), 4),
         (cubic.clone().move_to(Vec2::new(4., 0.)), 5),
@@ -66,6 +66,199 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
             .point_count(),
         16
     );
+
+    let repeated_moves = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .move_to(Vec2::new(2., 1.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = repeated_moves.path_query().unwrap();
+    assert_eq!(query.curve_count(), 1);
+    assert_eq!(query.point_count(), 5);
+    assert_eq!(
+        query.points().unwrap(),
+        vec![(0., 0.), (0., 0.), (0., 0.), (0., 0.), (2., 1.)]
+    );
+    assert_eq!(query.curve_points(0).unwrap(), [(0., 0.); 4]);
+    assert_eq!(query.curve_length(0, None).unwrap(), 0.);
+
+    let move_then_draw = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .move_to(Vec2::new(2., 1.))
+                .line_to(Vec2::new(3., 1.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = move_then_draw.path_query().unwrap();
+    assert_eq!(query.curve_count(), 2);
+    assert_eq!(query.point_count(), 8);
+    assert_eq!(query.curve_points(0).unwrap(), [(0., 0.); 4]);
+    assert_eq!(query.curve_points(1).unwrap()[0], (2., 1.));
+}
+
+#[test]
+fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
+    let mut scene = Scene::new();
+    let first = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let second = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(2., 0.))
+                .line_to(Vec2::new(3., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&first).into()]).unwrap();
+
+    let first_points = first.path_query().unwrap().points().unwrap();
+    let second_points = second.path_query().unwrap().points().unwrap();
+    let mut expected = first_points.clone();
+    expected.extend(second_points);
+    expected.extend(first_points);
+    assert_eq!(MobjectTarget::from(&root).all_points().unwrap(), expected);
+    let expected_center = (
+        expected.iter().map(|point| point.0).sum::<f64>() / expected.len() as f64,
+        expected.iter().map(|point| point.1).sum::<f64>() / expected.len() as f64,
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).center_of_mass().unwrap(),
+        expected_center
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).boundary_point(1., 0.).unwrap(),
+        (3., 0.)
+    );
+    assert_eq!(
+        MobjectTarget::from(&root).boundary_point(0., 0.).unwrap(),
+        expected[0]
+    );
+    assert_eq!(
+        MobjectTarget::from(&root)
+            .extremum_along_dim(0, 0.)
+            .unwrap(),
+        1.5
+    );
+    assert_eq!(
+        MobjectTarget::from(&root)
+            .extremum_along_dim(2, 1.)
+            .unwrap(),
+        0.
+    );
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(0).unwrap(), 3.);
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(1).unwrap(), 0.);
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(2).unwrap(), 0.);
+    assert!(MobjectTarget::from(&root).length_over_dim(3).is_err());
+    assert_eq!(
+        MobjectTarget::from(&first).all_points().unwrap(),
+        first.path_query().unwrap().points().unwrap()
+    );
+
+    let empty = scene.family(&[]).unwrap();
+    assert!(MobjectTarget::from(&empty).all_points().unwrap().is_empty());
+    let empty_center = MobjectTarget::from(&empty).center_of_mass().unwrap();
+    assert!(empty_center.0.is_nan());
+    assert!(empty_center.1.is_nan());
+    assert_eq!(MobjectTarget::from(&empty).length_over_dim(3).unwrap(), 0.);
+    assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
+}
+
+#[test]
+fn vector_path_boundaries_use_curve_anchors_while_base_queries_keep_all_points() {
+    let mut scene = Scene::new();
+    let object = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(10., 0.),
+                Vec2::new(10., 0.),
+                Vec2::new(1., 0.),
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    let target = MobjectTarget::from(&object);
+
+    assert_eq!(target.all_points().unwrap().len(), 4);
+    assert_eq!(target.path_boundary_points().unwrap(), [(0., 0.), (1., 0.)]);
+    assert_eq!(target.extremum_along_dim(0, 1.).unwrap(), 10.);
+    assert_eq!(target.path_boundary_extremum_along_dim(0, 1.).unwrap(), 1.);
+    assert_eq!(target.path_boundary_extremum_along_dim(0, 0.).unwrap(), 0.5);
+    assert_eq!(target.boundary_point(1., 0.).unwrap(), (10., 0.));
+    assert_eq!(target.path_boundary_point(1., 0.).unwrap(), (1., 0.));
+    assert_eq!(target.length_over_dim(0).unwrap(), 10.);
+
+    let family = scene.family(&[(&object).into()]).unwrap();
+    let group_target = MobjectTarget::from(&family);
+    assert_eq!(group_target.path_boundary_points().unwrap().len(), 4);
+    assert_eq!(group_target.extremum_along_dim(0, 1.).unwrap(), 10.);
+}
+
+#[test]
+fn point_extremum_reducer_matches_manim_key_selection() {
+    let coordinates = [-2., 3., 4., -1.];
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 0, -1.).unwrap(),
+        -2.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 0, 0.).unwrap(),
+        1.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 1, 1.).unwrap(),
+        3.
+    );
+    assert_eq!(
+        noon::reduce_point_extremum(&coordinates, 2, 2, 1.),
+        Err(noon::AuthoringError::InvalidPointDimension(2))
+    );
+    assert!(noon::reduce_point_extremum(&[], 2, 0, 0.).is_err());
+    assert!(noon::reduce_point_extremum(&[1., 2., 3.], 2, 0, 0.).is_err());
+}
+
+#[test]
+fn new_path_started_tracks_the_unfinished_cubic_anchor() {
+    let mut scene = Scene::new();
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    assert!(!empty.path_query().unwrap().has_new_path_started());
+
+    let anchored = scene
+        .path(VectorPath::new().move_to(Vec2::ZERO), Default::default())
+        .unwrap();
+    assert!(anchored.path_query().unwrap().has_new_path_started());
+
+    let complete = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(!complete.path_query().unwrap().has_new_path_started());
+
+    let reopened = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.))
+                .move_to(Vec2::new(2., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(reopened.path_query().unwrap().has_new_path_started());
 }
 
 #[test]
@@ -252,6 +445,137 @@ fn effective_queries_capture_one_live_affine_publication() {
             .start()
             .unwrap(),
         (1., 2.5),
+    );
+}
+
+#[test]
+fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
+    let mut scene = Scene::new();
+    let object = scene.rectangle(2., 1.).unwrap();
+    let family = scene.family(&[(&object).into()]).unwrap();
+    let mut target = object.target_editor().unwrap();
+    target.set_translation(0., 2.).unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &object,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.)
+        .unwrap();
+
+    let points = noon::integration::effective_all_points(
+        scene.integration_store(),
+        &session,
+        MobjectTarget::from(&family),
+    )
+    .unwrap();
+    let expected =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap()
+            .points()
+            .unwrap();
+    assert_eq!(points, expected);
+    let effective_path =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
+    assert_eq!(
+        noon::integration::effective_path_boundary_points(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&object),
+        )
+        .unwrap(),
+        effective_path.anchors()
+    );
+    assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
+    let expected_center = (
+        points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64,
+        points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
+    );
+    assert_eq!(
+        noon::integration::effective_center_of_mass(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+        )
+        .unwrap(),
+        expected_center
+    );
+    let effective_top = noon::integration::effective_boundary_point(
+        scene.integration_store(),
+        &session,
+        MobjectTarget::from(&family),
+        0.,
+        1.,
+    )
+    .unwrap();
+    assert_eq!(effective_top.1, 1.5);
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            0,
+        )
+        .unwrap(),
+        2.
+    );
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            1,
+        )
+        .unwrap(),
+        1.
+    );
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            2,
+        )
+        .unwrap(),
+        0.
+    );
+    assert_eq!(
+        MobjectTarget::from(&family)
+            .extremum_along_dim(1, 1.)
+            .unwrap(),
+        0.5
+    );
+    assert_eq!(
+        noon::integration::effective_extremum_along_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            1,
+            1.,
+        )
+        .unwrap(),
+        1.5
+    );
+    assert_eq!(
+        noon::integration::effective_extremum_along_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            2,
+            1.,
+        )
+        .unwrap(),
+        0.
     );
 }
 

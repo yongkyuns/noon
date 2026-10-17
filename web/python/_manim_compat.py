@@ -94,12 +94,21 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    @property
+    def n_points_per_curve(self) -> int:
+        """The fixed cubic stride used by Noon path queries."""
+        return 4
+
     def get_group_class(self):
         return VGroup
 
     @staticmethod
     def get_mobject_type_class():
         return VMobject
+
+    def get_points_defining_boundary(self):
+        from _manim_path_queries import boundary_points
+        return boundary_points(self)
 
     def __init__(self, *, color=_base.WHITE, **kwargs):
         from _manim_semantic_handles import _empty_path_init
@@ -108,6 +117,10 @@ class VMobject(Mobject):
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
+
+    def clear_points(self):
+        from _manim_path_editing import clear_points
+        return clear_points(self)
 
     def set_points_smoothly(self, points):
         from _manim_path_editing import edit_points
@@ -139,6 +152,43 @@ class VMobject(Mobject):
         from _manim_path_editing import edit_points
         return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
 
+    def add_smooth_curve_to(self, *points):
+        from _manim_path_editing import add_smooth_curve_to
+        return add_smooth_curve_to(self, *points)
+
+    def scale_handle_to_anchor_distances(self, factor):
+        from _manim_path_editing import scale_handle_to_anchor_distances
+        return scale_handle_to_anchor_distances(self, factor)
+
+    def add_cubic_bezier_curve(self, anchor1, handle1, handle2, anchor2):
+        from _manim_path_editing import edit_points
+        return edit_points(
+            self,
+            "addCubicBezierCurve",
+            "liveAddCubicBezierCurve",
+            (anchor1, handle1, handle2, anchor2),
+        )
+
+    def add_cubic_bezier_curves(self, curves):
+        from _manim_path_editing import add_cubic_bezier_curves
+        return add_cubic_bezier_curves(self, curves)
+
+    def add_subpath(self, points):
+        from _manim_path_editing import add_subpath
+        return add_subpath(self, points)
+
+    def set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2):
+        from _manim_path_editing import set_anchors_and_handles
+        return set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2)
+
+    def append_vectorized_mobject(self, source):
+        from _manim_path_editing import append_vectorized_mobject
+        return append_vectorized_mobject(self, source)
+
+    def add_points_as_corners(self, points):
+        from _manim_path_editing import add_points_as_corners
+        return add_points_as_corners(self, points)
+
     def insert_n_curves(self, n):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)
@@ -158,10 +208,6 @@ class VMobject(Mobject):
     def get_num_curves(self):
         from _manim_path_queries import curve_count
         return curve_count(self)
-
-    def get_num_points(self):
-        from _manim_path_queries import point_count
-        return point_count(self)
 
     def get_nth_curve_points(self, n):
         from _manim_path_queries import curve_points
@@ -303,13 +349,13 @@ class VMobject(Mobject):
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
 
-    def get_start(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, False)
+    def get_last_point(self) -> _base.Vec2:
+        from _manim_path_queries import last_point
+        return last_point(self)
 
-    def get_end(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, True)
+    def has_new_path_started(self) -> bool:
+        from _manim_path_queries import has_new_path_started
+        return has_new_path_started(self)
 
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length

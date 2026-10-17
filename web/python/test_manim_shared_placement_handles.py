@@ -46,6 +46,14 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     return self.centerX + (-self.width / 2 if x < 0 else self.width / 2 if x > 0 else 0.0)
                 def criticalY(self, x, y):
                     return self.centerY + (-self.height / 2 if y < 0 else self.height / 2 if y > 0 else 0.0)
+                def pathQuery(self):
+                    return types.SimpleNamespace(pointCount=4, free=lambda: None)
+                def pathBoundaryExtremumAlongDim(self, dim, key):
+                    if dim == 0:
+                        return self.criticalX(key, 0.0)
+                    if dim == 1:
+                        return self.criticalY(0.0, key)
+                    raise ValueError("invalid point dimension")
                 def setFillOpacity(self, value): pass
                 def setStrokeOpacity(self, value): pass
                 def shift(self, x, y):

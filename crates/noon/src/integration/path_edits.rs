@@ -15,6 +15,9 @@ use std::{cell::RefCell, rc::Rc};
 /// All variants use the same coherent effective-state capture, validation,
 /// scoped immutable-resource rollback and semantic publication as Scene.
 pub enum BorrowedPathEdit<'a> {
+    Clear {
+        object: &'a Mobject,
+    },
     SmoothCorners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -52,9 +55,41 @@ pub enum BorrowedPathEdit<'a> {
         control2: Vec2,
         anchor: Vec2,
     },
+    SmoothCurve {
+        object: &'a Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    },
+    CubicCurve {
+        object: &'a Mobject,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    },
+    CubicCurves {
+        object: &'a Mobject,
+        curves: &'a [[Vec2; 4]],
+    },
+    SetCubicCurves {
+        object: &'a Mobject,
+        curves: &'a [[Vec2; 4]],
+    },
+    AppendVectorized {
+        object: &'a Mobject,
+        source: &'a Mobject,
+    },
+    AppendCorners {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
     Subdivide {
         object: &'a Mobject,
         additional: usize,
+    },
+    ScaleHandles {
+        object: &'a Mobject,
+        factor: f64,
     },
     Partial {
         object: &'a Mobject,
@@ -82,6 +117,7 @@ pub fn publish_borrowed_path_edit(
     // Cross-object partial selection and family edits have their own coherent
     // capture requirements, but still publish through the same Rust authority.
     let (object, operation) = match edit {
+        BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
         }
@@ -102,8 +138,38 @@ pub fn publish_borrowed_path_edit(
             control2,
             anchor,
         } => (object, PathEdit::Cubic(control1, control2, anchor)),
+        BorrowedPathEdit::SmoothCurve {
+            object,
+            handle2,
+            anchor,
+        } => (object, PathEdit::SmoothCurve { handle2, anchor }),
+        BorrowedPathEdit::CubicCurve {
+            object,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        } => (
+            object,
+            PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
+        ),
+        BorrowedPathEdit::CubicCurves { object, curves } => (object, PathEdit::CubicCurves(curves)),
+        BorrowedPathEdit::SetCubicCurves { object, curves } => {
+            (object, PathEdit::SetCubicCurves(curves))
+        }
+        BorrowedPathEdit::AppendCorners { object, points } => {
+            (object, PathEdit::AppendCorners(points))
+        }
+        BorrowedPathEdit::AppendVectorized { object, source } => {
+            return path_editing::publish_running_append_vectorized_mobject(
+                store, root, execution, object, source,
+            );
+        }
         BorrowedPathEdit::Subdivide { object, additional } => {
             (object, PathEdit::Subdivide(additional))
+        }
+        BorrowedPathEdit::ScaleHandles { object, factor } => {
+            (object, PathEdit::ScaleHandles(factor))
         }
         BorrowedPathEdit::Partial {
             object,
