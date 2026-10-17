@@ -107,6 +107,8 @@ After the architecture gate, use the relevant existing test path:
 ```sh
 # Shared semantics and authoring.
 cargo test -p noon-core -p noon --lib --all-features
+# Related CPU family integration cases share one ordinary Rust module tree.
+cargo test -p noon --test family --all-features
 # Compiler/runtime.
 cargo test -p noon-compile -p noon-runtime --lib --all-features
 # Native and browser platform compilation.
