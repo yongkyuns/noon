@@ -2167,6 +2167,12 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addPointsAsCorners)]
+        pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.add_points_as_corners(&points).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setPointsSmoothly)]
         pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
             self.handle

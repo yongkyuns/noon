@@ -66,6 +66,10 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         curves: &'a [[Vec2; 4]],
     },
+    AppendCorners {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
     Subdivide {
         object: &'a Mobject,
         additional: usize,
@@ -128,6 +132,9 @@ pub fn publish_borrowed_path_edit(
             PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
         ),
         BorrowedPathEdit::CubicCurves { object, curves } => (object, PathEdit::CubicCurves(curves)),
+        BorrowedPathEdit::AppendCorners { object, points } => {
+            (object, PathEdit::AppendCorners(points))
+        }
         BorrowedPathEdit::Subdivide { object, additional } => {
             (object, PathEdit::Subdivide(additional))
         }

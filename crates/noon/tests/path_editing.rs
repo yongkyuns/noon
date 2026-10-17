@@ -331,6 +331,110 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
 }
 
 #[test]
+fn add_points_as_corners_appends_atomically_authored_and_live() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(
+                ManimGeometryOptions::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(0., 0.))
+                        .line_to(Vec2::new(1., 0.)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+        let corners = [Vec2::new(2., 0.), Vec2::new(3., 1.)];
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::AppendCorners {
+                    object: &object,
+                    points: &corners,
+                },
+            )
+            .unwrap();
+        } else {
+            object.add_points_as_corners(&corners).unwrap();
+        }
+
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 3);
+        assert_eq!(query.end().unwrap(), (3., 1.));
+
+        let invalid = [Vec2::new(4., 1.), Vec2::new(f32::NAN, 2.)];
+        let revision = scene.revision();
+        let result = if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::AppendCorners {
+                    object: &object,
+                    points: &invalid,
+                },
+            )
+        } else {
+            object.add_points_as_corners(&invalid)
+        };
+        assert!(result.is_err());
+        assert_eq!(scene.revision(), revision);
+
+        let empty_revision = scene.revision();
+        let result = if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                noon::integration::BorrowedPathEdit::AppendCorners {
+                    object: &object,
+                    points: &[],
+                },
+            )
+        } else {
+            object.add_points_as_corners(&[])
+        };
+        result.unwrap();
+        assert_eq!(scene.revision(), empty_revision);
+    }
+}
+
+#[test]
+fn add_points_as_corners_uses_pending_new_path_anchor() {
+    let mut empty = Scene::new()
+        .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+        .unwrap();
+    assert!(empty.add_points_as_corners(&[]).is_err());
+
+    let mut object = Scene::new()
+        .geometry(
+            ManimGeometryOptions::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(0., 0.))
+                    .line_to(Vec2::new(1., 0.))
+                    .move_to(Vec2::new(5., 5.)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    object.add_points_as_corners(&[Vec2::new(6., 5.)]).unwrap();
+    let query = object.path_query().unwrap();
+    assert_eq!(query.curve_count(), 2);
+    assert_eq!(query.end().unwrap(), (6., 5.));
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

@@ -26,6 +26,16 @@ def add_cubic_bezier_curves(value, curves):
     )
 
 
+def add_points_as_corners(value, points):
+    return edit_points(
+        value,
+        "addPointsAsCorners",
+        "liveAddPointsAsCorners",
+        points,
+        array=True,
+    )
+
+
 def _looks_like_point(value):
     if isinstance(value, _base.Vec2):
         return True

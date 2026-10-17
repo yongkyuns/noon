@@ -324,6 +324,22 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_points_as_corners(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::AppendCorners(points),
+            )
+        })
+    }
+
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Close)
@@ -442,6 +458,7 @@ pub(crate) enum PathEdit<'a> {
     AnchorMode(bool),
     Start(Vec2),
     Line(Vec2),
+    AppendCorners(&'a [Vec2]),
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
@@ -483,6 +500,31 @@ impl PathEdit<'_> {
                 .iter()
                 .copied()
                 .fold(world_path(store, state)?, append_cubic_curve);
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
+        }
+        if let Self::AppendCorners(points) = self {
+            let mut path = world_path(store, state)?;
+            let Some((_, _)) = path.endpoints() else {
+                return Err(AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::EmptyPath,
+                ));
+            };
+            if points.is_empty() {
+                return Ok(None);
+            }
+            if points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            path = path.open_last_subpath();
+            for point in points {
+                path = path.line_to(*point);
+            }
             if !path.is_finite() {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
@@ -579,6 +621,7 @@ impl PathEdit<'_> {
                 | Self::Subdivide(_)
                 | Self::CubicCurve(_, _, _, _)
                 | Self::CubicCurves(_)
+                | Self::AppendCorners(_)
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -817,6 +860,10 @@ impl Mobject {
     /// Append a batch of four-control-point cubic curves atomically.
     pub fn add_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::CubicCurves(curves))
+    }
+    /// Append straight segments from the current endpoint through each corner.
+    pub fn add_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AppendCorners(points))
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)

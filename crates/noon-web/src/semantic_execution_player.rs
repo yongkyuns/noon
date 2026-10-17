@@ -882,6 +882,18 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_points_as_corners(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCorners {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_points_smoothly(
         &mut self,
         object: &noon::Mobject,
