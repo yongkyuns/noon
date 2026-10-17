@@ -460,11 +460,13 @@ class Mobject:
 
     def get_start(self) -> Vec2:
         """Return the first point of this object's path."""
+        self.throw_error_if_no_points()
         from _manim_path_queries import endpoint
         return endpoint(self, False)
 
     def get_end(self) -> Vec2:
         """Return the last point of this object's path."""
+        self.throw_error_if_no_points()
         from _manim_path_queries import endpoint
         return endpoint(self, True)
 
@@ -482,6 +484,14 @@ class Mobject:
 
     def has_no_points(self) -> bool:
         return not self.has_points()
+
+    def throw_error_if_no_points(self) -> None:
+        if self.has_no_points():
+            import sys
+            caller_name = sys._getframe(1).f_code.co_name
+            raise Exception(
+                f"Cannot call Mobject.{caller_name} for a Mobject with no points"
+            )
 
     def nonempty_submobjects(self) -> list[Mobject]:
         return [

@@ -336,6 +336,7 @@ class PathQueryTests(unittest.TestCase):
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
+        query.pointCount = 4
         query.pointFromProportion.return_value = [2.5, -1.0]
         query.arcLength.return_value = 7.25
         query.start.return_value = [1., 2.]
@@ -350,7 +351,7 @@ class PathQueryTests(unittest.TestCase):
             query.end.assert_called_once_with()
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.arcLength.assert_called_with(20)
-            self.assertEqual(query.free.call_count, 4)
+        self.assertEqual(query.free.call_count, 6)
 
     def test_start_and_end_are_base_methods_and_keep_dynamic_getter_dispatch(self):
         import noon
@@ -361,6 +362,7 @@ class PathQueryTests(unittest.TestCase):
         self.assertIn("get_num_points", noon.Mobject.__dict__)
         self.assertIn("has_points", noon.Mobject.__dict__)
         self.assertIn("has_no_points", noon.Mobject.__dict__)
+        self.assertIn("throw_error_if_no_points", noon.Mobject.__dict__)
         self.assertIn("get_extremum_along_dim", noon.Mobject.__dict__)
         self.assertIn("length_over_dim", noon.Mobject.__dict__)
         self.assertIn("get_z", noon.Mobject.__dict__)
@@ -391,6 +393,7 @@ class PathQueryTests(unittest.TestCase):
         group_center.assert_called_once_with()
 
         query = Mock()
+        query.pointCount = 4
         query.start.return_value = [1.0, 2.0]
         query.end.return_value = [3.0, 4.0]
         with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
@@ -398,10 +401,10 @@ class PathQueryTests(unittest.TestCase):
                 value.get_start_and_end(),
                 (noon.Vec2(1.0, 2.0), noon.Vec2(3.0, 4.0)),
             )
-            self.assertEqual(observe.call_count, 2)
+            self.assertEqual(observe.call_count, 4)
             self.assertEqual(query.start.call_count, 1)
             self.assertEqual(query.end.call_count, 1)
-            self.assertEqual(query.free.call_count, 2)
+            self.assertEqual(query.free.call_count, 4)
 
         line = identity_only_wrapper(compat.Line)
         line.get_start = Mock(return_value=noon.Vec2(-1.0, 0.0))
@@ -438,6 +441,17 @@ class PathQueryTests(unittest.TestCase):
         root.get_family.return_value = [root, nested, empty, leaf, second_leaf]
         root.get_num_points.return_value = 0
         self.assertEqual(noon.Mobject.family_members_with_points(root), [leaf, second_leaf])
+
+    def test_empty_path_guards_keep_manim_caller_names(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.get_num_points = Mock(return_value=0)
+
+        for method, caller in ((value.get_start, "get_start"), (value.get_end, "get_end")):
+            with self.subTest(method=caller), self.assertRaisesRegex(
+                Exception,
+                f"Cannot call Mobject.{caller} for a Mobject with no points",
+            ):
+                method()
 
     def test_base_point_count_queries_share_the_path_snapshot_contract(self):
         import noon
