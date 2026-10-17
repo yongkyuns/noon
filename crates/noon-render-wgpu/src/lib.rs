@@ -39,6 +39,14 @@ use std::{
 const PATH_PROGRESS_MAX: u32 = 16_777_215;
 const DEFAULT_PATH_MESH_CACHE_LIMIT: usize = 256;
 
+/// Shared GPU buffer growth policy used by upload and optional packed admission.
+pub(crate) fn buffer_growth_capacity(required_bytes: usize) -> usize {
+    required_bytes
+        .checked_next_power_of_two()
+        .unwrap_or(required_bytes)
+        .max(256)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedTransform {
@@ -320,7 +328,31 @@ pub struct PreparedFrame<'a> {
     complete_submission: bool,
     submitted_source_slots: Option<&'a std::collections::HashSet<usize>>,
     zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
+    mega_path_segments: &'a [Option<Range<u32>>],
+    mega_path_detached: &'a [bool],
     mega_path_offsets: &'a [u32],
+}
+
+impl PreparedFrame<'_> {
+    /// A reusable consecutive unique-path segment; source path batches remain
+    /// individually addressable for effect capture, picking and local edits.
+    pub(crate) fn mega_source_segment(
+        &self,
+        batch_index: usize,
+    ) -> Option<(Range<u32>, PathCoverage)> {
+        let segment = self.mega_path_segments.get(batch_index)?.as_ref()?.clone();
+        if segment.is_empty()
+            || self
+                .mega_path_detached
+                .get(batch_index)
+                .copied()
+                .unwrap_or(true)
+        {
+            return None;
+        }
+        let coverage = self.path_batches.get(batch_index)?.coverage;
+        Some((segment, coverage))
+    }
 }
 
 /// Packed geometry state for one exact source-frame row.
@@ -647,6 +679,17 @@ pub struct FramePreparer {
     // Mixed text/geometry consumers emit their own individual path painter order;
     // they never consume the per-vertex instance stream used by packed path draws.
     individual_path_draws: bool,
+    // Mixed retained draws keep individual path/source identity but also prepare
+    // the renderer's existing packed unique-path draw stream when eligible.
+    mixed_mega_path_draws: bool,
+    // The current device's per-buffer limit for optional packed-path draws.
+    // Rejection must leave ordinary path rendering available at painter order.
+    packed_path_buffer_limit: Option<u64>,
+    // Renderer-derived rows whose active family operation requires one mutable
+    // instance record per member. Their source meshes stay retained; repeating
+    // the instance per vertex would turn a scalar reveal into a mesh-sized upload.
+    // Rebuilt with the mixed scratch generation, never a semantic authority.
+    individual_path_objects: std::collections::HashSet<ObjectId>,
     resident_vertex_count: usize,
     resident_index_count: usize,
     resident_mesh_count: usize,
@@ -724,10 +767,28 @@ impl FramePreparer {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn for_individual_path_draws() -> Self {
         Self {
             individual_path_draws: true,
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn for_mixed_retained_path_draws() -> Self {
+        Self {
+            individual_path_draws: true,
+            mixed_mega_path_draws: true,
+            ..Self::default()
+        }
+    }
+
+    /// Install the actual renderer device limit before selecting packed draws.
+    /// Changing devices invalidates derived packing, not semantic geometry.
+    pub(crate) fn set_packed_path_buffer_limit(&mut self, limit: u64) {
+        if self.packed_path_buffer_limit != Some(limit) {
+            self.packed_path_buffer_limit = Some(limit);
+            self.initialized = false;
         }
     }
 
@@ -1273,7 +1334,7 @@ impl FramePreparer {
             coverage: path_coverage(&self.path_mesh_cache[cache_index].mesh),
         });
         self.path_batch_cache_indices.push(cache_index);
-        if !self.individual_path_draws {
+        if !self.individual_path_draws || self.mixed_mega_path_draws {
             self.mega_path_segments.push(None);
             self.mega_path_detached.push(false);
         }
@@ -1967,6 +2028,8 @@ impl FramePreparer {
             complete_submission: true,
             submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
+            mega_path_segments: &self.mega_path_segments,
+            mega_path_detached: &self.mega_path_detached,
             mega_path_offsets: &self.mega_path_offsets,
         }
     }
@@ -2070,8 +2133,9 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 34] {
+    fn capacities(&self) -> [usize; 35] {
         [
+            self.individual_path_objects.capacity(),
             self.circle_ids.capacity(),
             self.circles.capacity(),
             self.rectangle_ids.capacity(),

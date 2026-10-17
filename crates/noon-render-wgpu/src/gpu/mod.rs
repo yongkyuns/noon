@@ -30,8 +30,9 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
-    PathVertex, PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
+    buffer_growth_capacity, CircleInstance, LineInstance, OrderedRenderBatch, PathBatch,
+    PathCoverage, PathInstance, PathVertex, PreparedDerivedDisplay, PreparedFrame,
+    RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -1082,19 +1083,35 @@ impl GpuRenderer {
             indices,
             wgpu::BufferUsages::INDEX,
         );
+        // A compaction frame has no packed draws. Retire prior high-water
+        // packed buffers together with the old geometry prefix, rather than
+        // leaving their allocations resident indefinitely after scene shrink.
+        // Stage replacements before mutating the renderer: previously encoded
+        // command buffers retain old GPU handles through wgpu's lifetimes.
+        let mega_path_index_buffer = empty_buffer(
+            device,
+            "Noon packed path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let mega_path_vertex_instance_buffer =
+            empty_instance_buffer(device, "Noon packed path vertex attributes");
         let bytes_uploaded = vertex_bytes_len + compact_vertex_bytes_len + index_bytes_len;
 
         self.path_vertex_buffer = path_vertex_buffer;
         self.compact_path_vertex_buffer = compact_path_vertex_buffer;
         self.path_index_buffer = path_index_buffer;
+        self.mega_path_index_buffer = mega_path_index_buffer;
+        self.mega_path_vertex_instance_buffer = mega_path_vertex_instance_buffer;
         self.compact_path_vertices = compact_vertices;
         self.path_vertex_capacity_bytes = vertex_bytes_len;
         self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
         self.path_index_capacity_bytes = index_bytes_len;
+        self.mega_path_index_capacity_bytes = 0;
+        self.mega_path_vertex_instance_capacity_bytes = 0;
 
         Ok(UploadStats {
             bytes_uploaded,
-            buffer_reallocations: 3,
+            buffer_reallocations: 5,
         })
     }
 
@@ -2286,13 +2303,6 @@ fn ensure_capacity(
         label,
         wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     )
-}
-
-fn buffer_growth_capacity(required_bytes: usize) -> usize {
-    required_bytes
-        .checked_next_power_of_two()
-        .unwrap_or(required_bytes)
-        .max(256)
 }
 
 fn validate_preload_allocation(

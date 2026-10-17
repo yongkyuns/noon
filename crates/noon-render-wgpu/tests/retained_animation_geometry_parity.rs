@@ -60,7 +60,12 @@ fn assert_prepares_path(frame: &FrameState, expect_path: bool) {
     let has_path = prepared
         .geometry_render_chunks()
         .flat_map(|chunk| chunk.render_batches.iter())
-        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. }));
+        .any(|batch| {
+            matches!(
+                batch.primitive,
+                RenderPrimitive::Path { .. } | RenderPrimitive::MegaPath { .. }
+            )
+        });
     assert_eq!(has_path, expect_path);
     if !expect_path {
         assert!(prepared
@@ -134,7 +139,10 @@ fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
         assert!(frame
             .geometry_render_chunks()
             .flat_map(|chunk| chunk.render_batches.iter())
-            .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+            .any(|batch| matches!(
+                batch.primitive,
+                RenderPrimitive::Path { .. } | RenderPrimitive::MegaPath { .. }
+            )));
     }
 
     runtime.release_effective_content(lease).unwrap();
@@ -145,7 +153,10 @@ fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
     assert!(!frame
         .geometry_render_chunks()
         .flat_map(|chunk| chunk.render_batches.iter())
-        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+        .any(|batch| matches!(
+            batch.primitive,
+            RenderPrimitive::Path { .. } | RenderPrimitive::MegaPath { .. }
+        )));
 }
 
 #[test]

@@ -306,6 +306,8 @@ impl FramePreparer {
             complete_submission: false,
             submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
+            mega_path_segments: &[],
+            mega_path_detached: &[],
             mega_path_offsets: &self.mega_path_offsets,
         }
     }
@@ -470,6 +472,28 @@ fn checked_packed_end(start: usize, length: usize) -> Result<u32, noon_geometry:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resident_upload_hides_stale_mixed_mega_draw_metadata() {
+        let mut preparer = super::FramePreparer::new();
+        preparer.mega_path_segments.push(Some(0..6));
+        preparer.mega_path_detached.push(false);
+        preparer.mega_path_indices.extend(0..6);
+        preparer.path_indices.extend(0..6);
+        preparer.path_index_dirty_ranges.push(0..6);
+        preparer.path_geometry_dirty = true;
+
+        let frame = preparer.resident_upload_frame(super::RenderStats::default());
+        assert!(frame.mega_path_segments.is_empty());
+        assert!(frame.mega_path_detached.is_empty());
+        assert!(frame.mega_path_indices.is_empty());
+        assert!(frame.mega_source_segment(0).is_none());
+        assert!(frame.ordered_render_batches().next().is_none());
+        assert_eq!(frame.path_indices, preparer.path_indices.as_slice());
+        assert_eq!(frame.path_index_dirty_ranges.len(), 1);
+        assert_eq!(frame.path_index_dirty_ranges.first(), Some(&(0..6)));
+        assert!(frame.path_geometry_dirty);
+    }
+
     #[test]
     fn oversized_preload_address_is_rejected_without_allocation() {
         assert!(super::checked_packed_end(u32::MAX as usize, 1).is_err());

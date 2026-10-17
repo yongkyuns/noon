@@ -39,6 +39,12 @@ fn pixel(pixels: &[u8], x: u32) -> [u8; 4] {
 #[test]
 #[ignore = "requires software Vulkan; executed by Native Host Smoke"]
 fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() {
+    for (packed_paths, reorder) in [(false, false), (true, false), (true, true)] {
+        qualify_transient_anchor_order(packed_paths, reorder);
+    }
+}
+
+fn qualify_transient_anchor_order(packed_paths: bool, reorder: bool) {
     pollster::block_on(async {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -61,12 +67,25 @@ fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() 
             .iter()
             .enumerate()
             .map(|(index, &x)| {
-                let geometry = if index == 1 {
+                let geometry = if packed_paths {
+                    GeometryRef::path(
+                        VectorPath::new()
+                            .move_to(Vec2::new(-0.6, 0.0))
+                            .line_to(Vec2::new(0.6 + index as f32 * 0.02, 0.0)),
+                    )
+                } else if index == 1 {
                     GeometryRef::rectangle(1.2, 1.2)
                 } else {
                     GeometryRef::circle(0.6)
                 };
-                let row = state(geometry.clone(), x, Color::WHITE);
+                let mut row = state(geometry.clone(), x, Color::WHITE);
+                if packed_paths {
+                    row.style.fill = None;
+                    row.style.stroke = Some(Color::WHITE);
+                    row.style.stroke_width = 1.2;
+                    row.style.stroke_cap = noon_core::StrokeCap::Butt;
+                    row.style.stroke_join = noon_core::StrokeJoin::Miter;
+                }
                 CompiledObject::new(
                     ObjectId::new(index as u64),
                     geometry,
@@ -115,16 +134,66 @@ fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() 
                 .with_anchor_side(TransientAnchorSide::Before),
             );
         }
+        // These two occurrences overlap between adjacent stable sources. Their
+        // ordering must remain After(A), Before(B), including when both sources
+        // occupy adjacent spans of one packed draw.
+        occurrences.push(TransientPresentationOccurrence::new(
+            0,
+            500,
+            state(
+                GeometryRef::circle(0.1),
+                -1.25,
+                Color::rgba(1.0, 0.0, 0.0, 1.0),
+            ),
+        ));
+        occurrences.push(
+            TransientPresentationOccurrence::new(
+                1,
+                600,
+                state(
+                    GeometryRef::circle(0.1),
+                    -1.25,
+                    Color::rgba(0.0, 1.0, 0.0, 1.0),
+                ),
+            )
+            .with_anchor_side(TransientAnchorSide::Before),
+        );
         let publication = runtime
             .take_renderer_publication()
             .with_transient_presentations(&occurrences)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
         assert_eq!(derived.stats.painter_positions_visited, 0);
-        assert_eq!(derived.stats.occurrences_packed, 9);
+        assert_eq!(derived.stats.occurrences_packed, 11);
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        let stable = preparer.prepare(publication.frame());
+        let stable = if reorder {
+            let original_indices = preparer
+                .prepare(publication.frame())
+                .mega_path_indices
+                .to_vec();
+            preparer.set_painter_order_range(publication.frame(), &[2, 0, 1], 0..3);
+            let stable = preparer.prepare_incremental(
+                publication.frame(),
+                &noon_runtime::FrameChanges::default().with_painter_order(0..3),
+            );
+            assert_eq!(stable.stats.full_rebuilds, 0);
+            assert_eq!(stable.stats.render_order_chunks_rebuilt, 1);
+            assert_eq!(stable.mega_path_indices, original_indices);
+            stable
+        } else {
+            preparer.prepare(publication.frame())
+        };
+        assert_eq!(
+            stable.stats.mega_path_count,
+            if packed_paths { 3 } else { 0 }
+        );
+        if packed_paths {
+            assert_eq!(
+                stable.stats.mega_path_batch_count,
+                if reorder { 2 } else { 1 }
+            );
+        }
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         renderer.set_camera(
@@ -161,7 +230,7 @@ fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() 
             &derived,
             wgpu::Color::BLACK,
         );
-        assert_eq!(drawn.instances_drawn, 12);
+        assert_eq!(drawn.instances_drawn, 14);
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -189,6 +258,11 @@ fn before_and_after_transients_preserve_pixels_across_stable_batch_boundaries() 
         receiver.recv().unwrap().unwrap();
         let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
         readback.unmap();
+        let adjacent = pixel(&pixels, 88);
+        assert!(
+            adjacent[0] < 10 && adjacent[1] > 240 && adjacent[2] < 10,
+            "Before(B) must paint above After(A) at their shared boundary: {adjacent:?}"
+        );
         for center in [48, 128, 208] {
             let green = pixel(&pixels, center);
             assert!(

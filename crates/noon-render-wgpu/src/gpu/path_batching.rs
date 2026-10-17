@@ -3,9 +3,50 @@
 use noon_core::{Rect, Vec2};
 
 use super::retained_text::RetainedRenderItem;
-use crate::{OrderedRenderBatch, PathCoverage, PreparedFrame, RenderPrimitive};
+use crate::{MegaPathBatch, OrderedRenderBatch, PathCoverage, PreparedFrame, RenderPrimitive};
 
 const WINDOW: usize = 32;
+
+/// A mixed painter run can use the already-packed geometry-only mega-path
+/// pipeline without discarding per-object source descriptors. Stop at the
+/// caller's next image/effect/inset boundary, any ordinary non-path item,
+/// detached/specialized path, coverage change or nonadjacent mega segment.
+/// The caller must preserve its own painter order and only use this with the
+/// complete retained mixed-frame view (not source capture or partial renders).
+pub(super) fn collect_consecutive_mega_paths<'a>(
+    first: &OrderedRenderBatch,
+    rest: &mut std::iter::Peekable<std::slice::Iter<'a, RetainedRenderItem>>,
+    prepared: &PreparedFrame<'_>,
+    stop_at: impl Fn(noon_core::ObjectId) -> bool,
+) -> Option<MegaPathBatch> {
+    let RenderPrimitive::Path { batch: first_batch } = first.primitive else {
+        return None;
+    };
+    let (segment, coverage) = prepared.mega_source_segment(first_batch)?;
+    let mut mega = MegaPathBatch {
+        index_range: segment,
+        path_count: 1,
+        coverage,
+    };
+    while let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() {
+        if stop_at(*object_id) {
+            break;
+        }
+        let RenderPrimitive::Path { batch: next_batch } = batch.primitive else {
+            break;
+        };
+        let Some((segment, coverage)) = prepared.mega_source_segment(next_batch) else {
+            break;
+        };
+        if mega.index_range.end != segment.start || coverage != mega.coverage {
+            break;
+        }
+        mega.index_range.end = segment.end;
+        mega.path_count += 1;
+        rest.next();
+    }
+    Some(mega)
+}
 
 pub(super) struct RetainedGeometryBatches {
     batches: [Option<(OrderedRenderBatch, std::ops::Range<u32>)>; WINDOW],
@@ -221,6 +262,96 @@ fn path_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_unique_mega_paths_preserve_source_rows_and_stop_at_painter_barriers() {
+        use noon_core::{
+            Color, GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, VectorPath,
+        };
+        use noon_runtime::{FrameObjectState, FrameState};
+
+        let objects = (0..3)
+            .map(|i| FrameObjectState {
+                glow: None,
+                spatial: None,
+                id: ObjectId::new(i + 1),
+                z_index: 0.0,
+                content: ObjectContentRef::Geometry(GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-1.0, i as f32 * 0.1))
+                        .line_to(Vec2::new(1.0 + i as f32 * 0.3, i as f32 * 0.1)),
+                )),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Style {
+                    stroke: Some(Color::WHITE),
+                    stroke_width: 0.08,
+                    fill: None,
+                    ..Style::default()
+                },
+                appearance: 1.0,
+            })
+            .collect::<Vec<_>>();
+        let frame = FrameState {
+            time: 0.0,
+            objects,
+            presences: vec![true; 3],
+            reveals: vec![1.0; 3],
+            morphs: vec![0.0; 3],
+            render_geometries: vec![None; 3],
+            render_transforms: vec![None; 3],
+            family_animations: vec![],
+            family_animation_plan_indices: vec![],
+        };
+        let mut preparer = crate::FramePreparer::for_mixed_retained_path_draws();
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.path_batches.len(), 3);
+        assert!(
+            !prepared.mega_path_indices.is_empty(),
+            "mixed renderer should prepare an additional packed draw index stream"
+        );
+        // Original object-scoped descriptors are still individually addressable
+        // for source isolation and painter-order interleaving.
+        let items = prepared
+            .path_batches
+            .iter()
+            .enumerate()
+            .map(|(index, batch)| RetainedRenderItem::Geometry {
+                object_id: ObjectId::new(index as u64 + 1),
+                batch: OrderedRenderBatch {
+                    primitive: RenderPrimitive::Path { batch: index },
+                    instance_range: batch.instance_range.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+        let RetainedRenderItem::Geometry { batch: first, .. } = &items[0] else {
+            unreachable!();
+        };
+        let mut pending = items[1..].iter().peekable();
+        let merged =
+            collect_consecutive_mega_paths(first, &mut pending, &prepared, |_| false).unwrap();
+        assert_eq!(merged.path_count, 3);
+        assert!(
+            pending.next().is_none(),
+            "contiguous source paths were coalesced"
+        );
+
+        let mut pending = items[1..].iter().peekable();
+        let blocked = collect_consecutive_mega_paths(first, &mut pending, &prepared, |object| {
+            object == ObjectId::new(2)
+        })
+        .unwrap();
+        assert_eq!(blocked.path_count, 1);
+        assert_eq!(pending.next().unwrap().object_id(), ObjectId::new(2));
+
+        let mut individual = crate::FramePreparer::for_individual_path_draws();
+        let fallback = individual.prepare(&frame);
+        let mut pending = items[1..].iter().peekable();
+        assert!(
+            collect_consecutive_mega_paths(first, &mut pending, &fallback, |_| false).is_none(),
+            "unqualified frames use the old path draw"
+        );
+    }
 
     fn batch(mesh: usize, instance: u32) -> OrderedRenderBatch {
         OrderedRenderBatch {
