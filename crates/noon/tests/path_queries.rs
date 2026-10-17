@@ -69,6 +69,123 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
 }
 
 #[test]
+fn inverse_proportion_matches_bezier_roots_and_manims_path_order() {
+    let mut scene = Scene::new();
+    let cubic = scene
+        .path(
+            VectorPath::new().move_to(Vec2::new(-3., -1.)).cubic_to(
+                Vec2::new(-1., 2.),
+                Vec2::new(1., -2.),
+                Vec2::new(3., 1.),
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    let query = cubic.path_query().unwrap();
+    assert!((query.proportion_from_point((-1.5, 0.15625)).unwrap() - 0.25).abs() < 1e-6);
+    for alpha in [0., 0.125, 0.25, 0.5, 0.75, 0.875, 1.] {
+        let point = query.point_from_proportion(alpha).unwrap();
+        let proportion = query.proportion_from_point(point).unwrap_or_else(|error| {
+            panic!("inverse query failed for alpha {alpha} at {point:?}: {error}")
+        });
+        assert!(
+            (proportion - alpha).abs() < 1e-6,
+            "inverse query returned {proportion} for alpha {alpha} at {point:?}"
+        );
+    }
+
+    let loop_curve = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(1., 1.),
+                Vec2::new(-1., 1.),
+                Vec2::ZERO,
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        loop_curve
+            .path_query()
+            .unwrap()
+            .proportion_from_point((0., 0.))
+            .unwrap(),
+        1.0,
+        "closed-loop endpoints choose the greatest matching cubic root"
+    );
+
+    let disjoint = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2., 0.))
+                .move_to(Vec2::new(10., 0.))
+                .line_to(Vec2::new(11., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(
+        (disjoint
+            .path_query()
+            .unwrap()
+            .proportion_from_point((1.5, 0.))
+            .unwrap()
+            - 0.5)
+            .abs()
+            < 1e-6
+    );
+}
+
+#[test]
+fn inverse_proportion_uses_world_coordinates_and_rejects_missing_points() {
+    let mut scene = Scene::new();
+    let mut path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.))
+                .line_to(Vec2::new(1., 1.)),
+            Default::default(),
+        )
+        .unwrap();
+    path.set_scale(3., 1.).unwrap();
+    path.set_translation(10., -2.).unwrap();
+    assert!(
+        (path
+            .path_query()
+            .unwrap()
+            .proportion_from_point((11.5, -2.))
+            .unwrap()
+            - 0.375)
+            .abs()
+            < 1e-6
+    );
+
+    let horizontal = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let off_path = horizontal
+        .path_query()
+        .unwrap()
+        .proportion_from_point((0.5, 0.1))
+        .unwrap_err();
+    assert!(off_path.to_string().contains("does not lie on this path"));
+
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    let empty_path = empty
+        .path_query()
+        .unwrap()
+        .proportion_from_point((0., 0.))
+        .unwrap_err();
+    assert!(empty_path.to_string().contains("no drawable curves"));
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()

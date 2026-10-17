@@ -1607,6 +1607,17 @@ mod wasm {
                 .map(|(x, y)| vec![x, y])
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = proportionFromPoint)]
+        pub fn proportion_from_point(&self, point: Vec<f64>) -> Result<f64, JsValue> {
+            if point.len() != 2 {
+                return Err(js_error(noon::AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::InvalidPoint,
+                )));
+            }
+            self.value
+                .proportion_from_point((point[0], point[1]))
+                .map_err(js_error)
+        }
         pub fn start(&self) -> Result<Vec<f64>, JsValue> {
             self.value
                 .start()

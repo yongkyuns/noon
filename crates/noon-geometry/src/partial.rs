@@ -26,6 +26,8 @@ struct Curve {
 pub enum PathProportionError {
     InvalidProportion(f32),
     EmptyPath,
+    PointNotOnPath,
+    InvalidPoint,
     InvalidMetric,
     InvalidSampleCount,
     InvalidInterval,
@@ -43,6 +45,10 @@ impl std::fmt::Display for PathProportionError {
                 )
             }
             Self::EmptyPath => formatter.write_str("path has no drawable curves"),
+            Self::PointNotOnPath => formatter.write_str("point does not lie on this path"),
+            Self::InvalidPoint => {
+                formatter.write_str("path query point must have finite coordinates")
+            }
             Self::InvalidMetric => {
                 formatter.write_str("path metric must have finite coordinates, scales and length")
             }
@@ -132,6 +138,22 @@ impl PathProportionPlan {
 
     pub fn curve_count(&self) -> usize {
         self.curves.len()
+    }
+
+    /// Approximate length of one retained curve in this plan's metric.
+    pub fn curve_length(&self, index: usize) -> Result<f64, PathProportionError> {
+        self.lengths
+            .get(index)
+            .copied()
+            .ok_or(PathProportionError::InvalidCurveIndex {
+                index,
+                count: self.curves.len(),
+            })
+    }
+
+    /// Total approximate length in this plan's metric.
+    pub fn total_length(&self) -> f64 {
+        self.total_length
     }
 
     /// Cubic controls for one retained curve, promoting lines and quadratics
@@ -233,6 +255,116 @@ impl PathProportionPlan {
         }
         Ok(length)
     }
+}
+
+/// Return the real Bezier parameters at which a planar point lies on a cubic.
+///
+/// Each coordinate is solved independently and the resulting parameters are
+/// rounded to six decimal places before intersection, matching ManimCE 0.21's
+/// `proportions_along_bezier_curve_for_point` behavior.
+pub fn proportions_on_cubic_for_point(
+    control_points: [SemanticVec3; 4],
+    point: (f64, f64),
+) -> Vec<f64> {
+    let mut common: Option<Vec<f64>> = None;
+    for (coordinate, controls) in [
+        (point.0, control_points.map(|p| p.x)),
+        (point.1, control_points.map(|p| p.y)),
+    ] {
+        let polynomial = [
+            -controls[0] + 3.0 * controls[1] - 3.0 * controls[2] + controls[3],
+            3.0 * controls[0] - 6.0 * controls[1] + 3.0 * controls[2],
+            -3.0 * controls[0] + 3.0 * controls[1],
+            controls[0] - coordinate,
+        ];
+        if polynomial.iter().all(|coefficient| *coefficient == 0.0) {
+            continue;
+        }
+        let mut roots = real_polynomial_roots(polynomial);
+        for root in &mut roots {
+            *root = (*root * 1_000_000.0).round() / 1_000_000.0;
+            if *root == 0.0 {
+                // NumPy's intersection treats signed zeros as equal.
+                *root = 0.0;
+            }
+        }
+        roots.retain(|root| (0.0..=1.0).contains(root));
+        roots.sort_by(f64::total_cmp);
+        roots.dedup_by(|left, right| left == right);
+        common = Some(match common {
+            None => roots,
+            Some(previous) => previous
+                .into_iter()
+                .filter(|root| {
+                    roots
+                        .binary_search_by(|candidate| candidate.total_cmp(root))
+                        .is_ok()
+                })
+                .collect(),
+        });
+    }
+    common.unwrap_or_default()
+}
+
+fn real_polynomial_roots([a, b, c, d]: [f64; 4]) -> Vec<f64> {
+    if a == 0.0 {
+        if b == 0.0 {
+            return if c == 0.0 { Vec::new() } else { vec![-d / c] };
+        }
+        let discriminant = c * c - 4.0 * b * d;
+        if discriminant < 0.0 {
+            return Vec::new();
+        }
+        let root = discriminant.sqrt();
+        let mut roots = if root == 0.0 {
+            vec![-c / (2.0 * b)]
+        } else {
+            let q = -0.5 * (c + c.signum() * root);
+            if q == 0.0 {
+                vec![(-c + root) / (2.0 * b), (-c - root) / (2.0 * b)]
+            } else {
+                vec![q / b, d / q]
+            }
+        };
+        roots.sort_by(f64::total_cmp);
+        roots.dedup_by(|left, right| left == right);
+        return roots;
+    }
+
+    let b = b / a;
+    let c = c / a;
+    let d = d / a;
+    let p = c - b * b / 3.0;
+    let q = 2.0 * b * b * b / 27.0 - b * c / 3.0 + d;
+    let half_q = q / 2.0;
+    let third_p = p / 3.0;
+    let discriminant = half_q * half_q + third_p * third_p * third_p;
+    let shift = b / 3.0;
+    let mut roots = if discriminant > 0.0 {
+        let square_root = discriminant.sqrt();
+        let u = (-half_q + square_root).cbrt();
+        let v = if u == 0.0 {
+            (-half_q - square_root).cbrt()
+        } else {
+            -third_p / u
+        };
+        vec![u + v - shift]
+    } else if discriminant == 0.0 {
+        let u = (-half_q).cbrt();
+        vec![2.0 * u - shift, -u - shift]
+    } else {
+        let radius = 2.0 * (-third_p).sqrt();
+        let cosine = ((-half_q) / (-(third_p * third_p * third_p)).sqrt()).clamp(-1.0, 1.0);
+        let angle = cosine.acos() / 3.0;
+        (0..3)
+            .map(|index| {
+                radius * (angle - 2.0 * std::f64::consts::PI * index as f64 / 3.0).cos() - shift
+            })
+            .collect()
+    };
+    roots.sort_by(f64::total_cmp);
+    roots.dedup_by(|left, right| left == right);
+    roots
 }
 
 /// Return the first and last drawable anchors using the same curve traversal as
@@ -688,6 +820,25 @@ mod tests {
                 && (actual.y - expected.y).abs() <= tolerance
                 && (actual.z - expected.z).abs() <= tolerance,
             "{actual:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn inverse_cubic_roots_include_endpoints_and_interior_parameters() {
+        let controls = [
+            SemanticVec3::new(-3., -1., 0.),
+            SemanticVec3::new(-1., 2., 0.),
+            SemanticVec3::new(1., -2., 0.),
+            SemanticVec3::new(3., 1., 0.),
+        ];
+        assert_eq!(
+            proportions_on_cubic_for_point(controls, (-3., -1.)),
+            vec![0.]
+        );
+        assert_eq!(proportions_on_cubic_for_point(controls, (3., 1.)), vec![1.]);
+        assert_eq!(
+            proportions_on_cubic_for_point(controls, (-1.5, 0.15625)),
+            vec![0.25]
         );
     }
 

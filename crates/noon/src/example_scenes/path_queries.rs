@@ -21,6 +21,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             assert!(query.arc_length(None)? > 0.);
             for alpha in [0.125, 0.375, 0.625, 0.875] {
                 let (x, y) = query.point_from_proportion(alpha)?;
+                assert!((query.proportion_from_point((x, y))? - alpha).abs() < 1e-5);
                 let mut marker = scene.circle(0.08)?;
                 marker.set_fill(1., 204. / 255., 68. / 255., 1.)?;
                 marker.set_stroke_width(0.)?;
@@ -28,6 +29,24 @@ pub fn session() -> Result<ExecutionSession, String> {
                 scene.add(&marker)?;
             }
         }
+        assert!(rectangle
+            .path_query()?
+            .proportion_from_point((0., 0.))
+            .is_err());
+        let loop_curve = scene.path(
+            crate::VectorPath::new()
+                .move_to(crate::Vec2::ZERO)
+                .cubic_to(
+                    crate::Vec2::new(1., 1.),
+                    crate::Vec2::new(-1., 1.),
+                    crate::Vec2::ZERO,
+                ),
+            Default::default(),
+        )?;
+        assert_eq!(
+            loop_curve.path_query()?.proportion_from_point((0., 0.))?,
+            1.0
+        );
         let target = rectangle.target_editor()?;
         crate::LayoutAnchor::from(&target).stretch(
             1.2,
