@@ -107,4 +107,24 @@ impl SemanticExecutionPlayer {
         })?
         .map_err(AuthoringFailure::from)
     }
+    pub(crate) fn live_create_mobject_table_with_labels<'a>(
+        &mut self,
+        rows: Vec<Vec<noon::MobjectTarget<'a>>>,
+        row_labels: Option<Vec<noon::Mobject>>,
+        column_labels: Option<Vec<noon::Mobject>>,
+        options: noon::TableOptions,
+    ) -> Result<noon::MobjectTable, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(
+                noon::MobjectTable::from_target_rows_with_labels_in_live_session(
+                    live,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    options,
+                ),
+            )
+        })?
+        .map_err(AuthoringFailure::from)
+    }
 }

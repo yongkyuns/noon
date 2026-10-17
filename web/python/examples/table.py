@@ -11,6 +11,11 @@ class RetainedTable(Scene):
         math.shift(RIGHT * 3 + UP * 1.4)
         pair = VGroup(MathTex("x"), MathTex("+"))
         pair.submobjects[1].shift(RIGHT * .5)
-        composite = MobjectTable([[pair, MathTex("y")]], include_outer_lines=True)
+        composite = MobjectTable(
+            [[pair, MathTex("y")]],
+            row_labels=[Text("r")],
+            col_labels=[Text("a"), Text("b")],
+            include_outer_lines=True,
+        )
         composite.shift(DOWN * 2)
         self.add(plain, math, composite)

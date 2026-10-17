@@ -115,7 +115,7 @@
       "scene": "MobjectTableExample",
       "source": "parity/manim-v0.21/core-examples/table.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+      "notes": "Nested family entries, two row labels and two column labels use unchanged pinned ManimCE Cairo raster tolerances on WebGPU and WebGL2. Only direct retained Mobjects are qualified as labels; top-left entries and broader table options remain outside this slice."
     },
     {
       "id": "table-highlights",

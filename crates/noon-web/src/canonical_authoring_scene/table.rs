@@ -212,4 +212,41 @@ impl CanonicalAuthoringSceneContext {
                 .map_err(js_error)
         }
     }
+    #[wasm_bindgen(js_name = liveCreateMobjectTableWithLabels)]
+    pub fn live_create_mobject_table_with_labels(
+        &mut self,
+        rows: &WasmCompositeRows,
+        row_labels: &WasmCompositeRows,
+        column_labels: &WasmCompositeRows,
+        options: WasmTableOptions,
+    ) -> Result<WasmTableHandle, JsValue> {
+        let rows = rows.targets();
+        let row_labels = row_labels.objects()?;
+        let column_labels = column_labels.objects()?;
+        let row_labels = (!row_labels.is_empty()).then_some(row_labels);
+        let column_labels = (!column_labels.is_empty()).then_some(column_labels);
+        if self.inner.player_ownership.is_unstarted() {
+            noon::MobjectTable::from_target_rows_with_labels(
+                &mut self.inner.scene,
+                rows,
+                row_labels,
+                column_labels,
+                options.options,
+            )
+            .map(|value| WasmTableHandle::new(value.into_table()))
+            .map_err(js_error)
+        } else {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_create_mobject_table_with_labels(
+                    rows,
+                    row_labels,
+                    column_labels,
+                    options.options,
+                )
+                .map(|value| WasmTableHandle::new(value.into_table()))
+                .map_err(js_error)
+        }
+    }
 }

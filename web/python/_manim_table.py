@@ -205,9 +205,42 @@ class MobjectTable(Table):
             if semantic is None:
                 raise TypeError("MobjectTable entries require current shared semantic identities")
             return semantic
+        row_label_mobjects = list(kwargs.pop("row_labels", None) or [])
+        column_label_mobjects = list(kwargs.pop("col_labels", None) or [])
+        row_labels = [self._label_handle(value) for value in row_label_mobjects]
+        column_labels = [self._label_handle(value) for value in column_label_mobjects]
         context = _live_constructor_context("MobjectTable", allow_unstarted=True)
-        self._initialize_table(engine_call(_create_mobject_table, _rows(source_rows, handle), *_options(kwargs), context), context)
+        self._initialize_table(
+            engine_call(
+                _create_mobject_table,
+                _rows(source_rows, handle),
+                row_labels,
+                column_labels,
+                *_options(kwargs),
+                context,
+            ),
+            context,
+        )
         for row_group, row in zip(self._entry_family().submobjects, source_rows):
             row_group._semantic_member_wrappers = {
                 _family_wrapper_key(value): value for value in row
             }
+        family_index = 3
+        for labels in (row_label_mobjects, column_label_mobjects):
+            if labels:
+                label_group = self.submobjects[family_index]
+                label_group._semantic_member_wrappers = {
+                    _family_wrapper_key(value): value for value in labels
+                }
+                family_index += 1
+
+    @staticmethod
+    def _label_handle(value):
+        if not isinstance(value, _base.Mobject):
+            raise TypeError("MobjectTable row/column labels must be shared Mobjects")
+        if getattr(value, "_semantic_family_handle", None) is not None:
+            raise TypeError("MobjectTable row/column labels must be individual Mobjects, not Groups")
+        handle = _handle_for(value)
+        if handle is None:
+            raise TypeError("MobjectTable labels require current shared semantic identities")
+        return handle

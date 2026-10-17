@@ -15,8 +15,11 @@ class MathTableExample(Scene):
 class MobjectTableExample(Scene):
     def construct(self):
         pair = VGroup(Circle(radius=0.2), Square(side_length=0.3).shift(RIGHT * 0.5))
+        row_labels = [Circle(radius=0.12), Square(side_length=0.16)]
+        col_labels = [Square(side_length=0.14), Circle(radius=0.1)]
         table = MobjectTable([[pair, Circle(radius=0.4)],
                               [Square(side_length=0.5), Circle(radius=0.25)]],
+                             row_labels=row_labels, col_labels=col_labels,
                              h_buff=0.7, v_buff=0.5, include_outer_lines=True)
         table.shift(RIGHT * 0.5)
         self.add(table)

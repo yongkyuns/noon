@@ -43,6 +43,36 @@ class _Context:
         return self.handle
 
 
+class _MobjectHandle(_Handle):
+    pass
+
+
+class _MobjectTableHandle:
+    def __init__(self, row_labels, column_labels, entries):
+        self._family = _Family()
+        self._family.submobjects = [
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[types.SimpleNamespace(submobjects=entries)]),
+            types.SimpleNamespace(submobjects=[]),
+            *([types.SimpleNamespace(submobjects=row_labels)] if row_labels else []),
+            *([types.SimpleNamespace(submobjects=column_labels)] if column_labels else []),
+        ]
+
+    def family(self):
+        return self._family
+
+
+class _FakeMobject:
+    def __init__(self, slot):
+        self._semantic_handle = _MobjectHandle(slot)
+
+
+class _FakeFamily(_FakeMobject):
+    def __init__(self, slot):
+        super().__init__(slot)
+        self._semantic_family_handle = object()
+
+
 class TableFacadeTests(unittest.TestCase):
     def setUp(self):
         self.handle = _TableHandle()
@@ -111,6 +141,52 @@ class TableFacadeTests(unittest.TestCase):
         with patch.object(self.handle, "entryAt", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
+
+    def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
+        entry = _FakeMobject(1)
+        row_label = _FakeMobject(2)
+        column_label = _FakeMobject(3)
+        context = types.SimpleNamespace()
+        handle = _MobjectTableHandle([row_label], [column_label], [entry])
+
+        def create(rows, row_labels, column_labels, v_buff, h_buff, outer_lines, _context):
+            self.assertEqual(rows, [[entry._semantic_handle]])
+            self.assertEqual(row_labels, [row_label._semantic_handle])
+            self.assertEqual(column_labels, [column_label._semantic_handle])
+            self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
+            return handle
+
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_mobject_table", side_effect=create), \
+                patch.object(table, "_live_constructor_context", return_value=context), \
+                patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_test_submobjects", family.submobjects),
+                    setattr(wrapper, "_canonical_live_target_context", context),
+                )), \
+                patch.object(table._compat.Group, "submobjects", new=property(
+                    lambda wrapper: wrapper._test_submobjects
+                )), \
+                patch.object(table, "_family_wrapper_key", side_effect=lambda value: (
+                    f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"
+                )):
+            value = table.MobjectTable(
+                [[entry]], row_labels=[row_label], col_labels=[column_label],
+                v_buff=0.4, h_buff=0.7, include_outer_lines=True,
+            )
+
+        children = value._test_submobjects
+        self.assertIs(children[1].submobjects[0]._semantic_member_wrappers["1:1"], entry)
+        self.assertIs(children[3]._semantic_member_wrappers["2:1"], row_label)
+        self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)
+
+    def test_mobject_table_label_boundaries_are_explicit(self):
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            with self.assertRaisesRegex(TypeError, "individual Mobjects"):
+                table.MobjectTable._label_handle(_FakeFamily(1))
+            with self.assertRaisesRegex(NotImplementedError, "unsupported Table option"):
+                table._options({"top_left_entry": _FakeMobject(2)})
 
 
 if __name__ == "__main__":

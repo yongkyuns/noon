@@ -711,6 +711,57 @@ impl MobjectTable {
         )
         .map(Self)
     }
+    /// Construct a retained MobjectTable with individual shared row/column labels.
+    ///
+    /// Labels are arranged in the same Rust-owned grid as entries. When present,
+    /// `row_labels` contains one Mobject per row and `column_labels` one per column.
+    pub fn from_target_rows_with_labels<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Option<Vec<Mobject>>,
+        column_labels: Option<Vec<Mobject>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            options,
+        )
+        .map(Self)
+    }
+    /// Live-session counterpart of [`Self::from_target_rows_with_labels`].
+    pub fn from_target_rows_with_labels_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Option<Vec<Mobject>>,
+        column_labels: Option<Vec<Mobject>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            options,
+        )
+        .map(Self)
+    }
     pub fn from_rows<I, J>(scene: &mut Scene, rows: I) -> Result<Self, TableAuthoringError>
     where
         I: IntoIterator<Item = J>,
@@ -977,6 +1028,49 @@ mod tests {
                 .chain(table_leaves)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn mobject_table_labels_keep_identity_and_use_table_spacing() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let row_label = circle(&store, 0.2);
+        let column_label = circle(&store, 0.15);
+        let options = TableOptions {
+            h_buff: 0.75,
+            v_buff: 0.4,
+            ..Default::default()
+        };
+
+        let table = MobjectTable::from_target_rows_with_labels(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            Some(vec![row_label.clone()]),
+            Some(vec![column_label.clone()]),
+            options,
+        )
+        .unwrap()
+        .into_table();
+
+        let store = store.borrow();
+        assert_eq!(
+            store
+                .semantic_family_members_checked(table.row_label_family().unwrap().node_id())
+                .unwrap(),
+            vec![row_label.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_members_checked(table.column_label_family().unwrap().node_id())
+                .unwrap(),
+            vec![column_label.node_id()]
+        );
+        let entry_bounds = entry.layout_bounds().unwrap().unwrap();
+        let row_bounds = row_label.layout_bounds().unwrap().unwrap();
+        let column_bounds = column_label.layout_bounds().unwrap().unwrap();
+        assert!((entry_bounds.min_x - row_bounds.max_x - options.h_buff).abs() < 1e-6);
+        assert!((column_bounds.min_y - entry_bounds.max_y - options.v_buff).abs() < 1e-6);
     }
 
     #[test]

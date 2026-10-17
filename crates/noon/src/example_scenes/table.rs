@@ -57,9 +57,16 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
             backend,
         )
         .map_err(|error| error.to_string())?;
-    let composite = MobjectTable::from_target_rows_with_options(
+    let row_label = scene.text("r").map_err(|error| error.to_string())?;
+    let column_labels = ["a", "b"]
+        .into_iter()
+        .map(|label| scene.text(label).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let composite = MobjectTable::from_target_rows_with_labels(
         &mut scene,
         vec![vec![(&group).into(), (&y).into()]],
+        Some(vec![row_label]),
+        Some(column_labels),
         options,
     )
     .map_err(|error| error.to_string())?

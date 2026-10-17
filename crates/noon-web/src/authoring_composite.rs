@@ -58,6 +58,19 @@ impl WasmCompositeRows {
             })
             .collect()
     }
+
+    pub(crate) fn objects(&self) -> Result<Vec<noon::Mobject>, JsValue> {
+        self.rows
+            .iter()
+            .flatten()
+            .map(|entry| match entry {
+                noon::CompositeEntryHandle::Mobject(object) => Ok(object.clone()),
+                noon::CompositeEntryHandle::Family(_) => Err(js_error(
+                    "Table row and column labels must be Mobjects, not semantic families",
+                )),
+            })
+            .collect()
+    }
 }
 
 pub(crate) fn entry_handle(entry: noon::CompositeEntryHandle) -> JsValue {
