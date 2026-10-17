@@ -47,12 +47,21 @@ impl FramePreparer {
             .resize(self.path_batches.len(), None);
         self.mega_path_detached
             .resize(self.path_batches.len(), false);
-        if !eligible.iter().any(|&eligible| eligible) {
+        // Packed indices retain the shared vertex addresses, but an unused
+        // resident suffix needs no per-vertex instance attributes. Inspect only
+        // the already selected batches during this full rebuild, not all meshes.
+        let vertex_end = eligible
+            .iter()
+            .enumerate()
+            .filter(|(_, eligible)| **eligible)
+            .map(|(index, _)| self.path_batch_vertex_ranges[index].end as usize)
+            .max();
+        let Some(vertex_end) = vertex_end else {
             return;
-        }
+        };
 
         self.mega_path_vertex_instances
-            .resize(self.path_vertices.len(), PathInstance::zeroed());
+            .resize(vertex_end, PathInstance::zeroed());
         for (batch_index, &eligible) in eligible.iter().enumerate() {
             if !eligible {
                 continue;
@@ -170,11 +179,11 @@ impl FramePreparer {
         );
         self.mega_path_index_dirty = true;
 
-        if self.mega_path_vertex_instances.len() < self.path_vertices.len() {
-            self.mega_path_vertex_instances
-                .resize(self.path_vertices.len(), PathInstance::zeroed());
-        }
         let vertex_range = range_usize(&vertex_range);
+        if self.mega_path_vertex_instances.len() < vertex_range.end {
+            self.mega_path_vertex_instances
+                .resize(vertex_range.end, PathInstance::zeroed());
+        }
         self.mega_path_vertex_instances[vertex_range.clone()].fill(packed);
         push_dirty_range(&mut self.mega_path_instance_dirty_ranges, vertex_range);
 
@@ -509,5 +518,209 @@ mod tests {
         assert_eq!(clean.stats.full_rebuilds, 0);
         let rebuilt = preparer.prepare(&frame);
         assert_eq!(uploaded.as_slice(), rebuilt.mega_path_vertex_instances);
+    }
+
+    fn preloaded_prefix_fixture(
+        count: usize,
+    ) -> (
+        FramePreparer,
+        noon_runtime::FrameState,
+        Vec<noon_runtime::FrameObjectState>,
+        Vec<Range<usize>>,
+    ) {
+        use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
+        use noon_runtime::{FrameObjectState, FrameState};
+
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            ..Style::default()
+        };
+        let geometries = (0..count)
+            .map(|index| {
+                let y = index as f32 * 0.25;
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-1.0, y))
+                        .line_to(Vec2::new(1.0 + index as f32 * 0.01, y)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let requests = geometries
+            .iter()
+            .map(|geometry| crate::PathMeshPreload {
+                geometry,
+                style,
+                transform: Transform2D::IDENTITY,
+            })
+            .collect::<Vec<_>>();
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        preparer.preload_paths(&requests).unwrap();
+        let ranges = preparer
+            .path_mesh_cache
+            .iter()
+            .map(|cached| range_usize(&cached.resident.as_ref().unwrap().vertices))
+            .collect::<Vec<_>>();
+        assert_eq!(ranges.len(), count);
+        assert_eq!(ranges[0].start, 0);
+        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
+        let rows = geometries
+            .into_iter()
+            .enumerate()
+            .map(|(index, geometry)| FrameObjectState {
+                glow: None,
+                spatial: None,
+                id: ObjectId::new(index as u64 + 1),
+                z_index: 0.0,
+                content: geometry.into(),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style,
+                appearance: 1.0,
+            })
+            .collect();
+        let frame = FrameState {
+            time: 0.0,
+            objects: vec![],
+            presences: vec![],
+            reveals: vec![],
+            morphs: vec![],
+            render_geometries: vec![],
+            render_transforms: vec![],
+            family_animations: vec![],
+            family_animation_plan_indices: vec![],
+        };
+        (preparer, frame, rows, ranges)
+    }
+
+    fn append_fixture_row(
+        frame: &mut noon_runtime::FrameState,
+        row: noon_runtime::FrameObjectState,
+    ) {
+        frame.objects.push(row);
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+        frame.family_animations.push(None);
+        frame.family_animation_plan_indices.push(None);
+    }
+
+    #[test]
+    fn mixed_preloaded_suffix_stays_out_of_packed_attribute_uploads() {
+        for count in [8, 1024] {
+            let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(count);
+            let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+            let mut renderer =
+                crate::GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            append_fixture_row(&mut frame, rows[0].clone());
+            let prepared = preparer.prepare(&frame);
+            assert_eq!(prepared.stats.mega_path_count, 1);
+            assert_eq!(prepared.path_vertices.len(), ranges[count - 1].end);
+            assert_eq!(prepared.mega_path_vertex_instances.len(), ranges[0].end);
+            assert!(ranges.iter().all(|range| range.len() == ranges[0].len()));
+            assert_eq!(prepared.path_vertices.len(), count * ranges[0].end);
+            assert!(prepared
+                .mega_path_indices
+                .iter()
+                .all(|&index| (index as usize) < ranges[0].end));
+
+            // Exercise the real upload entrypoint on wgpu's validating noop
+            // device. These are submitted byte counts, not physical VRAM/FPS.
+            let mut writes = Vec::new();
+            let upload = renderer.upload_with_trace(&device, &queue, &prepared, &mut writes);
+            assert_eq!(
+                upload.bytes_uploaded,
+                writes.iter().map(|write| write.byte_length).sum::<usize>()
+            );
+            let packed_writes = writes
+                .iter()
+                .filter(|write| write.buffer == "mega_path_vertex_instance")
+                .collect::<Vec<_>>();
+            assert_eq!(packed_writes.len(), 1);
+            assert_eq!(packed_writes[0].instance_range, 0..ranges[0].end);
+            assert_eq!(
+                packed_writes[0].byte_length,
+                ranges[0].end * std::mem::size_of::<PathInstance>()
+            );
+
+            let clean = preparer.prepare_incremental(&frame, &Default::default());
+            let upload = renderer.upload(&device, &queue, &clean);
+            assert_eq!(upload.bytes_uploaded, 0);
+            assert_eq!(upload.buffer_reallocations, 0);
+        }
+    }
+
+    #[test]
+    fn mixed_preloaded_append_bounds_attributes_and_preserves_high_address_reentry() {
+        use noon_core::{GeometryRef, ObjectId, Vec2, VectorPath};
+        use noon_runtime::FrameChanges;
+
+        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(32);
+        let empty = preparer.prepare(&frame);
+        assert!(!empty.path_vertices.is_empty());
+        assert!(empty.mega_path_vertex_instances.is_empty());
+        assert!(empty.mega_path_instance_dirty_ranges.is_empty());
+
+        append_fixture_row(&mut frame, rows[0].clone());
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.mega_path_vertex_instances.len(), ranges[0].end);
+        let prefix = initial.mega_path_vertex_instances.to_vec();
+
+        // A genuinely new nonresident path uses the existing structural-append
+        // lane. Resident first-use deliberately retains its individual lane;
+        // this test must not change that separate admission policy.
+        let mut added = rows[0].clone();
+        added.id = ObjectId::new(1001);
+        added.content = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-2.0, 0.125))
+                .line_to(Vec2::new(2.0, 0.125)),
+        )
+        .into();
+        append_fixture_row(&mut frame, added);
+        let appended = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::with_structure(vec![], vec![1], vec![]),
+        );
+        let appended_range = ranges[31].end..appended.path_vertices.len();
+        assert!(!appended_range.is_empty());
+        assert_eq!(appended.stats.full_rebuilds, 0);
+        assert_eq!(appended.stats.geometry_cache_misses, 1);
+        assert_eq!(appended.stats.path_vertices_repacked, appended_range.len());
+        assert_eq!(appended.stats.mega_path_count, 2);
+        assert_eq!(appended.mega_path_vertex_instances.len(), appended_range.end);
+        assert_eq!(&appended.mega_path_vertex_instances[..prefix.len()], &prefix);
+        assert_eq!(
+            appended.mega_path_instance_dirty_ranges,
+            std::slice::from_ref(&appended_range)
+        );
+        assert!(appended
+            .mega_path_indices
+            .iter()
+            .all(|&index| (index as usize) < appended.mega_path_vertex_instances.len()));
+
+        // An already-allowed full rebuild may trim the logical suffix. Do not
+        // claim this shrinks retained Vec capacity or a GPU high-water buffer.
+        frame.presences[1] = false;
+        let rebuilt = preparer.prepare(&frame);
+        assert_eq!(rebuilt.stats.mega_path_count, 1);
+        assert_eq!(rebuilt.mega_path_vertex_instances.len(), ranges[0].end);
+
+        frame.presences[1] = true;
+        let reentered = preparer.prepare(&frame);
+        assert_eq!(reentered.stats.mega_path_count, 2);
+        assert_eq!(reentered.mega_path_vertex_instances.len(), appended_range.end);
+        let retained = reentered.mega_path_vertex_instances.to_vec();
+        frame.objects[0].style.opacity = 0.25;
+        let changed = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert_eq!(changed.stats.full_rebuilds, 0);
+        assert_eq!(changed.mega_path_instance_dirty_ranges, &ranges[..1]);
+        assert_eq!(
+            &changed.mega_path_vertex_instances[appended_range.clone()],
+            &retained[appended_range]
+        );
     }
 }
