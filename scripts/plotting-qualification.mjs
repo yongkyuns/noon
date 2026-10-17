@@ -356,12 +356,12 @@ class AxesAddCoordinates(Scene):
         assert not hasattr(x_default.y_axis, "numbers")
 
         custom = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
-        custom.add_coordinates({-1: "Left", 1: "Right"})
+        custom.add_coordinates({-1: "Left", 1: "Right"}, font="DejaVu Sans Mono")
         assert len(custom.coordinate_labels.submobjects) == 1
         assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
 
         mixed = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
-        mixed.add_coordinates({0: "origin"}, (-1, 1))
+        mixed.add_coordinates({0: "origin"}, (-1, 1), font="DejaVu Sans Mono")
         assert len(mixed.coordinate_labels.submobjects) == 2
         assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
         assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
@@ -401,12 +401,12 @@ class NumberPlaneAddCoordinates(Scene):
         assert not hasattr(x_default.y_axis, "numbers")
 
         custom = NumberPlane((-2, 2, 1), (-1, 1, 1))
-        custom.add_coordinates({-1: "Left", 1: "Right"})
+        custom.add_coordinates({-1: "Left", 1: "Right"}, font="DejaVu Sans Mono")
         assert len(custom.coordinate_labels.submobjects) == 1
         assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
 
         mixed = NumberPlane((-2, 2, 1), (-1, 1, 1))
-        mixed.add_coordinates({0: "origin"}, (-1, 1))
+        mixed.add_coordinates({0: "origin"}, (-1, 1), font="DejaVu Sans Mono")
         assert len(mixed.coordinate_labels.submobjects) == 2
         assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
         assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")

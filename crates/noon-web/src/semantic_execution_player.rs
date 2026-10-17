@@ -1624,7 +1624,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_next_layout_to_edge_in_frame(
         &mut self,
         source: &noon::LayoutAnchor,

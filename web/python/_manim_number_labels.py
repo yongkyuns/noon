@@ -211,6 +211,12 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
         for axis, settings in zip(axes, axis_configs, strict=True)
     ]
     native_profiles = ["font" in settings for settings in axis_configs]
+    if any(isinstance(value, Mapping) and not native_profiles[index]
+           for index, value in enumerate(values)):
+        raise NotImplementedError(
+            "mapping coordinate labels require an explicit font for native Text; "
+            "default TeX mappings are not yet supported"
+        )
     custom_log_labels = any(
         _plot._number_line_scale(getattr(axis, "scaling", None))[2] for axis in axes
     )
@@ -292,7 +298,8 @@ def _add_axis_custom_labels(axis, values, settings):
     }
     if "label_constructor" in settings:
         options["label_constructor"] = settings["label_constructor"]
-    return axis.add_labels(values, **options)
+    options["font"] = settings["font"]
+    return custom_labels(axis, values, config=options)
 
 
 def _add_decimal_coordinate_labels(
