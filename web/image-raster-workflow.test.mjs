@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const workflowDir = new URL("../.github/workflows/", import.meta.url);
@@ -42,4 +42,34 @@ test("image input qualification executes real worker input cases and a pinned ra
   const reference = await readFile(new URL("../scripts/image-manim-reference.py", import.meta.url), "utf8");
   assert.match(reference, /input_camera\.capture_mobjects\(\[input_image\]\)/);
   assert.match(reference, /input-raster\.png/);
+});
+
+
+test("all pinned Manim oracles share the compatible Pillow constraint", async () => {
+  const constraints = await readFile(
+    new URL("../.github/ci/manim-reference-constraints.txt", import.meta.url), "utf8",
+  );
+  assert.match(constraints, /^pillow==12\.3\.0$/m);
+  let installers = 0;
+  for (const name of await readdir(workflowDir)) {
+    if (!name.endsWith(".yml")) continue;
+    const source = await readFile(new URL(name, workflowDir), "utf8");
+    const installs = source.split("\n").filter(line =>
+      line.includes("pip install") && /manim(?:\[typst\])?==0\.21\.0/.test(line));
+    if (!installs.length) continue;
+    for (const line of installs) {
+      assert.match(line, /--constraint \.github\/ci\/manim-reference-constraints\.txt(?: |$)/,
+        name + ": reference dependencies must not drift independently");
+      installers++;
+    }
+    const triggers = source.split("on:\n")[1]?.split("\npermissions:")[0];
+    if (triggers?.includes("    paths:\n")) {
+      assert.ok(triggers.includes('      - ".github/ci/manim-reference-constraints.txt"'),
+        name + ": constraint changes must select the affected oracle");
+    } else {
+      assert.match(triggers ?? "", /  push:\n    branches:\n      - master/);
+      assert.doesNotMatch(triggers, /paths-ignore:[\s\S]*manim-reference-constraints/);
+    }
+  }
+  assert.ok(installers > 0, "no pinned Manim oracle installers were checked");
 });
