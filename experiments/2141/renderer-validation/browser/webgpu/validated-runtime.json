@@ -1,0 +1,64 @@
+{
+  "backend": "webgpu",
+  "before": {
+    "head": "495580e2197022701a9190bae4f20047193f5be6",
+    "runtime": {
+      "schema": 1,
+      "sourceRevision": "495580e2197022701a9190bae4f20047193f5be6",
+      "files": {
+        "worker": {
+          "path": "./python-worker.js",
+          "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+        },
+        "wasm": {
+          "path": "./pkg/noon_web_bg.wasm",
+          "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822"
+        },
+        "glue": {
+          "path": "./pkg/noon_web.js",
+          "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+        },
+        "verifier": {
+          "path": "./runtime-build-verifier.js",
+          "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+        }
+      },
+      "buildId": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5"
+    },
+    "identitySha256": "1450c44ac95b949f979b7ba438e6e9c759650cb7592a74dced835fe462e0b1f9",
+    "wasmSha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822",
+    "wasmBytes": 50121763
+  },
+  "after": {
+    "head": "495580e2197022701a9190bae4f20047193f5be6",
+    "runtime": {
+      "schema": 1,
+      "sourceRevision": "495580e2197022701a9190bae4f20047193f5be6",
+      "files": {
+        "worker": {
+          "path": "./python-worker.js",
+          "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+        },
+        "wasm": {
+          "path": "./pkg/noon_web_bg.wasm",
+          "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822"
+        },
+        "glue": {
+          "path": "./pkg/noon_web.js",
+          "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+        },
+        "verifier": {
+          "path": "./runtime-build-verifier.js",
+          "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+        }
+      },
+      "buildId": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5"
+    },
+    "identitySha256": "1450c44ac95b949f979b7ba438e6e9c759650cb7592a74dced835fe462e0b1f9",
+    "wasmSha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822",
+    "wasmBytes": 50121763
+  },
+  "passed": true,
+  "failure": null,
+  "harnessAdaptation": "Pinned Pyodide assets use Chromium networking instead of the optional Node route.fetch byte cache; test assertions and production sources are unchanged."
+}

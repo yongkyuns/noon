@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "purpose": "PR #2175 validation extension; correctness evidence, separate from performance experiments",
+  "source": {
+    "headlineFastGateRevision": "aba3d4c6a27a24890ffac70fd4819ae7aff47009",
+    "headlineFastGateTree": "aa5f45c05e94ca62d181a910584768f7d6bdbf95",
+    "browserRevision": "495580e2197022701a9190bae4f20047193f5be6",
+    "browserLocalEquivalentRevision": "2d4c255728455013d2fd26aa28ab2eeb0ec505af",
+    "browserSourceTree": "432c64b62949bad018d587ade585b92986f80324",
+    "identicalRendererSubtree": "a3d16c015a5acad45529079ba3b90d2246ef1cb8",
+    "rawGitObjectIdentities": "source-identities.txt",
+    "scopeNote": "Browser captures qualify 495580e. The final full-tree fast gate qualifies aba3d4c6. Their renderer crate subtrees are identical; the complete source trees differ."
+  },
+  "runtime": {
+    "schema": 1,
+    "sourceRevision": "495580e2197022701a9190bae4f20047193f5be6",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "f35fb4d3dc1d07675b3d2cb69ef3a00b830e180427a65474f31bbcefd01348d7"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "f3a75bb41ebb5623897ba836f83fade7630ae35d6c85a9908d39112265517955"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "b0170cc832f3a35996637589a3004cfaa32046028f995392ad5c78775fd890c5"
+  },
+  "wasm": {
+    "bytes": 50121763,
+    "sha256": "ab3485e20f1c2c54dcbab9da26da3b66b736355c3134c34014584a84129c8822",
+    "binaryIncluded": false
+  },
+  "browserResults": [
+    {
+      "backend": "WebGL2",
+      "browserVersion": "151.0.7922.34",
+      "outcome": "pass",
+      "presentedFrames": 115,
+      "authoredDurationSeconds": 2,
+      "finalTimeSeconds": 2,
+      "finalObjectCount": 4,
+      "browserErrors": 0,
+      "failedRequests": 0,
+      "sampleCount": 19,
+      "sampledTransientIntervalBeforeOneSecond": true,
+      "bufferedDeltas": 0,
+      "needsPresent": false,
+      "semanticExecution": {
+        "contextId": "semantic-0",
+        "continuationGeneration": 1
+      },
+      "rawResult": "browser/webgl/noon-transform-matching-shapes-breadth.json"
+    },
+    {
+      "backend": "WebGPU",
+      "browserVersion": "151.0.7922.34",
+      "outcome": "pass",
+      "presentedFrames": 125,
+      "authoredDurationSeconds": 2,
+      "finalTimeSeconds": 2,
+      "finalObjectCount": 4,
+      "browserErrors": 0,
+      "failedRequests": 0,
+      "sampleCount": 21,
+      "sampledTransientIntervalBeforeOneSecond": true,
+      "bufferedDeltas": 0,
+      "needsPresent": false,
+      "semanticExecution": {
+        "contextId": "semantic-0",
+        "continuationGeneration": 1
+      },
+      "rawResult": "browser/webgpu/noon-transform-matching-shapes-breadth.json"
+    }
+  ],
+  "browserScope": {
+    "galleryCase": "noon-transform-matching-shapes-breadth",
+    "productionPackage": true,
+    "unchangedQualificationScript": "scripts/playground-gallery-runtime-smoke.mjs",
+    "dedicatedSmokeExportStartupAndCleanupSuite": "Not run locally with this plain production package; left for CI",
+    "harnessAdjustments": [
+      "Explicit Chrome 151 executable and software WebGL/WebGPU launch flags",
+      "Local certificate settings matching the working benchmark",
+      "Pinned Pyodide CDN requests use Chromium networking instead of the optional Node route.fetch byte cache"
+    ],
+    "nodeVersion": "v24.19.0",
+    "playwrightVersion": "1.62.1"
+  },
+  "focusedNativeEvidence": {
+    "rawLogsRetained": false,
+    "narrativeSessionReport": "native-session-results.md"
+  },
+  "earlierFastGate": {
+    "passed": true,
+    "recordedExitCode": 0,
+    "rawLog": "logs/check-fast-2175.log.gz",
+    "metadata": "logs/check-fast-metadata.json",
+    "rustPassed": 3400,
+    "rustIgnored": 33,
+    "pythonReferencePassed": 25
+  },
+  "fastGate": {
+    "passed": true,
+    "recordedExitCode": 0,
+    "sourceRevision": "aba3d4c6a27a24890ffac70fd4819ae7aff47009",
+    "sourceTree": "aa5f45c05e94ca62d181a910584768f7d6bdbf95",
+    "rawLog": "logs/check-fast-merged-2175.log.gz",
+    "metadata": "logs/check-fast-merged-metadata.json",
+    "rustPassed": 3410,
+    "rustIgnored": 33,
+    "pythonReferencePassed": 25
+  }
+}

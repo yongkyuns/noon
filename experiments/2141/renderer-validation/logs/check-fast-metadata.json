@@ -1,0 +1,103 @@
+{
+  "evidenceType": "Raw command log plus separately recorded invocation metadata",
+  "rawLog": "logs/check-fast-2175.log.gz",
+  "compression": "gzip; decompression reproduces the original bytes",
+  "originalFilename": "/tmp/noon-check-fast-2175-network.log",
+  "originalBytes": 396161,
+  "originalSha256": "6affeaa4de916051b8c84e300f5d20b41c96293603d12c8a9427df96f0d81aa9",
+  "command": "env PATH=/tmp/noon-cargo/bin:$PATH RUSTUP_HOME=/tmp/noon-rustup CARGO_HOME=/tmp/noon-cargo CARGO_TARGET_DIR=/tmp/noon-target CARGO_BUILD_JOBS=2 bash scripts/check.sh fast",
+  "recordedExitCode": 0,
+  "exitCodeProvenance": "Completed tool invocation reported exit code 0; the raw log does not embed an explicit exit-code footer.",
+  "candidateIdentityProvenance": "The running task recorded the local candidate as 2d4c255; the log itself identifies its candidate as the current working tree and does not embed the candidate Git SHA. Git object identity proves 2d4c255 and 495580e have the same full source tree.",
+  "localCandidateRevision": "2d4c255728455013d2fd26aa28ab2eeb0ec505af",
+  "equivalentRemoteRevision": "495580e2197022701a9190bae4f20047193f5be6",
+  "sourceTree": "432c64b62949bad018d587ade585b92986f80324",
+  "rustLibrarySuites": [
+    {
+      "passed": 1118,
+      "failed": 0,
+      "ignored": 1,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 227,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 746,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 16,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 150,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 73,
+      "failed": 0,
+      "ignored": 8,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 298,
+      "failed": 0,
+      "ignored": 8,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 193,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 62,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 501,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    }
+  ],
+  "rustTotals": {
+    "passed": 3400,
+    "failed": 0,
+    "ignored": 33,
+    "suites": 11
+  },
+  "pythonReferenceTests": {
+    "passed": 25
+  }
+}

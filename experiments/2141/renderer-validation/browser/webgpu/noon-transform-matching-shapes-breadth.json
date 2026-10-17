@@ -1,0 +1,275 @@
+{
+  "id": "noon-transform-matching-shapes-breadth",
+  "noJspi": false,
+  "browserName": "chromium",
+  "profile": "desktop-dpr1",
+  "revision": null,
+  "browserVersion": "151.0.7922.34",
+  "errors": [],
+  "failedRequests": [],
+  "samples": [
+    {
+      "time": 0.021900000000372528,
+      "objects": 3,
+      "frames": 3
+    },
+    {
+      "time": 0.102,
+      "objects": 3,
+      "frames": 8
+    },
+    {
+      "time": 0.202,
+      "objects": 3,
+      "frames": 14
+    },
+    {
+      "time": 0.31859999999962746,
+      "objects": 3,
+      "frames": 21
+    },
+    {
+      "time": 0.41869999999925495,
+      "objects": 3,
+      "frames": 27
+    },
+    {
+      "time": 0.518699999999255,
+      "objects": 3,
+      "frames": 33
+    },
+    {
+      "time": 0.618699999999255,
+      "objects": 3,
+      "frames": 39
+    },
+    {
+      "time": 0.7352999999988824,
+      "objects": 3,
+      "frames": 46
+    },
+    {
+      "time": 0.8350999999996275,
+      "objects": 3,
+      "frames": 52
+    },
+    {
+      "time": 0.9352999999988824,
+      "objects": 3,
+      "frames": 58
+    },
+    {
+      "time": 1.0350999999996275,
+      "objects": 4,
+      "frames": 65
+    },
+    {
+      "time": 1.1519000000003725,
+      "objects": 4,
+      "frames": 72
+    },
+    {
+      "time": 1.2519000000003726,
+      "objects": 4,
+      "frames": 78
+    },
+    {
+      "time": 1.352,
+      "objects": 4,
+      "frames": 84
+    },
+    {
+      "time": 1.4519000000003726,
+      "objects": 4,
+      "frames": 90
+    },
+    {
+      "time": 1.5519000000003724,
+      "objects": 4,
+      "frames": 96
+    },
+    {
+      "time": 1.6685999999996275,
+      "objects": 4,
+      "frames": 103
+    },
+    {
+      "time": 1.768699999999255,
+      "objects": 4,
+      "frames": 109
+    },
+    {
+      "time": 1.8685,
+      "objects": 4,
+      "frames": 115
+    },
+    {
+      "time": 1.9685999999996275,
+      "objects": 4,
+      "frames": 121
+    },
+    {
+      "time": 2,
+      "objects": 4,
+      "frames": 125
+    }
+  ],
+  "presentations": [],
+  "state": {
+    "selected": "noon-transform-matching-shapes-breadth",
+    "inFlight": false,
+    "transportMode": "transferable",
+    "crossOriginIsolated": false,
+    "patch": {
+      "state": "applied",
+      "exampleId": "noon-transform-matching-shapes-breadth",
+      "parityStatus": "candidate",
+      "sequence": "0",
+      "runGeneration": "3",
+      "operation": "Scene rebuilt atomically"
+    },
+    "text": "Finished · TransformMatchingShapes Breadth · 4 objects · timeline ready",
+    "runtimeStatus": "Finished · 4 objects · WebGPU semantic worker",
+    "rendererBackend": "WebGPU",
+    "metrics": {
+      "channel": "noon.render",
+      "protocolVersion": 1,
+      "requestId": 27,
+      "type": "metrics",
+      "metrics": {
+        "ready": true,
+        "mode": "retained",
+        "retained": true,
+        "mixed": true,
+        "transportMode": "transferable",
+        "presentedFrames": 125,
+        "presentationIntervalMs": null,
+        "presentationIntervalSamples": 0,
+        "lastDeltaApplyMs": 0.09999999962747097,
+        "lastRendererCallMs": 0.5,
+        "modeSwitches": 0,
+        "rendererRebuilds": 1,
+        "sampledAtMs": 5876.4000000003725,
+        "performanceTimeOriginMs": 1792248357107.9,
+        "rendererReadyAtMs": 2801.199999999255,
+        "firstPresentedAtMs": 2861.0999999996275,
+        "presentedSession": 2,
+        "firstPresentedSessionAtMs": 5414.799999998882,
+        "transitionMode": null,
+        "lastFrameTimestamp": 5396.8,
+        "bufferedDeltas": 0,
+        "needsPresent": false,
+        "backend": "WebGPU",
+        "gpuGeneration": 1,
+        "time": 2,
+        "objectCount": 4,
+        "drawCalls": 2,
+        "instancesDrawn": 4,
+        "bytesUploaded": 0,
+        "geometryCacheMisses": 0,
+        "outlineCacheMisses": "0",
+        "resourceBundlePending": false,
+        "preloadedGeometryCount": 0,
+        "preloadBytesUploaded": 0
+      },
+      "engineMetrics": {
+        "host": {
+          "enabled": false,
+          "missedDeadlines": 0,
+          "droppedLateResults": 0
+        }
+      },
+      "renderHost": "worker",
+      "executionMode": "semantic"
+    }
+  },
+  "finalMetrics": {
+    "channel": "noon.render",
+    "protocolVersion": 1,
+    "requestId": 30,
+    "type": "metrics",
+    "metrics": {
+      "ready": true,
+      "mode": "retained",
+      "retained": true,
+      "mixed": true,
+      "transportMode": "transferable",
+      "presentedFrames": 125,
+      "presentationIntervalMs": null,
+      "presentationIntervalSamples": 0,
+      "lastDeltaApplyMs": 0.09999999962747097,
+      "lastRendererCallMs": 0.5,
+      "modeSwitches": 0,
+      "rendererRebuilds": 1,
+      "sampledAtMs": 6048.9000000003725,
+      "performanceTimeOriginMs": 1792248357107.9,
+      "rendererReadyAtMs": 2801.199999999255,
+      "firstPresentedAtMs": 2861.0999999996275,
+      "presentedSession": 2,
+      "firstPresentedSessionAtMs": 5414.799999998882,
+      "transitionMode": null,
+      "lastFrameTimestamp": 5396.8,
+      "bufferedDeltas": 0,
+      "needsPresent": false,
+      "backend": "WebGPU",
+      "gpuGeneration": 1,
+      "time": 2,
+      "objectCount": 4,
+      "drawCalls": 2,
+      "instancesDrawn": 4,
+      "bytesUploaded": 0,
+      "geometryCacheMisses": 0,
+      "outlineCacheMisses": "0",
+      "resourceBundlePending": false,
+      "preloadedGeometryCount": 0,
+      "preloadBytesUploaded": 0
+    },
+    "engineMetrics": {
+      "host": {
+        "enabled": false,
+        "missedDeadlines": 0,
+        "droppedLateResults": 0
+      }
+    },
+    "renderHost": "worker",
+    "executionMode": "semantic"
+  },
+  "semanticExecution": {
+    "contextId": "semantic-0",
+    "continuationGeneration": 1
+  },
+  "authoredDuration": 2,
+  "outcome": "pass",
+  "browserTrace": {
+    "phase": "gallery-authored-execution",
+    "events": [
+      {
+        "atMs": 1792248356456,
+        "phase": "gallery-navigation",
+        "kind": "phase",
+        "exampleId": "noon-transform-matching-shapes-breadth",
+        "noJspi": false
+      },
+      {
+        "atMs": 1792248356489,
+        "phase": "gallery-navigation",
+        "kind": "main-frame-navigation",
+        "url": "http://127.0.0.1:44725/web/index.html?example=noon-transform-matching-shapes-breadth"
+      },
+      {
+        "atMs": 1792248356600,
+        "phase": "gallery-navigation",
+        "kind": "main-frame-navigation",
+        "url": "http://127.0.0.1:44725/web/index.html?example=noon-transform-matching-shapes-breadth"
+      },
+      {
+        "atMs": 1792248356658,
+        "phase": "gallery-authored-execution",
+        "kind": "phase",
+        "exampleId": "noon-transform-matching-shapes-breadth",
+        "noJspi": false
+      }
+    ]
+  },
+  "elapsedMs": 6966.430903
+}

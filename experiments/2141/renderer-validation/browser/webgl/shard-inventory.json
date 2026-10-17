@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "browser": "chromium",
+  "profile": "desktop-dpr1",
+  "shard": null,
+  "sourceCaseCount": 66,
+  "selectedCaseIds": [
+    "noon-transform-matching-shapes-breadth"
+  ],
+  "expectedCases": [
+    {
+      "id": "noon-transform-matching-shapes-breadth",
+      "noJspi": false
+    }
+  ]
+}

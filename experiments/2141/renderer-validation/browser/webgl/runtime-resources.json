@@ -1,0 +1,12 @@
+{
+  "elapsedMs": 6473.053218999999,
+  "baseUrl": "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/",
+  "requests": 0,
+  "hits": 0,
+  "upstreamRequests": 0,
+  "upstreamFailures": 0,
+  "upstreamFailureDetails": [],
+  "fulfillFailures": 0,
+  "fulfillFailureDetails": [],
+  "retainedBytes": 0
+}

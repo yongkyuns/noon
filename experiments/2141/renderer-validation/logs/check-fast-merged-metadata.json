@@ -1,0 +1,103 @@
+{
+  "evidenceType": "Raw command log plus separately recorded invocation metadata",
+  "rawLog": "logs/check-fast-merged-2175.log.gz",
+  "compression": "gzip; decompression reproduces original bytes",
+  "originalFilename": "/tmp/noon-check-fast-merged-2175-network.log",
+  "originalBytes": 380830,
+  "originalSha256": "b3eef73d30d7b3d9f080f18a85c4804e7fd36b7b97795f798eb9ef2a4edff34c",
+  "command": "CARGO_INCREMENTAL=0 bash scripts/check.sh fast",
+  "commandProvenance": "Task owner reported CARGO_INCREMENTAL=0 for this completed fast-gate invocation. The raw log does not embed the shell command or complete environment.",
+  "recordedExitCode": 0,
+  "exitCodeProvenance": "Completed invocation reported by the task owner; the raw log does not embed an explicit exit-code footer.",
+  "sourceRevision": "aba3d4c6a27a24890ffac70fd4819ae7aff47009",
+  "sourceTree": "aa5f45c05e94ca62d181a910584768f7d6bdbf95",
+  "candidateIdentityProvenance": "Task owner identified the completed merged-tree gate; Git object identity independently confirms the revision/tree mapping. The log calls its candidate the current working tree and does not embed a candidate SHA.",
+  "rustLibrarySuites": [
+    {
+      "passed": 1127,
+      "failed": 0,
+      "ignored": 1,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 227,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 746,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 16,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 151,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 73,
+      "failed": 0,
+      "ignored": 8,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 298,
+      "failed": 0,
+      "ignored": 8,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 193,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 62,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    },
+    {
+      "passed": 501,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filteredOut": 0
+    }
+  ],
+  "rustTotals": {
+    "passed": 3410,
+    "failed": 0,
+    "ignored": 33,
+    "suites": 11
+  },
+  "pythonReferenceTests": {
+    "passed": 25
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "evidenceType": "Post-assembly content review",
+  "result": "pass",
+  "credentialPatternsChecked": [
+    "privateKey",
+    "awsAccessKey",
+    "githubToken",
+    "slackToken",
+    "authorizationHeader"
+  ],
+  "signedOrCredentialQueryParametersChecked": [
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth",
+    "sig",
+    "signature",
+    "token",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-amz-signature",
+    "x-goog-credential",
+    "x-goog-signature"
+  ],
+  "findings": [],
+  "textAndDecompressedLogFilesReviewed": [
+    "README.md",
+    "browser/captured-run-summary.json",
+    "browser/webgl/noon-transform-matching-shapes-breadth.json",
+    "browser/webgl/runtime-resources.json",
+    "browser/webgl/shard-inventory.json",
+    "browser/webgl/validated-runtime.json",
+    "browser/webgpu/noon-transform-matching-shapes-breadth.json",
+    "browser/webgpu/runtime-resources.json",
+    "browser/webgpu/shard-inventory.json",
+    "browser/webgpu/validated-runtime.json",
+    "logs/check-fast-2175.log.gz",
+    "logs/check-fast-merged-2175.log.gz",
+    "logs/check-fast-merged-metadata.json",
+    "logs/check-fast-metadata.json",
+    "native-session-results.md",
+    "reproduce.sh",
+    "runtime-build-identity.json",
+    "source-identities.txt",
+    "summary.json",
+    "wrapper.mjs"
+  ],
+  "observedUrlHosts": [
+    "127.0.0.1",
+    "cdn.jsdelivr.net"
+  ],
+  "observedUrlQueryKeys": [
+    "example"
+  ],
+  "pngReview": [
+    {
+      "path": "browser/webgl/noon-transform-matching-shapes-breadth.png",
+      "chunkTypes": [
+        "IDAT",
+        "IEND",
+        "IHDR"
+      ],
+      "visualReview": "Local gallery source and rendered shapes only; no credentials or signed URLs visible."
+    },
+    {
+      "path": "browser/webgpu/noon-transform-matching-shapes-breadth.png",
+      "chunkTypes": [
+        "IDAT",
+        "IEND",
+        "IHDR"
+      ],
+      "visualReview": "Local gallery source and rendered shapes only; no credentials or signed URLs visible."
+    }
+  ],
+  "rawIntegrityChecks": [
+    "Copied browser JSON and screenshots are byte-identical to the successful source artifacts.",
+    "Gzip decompression reproduces each original completed fast-gate log byte for byte.",
+    "Git objects verify the revision/tree relationships in source-identities.txt."
+  ]
+}

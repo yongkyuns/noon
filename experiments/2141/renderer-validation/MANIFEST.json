@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "scope": "All files in this directory except MANIFEST.json itself",
+  "payloadFileCount": 23,
+  "payloadBytes": 563053,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 5234,
+      "sha256": "ba9adfcc1f2dd99b227e8455c2fe3b4e5f97f175cd5fd80382fca78194f6ee97"
+    },
+    {
+      "path": "browser/captured-run-summary.json",
+      "bytes": 5298,
+      "sha256": "1996e4ef36dbc2d2dd2a3834088089d58145ff06511a0779a02b9da68be4d323"
+    },
+    {
+      "path": "browser/webgl/noon-transform-matching-shapes-breadth.json",
+      "bytes": 6584,
+      "sha256": "98fb51d9402ade5063f5117e8f9a86c5473c5d2ceffa61c1ba107e166fd2ed43"
+    },
+    {
+      "path": "browser/webgl/noon-transform-matching-shapes-breadth.png",
+      "bytes": 175319,
+      "sha256": "1a63c1eddcaf2ec012c68f4ee8691e8a033b150a6aabc0be11d8f09afa203a5d"
+    },
+    {
+      "path": "browser/webgl/runtime-resources.json",
+      "bytes": 289,
+      "sha256": "f9c09bb719deaf319f6993f8832a946fdb5b82580f986b913b8fae763bfdcd63"
+    },
+    {
+      "path": "browser/webgl/shard-inventory.json",
+      "bytes": 307,
+      "sha256": "f26e7dfd9078a77e8437203212c87cfc0731208cfbbeea0ae3e292aa6d379e7c"
+    },
+    {
+      "path": "browser/webgl/validated-runtime.json",
+      "bytes": 2518,
+      "sha256": "e7aacc00440d86c3d2a6b97d94f7ba2d05a983ee240c77e2b5dda2aa54e46f17"
+    },
+    {
+      "path": "browser/webgpu/noon-transform-matching-shapes-breadth.json",
+      "bytes": 6740,
+      "sha256": "ad9e64da102fad13d78c8ccbc68e12bbfcb9589f05df34af646c86372d00217d"
+    },
+    {
+      "path": "browser/webgpu/noon-transform-matching-shapes-breadth.png",
+      "bytes": 175091,
+      "sha256": "0b88a4926115e3fe8ddeb027dda5c3612799265538a0b91305f1b5d89e428b82"
+    },
+    {
+      "path": "browser/webgpu/runtime-resources.json",
+      "bytes": 283,
+      "sha256": "79b2d3bd8113ddd819d372813bb0e20063dbd639922e316a021631b264ab9b3c"
+    },
+    {
+      "path": "browser/webgpu/shard-inventory.json",
+      "bytes": 307,
+      "sha256": "f26e7dfd9078a77e8437203212c87cfc0731208cfbbeea0ae3e292aa6d379e7c"
+    },
+    {
+      "path": "browser/webgpu/validated-runtime.json",
+      "bytes": 2519,
+      "sha256": "dc99f5d8e8ed24345b6aeb661ec50add76753ccc59e51e9f98a73584b0c74879"
+    },
+    {
+      "path": "content-review.json",
+      "bytes": 2311,
+      "sha256": "2b31acd92c73f965566ff729493ac766755efebf11ae62817cd485cacbbd7f18"
+    },
+    {
+      "path": "logs/check-fast-2175.log.gz",
+      "bytes": 82135,
+      "sha256": "e2588af35334cb6e8f1bf39d584015df46fa6f31fb047952054ccb6c53873294"
+    },
+    {
+      "path": "logs/check-fast-merged-2175.log.gz",
+      "bytes": 78447,
+      "sha256": "8705851242d63baf9c4f2d54cb73a277d94553c733ab8ada76ccb99dacfa3a45"
+    },
+    {
+      "path": "logs/check-fast-merged-metadata.json",
+      "bytes": 2617,
+      "sha256": "c0c74154e7927e38f8472fe4c54908d8d67c013d988f6b8d2fb08ac39ecb27b3"
+    },
+    {
+      "path": "logs/check-fast-metadata.json",
+      "bytes": 2669,
+      "sha256": "05d3ac55f4fe001ea154be0ae19664c12f12bc814926356eaf8132b44346a0ed"
+    },
+    {
+      "path": "native-session-results.md",
+      "bytes": 2733,
+      "sha256": "2c7f1416bbeaa2be4f55b218a99c2077a891691caab7b06f28313d4f6a15e621"
+    },
+    {
+      "path": "reproduce.sh",
+      "bytes": 341,
+      "sha256": "d96004b75977484ad707cd115278e9eaae4adee7ab9cfb6a070d2dbc5503d7e8"
+    },
+    {
+      "path": "runtime-build-identity.json",
+      "bytes": 758,
+      "sha256": "1450c44ac95b949f979b7ba438e6e9c759650cb7592a74dced835fe462e0b1f9"
+    },
+    {
+      "path": "source-identities.txt",
+      "bytes": 955,
+      "sha256": "0b6d2cca6de4621db65b587ac64d412cc91c7a9cfc5d0f6225859e62ed1534e9"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 4466,
+      "sha256": "66af0b7bbf1e551ed3caa6acd476c977193b9931af9bde22758beebd7367fb7b"
+    },
+    {
+      "path": "wrapper.mjs",
+      "bytes": 5132,
+      "sha256": "264ec432972e9a923f402fce7b4b1920eb1945470d4de4cc28cf44cebd9139fb"
+    }
+  ]
+}

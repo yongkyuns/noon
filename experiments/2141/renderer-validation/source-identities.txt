@@ -1,0 +1,7 @@
+2d4c255728455013d2fd26aa28ab2eeb0ec505af 432c64b62949bad018d587ade585b92986f80324 fix(ci): pin Pillow for the Manim image reference oracle
+495580e2197022701a9190bae4f20047193f5be6 432c64b62949bad018d587ade585b92986f80324 fix(ci): pin Pillow for the Manim image reference oracle
+94fb0297959b457e8a7b7a40e86858a726650ff8 b994f29372b78e78e5335a526d07532a8cacfe50 fix(renderer): preserve packed transient anchors and family upload locality
+522e0982258d55d3515da6aad5c94331e263a2d9 b994f29372b78e78e5335a526d07532a8cacfe50 fix(renderer): preserve packed transient anchors and family upload locality
+aba3d4c6a27a24890ffac70fd4819ae7aff47009 aa5f45c05e94ca62d181a910584768f7d6bdbf95 Merge current master and retain the shared Manim oracle constraint
+495580e2197022701a9190bae4f20047193f5be6:crates/noon-render-wgpu a3d16c015a5acad45529079ba3b90d2246ef1cb8
+aba3d4c6a27a24890ffac70fd4819ae7aff47009:crates/noon-render-wgpu a3d16c015a5acad45529079ba3b90d2246ef1cb8

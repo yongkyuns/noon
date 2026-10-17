@@ -1,0 +1,265 @@
+{
+  "id": "noon-transform-matching-shapes-breadth",
+  "noJspi": false,
+  "browserName": "chromium",
+  "profile": "desktop-dpr1",
+  "revision": null,
+  "browserVersion": "151.0.7922.34",
+  "errors": [],
+  "failedRequests": [],
+  "samples": [
+    {
+      "time": 0.02030000000074506,
+      "objects": 3,
+      "frames": 3
+    },
+    {
+      "time": 0.04990000000037253,
+      "objects": 3,
+      "frames": 5
+    },
+    {
+      "time": 0.3499000000003725,
+      "objects": 3,
+      "frames": 12
+    },
+    {
+      "time": 0.44980000000074505,
+      "objects": 3,
+      "frames": 18
+    },
+    {
+      "time": 0.553800000000745,
+      "objects": 3,
+      "frames": 24
+    },
+    {
+      "time": 0.6499000000003725,
+      "objects": 3,
+      "frames": 30
+    },
+    {
+      "time": 0.7665999999996275,
+      "objects": 3,
+      "frames": 37
+    },
+    {
+      "time": 0.8665,
+      "objects": 3,
+      "frames": 43
+    },
+    {
+      "time": 0.9665,
+      "objects": 3,
+      "frames": 49
+    },
+    {
+      "time": 1.083199999999255,
+      "objects": 4,
+      "frames": 57
+    },
+    {
+      "time": 1.1831999999992548,
+      "objects": 4,
+      "frames": 63
+    },
+    {
+      "time": 1.2830999999996275,
+      "objects": 4,
+      "frames": 69
+    },
+    {
+      "time": 1.4000999999996275,
+      "objects": 4,
+      "frames": 76
+    },
+    {
+      "time": 1.499800000000745,
+      "objects": 4,
+      "frames": 82
+    },
+    {
+      "time": 1.5999000000003725,
+      "objects": 4,
+      "frames": 88
+    },
+    {
+      "time": 1.7165,
+      "objects": 4,
+      "frames": 95
+    },
+    {
+      "time": 1.8165,
+      "objects": 4,
+      "frames": 101
+    },
+    {
+      "time": 1.9338000000007451,
+      "objects": 4,
+      "frames": 108
+    },
+    {
+      "time": 2,
+      "objects": 4,
+      "frames": 114
+    }
+  ],
+  "presentations": [],
+  "state": {
+    "selected": "noon-transform-matching-shapes-breadth",
+    "inFlight": false,
+    "transportMode": "transferable",
+    "crossOriginIsolated": false,
+    "patch": {
+      "state": "applied",
+      "exampleId": "noon-transform-matching-shapes-breadth",
+      "parityStatus": "candidate",
+      "sequence": "0",
+      "runGeneration": "3",
+      "operation": "Scene rebuilt atomically"
+    },
+    "text": "Finished · TransformMatchingShapes Breadth · 4 objects · timeline ready",
+    "runtimeStatus": "Finished · 4 objects · WebGL2 semantic worker",
+    "rendererBackend": "WebGL2",
+    "metrics": {
+      "channel": "noon.render",
+      "protocolVersion": 1,
+      "requestId": 26,
+      "type": "metrics",
+      "metrics": {
+        "ready": true,
+        "mode": "retained",
+        "retained": true,
+        "mixed": true,
+        "transportMode": "transferable",
+        "presentedFrames": 114,
+        "presentationIntervalMs": null,
+        "presentationIntervalSamples": 0,
+        "lastDeltaApplyMs": 0.10000000149011612,
+        "lastRendererCallMs": 57.5,
+        "modeSwitches": 0,
+        "rendererRebuilds": 1,
+        "sampledAtMs": 4772.9000000003725,
+        "performanceTimeOriginMs": 1792248350995.7,
+        "rendererReadyAtMs": 2504.10000000149,
+        "firstPresentedAtMs": 2618.7000000011176,
+        "presentedSession": 2,
+        "firstPresentedSessionAtMs": 4771.200000001118,
+        "transitionMode": null,
+        "lastFrameTimestamp": 4635.7,
+        "bufferedDeltas": 0,
+        "needsPresent": false,
+        "backend": "WebGL2",
+        "gpuGeneration": 1,
+        "time": 2,
+        "objectCount": 4,
+        "drawCalls": 2,
+        "instancesDrawn": 4,
+        "bytesUploaded": 5612,
+        "geometryCacheMisses": 2,
+        "outlineCacheMisses": "0",
+        "resourceBundlePending": false,
+        "preloadedGeometryCount": 0,
+        "preloadBytesUploaded": 0
+      },
+      "engineMetrics": {
+        "host": {
+          "enabled": false,
+          "missedDeadlines": 0,
+          "droppedLateResults": 0
+        }
+      },
+      "renderHost": "worker",
+      "executionMode": "semantic"
+    }
+  },
+  "finalMetrics": {
+    "channel": "noon.render",
+    "protocolVersion": 1,
+    "requestId": 30,
+    "type": "metrics",
+    "metrics": {
+      "ready": true,
+      "mode": "retained",
+      "retained": true,
+      "mixed": true,
+      "transportMode": "transferable",
+      "presentedFrames": 115,
+      "presentationIntervalMs": null,
+      "presentationIntervalSamples": 0,
+      "lastDeltaApplyMs": 0.09999999962747097,
+      "lastRendererCallMs": 0.30000000074505806,
+      "modeSwitches": 0,
+      "rendererRebuilds": 1,
+      "sampledAtMs": 4874.60000000149,
+      "performanceTimeOriginMs": 1792248350995.7,
+      "rendererReadyAtMs": 2504.10000000149,
+      "firstPresentedAtMs": 2618.7000000011176,
+      "presentedSession": 2,
+      "firstPresentedSessionAtMs": 4771.200000001118,
+      "transitionMode": null,
+      "lastFrameTimestamp": 4635.7,
+      "bufferedDeltas": 0,
+      "needsPresent": false,
+      "backend": "WebGL2",
+      "gpuGeneration": 1,
+      "time": 2,
+      "objectCount": 4,
+      "drawCalls": 2,
+      "instancesDrawn": 4,
+      "bytesUploaded": 0,
+      "geometryCacheMisses": 0,
+      "outlineCacheMisses": "0",
+      "resourceBundlePending": false,
+      "preloadedGeometryCount": 0,
+      "preloadBytesUploaded": 0
+    },
+    "engineMetrics": {
+      "host": {
+        "enabled": false,
+        "missedDeadlines": 0,
+        "droppedLateResults": 0
+      }
+    },
+    "renderHost": "worker",
+    "executionMode": "semantic"
+  },
+  "semanticExecution": {
+    "contextId": "semantic-0",
+    "continuationGeneration": 1
+  },
+  "authoredDuration": 2,
+  "outcome": "pass",
+  "browserTrace": {
+    "phase": "gallery-authored-execution",
+    "events": [
+      {
+        "atMs": 1792248349759,
+        "phase": "gallery-navigation",
+        "kind": "phase",
+        "exampleId": "noon-transform-matching-shapes-breadth",
+        "noJspi": false
+      },
+      {
+        "atMs": 1792248349819,
+        "phase": "gallery-navigation",
+        "kind": "main-frame-navigation",
+        "url": "http://127.0.0.1:38713/web/index.html?example=noon-transform-matching-shapes-breadth"
+      },
+      {
+        "atMs": 1792248349959,
+        "phase": "gallery-navigation",
+        "kind": "main-frame-navigation",
+        "url": "http://127.0.0.1:38713/web/index.html?example=noon-transform-matching-shapes-breadth"
+      },
+      {
+        "atMs": 1792248350051,
+        "phase": "gallery-authored-execution",
+        "kind": "phase",
+        "exampleId": "noon-transform-matching-shapes-breadth",
+        "noJspi": false
+      }
+    ]
+  },
+  "elapsedMs": 6279.118767
+}
