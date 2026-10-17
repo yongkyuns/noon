@@ -111,11 +111,50 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "table-labels",
+      "scene": "TableLabelsExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_labels.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises base Table row_labels, col_labels, and top_left_entry with empty native-text cells to isolate label layout from default cell-font metrics. Rust/WASM and Python-worker pixels match exactly on WebGPU and WebGL2; identity, copy independence, and lifecycle checks pass. Strict pinned ManimCE Cairo passes unchanged thresholds on both backends with exact duration and 0.17% worst differing pixels. Non-empty default Table cell-font metrics and custom element formatting remain unqualified."
+    },
+    {
       "id": "mobject-table",
       "scene": "MobjectTableExample",
       "source": "parity/manim-v0.21/core-examples/table.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+      "notes": "Nested family entries, two row labels and two column labels use unchanged pinned ManimCE Cairo raster tolerances on WebGPU and WebGL2. This baseline fixture qualifies direct retained Mobject labels; the separate top-left-entry fixture qualifies the corner entry, while broader table options remain outside this slice."
+    },
+    {
+      "id": "mobject-table-top-left-entry",
+      "scene": "MobjectTableTopLeftEntryExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises ManimCE top_left_entry placement with direct retained Mobjects and labels. Rust/WASM and Python-worker pixels are identical on WebGPU and WebGL2; strict pinned ManimCE Cairo comparison passes unchanged thresholds on both backends with exact duration and 0.12% worst differing pixels."
+    },
+    {
+      "id": "mobject-table-family-labels",
+      "scene": "MobjectTableFamilyLabelsExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/mobject_table_family_labels.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises family-valued row labels, column labels, and top-left entry. Rust admission retains each supplied family root, sizes cells from aggregate descendant bounds, and translates every leaf together. Rust/WASM and Python-worker pixels match exactly on WebGPU and WebGL2; strict pinned Cairo raster qualification passes unchanged thresholds on both backends with exact duration and 0.33% worst differing pixels."
+    },
+    {
+      "id": "table-inner-lines-omitted",
+      "scene": "TableInnerLinesOmittedExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_inner_lines_omitted.py",
+      "expected_duration": 0.2,
+      "notes": "Matches ManimCE include_inner_lines=False with both outer rules retained. The strict local pinned Cairo differential passes unchanged policy on WebGPU and WebGL2 with exact duration and 0.18% worst differing pixels. Direct Rust/WASM and Python-worker captures are pixel-identical on both backends."
+    },
+    {
+      "id": "table-line-config-stroke",
+      "scene": "TableLineConfigExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_line_config.py",
+      "expected_duration": 0.2,
+      "notes": "Qualifies line_config color, stroke_width, and stroke_opacity using ManimCE's line constructor on a retained MobjectTable. Strict pinned Cairo passes unchanged thresholds on WebGPU and WebGL2 with exact duration and 0.11% worst differing pixels; paired Rust/WASM and Python-worker captures are pixel-identical."
     },
     {
       "id": "table-highlights",

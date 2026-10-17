@@ -23,6 +23,33 @@ impl WasmTableOptions {
             },
         }
     }
+
+    /// Match ManimCE's default-on inner grid lines while preserving the
+    /// existing three-argument constructor for JavaScript callers.
+    #[wasm_bindgen(js_name = setIncludeInnerLines)]
+    pub fn set_include_inner_lines(&mut self, include_inner_lines: bool) {
+        self.options.include_inner_lines = include_inner_lines;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeColor)]
+    pub fn set_line_stroke_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) {
+        self.options.line_stroke_color = noon::Color {
+            red: red as f32,
+            green: green as f32,
+            blue: blue as f32,
+            alpha: alpha as f32,
+        };
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeWidth)]
+    pub fn set_line_stroke_width(&mut self, width: f64) {
+        self.options.line_stroke_width = width;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeOpacity)]
+    pub fn set_line_stroke_opacity(&mut self, opacity: f64) {
+        self.options.line_stroke_opacity = opacity;
+    }
 }
 
 #[wasm_bindgen]
@@ -48,6 +75,26 @@ pub async fn create_table_renderer(
     compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the grouped-label table fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createMobjectTableFamilyLabelsRenderer)]
+pub async fn create_mobject_table_family_labels_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::family_labels_session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the plain-text Table labels fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createTableLabelsRenderer)]
+pub async fn create_table_labels_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::labels_session().map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -95,6 +142,22 @@ impl WasmTableHandle {
                 values.push(&entry_handle(entry));
             }
             result.push(&values);
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = getHorizontalLines)]
+    pub fn get_horizontal_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_horizontal_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = getVerticalLines)]
+    pub fn get_vertical_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_vertical_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
         }
         Ok(result)
     }

@@ -32,6 +32,12 @@ class _TableHandle:
     def columns(self):
         return [[self.a, self.c], [self.b, self.d]]
 
+    def getHorizontalLines(self):
+        return [self.a, self.b]
+
+    def getVerticalLines(self):
+        return [self.c, self.d]
+
 
 class _Context:
     def __init__(self, handle):
@@ -41,6 +47,41 @@ class _Context:
     def liveCreateTable(self, *args):
         self.calls.append(("create", args))
         return self.handle
+
+    def liveCreateTableWithLabels(self, *args):
+        self.calls.append(("create_with_labels", args))
+        return self.handle
+
+
+class _MobjectHandle(_Handle):
+    pass
+
+
+class _MobjectTableHandle:
+    def __init__(self, row_labels, column_labels, entries, top_left_entry=None):
+        self._family = _Family()
+        self._family.submobjects = [
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[types.SimpleNamespace(submobjects=entries)]),
+            types.SimpleNamespace(submobjects=[]),
+            *([types.SimpleNamespace(submobjects=row_labels)] if row_labels else []),
+            *([types.SimpleNamespace(submobjects=column_labels)] if column_labels else []),
+            *([types.SimpleNamespace(submobjects=[top_left_entry])] if top_left_entry else []),
+        ]
+
+    def family(self):
+        return self._family
+
+
+class _FakeMobject:
+    def __init__(self, slot):
+        self._semantic_handle = _MobjectHandle(slot)
+
+
+class _FakeFamily(_FakeMobject):
+    def __init__(self, slot):
+        super().__init__(slot)
+        self._semantic_family_handle = object()
 
 
 class TableFacadeTests(unittest.TestCase):
@@ -55,6 +96,7 @@ class TableFacadeTests(unittest.TestCase):
 
         self.patches = [
             patch.object(table, "_create_table", side_effect=self.context.liveCreateTable),
+            patch.object(table, "_create_table_with_labels", side_effect=self.context.liveCreateTableWithLabels),
             patch.object(table, "_live_constructor_context", return_value=self.context),
             patch.object(table, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
             patch.object(table, "_attach_shared_family", side_effect=attach_family),
@@ -74,6 +116,7 @@ class TableFacadeTests(unittest.TestCase):
 
     def test_entries_columns_and_cells_keep_the_shared_handle_contract(self):
         value = table.Table([["a", "b"], ["c", "d"]])
+        self.assertEqual(self.context.calls[0][1][1:5], (0.8, 1.3, False, True))
         leaves = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
         rows = [types.SimpleNamespace(submobjects=leaves[:2]),
                 types.SimpleNamespace(submobjects=leaves[2:])]
@@ -111,6 +154,186 @@ class TableFacadeTests(unittest.TestCase):
         with patch.object(self.handle, "entryAt", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
+
+    def test_horizontal_and_vertical_line_groups_reuse_retained_wrappers(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        lines = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
+        line_family = types.SimpleNamespace(submobjects=lines)
+        with patch.object(table, "_handle_for", side_effect=lambda item: item._semantic_handle), \
+                patch.object(table.Table, "submobjects", new_callable=PropertyMock,
+                             return_value=[None, None, line_family]):
+            horizontal = value.get_horizontal_lines()
+            vertical = value.get_vertical_lines()
+            self.assertIs(value.get_horizontal_lines(), horizontal)
+            self.assertIs(value.get_vertical_lines(), vertical)
+        self.assertEqual(horizontal.submobjects, lines[:2])
+        self.assertEqual(vertical.submobjects, lines[2:])
+
+    def test_label_queries_keep_manims_group_order_and_original_wrappers(self):
+        value = table.Table([["a"]])
+        row = object()
+        column = object()
+        corner = object()
+        value.row_labels = [row]
+        value.col_labels = [column]
+        value.top_left_entry = corner
+
+        self.assertEqual(value.get_row_labels().submobjects, [row])
+        self.assertEqual(value.get_col_labels().submobjects, [column])
+        self.assertEqual(value.get_labels().submobjects, [corner, column, row])
+
+    def test_absent_label_queries_return_empty_groups(self):
+        value = table.Table([["a"]])
+        self.assertEqual(value.get_row_labels().submobjects, [])
+        self.assertEqual(value.get_col_labels().submobjects, [])
+        self.assertEqual(value.get_labels().submobjects, [])
+
+    def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
+        entry = _FakeMobject(1)
+        row_label = _FakeFamily(2)
+        column_label = _FakeMobject(3)
+        top_left_entry = _FakeFamily(4)
+        context = types.SimpleNamespace()
+        handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
+
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines,
+                   red, green, blue, alpha, width, opacity, _context):
+            self.assertEqual(rows, [[entry._semantic_handle]])
+            self.assertEqual(row_labels, [row_label._semantic_family_handle])
+            self.assertEqual(column_labels, [column_label._semantic_handle])
+            self.assertEqual(top_left_entries, [top_left_entry._semantic_family_handle])
+            self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
+            self.assertTrue(inner_lines)
+            self.assertEqual((red, green, blue, alpha, width, opacity), (1.0, 1.0, 1.0, 1.0, .04, 1.0))
+            return handle
+
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_mobject_table", side_effect=create), \
+                patch.object(table, "_live_constructor_context", return_value=context), \
+                patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_test_submobjects", family.submobjects),
+                    setattr(wrapper, "_canonical_live_target_context", context),
+                )), \
+                patch.object(table._compat.Group, "submobjects", new=property(
+                    lambda wrapper: wrapper._test_submobjects
+                )), \
+                patch.object(table, "_family_wrapper_key", side_effect=lambda value: (
+                    f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"
+                )):
+            value = table.MobjectTable(
+                [[entry]], row_labels=[row_label], col_labels=[column_label],
+                top_left_entry=top_left_entry,
+                v_buff=0.4, h_buff=0.7, include_outer_lines=True,
+            )
+
+        children = value._test_submobjects
+        self.assertIs(value.row_labels[0], row_label)
+        self.assertIs(value.col_labels[0], column_label)
+        self.assertIs(value.top_left_entry, top_left_entry)
+        self.assertIs(children[1].submobjects[0]._semantic_member_wrappers["1:1"], entry)
+        self.assertIs(children[3]._semantic_member_wrappers["2:1"], row_label)
+        self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)
+        self.assertIs(children[5]._semantic_member_wrappers["4:1"], top_left_entry)
+
+    def test_mobject_table_top_left_entry_requires_both_label_sets(self):
+        entry = _FakeMobject(1)
+        top_left_entry = _FakeMobject(2)
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
+                table.MobjectTable([[entry]], top_left_entry=top_left_entry)
+
+    def test_table_row_column_and_corner_labels_retain_shared_wrappers(self):
+        row_label = _FakeMobject(1)
+        column_label = _FakeFamily(2)
+        top_left_entry = _FakeMobject(3)
+        context = types.SimpleNamespace()
+        self.handle._family.submobjects = [
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[]),
+            types.SimpleNamespace(submobjects=[row_label]),
+            types.SimpleNamespace(submobjects=[column_label]),
+            types.SimpleNamespace(submobjects=[top_left_entry]),
+        ]
+        calls = []
+
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff,
+                   outer_lines, inner_lines, red, green, blue, alpha, width, opacity, _context):
+            calls.append((rows, row_labels, column_labels, top_left_entries))
+            self.assertEqual(rows, [["a"]])
+            self.assertEqual(row_labels, [row_label._semantic_handle])
+            self.assertEqual(column_labels, [column_label._semantic_family_handle])
+            self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
+            self.assertEqual((v_buff, h_buff, outer_lines, inner_lines), (0.8, 1.3, False, True))
+            return self.handle
+
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_table_with_labels", side_effect=create), \
+                patch.object(table, "_live_constructor_context", return_value=context), \
+                patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_test_submobjects", family.submobjects),
+                    setattr(wrapper, "_canonical_live_target_context", context),
+                )), \
+                patch.object(table._compat.Group, "submobjects", new=property(
+                    lambda wrapper: wrapper._test_submobjects
+                )), \
+                patch.object(table, "_family_wrapper_key", side_effect=lambda value: (
+                    f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"
+                )):
+            value = table.Table(
+                [["a"]], row_labels=[row_label], col_labels=[column_label],
+                top_left_entry=top_left_entry,
+            )
+
+        self.assertEqual(calls, [([['a']], [row_label._semantic_handle],
+                                  [column_label._semantic_family_handle],
+                                  [top_left_entry._semantic_handle])])
+        self.assertIs(value.row_labels[0], row_label)
+        self.assertIs(value.col_labels[0], column_label)
+        self.assertIs(value.top_left_entry, top_left_entry)
+        self.assertIs(value._test_submobjects[3]._semantic_member_wrappers["1:1"], row_label)
+        self.assertIs(value._test_submobjects[4]._semantic_member_wrappers["2:1"], column_label)
+        self.assertIs(value._test_submobjects[5]._semantic_member_wrappers["3:1"], top_left_entry)
+
+    def test_table_top_left_entry_requires_both_label_sets(self):
+        with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
+            table.Table([["a"]], top_left_entry=_FakeMobject(1))
+
+    def test_mobject_table_accepts_family_labels_and_rejects_unshared_labels(self):
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            family = _FakeFamily(1)
+            self.assertIs(
+                table.MobjectTable._label_handle(family),
+                family._semantic_family_handle,
+            )
+            with self.assertRaisesRegex(TypeError, "current shared semantic identities"):
+                with patch.object(table, "_handle_for", return_value=None):
+                    table.MobjectTable._label_handle(_FakeMobject(2))
+            with self.assertRaisesRegex(NotImplementedError, "unsupported Table option"):
+                table._options({"top_left_entry": _FakeMobject(2)})
+
+    def test_include_inner_lines_is_forwarded_and_defaults_to_manimce_true(self):
+        self.assertEqual(table._options({}), (0.8, 1.3, False, True, 1.0, 1.0, 1.0, 1.0, .04, 1.0))
+        self.assertEqual(
+            table._options({"include_outer_lines": True, "include_inner_lines": False}),
+            (0.8, 1.3, True, False, 1.0, 1.0, 1.0, 1.0, .04, 1.0),
+        )
+
+    def test_line_config_stroke_subset_is_forwarded_with_manim_width_units(self):
+        table.Table(
+            [["a"]],
+            line_config={"color": "#FF00AA", "stroke_width": 2, "stroke_opacity": .25},
+        )
+        args = self.context.calls[0][1]
+        self.assertEqual(args[5:11], (1.0, 0.0, 170 / 255, 1.0, .02, .25))
+
+    def test_unqualified_line_config_options_remain_explicit(self):
+        with self.assertRaisesRegex(NotImplementedError, "background_stroke_width"):
+            table.Table([["a"]], line_config={"background_stroke_width": 1})
 
 
 if __name__ == "__main__":

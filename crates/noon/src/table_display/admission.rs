@@ -169,18 +169,32 @@ struct GridLayout {
     column_offset: usize,
     options: TableOptions,
 }
+struct GridLabels<'a> {
+    row_count: Option<usize>,
+    row_bounds: Option<&'a [Bounds2D64]>,
+    column_count: Option<usize>,
+    column_bounds: Option<&'a [Bounds2D64]>,
+    top_left_bounds: Option<Bounds2D64>,
+}
 impl GridLayout {
     fn measure(
         entry_bounds: &[Bounds2D64],
         shape: TableShape,
-        row_labels: Option<&[Mobject]>,
-        row_bounds: Option<&[Bounds2D64]>,
-        column_labels: Option<&[Mobject]>,
-        column_bounds: Option<&[Bounds2D64]>,
+        labels: GridLabels<'_>,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError> {
-        let row_offset = usize::from(column_labels.is_some());
-        let column_offset = usize::from(row_labels.is_some());
+        let GridLabels {
+            row_count,
+            row_bounds,
+            column_count,
+            column_bounds,
+            top_left_bounds,
+        } = labels;
+        if top_left_bounds.is_some() && (row_count.is_none() || column_count.is_none()) {
+            return Err(TableAuthoringError::TopLeftRequiresLabels);
+        }
+        let row_offset = usize::from(column_count.is_some());
+        let column_offset = usize::from(row_count.is_some());
         let mut widths: Vec<f64> = vec![0.0; shape.columns + column_offset];
         let mut heights: Vec<f64> = vec![0.0; shape.rows + row_offset];
         for (index, bounds) in entry_bounds.iter().enumerate() {
@@ -189,11 +203,11 @@ impl GridLayout {
             heights[index / shape.columns + row_offset] =
                 heights[index / shape.columns + row_offset].max(bounds.height());
         }
-        if let (Some(labels), Some(bounds)) = (row_labels, row_bounds) {
-            if labels.len() != shape.rows {
+        if let (Some(count), Some(bounds)) = (row_count, row_bounds) {
+            if count != shape.rows {
                 return Err(TableAuthoringError::InvalidLabels {
                     expected: shape.rows,
-                    actual: labels.len(),
+                    actual: count,
                 });
             }
             for (index, bound) in bounds.iter().enumerate() {
@@ -201,17 +215,21 @@ impl GridLayout {
                 heights[index + row_offset] = heights[index + row_offset].max(bound.height());
             }
         }
-        if let (Some(labels), Some(bounds)) = (column_labels, column_bounds) {
-            if labels.len() != shape.columns {
+        if let (Some(count), Some(bounds)) = (column_count, column_bounds) {
+            if count != shape.columns {
                 return Err(TableAuthoringError::InvalidLabels {
                     expected: shape.columns,
-                    actual: labels.len(),
+                    actual: count,
                 });
             }
             for (index, bound) in bounds.iter().enumerate() {
                 heights[0] = heights[0].max(bound.height());
                 widths[index + column_offset] = widths[index + column_offset].max(bound.width());
             }
+        }
+        if let Some(bounds) = top_left_bounds {
+            widths[0] = widths[0].max(bounds.width());
+            heights[0] = heights[0].max(bounds.height());
         }
         Ok(Self {
             widths,
@@ -253,7 +271,10 @@ impl GridLayout {
             ys.last().unwrap() - self.heights.last().unwrap() / 2.0 - self.options.v_buff / 2.0;
         let mut output = Vec::new();
         for row in 0..=ys.len() {
-            if self.options.include_outer_lines || (row > 0 && row < ys.len()) {
+            let is_outer = row == 0 || row == ys.len();
+            if (is_outer && self.options.include_outer_lines)
+                || (!is_outer && self.options.include_inner_lines)
+            {
                 let y = if row == 0 {
                     max_y
                 } else if row == ys.len() {
@@ -265,12 +286,15 @@ impl GridLayout {
                     start: noon_core::Vec2::new(min_x as f32, y as f32),
                     end: noon_core::Vec2::new(max_x as f32, y as f32),
                 });
-                s.style = line_style();
+                s.style = table_line_style(self.options);
                 output.push(s)
             }
         }
         for column in 0..=xs.len() {
-            if self.options.include_outer_lines || (column > 0 && column < xs.len()) {
+            let is_outer = column == 0 || column == xs.len();
+            if (is_outer && self.options.include_outer_lines)
+                || (!is_outer && self.options.include_inner_lines)
+            {
                 let x = if column == 0 {
                     min_x
                 } else if column == xs.len() {
@@ -282,7 +306,7 @@ impl GridLayout {
                     start: noon_core::Vec2::new(x as f32, min_y as f32),
                     end: noon_core::Vec2::new(x as f32, max_y as f32),
                 });
-                s.style = line_style();
+                s.style = table_line_style(self.options);
                 output.push(s)
             }
         }
@@ -302,6 +326,14 @@ fn line_style() -> SemanticStyle {
         object_opacity: 1.0,
     }
 }
+fn table_line_style(options: TableOptions) -> SemanticStyle {
+    SemanticStyle {
+        stroke: Some(noon_core::SemanticPaint::Solid(options.line_stroke_color)),
+        stroke_width: options.line_stroke_width,
+        stroke_opacity: options.line_stroke_opacity,
+        ..line_style()
+    }
+}
 
 struct Publication {
     result: noon_core::SemanticMutationTransactionResult,
@@ -311,6 +343,7 @@ struct Publication {
     highlights: noon_core::SemanticLocalNodeToken,
     row_labels: Option<noon_core::SemanticLocalNodeToken>,
     column_labels: Option<noon_core::SemanticLocalNodeToken>,
+    top_left_entry: Option<noon_core::SemanticLocalNodeToken>,
 }
 struct StagedTable {
     root: noon_core::SemanticLocalNodeToken,
@@ -319,6 +352,7 @@ struct StagedTable {
     highlights: noon_core::SemanticLocalNodeToken,
     row_labels: Option<noon_core::SemanticLocalNodeToken>,
     column_labels: Option<noon_core::SemanticLocalNodeToken>,
+    top_left_entry: Option<noon_core::SemanticLocalNodeToken>,
 }
 impl StagedTable {
     fn published(self, result: noon_core::SemanticMutationTransactionResult) -> Publication {
@@ -330,6 +364,7 @@ impl StagedTable {
             highlights: self.highlights,
             row_labels: self.row_labels,
             column_labels: self.column_labels,
+            top_left_entry: self.top_left_entry,
         }
     }
 }
@@ -362,15 +397,26 @@ fn make_table(
             )?),
             None => None,
         },
+        top_left_entry_family: match value.top_left_entry {
+            Some(token) => Some(MobjectFamily::from_node(
+                Rc::clone(&store),
+                resolve(token)?,
+            )?),
+            None => None,
+        },
     })
+}
+struct TableLabels<'a> {
+    rows: Option<&'a [noon_core::SemanticNodeId]>,
+    columns: Option<&'a [noon_core::SemanticNodeId]>,
+    top_left_entry: Option<noon_core::SemanticNodeId>,
 }
 fn stage(
     tx: &mut SemanticMutationTransaction,
     entries: Vec<noon_core::SemanticTransactionNodeRef>,
     shape: TableShape,
     lines: Vec<SemanticObjectState>,
-    rows: Option<&[Mobject]>,
-    columns: Option<&[Mobject]>,
+    labels: TableLabels<'_>,
     options: TableOptions,
 ) -> StagedTable {
     let entries_root = tx.create_node(SemanticNodeCreation::family());
@@ -387,18 +433,23 @@ fn stage(
         tx.add_member(lines_root, node);
     }
     let highlights = tx.create_node(SemanticNodeCreation::family());
-    let row_labels = rows.map(|items| {
+    let row_labels = labels.rows.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
-            tx.add_member(family, item.node_id());
+            tx.add_member(family, *item);
         }
         family
     });
-    let column_labels = columns.map(|items| {
+    let column_labels = labels.columns.map(|items| {
         let family = tx.create_node(SemanticNodeCreation::family());
         for item in items {
-            tx.add_member(family, item.node_id());
+            tx.add_member(family, *item);
         }
+        family
+    });
+    let top_left_entry = labels.top_left_entry.map(|item| {
+        let family = tx.create_node(SemanticNodeCreation::family());
+        tx.add_member(family, item);
         family
     });
     let root = tx.create_node(SemanticNodeCreation::family());
@@ -414,12 +465,21 @@ fn stage(
             options.v_buff,
             options.label_buff,
             options.include_outer_lines,
+        )
+        .with_inner_lines(options.include_inner_lines)
+        .with_line_style(
+            options.line_stroke_color,
+            options.line_stroke_width,
+            options.line_stroke_opacity,
         ),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);
     }
     if let Some(member) = column_labels {
+        tx.add_member(root, member);
+    }
+    if let Some(member) = top_left_entry {
         tx.add_member(root, member);
     }
     StagedTable {
@@ -429,20 +489,27 @@ fn stage(
         highlights,
         row_labels,
         column_labels,
+        top_left_entry,
     }
 }
+#[cfg(feature = "latex")]
 fn preflight(
     entries: &[Mobject],
     shape: TableShape,
     rows: Option<&[Mobject]>,
     columns: Option<&[Mobject]>,
+    top_left_entry: Option<&Mobject>,
     store: &Rc<RefCell<noon_core::SemanticStore>>,
 ) -> Result<(), TableAuthoringError> {
+    if top_left_entry.is_some() && (rows.is_none() || columns.is_none()) {
+        return Err(TableAuthoringError::TopLeftRequiresLabels);
+    }
     let mut seen = std::collections::BTreeSet::new();
     for object in entries
         .iter()
         .chain(rows.into_iter().flatten())
         .chain(columns.into_iter().flatten())
+        .chain(top_left_entry)
     {
         if !Rc::ptr_eq(object.integration_store(), store) {
             return Err(AuthoringError::ForeignStore.into());
@@ -466,6 +533,7 @@ fn preflight(
     }
     Ok(())
 }
+#[cfg(feature = "latex")]
 fn authored_bounds(objects: &[Mobject]) -> Result<Vec<Bounds2D64>, TableAuthoringError> {
     objects
         .iter()
@@ -476,86 +544,108 @@ fn authored_bounds(objects: &[Mobject]) -> Result<Vec<Bounds2D64>, TableAuthorin
         })
         .collect()
 }
-fn bounds_at_states(
-    objects: &[Mobject],
-    states: &[SemanticObjectState],
-) -> Result<Vec<Bounds2D64>, TableAuthoringError> {
-    objects
-        .iter()
-        .zip(states)
-        .map(|(object, state)| {
-            crate::semantic_mobject::layout_for_content(
-                &object.integration_store().borrow(),
-                state.content,
-                state
-                    .transform
-                    .as_planar()
-                    .ok_or(AuthoringError::NonFiniteObjectState)?,
-            )?
-            .ok_or(TableAuthoringError::InvalidStructure)
-        })
-        .collect()
-}
 fn commit_composite(
     publisher: TablePublisher<'_, '_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
-    rows: Option<Vec<Mobject>>,
-    columns: Option<Vec<Mobject>>,
+    rows: Option<Vec<MobjectTarget<'_>>>,
+    columns: Option<Vec<MobjectTarget<'_>>>,
+    top_left_entry: Option<MobjectTarget<'_>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
     let options = options.validate()?;
     let store = publisher.store();
-    preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
-    let entries = publisher.composite_entries(&entries)?;
+    if top_left_entry.is_some() && (rows.is_none() || columns.is_none()) {
+        return Err(TableAuthoringError::TopLeftRequiresLabels);
+    }
+    for target in entries
+        .iter()
+        .chain(rows.iter().flatten())
+        .chain(columns.iter().flatten())
+        .chain(top_left_entry.iter())
+    {
+        target.require_store(&store)?;
+    }
+    if rows
+        .as_ref()
+        .is_some_and(|labels| labels.len() != shape.rows)
+    {
+        return Err(TableAuthoringError::InvalidLabels {
+            expected: shape.rows,
+            actual: rows.as_ref().unwrap().len(),
+        });
+    }
+    if columns
+        .as_ref()
+        .is_some_and(|labels| labels.len() != shape.columns)
+    {
+        return Err(TableAuthoringError::InvalidLabels {
+            expected: shape.columns,
+            actual: columns.as_ref().unwrap().len(),
+        });
+    }
+
+    let entry_count = entries.len();
+    let row_count = rows.as_ref().map(Vec::len);
+    let column_count = columns.as_ref().map(Vec::len);
+    let mut all_targets = entries;
+    all_targets.extend(rows.iter().flatten().copied());
+    all_targets.extend(columns.iter().flatten().copied());
+    let top_left_index = top_left_entry.as_ref().map(|_| all_targets.len());
+    all_targets.extend(top_left_entry.iter().copied());
+
+    // Capture all supplied roots together so overlapping entries/labels are
+    // rejected and every family-valued label retains its complete leaf set.
+    let captured = publisher.composite_entries(&all_targets)?;
+    let entries = captured[..entry_count].to_vec();
+    let mut cursor = entry_count;
+    let row_entries = row_count.map(|count| {
+        let result = captured[cursor..cursor + count].to_vec();
+        cursor += count;
+        result
+    });
+    let column_entries = column_count.map(|count| {
+        let result = captured[cursor..cursor + count].to_vec();
+        cursor += count;
+        result
+    });
+    let top_left_entry = top_left_index.map(|index| captured[index].clone());
     let entry_bounds = entries
         .iter()
         .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .collect::<Result<Vec<_>, _>>()?;
-    for label in rows.iter().flatten().chain(columns.iter().flatten()) {
-        if entries
-            .iter()
-            .flat_map(|entry| entry.leaves())
-            .any(|(leaf, _)| leaf.node_id() == label.node_id())
-        {
-            return Err(TableAuthoringError::DuplicateEntry);
-        }
-    }
-    let row_states: Option<Vec<SemanticObjectState>> = rows
-        .as_deref()
+    let row_bounds = row_entries
+        .as_ref()
         .map(|items| {
             items
                 .iter()
-                .map(|entry| publisher.entry_state(entry))
-                .collect()
+                .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+                .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
-    let column_states: Option<Vec<SemanticObjectState>> = columns
-        .as_deref()
+    let column_bounds = column_entries
+        .as_ref()
         .map(|items| {
             items
                 .iter()
-                .map(|entry| publisher.entry_state(entry))
-                .collect()
+                .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+                .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
-    let row_bounds = rows
-        .as_deref()
-        .zip(row_states.as_deref())
-        .map(|(items, states)| bounds_at_states(items, states))
-        .transpose()?;
-    let column_bounds = columns
-        .as_deref()
-        .zip(column_states.as_deref())
-        .map(|(items, states)| bounds_at_states(items, states))
+    let top_left_bounds = top_left_entry
+        .as_ref()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
         .transpose()?;
     let layout = GridLayout::measure(
         &entry_bounds,
         shape,
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        columns.as_deref(),
-        column_bounds.as_deref(),
+        GridLabels {
+            row_count,
+            row_bounds: row_bounds.as_deref(),
+            column_count,
+            column_bounds: column_bounds.as_deref(),
+            top_left_bounds,
+        },
         options,
     )?;
     let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
@@ -577,36 +667,47 @@ fn commit_composite(
             })
         })
         .collect::<Vec<_>>();
-    if let (Some(labels), Some(bounds), Some(states)) = (
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        row_states.as_deref(),
-    ) {
-        translations.extend(labels.iter().zip(bounds).zip(states).enumerate().map(
-            |(index, ((label, bounds), state))| {
+    if let (Some(labels), Some(bounds)) = (row_entries.as_deref(), row_bounds.as_deref()) {
+        for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
+            let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = ys[index + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
+            translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
-                translation.x += xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
-                translation.y +=
-                    ys[index + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
-                (label.node_id(), translation)
-            },
-        ));
+                translation.x += dx;
+                translation.y += dy;
+                (leaf.node_id(), translation)
+            }));
+        }
     }
-    if let (Some(labels), Some(bounds), Some(states)) = (
-        columns.as_deref(),
-        column_bounds.as_deref(),
-        column_states.as_deref(),
-    ) {
-        translations.extend(labels.iter().zip(bounds).zip(states).enumerate().map(
-            |(index, ((label, bounds), state))| {
+    if let (Some(entry), Some(bounds)) = (top_left_entry.as_ref(), top_left_bounds) {
+        let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
+        let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+        translations.extend(entry.leaves().iter().map(|(leaf, state)| {
+            let mut translation = state.transform.translation;
+            translation.x += dx;
+            translation.y += dy;
+            (leaf.node_id(), translation)
+        }));
+    }
+    if let (Some(labels), Some(bounds)) = (column_entries.as_deref(), column_bounds.as_deref()) {
+        for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
+            let dx = xs[index + layout.column_offset] - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+            translations.extend(label.leaves().iter().map(|(leaf, state)| {
                 let mut translation = state.transform.translation;
-                translation.x +=
-                    xs[index + layout.column_offset] - (bounds.min_x + bounds.max_x) * 0.5;
-                translation.y += ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
-                (label.node_id(), translation)
-            },
-        ));
+                translation.x += dx;
+                translation.y += dy;
+                (leaf.node_id(), translation)
+            }));
+        }
     }
+    let row_label_roots = row_entries
+        .as_ref()
+        .map(|items| items.iter().map(|item| item.root()).collect::<Vec<_>>());
+    let column_label_roots = column_entries
+        .as_ref()
+        .map(|items| items.iter().map(|item| item.root()).collect::<Vec<_>>());
+    let top_left_root = top_left_entry.as_ref().map(|item| item.root());
     let lines = layout.line_states();
     let published = publisher.publish(move |semantic, publish| {
         let mut tx = SemanticMutationTransaction::new();
@@ -618,8 +719,11 @@ fn commit_composite(
             entries.iter().map(|item| item.root().into()).collect(),
             shape,
             lines,
-            rows.as_deref(),
-            columns.as_deref(),
+            TableLabels {
+                rows: row_label_roots.as_deref(),
+                columns: column_label_roots.as_deref(),
+                top_left_entry: top_left_root,
+            },
             options,
         );
         Ok(value.published(publish(semantic, tx)?))
@@ -635,7 +739,21 @@ pub(super) fn publish_existing_table(
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
     let targets = entries.iter().map(Into::into).collect();
-    commit_composite(publisher, targets, shape, rows, columns, options)
+    let row_targets = rows
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let column_targets = columns
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    commit_composite(
+        publisher,
+        targets,
+        shape,
+        row_targets,
+        column_targets,
+        None,
+        options,
+    )
 }
 pub(super) fn publish_target_table(
     publisher: TablePublisher<'_, '_>,
@@ -645,18 +763,137 @@ pub(super) fn publish_target_table(
     columns: Option<Vec<Mobject>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
-    commit_composite(publisher, entries, shape, rows, columns, options)
+    let row_targets = rows
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let column_targets = columns
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    commit_composite(
+        publisher,
+        entries,
+        shape,
+        row_targets,
+        column_targets,
+        None,
+        options,
+    )
+}
+pub(super) fn publish_target_table_with_composite_labels(
+    publisher: TablePublisher<'_, '_>,
+    entries: Vec<MobjectTarget<'_>>,
+    shape: TableShape,
+    rows: Option<Vec<MobjectTarget<'_>>>,
+    columns: Option<Vec<MobjectTarget<'_>>>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    commit_composite(publisher, entries, shape, rows, columns, None, options)
+}
+pub(super) fn publish_target_table_with_top_left_entry(
+    publisher: TablePublisher<'_, '_>,
+    entries: Vec<MobjectTarget<'_>>,
+    shape: TableShape,
+    rows: Option<Vec<Mobject>>,
+    columns: Option<Vec<Mobject>>,
+    top_left_entry: Option<Mobject>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    let row_targets = rows
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let column_targets = columns
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let top_left_target = top_left_entry.as_ref().map(Into::into);
+    commit_composite(
+        publisher,
+        entries,
+        shape,
+        row_targets,
+        column_targets,
+        top_left_target,
+        options,
+    )
+}
+pub(super) fn publish_target_table_with_composite_labels_and_top_left_entry(
+    publisher: TablePublisher<'_, '_>,
+    entries: Vec<MobjectTarget<'_>>,
+    shape: TableShape,
+    rows: Vec<MobjectTarget<'_>>,
+    columns: Vec<MobjectTarget<'_>>,
+    top_left_entry: MobjectTarget<'_>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
+    commit_composite(
+        publisher,
+        entries,
+        shape,
+        Some(rows),
+        Some(columns),
+        Some(top_left_entry),
+        options,
+    )
 }
 #[cfg(any(feature = "latex", feature = "native-text"))]
 fn publish_prepared_text_table(
     publisher: TablePublisher<'_, '_>,
     prepared: Vec<PreparedTextCell>,
     shape: TableShape,
-    rows: Option<Vec<Mobject>>,
-    columns: Option<Vec<Mobject>>,
+    rows: Option<Vec<MobjectTarget<'_>>>,
+    columns: Option<Vec<MobjectTarget<'_>>>,
+    top_left_entry: Option<MobjectTarget<'_>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
     let options = options.validate()?;
+    if top_left_entry.is_some() && (rows.is_none() || columns.is_none()) {
+        return Err(TableAuthoringError::TopLeftRequiresLabels);
+    }
+    let store = publisher.store();
+    for target in rows
+        .iter()
+        .flatten()
+        .chain(columns.iter().flatten())
+        .chain(top_left_entry.iter())
+    {
+        target.require_store(&store)?;
+    }
+    if rows.as_ref().is_some_and(|items| items.len() != shape.rows) {
+        return Err(TableAuthoringError::InvalidLabels {
+            expected: shape.rows,
+            actual: rows.as_ref().unwrap().len(),
+        });
+    }
+    if columns
+        .as_ref()
+        .is_some_and(|items| items.len() != shape.columns)
+    {
+        return Err(TableAuthoringError::InvalidLabels {
+            expected: shape.columns,
+            actual: columns.as_ref().unwrap().len(),
+        });
+    }
+    let row_count = rows.as_ref().map(Vec::len);
+    let column_count = columns.as_ref().map(Vec::len);
+    let mut label_targets = Vec::new();
+    label_targets.extend(rows.iter().flatten().copied());
+    label_targets.extend(columns.iter().flatten().copied());
+    let top_left_index = top_left_entry.as_ref().map(|_| label_targets.len());
+    label_targets.extend(top_left_entry.iter().copied());
+    // Capture all supplied labels together so repeated roots or overlapping
+    // families fail before text resources or table topology are published.
+    let captured = publisher.composite_entries(&label_targets)?;
+    let mut cursor = 0;
+    let row_entries = row_count.map(|count| {
+        let result = captured[cursor..cursor + count].to_vec();
+        cursor += count;
+        result
+    });
+    let column_entries = column_count.map(|count| {
+        let result = captured[cursor..cursor + count].to_vec();
+        cursor += count;
+        result
+    });
+    let top_left_entry = top_left_index.map(|index| captured[index].clone());
     let mut transforms: Vec<_> = prepared.iter().map(|item| item.transform).collect();
     let entry_bounds: Vec<_> = prepared
         .iter()
@@ -665,17 +902,38 @@ fn publish_prepared_text_table(
             transformed_rect_layout_bounds(item.dependency.1.bounds, *transform)
         })
         .collect();
-    let store = publisher.store();
-    preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
-    let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
-    let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
+    let row_bounds = row_entries
+        .as_ref()
+        .map(|items| {
+            items
+                .iter()
+                .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let column_bounds = column_entries
+        .as_ref()
+        .map(|items| {
+            items
+                .iter()
+                .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let top_left_bounds = top_left_entry
+        .as_ref()
+        .map(|entry| entry.bounds()?.ok_or(TableAuthoringError::InvalidStructure))
+        .transpose()?;
     let layout = GridLayout::measure(
         &entry_bounds,
         shape,
-        rows.as_deref(),
-        row_bounds.as_deref(),
-        columns.as_deref(),
-        column_bounds.as_deref(),
+        GridLabels {
+            row_count,
+            row_bounds: row_bounds.as_deref(),
+            column_count,
+            column_bounds: column_bounds.as_deref(),
+            top_left_bounds,
+        },
         options,
     )?;
     let xs = GridLayout::centers(&layout.widths, options.h_buff, false);
@@ -686,6 +944,48 @@ fn publish_prepared_text_table(
         transform.translation.y +=
             ys[index / shape.columns + layout.row_offset] - (bound.min_y + bound.max_y) * 0.5;
     }
+    let mut label_translations = Vec::new();
+    if let (Some(labels), Some(bounds)) = (row_entries.as_deref(), row_bounds.as_deref()) {
+        for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
+            let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = ys[index + layout.row_offset] - (bounds.min_y + bounds.max_y) * 0.5;
+            label_translations.extend(label.leaves().iter().map(|(leaf, state)| {
+                let mut translation = state.transform.translation;
+                translation.x += dx;
+                translation.y += dy;
+                (leaf.node_id(), translation)
+            }));
+        }
+    }
+    if let (Some(labels), Some(bounds)) = (column_entries.as_deref(), column_bounds.as_deref()) {
+        for (index, (label, bounds)) in labels.iter().zip(bounds).enumerate() {
+            let dx = xs[index + layout.column_offset] - (bounds.min_x + bounds.max_x) * 0.5;
+            let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+            label_translations.extend(label.leaves().iter().map(|(leaf, state)| {
+                let mut translation = state.transform.translation;
+                translation.x += dx;
+                translation.y += dy;
+                (leaf.node_id(), translation)
+            }));
+        }
+    }
+    if let (Some(entry), Some(bounds)) = (top_left_entry.as_ref(), top_left_bounds) {
+        let dx = xs[0] - (bounds.min_x + bounds.max_x) * 0.5;
+        let dy = ys[0] - (bounds.min_y + bounds.max_y) * 0.5;
+        label_translations.extend(entry.leaves().iter().map(|(leaf, state)| {
+            let mut translation = state.transform.translation;
+            translation.x += dx;
+            translation.y += dy;
+            (leaf.node_id(), translation)
+        }));
+    }
+    let row_roots = row_entries
+        .as_ref()
+        .map(|items| items.iter().map(|item| item.root()).collect::<Vec<_>>());
+    let column_roots = column_entries
+        .as_ref()
+        .map(|items| items.iter().map(|item| item.root()).collect::<Vec<_>>());
+    let top_left_root = top_left_entry.as_ref().map(|item| item.root());
     let dependencies = prepared
         .iter()
         .map(|item| item.dependency.clone())
@@ -708,6 +1008,9 @@ fn publish_prepared_text_table(
             },
             |semantic, handles| {
                 let mut tx = SemanticMutationTransaction::new();
+                for (node, translation) in label_translations {
+                    tx.set_property(node, SemanticObjectProperty::Translation, translation);
+                }
                 let leaves = prepared
                     .iter()
                     .zip(handles)
@@ -727,8 +1030,11 @@ fn publish_prepared_text_table(
                     leaves,
                     shape,
                     lines,
-                    rows.as_deref(),
-                    columns.as_deref(),
+                    TableLabels {
+                        rows: row_roots.as_deref(),
+                        columns: column_roots.as_deref(),
+                        top_left_entry: top_left_root,
+                    },
                     options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))
@@ -753,7 +1059,21 @@ pub(super) fn publish_text_table(
         .into_iter()
         .map(|value| prepare_text(backend, value))
         .collect::<Result<Vec<_>, _>>()?;
-    publish_prepared_text_table(publisher, prepared, shape, rows, columns, options)
+    let row_targets = rows
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let column_targets = columns
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    publish_prepared_text_table(
+        publisher,
+        prepared,
+        shape,
+        row_targets,
+        column_targets,
+        None,
+        options,
+    )
 }
 
 /// Publish ordinary `Table` strings through the native shaped-text pipeline.
@@ -770,12 +1090,47 @@ pub(super) fn publish_native_text_table(
     columns: Option<Vec<Mobject>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
+    let row_targets = rows
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    let column_targets = columns
+        .as_ref()
+        .map(|items| items.iter().map(Into::into).collect());
+    publish_native_text_table_with_composite_labels(
+        publisher,
+        values,
+        shape,
+        row_targets,
+        column_targets,
+        None,
+        options,
+    )
+}
+
+#[cfg(feature = "native-text")]
+pub(super) fn publish_native_text_table_with_composite_labels(
+    publisher: TablePublisher<'_, '_>,
+    values: Vec<String>,
+    shape: TableShape,
+    rows: Option<Vec<MobjectTarget<'_>>>,
+    columns: Option<Vec<MobjectTarget<'_>>>,
+    top_left_entry: Option<MobjectTarget<'_>>,
+    options: TableOptions,
+) -> Result<Table, TableAuthoringError> {
     let options = options.validate()?;
     let prepared = values
         .into_iter()
         .map(prepare_native_text)
         .collect::<Result<Vec<_>, _>>()?;
-    publish_prepared_text_table(publisher, prepared, shape, rows, columns, options)
+    publish_prepared_text_table(
+        publisher,
+        prepared,
+        shape,
+        rows,
+        columns,
+        top_left_entry,
+        options,
+    )
 }
 #[cfg(feature = "latex")]
 #[allow(clippy::too_many_arguments)] // Numeric resource admission and topology publish one transaction.
@@ -802,7 +1157,14 @@ pub(super) fn publish_numeric_table(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let store = publisher.store();
-    preflight(&[], shape, rows.as_deref(), columns.as_deref(), &store)?;
+    preflight(
+        &[],
+        shape,
+        rows.as_deref(),
+        columns.as_deref(),
+        None,
+        &store,
+    )?;
     let row_bounds = rows.as_deref().map(authored_bounds).transpose()?;
     let column_bounds = columns.as_deref().map(authored_bounds).transpose()?;
     let published = publisher.publish_text(move |semantic, publish| {
@@ -828,10 +1190,13 @@ pub(super) fn publish_numeric_table(
                 let layout = GridLayout::measure(
                     &bounds,
                     shape,
-                    rows.as_deref(),
-                    row_bounds.as_deref(),
-                    columns.as_deref(),
-                    column_bounds.as_deref(),
+                    GridLabels {
+                        row_count: rows.as_ref().map(Vec::len),
+                        row_bounds: row_bounds.as_deref(),
+                        column_count: columns.as_ref().map(Vec::len),
+                        column_bounds: column_bounds.as_deref(),
+                        top_left_bounds: None,
+                    },
                     options,
                 )
                 .expect("validated nonempty table shape and label counts produce a grid");
@@ -856,13 +1221,22 @@ pub(super) fn publish_numeric_table(
                     .into_iter()
                     .map(Into::into)
                     .collect();
+                let row_roots = rows
+                    .as_deref()
+                    .map(|items| items.iter().map(Mobject::node_id).collect::<Vec<_>>());
+                let column_roots = columns
+                    .as_deref()
+                    .map(|items| items.iter().map(Mobject::node_id).collect::<Vec<_>>());
                 let value = stage(
                     &mut tx,
                     leaves,
                     shape,
                     layout.line_states(),
-                    rows.as_deref(),
-                    columns.as_deref(),
+                    TableLabels {
+                        rows: row_roots.as_deref(),
+                        columns: column_roots.as_deref(),
+                        top_left_entry: None,
+                    },
                     options,
                 );
                 Ok(value.published(publish(semantic, tx).map_err(TextAuthoringError::Semantic)?))

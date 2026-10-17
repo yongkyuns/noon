@@ -58,6 +58,17 @@ impl WasmCompositeRows {
             })
             .collect()
     }
+
+    pub(crate) fn single_row_targets(&self) -> Result<Vec<noon::MobjectTarget<'_>>, JsValue> {
+        if self.rows.len() > 1 {
+            return Err(js_error("Composite labels require one row of roots"));
+        }
+        Ok(self.rows.first().map_or_else(Vec::new, |row| {
+            row.iter()
+                .map(noon::CompositeEntryHandle::as_target)
+                .collect()
+        }))
+    }
 }
 
 pub(crate) fn entry_handle(entry: noon::CompositeEntryHandle) -> JsValue {
