@@ -2,9 +2,9 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
-        edit_color, edit_fade, edit_fade_occurrences, edit_fill_color, edit_fill_opacity,
-        edit_manim_opacity, edit_stroke_color, edit_stroke_opacity, edit_stroke_width,
-        PaintStyleEdit,
+        edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
+        edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
+        edit_stroke_width, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -306,6 +306,14 @@ impl MobjectFamily {
             .map_err(AuthoringError::from)
     }
 
+    /// Interpolate every recursively owned object's color toward the target.
+    pub fn fade_to(&self, target: Color, amount: f64) -> Result<(), AuthoringError> {
+        self.fade_to_transaction(target, amount)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     /// Prepare one validated paint transaction so authored and live owners
     /// publish the same family fade semantics.
     pub(crate) fn fade_transaction(
@@ -321,6 +329,30 @@ impl MobjectFamily {
             let previous = &store.semantic_object_state_checked(leaf)?.style;
             let mut next = previous.clone();
             edit_fade_occurrences(&mut next, darkness, occurrences)?;
+            if next != *previous {
+                transaction.replace_style(leaf, next);
+            }
+        }
+        Ok(transaction)
+    }
+
+    pub(crate) fn fade_to_transaction(
+        &self,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        let leaves = store.ordered_leaf_multiplicities(self.node_id())?;
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, occurrences) in leaves {
+            let mobject = Mobject::from_node(self.integration_store().clone(), leaf)?;
+            if !mobject.has_fade_to_points()? {
+                continue;
+            }
+            let previous = &store.semantic_object_state_checked(leaf)?.style;
+            let mut next = previous.clone();
+            edit_fade_to_occurrences(&mut next, target, amount, occurrences)?;
             if next != *previous {
                 transaction.replace_style(leaf, next);
             }
@@ -394,7 +426,8 @@ impl MobjectFamily {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Scene;
+    use crate::{ManimGeometryOptions, Scene};
+    use noon_core::{SemanticPaint, Style, VectorPath};
 
     #[test]
     fn recursive_fade_counts_alias_paths_but_reads_and_publishes_unique_leaves() {
@@ -438,6 +471,115 @@ mod tests {
         assert_eq!(changes[0].1.stroke.unwrap().alpha, 0.1875);
         assert_eq!(changes[0].1.opacity, phase_style.opacity);
         assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
+    }
+
+    #[test]
+    fn recursive_fade_to_observes_alias_multiplicity_and_preserves_paint_opacity() {
+        let mut scene = Scene::new();
+        let mut a = scene.square(0.6).unwrap();
+        let mut direct = scene.square(0.4).unwrap();
+        direct.set_fill_color(1.0, 0.0, 0.0, 1.0).unwrap();
+        direct.set_fill_opacity(1.0).unwrap();
+        a.set_fill_color(1.0, 0.0, 0.0, 1.0).unwrap();
+        a.set_fill_opacity(0.5).unwrap();
+        a.set_object_opacity(0.3).unwrap();
+        let nested = scene.family(&[(&a).into()]).unwrap();
+        let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
+
+        let target = Color::rgba(0.0, 0.0, 1.0, 0.25);
+        let mut empty = scene
+            .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+            .unwrap();
+        let empty_before = empty.state().unwrap();
+        empty.fade_to(target, 0.5).unwrap();
+        assert_eq!(empty.state().unwrap(), empty_before);
+
+        direct.fade_to(target, 0.5).unwrap();
+        let Some(SemanticPaint::Solid(direct_fill)) = direct.state().unwrap().style.fill else {
+            panic!("direct fade_to should preserve solid fill paint");
+        };
+        assert!((direct_fill.red - 0.5).abs() < 1e-6);
+        assert!((direct_fill.blue - 0.5).abs() < 1e-6);
+        assert_eq!(direct_fill.alpha, 1.0);
+        assert_eq!(direct.fill_opacity().unwrap(), 1.0);
+
+        family.fade_to(target, 0.5).unwrap();
+        let style = &a.state().unwrap().style;
+        let Some(SemanticPaint::Solid(fill)) = style.fill.as_ref() else {
+            panic!("fade_to should preserve solid fill paint");
+        };
+        assert!((fill.red - 0.25).abs() < 1e-6);
+        assert!((fill.blue - 0.75).abs() < 1e-6);
+        assert_eq!(fill.alpha, 1.0);
+        assert!((style.fill_opacity - 0.5).abs() < 1e-6);
+        assert!((style.stroke_opacity - 1.0).abs() < 1e-6);
+        assert_eq!(style.object_opacity, 0.3);
+
+        let mut black = scene.square(0.3).unwrap();
+        black.set_fill_color(0.0, 0.0, 0.0, 1.0).unwrap();
+        black.set_fill_opacity(1.0).unwrap();
+        let black_family = scene.family(&[(&black).into()]).unwrap();
+        black_family
+            .fade_to(Color::rgb(0.0, 0.0, 0.0), 1.5)
+            .unwrap();
+        assert_eq!(black.manim_color().unwrap(), Color::rgb(0.0, 0.0, 0.0));
+        let black_callback = black_family
+            .prepare_callback_paint(
+                scene.integration_store().borrow().scene_revision(),
+                crate::FamilyPaint::FadeTo {
+                    color: Color::rgb(0.0, 0.0, 0.0),
+                    amount: 1.5,
+                },
+                |_| {
+                    Ok(Style {
+                        fill: Some(Color::rgb(0.0, 0.0, 0.0)),
+                        ..Default::default()
+                    })
+                },
+            )
+            .unwrap();
+        assert!(black_callback.is_empty());
+
+        scene.add(&direct).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.fade_to(&direct, target, 0.5).unwrap();
+        let Some(live_fill) = live.effective(&direct).unwrap().style.fill else {
+            panic!("live fade_to should preserve solid fill paint");
+        };
+        assert!((live_fill.red - 0.25).abs() < 1e-6);
+        assert!((live_fill.blue - 0.75).abs() < 1e-6);
+        assert_eq!(live_fill.alpha, 1.0);
+        assert_eq!(live.effective(&direct).unwrap().fill_opacity(), 1.0);
+
+        let before = a.state().unwrap();
+        assert!(family.fade_to(target, f64::NAN).is_err());
+        assert_eq!(a.state().unwrap(), before);
+
+        let revision = scene.integration_store().borrow().scene_revision();
+        let phase_style = Style {
+            fill: Some(Color::rgba(1.0, 0.0, 0.0, 0.5)),
+            stroke: Some(Color::rgba(0.0, 0.0, 1.0, 0.25)),
+            opacity: 0.3,
+            ..Default::default()
+        };
+        let changes = family
+            .prepare_callback_paint(
+                revision,
+                crate::FamilyPaint::FadeTo {
+                    color: target,
+                    amount: 0.5,
+                },
+                |_| Ok(phase_style),
+            )
+            .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert!((changes[0].1.fill.unwrap().red - 0.25).abs() < 1e-6);
+        assert!((changes[0].1.fill.unwrap().blue - 0.75).abs() < 1e-6);
+        assert_eq!(changes[0].1.fill.unwrap().alpha, 0.5);
+        assert_eq!(changes[0].1.stroke.unwrap().alpha, 0.25);
+        assert_eq!(changes[0].1.opacity, 0.3);
+        assert_eq!(a.state().unwrap(), before);
     }
 
     #[test]

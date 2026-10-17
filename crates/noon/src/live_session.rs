@@ -2600,6 +2600,18 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Set the nominal Manim Angle value through the active publication boundary.
+    pub fn set_angle_value(
+        &mut self,
+        mobject: &Mobject,
+        radians: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_angle_value(mobject.node_id(), radians);
+        self.apply(transaction)
+    }
+
     pub fn set_translation(
         &mut self,
         mobject: &Mobject,
@@ -2900,6 +2912,23 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_fade(style, darkness))
     }
 
+    /// Publish one validated color interpolation for an object.
+    pub fn fade_to(
+        &mut self,
+        mobject: &Mobject,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        if !mobject.has_fade_to_points()? {
+            return self.replace_style(mobject, mobject.state()?.style);
+        }
+        self.edit_style(mobject, |style| {
+            crate::semantic_mobject::edit_fade_to(style, target, amount)
+        })
+    }
+
     /// Set the independent object-composite opacity domain.
     pub fn set_object_opacity(
         &mut self,
@@ -3071,6 +3100,18 @@ impl<'a> LiveSession<'a> {
         self.apply(family.fade_transaction(darkness)?)
     }
 
+    /// Publish a recursive family color interpolation through the live owner.
+    pub fn fade_to_family(
+        &mut self,
+        family: &MobjectFamily,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.fade_to_transaction(target, amount)?)
+    }
+
     pub fn set_family_member_colors(
         &mut self,
         family: &MobjectFamily,
@@ -3159,7 +3200,8 @@ mod tests {
     use crate::execution_session::CallbackAdvance;
     use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
-        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticObjectRole, SemanticPaint,
+        SemanticVec3,
     };
 
     #[test]
@@ -3225,6 +3267,67 @@ mod tests {
         };
         assert_eq!(observed.transform.translation.x, 2.0);
         assert_eq!(session.frame().objects.len(), 1);
+    }
+
+    #[test]
+    fn live_angle_value_override_publishes_nominal_metadata_without_changing_render_state() {
+        let mut scene = Scene::new();
+        let angle = scene
+            .geometry(
+                crate::ManimGeometryOptions::angle_from_endpoints(
+                    [(-1.0, 0.0), (1.0, 0.0)],
+                    [(0.0, -1.0), (0.0, 1.0)],
+                    Default::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        scene.add(&angle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let frame_before = session.frame().clone();
+        let publication_before = session.publication_context();
+
+        {
+            let mut live = scene.live(&mut session);
+            live.set_angle_value(&angle, -0.75).unwrap();
+            assert_eq!(
+                live.authored(&angle).unwrap().role(),
+                SemanticObjectRole::Angle(noon_core::SemanticAngleRole::new(Some(-0.75)),)
+            );
+            assert_eq!(angle.angle_value(false).unwrap(), -0.75);
+            assert_ne!(live.session.publication_context(), publication_before);
+            let publication_after = live.session.publication_context();
+            assert!(live.set_angle_value(&angle, f64::NAN).is_err());
+            assert_eq!(live.session.publication_context(), publication_after);
+        }
+
+        assert_eq!(session.frame(), &frame_before);
+
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(angle.node_id(), HostCallbackId::new(9), 0.0, None);
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+        };
+        let publication = live.session.publication_context();
+        assert!(matches!(
+            live.set_angle_value(&angle, 0.5),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::RequiredCallbackPending
+            ))
+        ));
+        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(angle.angle_value(false).unwrap(), -0.75);
+        live.session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        live.set_angle_value(&angle, 0.5).unwrap();
+        assert_eq!(angle.angle_value(false).unwrap(), 0.5);
     }
 
     #[test]

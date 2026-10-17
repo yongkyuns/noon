@@ -141,12 +141,105 @@ class SharedFamilyPaintTests(unittest.TestCase):
             group.fade(family=False)
         group._semantic_family_handle.fade.assert_not_called()
 
+    def test_leaf_fade_to_forwards_rgba_and_unbounded_finite_interpolation(self):
+        leaf = identity_only_wrapper(compat.Square)
+        color = compat._base.Color(0.2, 0.4, 0.6, 0.8)
+        for live in (False, True):
+            with self.subTest(live=live):
+                handle = Mock()
+                context = Mock() if live else None
+                with patch.object(handles, "_handle_for", return_value=handle), \
+                     patch.object(handles, "_live_mutation_context", return_value=context):
+                    self.assertIs(leaf.fade_to(color, alpha=1.25), leaf)
+                if live:
+                    context.liveFadeTo.assert_called_once_with(
+                        handle, color.red, color.green, color.blue, color.alpha, 1.25
+                    )
+                    handle.fadeTo.assert_not_called()
+                else:
+                    handle.fadeTo.assert_called_once_with(
+                        color.red, color.green, color.blue, color.alpha, 1.25
+                    )
+
+    def test_invalid_fade_to_amount_fails_before_host_mutation(self):
+        leaf = identity_only_wrapper(compat.Square)
+        with patch.object(handles, "_handle_for") as get_handle:
+            with self.assertRaises(TypeError):
+                leaf.fade_to(compat._base.BLUE)
+            for amount in (float("nan"), float("inf"), -float("inf")):
+                with self.assertRaises(ValueError):
+                    leaf.fade_to(compat._base.BLUE, amount)
+            get_handle.assert_not_called()
+
+    def test_group_fade_to_routes_once_through_family_owner(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        target = compat._base.Color(0.1, 0.2, 0.3, 0.4)
+        for live in (False, True):
+            context = Mock() if live else None
+            with patch.object(handles, "_group_target_context", return_value=context):
+                self.assertIs(family.fade_to(target, 0.75), family)
+            owner = context if live else family._semantic_family_handle
+            method = owner.liveSetFamilyFadeTo if live else owner.fadeTo
+            expected = ((family._semantic_family_handle,) if live else ()) + (
+                target.red, target.green, target.blue, target.alpha, 0.75
+            )
+            method.assert_called_once_with(*expected)
+
+    def test_nonrecursive_group_fade_to_is_a_root_only_noop(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        with patch.object(handles, "_fade_to") as fade_to:
+            self.assertIs(family.fade_to(compat._base.BLUE, 0.5, family=False), family)
+        fade_to.assert_not_called()
+        self.assertEqual(family._semantic_family_handle.method_calls, [])
+
+    def test_callback_leaf_and_family_fade_to_use_staged_operations(self):
+        from types import SimpleNamespace
+        from test_updater_snapshot import CanonicalCallbackPropertyRowTests
+        _, leaf, context = CanonicalCallbackPropertyRowTests._mobject_and_context()
+        _, row = context.row(leaf)
+        previous = row.style
+        result = SimpleNamespace(hasFill=True, fillRed=0.25, fillGreen=0.5,
+            fillBlue=0.75, fillAlpha=0.8, hasStroke=False)
+        context._operations.callbackPaintFadeTo = Mock(return_value=result)
+        color = compat._base.Color(0.2, 0.4, 0.6, 0.8)
+        with patch.object(updaters, "_canonical_phase_context", return_value=context):
+            self.assertIs(leaf.fade_to(color, 0.5), leaf)
+        context._operations.callbackPaintFadeTo.assert_called_once_with(
+            *updaters._phase_optional_color_args(previous.fill),
+            *updaters._phase_optional_color_args(previous.stroke),
+            color.red, color.green, color.blue, color.alpha, 0.5
+        )
+        self.assertEqual(row.style.fill, (0.25, 0.5, 0.75, 0.8))
+
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            self.assertIs(family.fade_to(color, 0.5), family)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_called_once_with(
+            family._semantic_family_handle,
+            "FadeTo",
+            (color.red, color.green, color.blue, color.alpha, 0.5),
+        )
+
     def test_image_fade_cannot_inherit_vector_alpha_multiplication(self):
         from _manim_image import ImageMobject
         image = identity_only_wrapper(ImageMobject)
         with patch.object(handles, "_handle_for") as get_handle:
             with self.assertRaisesRegex(NotImplementedError, "image alpha reset"):
                 image.fade()
+            get_handle.assert_not_called()
+
+    def test_image_fade_to_is_a_noop_like_pinned_manim(self):
+        from _manim_image import ImageMobject
+        image = identity_only_wrapper(ImageMobject)
+        with patch.object(handles, "_handle_for") as get_handle:
+            self.assertIs(image.fade_to(compat._base.BLUE, 0.5), image)
             get_handle.assert_not_called()
 
     def test_callback_leaf_fade_uses_preceding_style_and_installs_shared_result(self):

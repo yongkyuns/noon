@@ -4,7 +4,7 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 from _manim_arc import _finish_candidate, _require_geometry_host
 from _manim_shared_geometry import _sector_component_count
-from _noon_errors import engine_call, NoonError
+from _noon_errors import engine_call, NoonError, raise_engine_error
 
 
 class Angle(_compat.VMobject):
@@ -65,6 +65,23 @@ class Angle(_compat.VMobject):
     @property
     def angle_value(self):
         return self.get_value()
+
+    @angle_value.setter
+    def angle_value(self, value):
+        radians = _shared._ir._finite_number("angle_value", value)
+        context = _shared._live_mutation_context(self)
+        handle = _shared._handle_for(self)
+        if handle is None and context is not None:
+            handle = getattr(self, "_semantic_handle", None)
+        if handle is None:
+            raise RuntimeError("Angle value mutation requires a current shared Rust handle")
+        try:
+            if context is not None:
+                engine_call(context.liveSetAngleValue, handle, radians)
+            else:
+                engine_call(handle.setAngleValue, radians)
+        except Exception as error:
+            raise_engine_error(error)
 
 
 class RightAngle(Angle):

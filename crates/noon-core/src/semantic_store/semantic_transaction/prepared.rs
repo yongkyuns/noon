@@ -1480,6 +1480,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectRole { object });
                 }
+                SemanticMutation::SetAngleValue { object, radians } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store.replace_semantic_object_role(
+                        object,
+                        SemanticObjectRole::Angle(crate::SemanticAngleRole::new(Some(radians))),
+                    );
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
+                }
                 SemanticMutation::ReplaceDecimalNumber { object, number } => {
                     let object = resolve_node_ref(object, &committed_nodes);
                     store.replace_semantic_decimal_number(object, number);
