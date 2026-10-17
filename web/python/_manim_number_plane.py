@@ -256,6 +256,7 @@ class NumberPlane(_plot.Axes):
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
 
     def add_coordinates(self, *axes_numbers, **kwargs):
+        """Add numeric labels together; label mixed or custom axes separately."""
         if "x_values" in kwargs or "y_values" in kwargs:
             raise TypeError("add_coordinates uses positional per-axis values")
         from _manim_number_labels import add_number_plane_coordinates

@@ -27,13 +27,22 @@ def _cold_labels():
         raise NotImplementedError("construct numeric label families before the first play/wait")
 
 
+def _merge_label_config(*layers):
+    """Normalize aliases within each option layer before applying overrides."""
+    config = {}
+    for layer in layers:
+        layer = dict(layer)
+        if "num_decimal_places" in layer:
+            places = layer.pop("num_decimal_places")
+            if "decimal_places" in layer and layer["decimal_places"] != places:
+                raise ValueError("decimal_places and num_decimal_places disagree")
+            layer.setdefault("decimal_places", places)
+        config.update(layer)
+    return config
+
+
 def _options(config, *, excluding=()):
-    config = dict(config)
-    if "num_decimal_places" in config:
-        places = config.pop("num_decimal_places")
-        if "decimal_places" in config and config["decimal_places"] != places:
-            raise ValueError("decimal_places and num_decimal_places disagree")
-        config.setdefault("decimal_places", places)
+    config = _merge_label_config(config)
     font = config.pop("font", "DejaVu Sans Mono")
     size = float(config.pop("font_size", 18))
     precision = config.pop("decimal_places", 0)
@@ -189,14 +198,14 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
     axes = (owner.x_axis, owner.y_axis)
     axis_configs = []
     for index, (axis, override) in enumerate(zip(axes, overrides, strict=True)):
-        settings = dict(getattr(axis, "decimal_number_config", {}))
-        settings.update(config)
-        settings.update({} if override is None else override)
+        settings = _merge_label_config(
+            getattr(axis, "decimal_number_config", {}),
+            config, {} if override is None else override,
+        )
         if plane:
             settings.setdefault("direction", _base.DR)
-            if "num_decimal_places" not in settings:
-                settings.setdefault("decimal_places",
-                                    getattr(owner, "_coordinate_decimal_places", (1, 1))[index])
+            settings.setdefault("decimal_places",
+                                getattr(owner, "_coordinate_decimal_places", (1, 1))[index])
         axis_configs.append(settings)
     axis_exclusions = [
         _coordinate_exclusions(axis, settings)
@@ -209,11 +218,16 @@ def _coordinate_labels(owner, axes_numbers, overrides, config, *, plane):
             "mapping coordinate labels require an explicit font for native Text; "
             "default TeX mappings are not yet supported"
         )
+    if len(values) == 2 and (native_profiles[0] != native_profiles[1]
+                            or any(isinstance(value, Mapping) for value in values)):
+        raise NotImplementedError(
+            "two-axis coordinate labels require numeric labels of one type; "
+            "add mixed or custom labels one axis at a time"
+        )
     if any(value is None and _plot._number_line_scale(getattr(axes[index], "scaling", None))[2]
            for index, value in enumerate(values)):
         raise NotImplementedError(_plot._UNSUPPORTED_LOG_LABELS)
-    if (len(values) == 2 and native_profiles[0] == native_profiles[1]
-            and not any(isinstance(value, Mapping) for value in values)):
+    if len(values) == 2:
         if native_profiles[0]:
             method = "numberPlaneCoordinateLabelFamilies" if plane else "coordinateLabelFamilies"
             result = _add_coordinate_labels(

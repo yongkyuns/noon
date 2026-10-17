@@ -754,14 +754,8 @@ class NumberLine(_compat.Group):
         return number_mobjects(self, numbers or None, attach=False, config=config)
 
     def _number_label_config(self, values):
-        config = dict(getattr(self, "decimal_number_config", {}))
-        config.update(values)
-        if "decimal_places" in values:
-            config.pop("num_decimal_places", None)
-        elif "num_decimal_places" in values:
-            config.pop("decimal_places", None)
-        elif "num_decimal_places" in config:
-            config["decimal_places"] = config.pop("num_decimal_places")
+        from _manim_number_labels import _merge_label_config
+        config = _merge_label_config(getattr(self, "decimal_number_config", {}), values)
         config.setdefault("direction", getattr(self, "label_direction", _base.DOWN))
         config.setdefault(
             "buff", getattr(self, "line_to_number_buff", _base.MED_SMALL_BUFF)
@@ -1151,6 +1145,8 @@ class Axes(_compat.Group):
 
         Numeric defaults use retained DecimalNumber labels and require
         ``await prepare_latex()``. Passing ``font`` selects native Text.
+        Two-axis numeric labels commit together and must use one text type.
+        Add mixed text types or custom mappings one axis at a time.
         """
         if "x_values" in kwargs or "y_values" in kwargs:
             raise TypeError("add_coordinates uses positional per-axis values")
