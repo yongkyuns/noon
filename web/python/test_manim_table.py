@@ -146,18 +146,18 @@ class TableFacadeTests(unittest.TestCase):
 
     def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
         entry = _FakeMobject(1)
-        row_label = _FakeMobject(2)
+        row_label = _FakeFamily(2)
         column_label = _FakeMobject(3)
-        top_left_entry = _FakeMobject(4)
+        top_left_entry = _FakeFamily(4)
         context = types.SimpleNamespace()
         handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
         def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines,
                    red, green, blue, alpha, width, opacity, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
-            self.assertEqual(row_labels, [row_label._semantic_handle])
+            self.assertEqual(row_labels, [row_label._semantic_family_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
-            self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
+            self.assertEqual(top_left_entries, [top_left_entry._semantic_family_handle])
             self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
             self.assertTrue(inner_lines)
             self.assertEqual((red, green, blue, alpha, width, opacity), (1.0, 1.0, 1.0, 1.0, .04, 1.0))
@@ -197,11 +197,17 @@ class TableFacadeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
                 table.MobjectTable([[entry]], top_left_entry=top_left_entry)
 
-    def test_mobject_table_label_boundaries_are_explicit(self):
+    def test_mobject_table_accepts_family_labels_and_rejects_unshared_labels(self):
         with patch.object(table._base, "Mobject", _FakeMobject), \
                 patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
-            with self.assertRaisesRegex(TypeError, "individual Mobjects"):
-                table.MobjectTable._label_handle(_FakeFamily(1))
+            family = _FakeFamily(1)
+            self.assertIs(
+                table.MobjectTable._label_handle(family),
+                family._semantic_family_handle,
+            )
+            with self.assertRaisesRegex(TypeError, "current shared semantic identities"):
+                with patch.object(table, "_handle_for", return_value=None):
+                    table.MobjectTable._label_handle(_FakeMobject(2))
             with self.assertRaisesRegex(NotImplementedError, "unsupported Table option"):
                 table._options({"top_left_entry": _FakeMobject(2)})
 

@@ -125,6 +125,14 @@
       "notes": "Exercises ManimCE top_left_entry placement with direct retained Mobjects and labels. Rust/WASM and Python-worker pixels are identical on WebGPU and WebGL2; strict pinned ManimCE Cairo comparison passes unchanged thresholds on both backends with exact duration and 0.12% worst differing pixels."
     },
     {
+      "id": "mobject-table-family-labels",
+      "scene": "MobjectTableFamilyLabelsExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises family-valued row labels, column labels, and top-left entry. Rust admission retains each supplied family root, sizes cells from aggregate descendant bounds, and translates every leaf together. Rust/WASM and Python-worker pixels match exactly on WebGPU and WebGL2; strict pinned Cairo raster qualification passes unchanged thresholds on both backends with exact duration and 0.33% worst differing pixels."
+    },
+    {
       "id": "table-inner-lines-omitted",
       "scene": "TableInnerLinesOmittedExample",
       "source": "parity/manim-v0.21/core-examples/table.py",

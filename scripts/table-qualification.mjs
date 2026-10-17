@@ -7,6 +7,9 @@ await qualifyPairedAuthoring({
     id: "table", file: "table.py", scene: "RetainedTable",
     factory: "createTableRenderer", objectCount: 31,
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
+  }, {
+    id: "mobject-table-family-labels", file: "table.py", scene: "MobjectTableFamilyLabelsExample",
+    factory: "createMobjectTableFamilyLabelsRenderer", duration: 0.2,
   }],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
     const source = `from noon import *

@@ -17,8 +17,9 @@ use std::{cell::RefCell, ops::Deref, rc::Rc};
 #[cfg(feature = "native-text")]
 use admission::publish_native_text_table;
 use admission::{
-    publish_existing_table, publish_target_table, publish_target_table_with_top_left_entry,
-    table_shape, TablePublisher,
+    publish_existing_table, publish_target_table, publish_target_table_with_composite_labels,
+    publish_target_table_with_composite_labels_and_top_left_entry,
+    publish_target_table_with_top_left_entry, table_shape, TablePublisher,
 };
 
 #[cfg(feature = "latex")]
@@ -801,6 +802,31 @@ impl MobjectTable {
         )
         .map(Self)
     }
+    /// Construct a retained MobjectTable with object or family-valued labels.
+    /// Each supplied label root keeps its identity and all descendant leaves.
+    pub fn from_target_rows_with_composite_labels<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_composite_labels(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            options,
+        )
+        .map(Self)
+    }
     /// Construct a retained MobjectTable with row/column labels and a corner
     /// entry. The top-left entry requires both label sets, matching ManimCE.
     pub fn from_target_rows_with_labels_and_top_left_entry<'a, I, J>(
@@ -828,6 +854,33 @@ impl MobjectTable {
         )
         .map(Self)
     }
+    /// Construct a retained MobjectTable with object or family-valued labels
+    /// and a shared object or family in the top-left corner.
+    pub fn from_target_rows_with_composite_labels_and_top_left_entry<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Vec<MobjectTarget<'a>>,
+        column_labels: Vec<MobjectTarget<'a>>,
+        top_left_entry: MobjectTarget<'a>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_composite_labels_and_top_left_entry(
+            TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
+        .map(Self)
+    }
     /// Live-session counterpart of [`Self::from_target_rows_with_labels`].
     pub fn from_target_rows_with_labels_in_live_session<'a, I, J>(
         live: &mut crate::LiveSession<'_>,
@@ -843,6 +896,30 @@ impl MobjectTable {
         let rows = collect_target_rows(rows);
         let shape = table_shape(&rows)?;
         publish_target_table(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            options,
+        )
+        .map(Self)
+    }
+    /// Live-session counterpart of [`Self::from_target_rows_with_composite_labels`].
+    pub fn from_target_rows_with_composite_labels_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_composite_labels(
             TablePublisher::Live(live),
             rows.into_iter().flatten().collect(),
             shape,
@@ -875,6 +952,33 @@ impl MobjectTable {
             Some(row_labels),
             Some(column_labels),
             Some(top_left_entry),
+            options,
+        )
+        .map(Self)
+    }
+    /// Live-session counterpart of
+    /// [`Self::from_target_rows_with_composite_labels_and_top_left_entry`].
+    pub fn from_target_rows_with_composite_labels_and_top_left_entry_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Vec<MobjectTarget<'a>>,
+        column_labels: Vec<MobjectTarget<'a>>,
+        top_left_entry: MobjectTarget<'a>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_composite_labels_and_top_left_entry(
+            TablePublisher::Live(live),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
             options,
         )
         .map(Self)
@@ -1250,6 +1354,108 @@ mod tests {
         let column_bounds = column_label.layout_bounds().unwrap().unwrap();
         assert!((entry_bounds.min_x - row_bounds.max_x - options.h_buff).abs() < 1e-6);
         assert!((column_bounds.min_y - entry_bounds.max_y - options.v_buff).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mobject_table_family_labels_keep_roots_and_place_all_descendants() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let row_label_left = circle(&store, 0.2);
+        let mut row_label_right = circle(&store, 0.1);
+        row_label_right.shift(0.8, 0.0).unwrap();
+        let row_label = MobjectFamily::create(
+            Rc::clone(&store),
+            &[(&row_label_left).into(), (&row_label_right).into()],
+        )
+        .unwrap();
+        let column_label_top = circle(&store, 0.15);
+        let mut column_label_bottom = circle(&store, 0.1);
+        column_label_bottom.shift(0.0, -0.5).unwrap();
+        let column_label = MobjectFamily::create(
+            Rc::clone(&store),
+            &[(&column_label_top).into(), (&column_label_bottom).into()],
+        )
+        .unwrap();
+        let corner_label_left = circle(&store, 0.25);
+        let mut corner_label_right = circle(&store, 0.12);
+        corner_label_right.shift(0.5, 0.0).unwrap();
+        let corner_label = MobjectFamily::create(
+            Rc::clone(&store),
+            &[(&corner_label_left).into(), (&corner_label_right).into()],
+        )
+        .unwrap();
+        let initial_offsets = [
+            row_label_right.state().unwrap().transform.translation.x
+                - row_label_left.state().unwrap().transform.translation.x,
+            column_label_bottom.state().unwrap().transform.translation.y
+                - column_label_top.state().unwrap().transform.translation.y,
+            corner_label_right.state().unwrap().transform.translation.x
+                - corner_label_left.state().unwrap().transform.translation.x,
+        ];
+        let options = TableOptions {
+            h_buff: 0.75,
+            v_buff: 0.4,
+            ..Default::default()
+        };
+
+        let table = MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            vec![MobjectTarget::from(&row_label)],
+            vec![MobjectTarget::from(&column_label)],
+            MobjectTarget::from(&corner_label),
+            options,
+        )
+        .unwrap()
+        .into_table();
+
+        let members = store.borrow();
+        assert_eq!(
+            members
+                .semantic_family_members_checked(table.row_label_family().unwrap().node_id())
+                .unwrap(),
+            vec![row_label.node_id()]
+        );
+        assert_eq!(
+            members
+                .semantic_family_members_checked(table.column_label_family().unwrap().node_id())
+                .unwrap(),
+            vec![column_label.node_id()]
+        );
+        assert_eq!(
+            members
+                .semantic_family_members_checked(table.top_left_entry_family().unwrap().node_id())
+                .unwrap(),
+            vec![corner_label.node_id()]
+        );
+        drop(members);
+
+        let entry_bounds = entry.layout_bounds().unwrap().unwrap();
+        let row_bounds = row_label.layout_bounds().unwrap().unwrap();
+        let column_bounds = column_label.layout_bounds().unwrap().unwrap();
+        let corner_bounds = corner_label.layout_bounds().unwrap().unwrap();
+        let center_x = |bounds: Bounds2D64| (bounds.min_x + bounds.max_x) * 0.5;
+        let center_y = |bounds: Bounds2D64| (bounds.min_y + bounds.max_y) * 0.5;
+        assert!((entry_bounds.min_x - row_bounds.max_x - options.h_buff).abs() < 1e-6);
+        assert!((column_bounds.min_y - entry_bounds.max_y - options.v_buff).abs() < 1e-6);
+        assert!((center_x(corner_bounds) - center_x(row_bounds)).abs() < 1e-6);
+        assert!((center_y(corner_bounds) - center_y(column_bounds)).abs() < 1e-6);
+        assert_eq!(
+            row_label_right.state().unwrap().transform.translation.x
+                - row_label_left.state().unwrap().transform.translation.x,
+            initial_offsets[0]
+        );
+        assert_eq!(
+            column_label_bottom.state().unwrap().transform.translation.y
+                - column_label_top.state().unwrap().transform.translation.y,
+            initial_offsets[1]
+        );
+        assert_eq!(
+            corner_label_right.state().unwrap().transform.translation.x
+                - corner_label_left.state().unwrap().transform.translation.x,
+            initial_offsets[2]
+        );
     }
 
     #[test]

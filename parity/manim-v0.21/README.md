@@ -33,6 +33,14 @@ on WebGPU and WebGL2; strict pinned ManimCE Cairo raster qualification passes th
 unchanged thresholds on both backends with exact duration and 0.12% worst pixel
 difference.
 
+`mobject-table-family-labels` exercises family-valued row labels, column labels,
+and a top-left entry. Admission retains each supplied root, computes spacing
+from the combined descendant bounds, and moves every descendant leaf together.
+Rust/WASM and Python-worker pixels match exactly on WebGPU and WebGL2, and the
+table lifecycle checks pass on both. Strict pinned ManimCE Cairo raster
+qualification passes the unchanged thresholds on both backends with exact
+duration and 0.33% worst differing pixels.
+
 `table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
 outer rules retained. The option defaults to `True`, travels through the Rust,
 WASM, and Python constructors, and survives table-family rehydration. Its direct

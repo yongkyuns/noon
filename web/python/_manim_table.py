@@ -278,8 +278,9 @@ class MobjectTable(Table):
     def _label_handle(value):
         if not isinstance(value, _base.Mobject):
             raise TypeError("MobjectTable labels must be shared Mobjects")
-        if getattr(value, "_semantic_family_handle", None) is not None:
-            raise TypeError("MobjectTable labels must be individual Mobjects, not Groups")
+        family = getattr(value, "_semantic_family_handle", None)
+        if family is not None:
+            return family
         handle = _handle_for(value)
         if handle is None:
             raise TypeError("MobjectTable labels require current shared semantic identities")

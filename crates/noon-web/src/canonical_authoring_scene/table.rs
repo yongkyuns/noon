@@ -222,17 +222,17 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
-        let row_labels = row_labels.objects()?;
-        let column_labels = column_labels.objects()?;
+        let row_labels = row_labels.single_row_targets()?;
+        let column_labels = column_labels.single_row_targets()?;
         let row_labels = (!row_labels.is_empty()).then_some(row_labels);
         let column_labels = (!column_labels.is_empty()).then_some(column_labels);
-        let mut top_left_entries = top_left_entry.objects()?;
+        let mut top_left_entries = top_left_entry.single_row_targets()?;
         let top_left_entry = match top_left_entries.len() {
             0 => None,
             1 => Some(top_left_entries.remove(0)),
             _ => {
                 return Err(js_error(
-                    "MobjectTable top_left_entry must be one shared Mobject",
+                    "MobjectTable top_left_entry must be one shared object or family",
                 ))
             }
         };
@@ -244,7 +244,7 @@ impl CanonicalAuthoringSceneContext {
                 js_error("top_left_entry requires both row_labels and col_labels")
             })?;
             if self.inner.player_ownership.is_unstarted() {
-                noon::MobjectTable::from_target_rows_with_labels_and_top_left_entry(
+                noon::MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry(
                     &mut self.inner.scene,
                     rows,
                     row_labels,
@@ -269,7 +269,7 @@ impl CanonicalAuthoringSceneContext {
                     .map_err(js_error)
             }
         } else if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectTable::from_target_rows_with_labels(
+            noon::MobjectTable::from_target_rows_with_composite_labels(
                 &mut self.inner.scene,
                 rows,
                 row_labels,

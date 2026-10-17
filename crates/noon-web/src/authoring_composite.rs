@@ -59,17 +59,15 @@ impl WasmCompositeRows {
             .collect()
     }
 
-    pub(crate) fn objects(&self) -> Result<Vec<noon::Mobject>, JsValue> {
-        self.rows
-            .iter()
-            .flatten()
-            .map(|entry| match entry {
-                noon::CompositeEntryHandle::Mobject(object) => Ok(object.clone()),
-                noon::CompositeEntryHandle::Family(_) => Err(js_error(
-                    "Table row and column labels must be Mobjects, not semantic families",
-                )),
-            })
-            .collect()
+    pub(crate) fn single_row_targets(&self) -> Result<Vec<noon::MobjectTarget<'_>>, JsValue> {
+        if self.rows.len() > 1 {
+            return Err(js_error("Composite labels require one row of roots"));
+        }
+        Ok(self.rows.first().map_or_else(Vec::new, |row| {
+            row.iter()
+                .map(noon::CompositeEntryHandle::as_target)
+                .collect()
+        }))
     }
 }
 

@@ -110,13 +110,13 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_create_mobject_table_with_labels<'a>(
         &mut self,
         rows: Vec<Vec<noon::MobjectTarget<'a>>>,
-        row_labels: Option<Vec<noon::Mobject>>,
-        column_labels: Option<Vec<noon::Mobject>>,
+        row_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        column_labels: Option<Vec<noon::MobjectTarget<'a>>>,
         options: noon::TableOptions,
     ) -> Result<noon::MobjectTable, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(
-                noon::MobjectTable::from_target_rows_with_labels_in_live_session(
+                noon::MobjectTable::from_target_rows_with_composite_labels_in_live_session(
                     live,
                     rows,
                     row_labels,
@@ -130,22 +130,20 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_create_mobject_table_with_labels_and_top_left_entry<'a>(
         &mut self,
         rows: Vec<Vec<noon::MobjectTarget<'a>>>,
-        row_labels: Vec<noon::Mobject>,
-        column_labels: Vec<noon::Mobject>,
-        top_left_entry: noon::Mobject,
+        row_labels: Vec<noon::MobjectTarget<'a>>,
+        column_labels: Vec<noon::MobjectTarget<'a>>,
+        top_left_entry: noon::MobjectTarget<'a>,
         options: noon::TableOptions,
     ) -> Result<noon::MobjectTable, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(
-                noon::MobjectTable::from_target_rows_with_labels_and_top_left_entry_in_live_session(
-                    live,
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options,
-                ),
-            )
+            Ok(noon::MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry_in_live_session(
+                live,
+                rows,
+                row_labels,
+                column_labels,
+                top_left_entry,
+                options,
+            ))
         })?
         .map_err(AuthoringFailure::from)
     }

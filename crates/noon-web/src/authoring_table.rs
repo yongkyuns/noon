@@ -78,6 +78,16 @@ pub async fn create_table_renderer(
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct WASM renderer counterpart of the grouped-label table fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createMobjectTableFamilyLabelsRenderer)]
+pub async fn create_mobject_table_family_labels_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::family_labels_session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
     #[wasm_bindgen(js_name = asTable)]
