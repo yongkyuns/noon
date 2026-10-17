@@ -38,11 +38,11 @@ pub fn family_labels_session() -> Result<ExecutionSession, String> {
     }
 
     let mut scene = Scene::new();
-    let row_labels = vec![
+    let row_labels = [
         family(&mut scene, Shape::Circle(0.12), Shape::Square(0.16), 0.3)?,
         family(&mut scene, Shape::Square(0.14), Shape::Circle(0.1), 0.28)?,
     ];
-    let column_labels = vec![
+    let column_labels = [
         family(&mut scene, Shape::Circle(0.11), Shape::Square(0.13), 0.26)?,
         family(&mut scene, Shape::Square(0.12), Shape::Circle(0.09), 0.24)?,
     ];
