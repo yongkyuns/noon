@@ -1034,10 +1034,40 @@ mod tests {
                 .unwrap();
 
         let scale = 48.0 * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
-        assert!((resource.bounds.width() - (10.0 * scale + 4.0 * 0.001 * 48.0)).abs() < 1e-6);
+        // Pinned DecimalNumber defaults unit_buff_per_font_unit to zero:
+        // four tokens have three equal gaps, including before the superscript.
+        assert!((resource.bounds.width() - (10.0 * scale + 3.0 * 0.001 * 48.0)).abs() < 1e-6);
         assert!((resource.bounds.height() - 5.0 * scale).abs() < 1e-6);
         assert_eq!(resource.parts.len(), 4);
         assert_eq!(resource.parts[2].source_span, TextSourceSpan::new(2, 3));
+    }
+
+    #[test]
+    fn default_numeric_unit_gap_matches_digits_at_each_font_size() {
+        for unit in ["m", "^{2}"] {
+            for font_size in [24.0, 48.0, 72.0] {
+                let (source, tokens) = numeric_layout_tokens(
+                    8.0,
+                    &DecimalFormat {
+                        decimal_places: 0,
+                        unit: Some(unit.into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let digit = text_box("8", Rect::new(Vec2::ZERO, Vec2::new(2.0, 4.0)));
+                let unit = text_box(unit, Rect::new(Vec2::ZERO, Vec2::new(3.0, 3.0)));
+                let resource = compose_numeric_text_resource_from_children(
+                    source,
+                    &tokens,
+                    &[&digit, &unit],
+                    font_size,
+                )
+                .unwrap();
+                let scale = font_size * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
+                assert!((resource.bounds.width() - (5.0 * scale + 0.001 * font_size)).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]
