@@ -5730,6 +5730,10 @@ mod wasm {
                 "Fade" => noon::FamilyPaint::Fade(
                     opacity.ok_or_else(|| js_error("family darkness is required"))?,
                 ),
+                "FadeTo" => noon::FamilyPaint::FadeTo {
+                    color: color.ok_or_else(|| js_error("family fade_to color is required"))?,
+                    amount: opacity.ok_or_else(|| js_error("family fade_to amount is required"))?,
+                },
                 _ => return Err(js_error("unknown family paint operation")),
             };
             let revision = noon_core::SceneRevision::new(
@@ -6125,6 +6129,49 @@ mod wasm {
             );
             Ok(callback_paint_result(
                 noon::integration::effective_style_with_fade(style, darkness).map_err(js_error)?,
+            ))
+        }
+
+        /// Interpolate callback-local paint toward a target color.
+        #[wasm_bindgen(js_name = callbackPaintFadeTo)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_fade_to(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            target_red: f64,
+            target_green: f64,
+            target_blue: f64,
+            target_alpha: f64,
+            amount: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            let target = callback_color(
+                "fade_to target",
+                Some(target_red),
+                Some(target_green),
+                Some(target_blue),
+                Some(target_alpha),
+            )?
+            .ok_or_else(|| js_error("fade_to target is required"))?;
+            Ok(callback_paint_result(
+                noon::integration::effective_style_with_fade_to(style, target, amount)
+                    .map_err(js_error)?,
             ))
         }
 
@@ -8458,6 +8505,31 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveFadeTo)]
+        pub fn live_fade_to(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            amount: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_fade_to(
+                    handle.semantic_mobject(),
+                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                    amount,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetObjectOpacity)]
         pub fn live_set_object_opacity(
             &mut self,
@@ -8879,6 +8951,28 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_family_fade(&family, darkness)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyFadeTo)]
+        pub fn live_set_family_fade_to(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            amount: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_fade_to(
+                    &family,
+                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                    amount,
+                )
                 .map_err(typed_js_error)
         }
 

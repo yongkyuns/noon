@@ -2900,6 +2900,23 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_fade(style, darkness))
     }
 
+    /// Publish one validated color interpolation for an object.
+    pub fn fade_to(
+        &mut self,
+        mobject: &Mobject,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        if !mobject.has_fade_to_points()? {
+            return self.replace_style(mobject, mobject.state()?.style);
+        }
+        self.edit_style(mobject, |style| {
+            crate::semantic_mobject::edit_fade_to(style, target, amount)
+        })
+    }
+
     /// Set the independent object-composite opacity domain.
     pub fn set_object_opacity(
         &mut self,
@@ -3069,6 +3086,18 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(family.fade_transaction(darkness)?)
+    }
+
+    /// Publish a recursive family color interpolation through the live owner.
+    pub fn fade_to_family(
+        &mut self,
+        family: &MobjectFamily,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.fade_to_transaction(target, amount)?)
     }
 
     pub fn set_family_member_colors(

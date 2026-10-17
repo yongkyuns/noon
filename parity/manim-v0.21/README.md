@@ -21,6 +21,20 @@ family-container paint remain unqualified. Image fade resets original pixel
 alpha in Manim and is explicitly rejected rather than inheriting vector alpha
 multiplication. Unrepresentable recursive occurrence counts fail before mutation.
 
+`Mobject.fade_to(color, alpha)` now interpolates the shared current RGB paint
+toward the target and routes the result through the common color edit, preserving
+fill and stroke opacity. Direct, live, recursive-family, and staged callback
+paths share that implementation; repeated family aliases blend once per membership
+path using bounded composition and one publication per leaf. Point-free geometry
+and image objects remain unchanged. Focused
+Rust and Python adapter tests cover RGB interpolation, opacity preservation,
+aliases, and publication routing. The pinned-source `paint-fade` fixture blends
+the current vector fill/stroke color after prior paint edits, as Manim's
+`VMobject.get_color` does, and holds the result in a visible interval.
+Its exact-head native/direct-WASM/Python raster comparison and ManimCE oracle are
+pending. Native Text hierarchy differences, resource paint color queries and
+broader object types remain unqualified.
+
 `triangle-options` covers omitted defaults, radius/start-angle overrides and
 inherited regular-polygon vertex queries. The Rust Triangle constructor delegates
 to the same closed regular-polygon path as the Python wrapper; the separate fixture

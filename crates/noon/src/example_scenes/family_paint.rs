@@ -47,10 +47,30 @@ pub fn session() -> Result<ExecutionSession, String> {
             assert_eq!(effective.fill_opacity(), opacity);
             assert_eq!(effective.stroke_opacity(), opacity);
         }
+        live.fade_to_family(&family, Color::rgb(1.0, 0.0, 0.0), 0.5)
+            .map_err(|e| e.to_string())?;
+        for (object, color, opacity) in [
+            (&a, Color::rgba(0.8, 0.15, 0.25, 0.0625), 0.0625),
+            (&b, Color::rgba(0.6, 0.3, 0.5, 0.25), 0.25),
+        ] {
+            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            assert_eq!(effective.style.fill, Some(color));
+            assert_eq!(effective.fill_opacity(), opacity);
+            assert_eq!(effective.style.stroke, Some(color));
+            assert_eq!(effective.stroke_opacity(), opacity);
+        }
         let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
         live.advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
     Ok(session)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fade_and_fade_to_fixture_matches_recursive_family_expectations() {
+        super::session().unwrap();
+    }
 }
