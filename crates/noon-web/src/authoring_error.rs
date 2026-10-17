@@ -92,6 +92,22 @@ impl From<noon::TableAuthoringError> for AuthoringFailure {
         }
     }
 }
+impl From<noon::CodeAuthoringError> for AuthoringFailure {
+    fn from(error: noon::CodeAuthoringError) -> Self {
+        use noon::CodeAuthoringError::*;
+        match error {
+            InvalidOption { .. } => Self::new("invalid_input", "code.invalid_option", error),
+            Highlight(_) => Self::new("unsupported_operation", "code.highlight", error),
+            InvalidStructure => Self::new("invalid_input", "code.invalid_structure", error),
+            LineOutOfRange { .. } => Self::new("invalid_input", "code.line_out_of_range", error),
+            Text(error) => error.into(),
+            TextPart(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => error.into(),
+            Io(error) => Self::unclassified("code.io", &error),
+        }
+    }
+}
 impl From<noon::MatrixAuthoringError> for AuthoringFailure {
     fn from(error: noon::MatrixAuthoringError) -> Self {
         use noon::MatrixAuthoringError::*;

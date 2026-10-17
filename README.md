@@ -70,6 +70,68 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
+### Code blocks
+
+`Code` displays source with native syntax highlighting and preserved indentation.
+Supply the source and its language; shared Rust code expands tabs at column stops,
+shapes complete lines, aligns the optional line-number gutter, and sizes the
+background. Scene authors do not need to color or position individual tokens.
+
+```python
+from noon import *
+
+class CodeExample(Scene):
+    def construct(self):
+        listing = Code(
+            code_string="def square(x):\n    return x * x",
+            language="python",
+            formatter_style="monokai",
+            tab_width=4,
+            background="window",
+            paragraph_config={"font_size": 24},
+        )
+        self.add(listing)
+```
+
+The native Rust equivalent uses the same admission, layout and retained resources:
+
+```rust
+use noon::{Code, CodeBackground, CodeOptions, Scene};
+
+let mut scene = Scene::new();
+let listing = Code::new(&mut scene, "def square(x):\n    return x * x", CodeOptions {
+    language: Some("python".into()),
+    formatter_style: "monokai".into(),
+    background: CodeBackground::Window,
+    ..Default::default()
+})?;
+scene.add_many(&[listing.family().into()])?;
+```
+
+Python also accepts `code_file=...`; Rust provides `Code::from_file`. These are UTF-8
+host input helpers. Explicit `language` takes precedence over filename detection.
+Without a recognized filename or first-line language marker, use an explicit
+language for highlighting. `Code.get_languages_list()` and
+`Code.get_styles_list()` enumerate the native profile; supported themes are
+`vim`, `monokai`, `friendly`, and `emacs`. Unsupported names and Python Pygments
+style classes produce explicit errors.
+
+Spaces, trailing whitespace, and all empty lines are retained; this is a source
+display, not a formatter or automatic dedenter. `code_lines`, `line_numbers` when
+enabled, and `background` are ordinary scene targets. In Rust, `line(index)`
+returns a retained text Mobject and `line_source(index)` reads its canonical
+expanded source. Family copies, transforms and animations reuse the existing
+semantic engine. The `code` Cargo feature is enabled by default and depends on
+native text; no Python or JavaScript process is needed by native Rust.
+
+The current Manim-compatible constructor is implemented for this native profile;
+full Pygments lexer/theme parity, arbitrary style classes, glyph-child indexing,
+and the untouched upstream example's semantic/raster qualification remain owned
+by [#2193](https://github.com/yongkyuns/noon/issues/2193). Leading and trailing empty
+lines are deliberately preserved, including those Manim's Pygments preprocessing
+may strip. See the paired [Rust](crates/noon-native/examples/code_block.rs) and
+[Python](web/python/examples/code_block.py) examples.
+
 ### Source-declared click indication
 
 An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:
