@@ -892,6 +892,7 @@
       "id": "path-queries",
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",
+      "notes": "Exercises shared curve length-piece and total-length queries with default and custom sample counts, alongside path proportion queries.",
       "expected_duration": 2.2,
       "raster_tolerance": {
         "max_bounds_delta_px": 1,

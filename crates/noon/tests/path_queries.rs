@@ -69,6 +69,40 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
 }
 
 #[test]
+fn curve_length_piece_queries_match_sample_count_and_world_scale() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+        Vec2::new(0., 1.),
+        Vec2::new(1., 1.),
+        Vec2::new(1., 0.),
+    );
+    let mut object = scene.path(path, Default::default()).unwrap();
+    object.set_scale(2., 0.5).unwrap();
+    let query = object.path_query().unwrap();
+
+    let pieces = query.curve_length_pieces(0, Some(5)).unwrap();
+    let expected = [
+        0.420_425_751_471_053_43,
+        0.693_862_603_474_203_7,
+        0.693_862_603_474_203_7,
+        0.420_425_751_471_053_43,
+    ];
+    assert_eq!(pieces.len(), expected.len());
+    for (actual, expected) in pieces.iter().zip(expected) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+    assert!((query.curve_length(0, Some(5)).unwrap() - pieces.iter().sum::<f64>()).abs() < 1e-12);
+    assert_eq!(
+        query.curve_length_pieces(0, Some(1)).unwrap(),
+        Vec::<f64>::new()
+    );
+    assert_eq!(query.curve_length(0, Some(1)).unwrap(), 0.0);
+    assert!(query.curve_length_pieces(0, Some(0)).is_err());
+    assert!(query.curve_length(0, Some(0)).is_err());
+    assert!(query.curve_length_pieces(1, None).is_err());
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()
