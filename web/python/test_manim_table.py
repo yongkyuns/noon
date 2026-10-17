@@ -405,6 +405,31 @@ class TableFacadeTests(unittest.TestCase):
             with self.assertRaisesRegex(TypeError, "element_to_mobject_config must be a dict"):
                 table.MobjectTable([[_FakeMobject(1)]], element_to_mobject_config=[])
 
+    def test_table_custom_converter_uses_the_retained_mobject_path(self):
+        calls = []
+        converter = lambda value, *, color: (value, color)
+
+        def initialize(wrapper, rows, **kwargs):
+            calls.append((wrapper, rows, kwargs))
+
+        with patch.object(table.MobjectTable, "__init__", autospec=True, side_effect=initialize):
+            value = table.Table(
+                [["alpha"]],
+                element_to_mobject=converter,
+                element_to_mobject_config={"color": "red"},
+                h_buff=0.7,
+            )
+
+        self.assertIs(calls[0][0], value)
+        self.assertEqual(calls[0][1], [["alpha"]])
+        self.assertIs(calls[0][2]["element_to_mobject"], converter)
+        self.assertEqual(calls[0][2]["element_to_mobject_config"], {"color": "red"})
+        self.assertEqual(calls[0][2]["h_buff"], 0.7)
+
+    def test_table_rejects_unbound_paragraph_config_instead_of_ignoring_it(self):
+        with self.assertRaisesRegex(NotImplementedError, "requires an explicit shared-Mobject converter"):
+            table.Table([["alpha"]], element_to_mobject_config={"font": "DejaVu Sans"})
+
     def test_mobject_table_top_left_entry_requires_both_label_sets(self):
         entry = _FakeMobject(1)
         top_left_entry = _FakeMobject(2)

@@ -137,6 +137,30 @@ def _cell_position(pos):
 class Table(_compat.VGroup):
     """A normal retained family: entries, lines and highlights remain Rust handles."""
     def __init__(self, table, **kwargs):
+        element_to_mobject = kwargs.pop("element_to_mobject", _UNSET)
+        element_to_mobject_config = kwargs.pop("element_to_mobject_config", _UNSET)
+        if element_to_mobject is not _UNSET:
+            if not callable(element_to_mobject):
+                raise TypeError("Table element_to_mobject must be callable")
+            if element_to_mobject_config is _UNSET:
+                element_to_mobject_config = {}
+            if not isinstance(element_to_mobject_config, dict):
+                raise TypeError("element_to_mobject_config must be a dict")
+            MobjectTable.__init__(
+                self,
+                table,
+                element_to_mobject=element_to_mobject,
+                element_to_mobject_config=element_to_mobject_config,
+                **kwargs,
+            )
+            return
+        if element_to_mobject_config is not _UNSET:
+            if not isinstance(element_to_mobject_config, dict):
+                raise TypeError("element_to_mobject_config must be a dict")
+            if element_to_mobject_config:
+                raise NotImplementedError(
+                    "Table element_to_mobject_config requires an explicit shared-Mobject converter"
+                )
         row_label_mobjects = kwargs.pop("row_labels", None)
         column_label_mobjects = kwargs.pop("col_labels", None)
         top_left_entry = kwargs.pop("top_left_entry", None)
@@ -182,6 +206,10 @@ class Table(_compat.VGroup):
             top_left_family._semantic_member_wrappers = {
                 _family_wrapper_key(top_left_entry): top_left_entry
             }
+
+    @staticmethod
+    def _label_handle(value):
+        return _label_handle(value, "Table")
 
     def _initialize_table(self, handle, context):
         self._table_handle = handle

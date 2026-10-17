@@ -54,6 +54,10 @@ ManimCE Cairo comparison passes unchanged thresholds with exact duration and
 `element_to_mobject` callback with `element_to_mobject_config` for each input in
 row-major order and keeps the returned shared wrappers; the focused Python
 facade tests verify callback order, kwargs, wrapper identity, and invalid inputs.
+An explicit `Table.element_to_mobject` callback uses that same retained-Mobject
+path, allowing callers to supply their own shared native or geometric cell
+objects. Passing formatting config without an explicit converter is rejected
+until the default Paragraph font provider is portable.
 
 The non-empty default base-`Table` font remains unqualified. A focused local
 ManimCE `Paragraph` probe exceeded unchanged limits on both browser backends
