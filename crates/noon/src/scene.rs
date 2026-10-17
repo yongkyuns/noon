@@ -544,6 +544,18 @@ impl Scene {
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
+    /// Capture the effective point arrays for an object or family in the
+    /// current Runtime publication, preserving recursive alias multiplicity.
+    pub fn effective_all_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_all_points(&self.store, execution, target)
+    }
+
     /// Read one persistent authored/base object declaration.
     ///
     /// This deliberately does not inspect the running Runtime. Use

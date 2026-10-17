@@ -1890,6 +1890,19 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_all_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_all_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
         mobject: &noon::Mobject,

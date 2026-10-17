@@ -454,6 +454,14 @@ class Mobject:
     def has_no_points(self) -> bool:
         return not self.has_points()
 
+    def get_all_points(self):
+        """Return this object's and its family's authored point arrays."""
+        from _manim_path_queries import all_points
+        return all_points(self)
+
+    def get_points_defining_boundary(self):
+        return self.get_all_points()
+
     @property
     def width(self) -> float:
         return _semantic_operations()._width(self)

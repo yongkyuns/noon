@@ -1847,6 +1847,20 @@ def _group_layout_observation(value: _compat.Group):
     return layout
 
 
+def _all_points_observation(value: _base.Mobject):
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyAllPoints, family)
+        return engine_call(family.allPoints)
+    return _typed_manim_observation(
+        value,
+        "allPoints",
+        "queryMobjectAllPoints",
+    )
+
+
 def _is_shared_family(value: object) -> bool:
     return (
         isinstance(value, _compat.Group)

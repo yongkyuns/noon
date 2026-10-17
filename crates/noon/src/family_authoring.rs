@@ -175,7 +175,8 @@ impl MobjectTarget<'_> {
             .map_err(AuthoringError::from)
     }
 
-    pub(crate) fn require_store(
+    /// Validate this target and return its root identity in the expected store.
+    pub fn require_store(
         &self,
         store: &Rc<RefCell<SemanticStore>>,
     ) -> Result<SemanticNodeId, AuthoringError> {

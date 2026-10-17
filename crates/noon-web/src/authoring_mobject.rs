@@ -1129,6 +1129,15 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimColor)]
         pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
             self.semantic_family()?
@@ -1526,6 +1535,10 @@ mod wasm {
             .collect()
     }
 
+    fn flat_points(points: Vec<(f64, f64)>) -> Vec<f64> {
+        points.into_iter().flat_map(|(x, y)| [x, y]).collect()
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -1753,6 +1766,14 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle

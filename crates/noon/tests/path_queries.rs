@@ -1,5 +1,5 @@
 use noon::{
-    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, MobjectTarget, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 
@@ -25,7 +25,7 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
             VectorPath::new()
                 .move_to(Vec2::ZERO)
                 .move_to(Vec2::new(2., 1.)),
-            1,
+            5,
         ),
         (cubic.clone(), 4),
         (cubic.clone().move_to(Vec2::new(4., 0.)), 5),
@@ -66,6 +66,76 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
             .point_count(),
         16
     );
+
+    let repeated_moves = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .move_to(Vec2::new(2., 1.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = repeated_moves.path_query().unwrap();
+    assert_eq!(query.curve_count(), 1);
+    assert_eq!(query.point_count(), 5);
+    assert_eq!(
+        query.points().unwrap(),
+        vec![(0., 0.), (0., 0.), (0., 0.), (0., 0.), (2., 1.)]
+    );
+    assert_eq!(query.curve_points(0).unwrap(), [(0., 0.); 4]);
+    assert_eq!(query.curve_length(0, None).unwrap(), 0.);
+
+    let move_then_draw = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .move_to(Vec2::new(2., 1.))
+                .line_to(Vec2::new(3., 1.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = move_then_draw.path_query().unwrap();
+    assert_eq!(query.curve_count(), 2);
+    assert_eq!(query.point_count(), 8);
+    assert_eq!(query.curve_points(0).unwrap(), [(0., 0.); 4]);
+    assert_eq!(query.curve_points(1).unwrap()[0], (2., 1.));
+}
+
+#[test]
+fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
+    let mut scene = Scene::new();
+    let first = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let second = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(2., 0.))
+                .line_to(Vec2::new(3., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&first).into()]).unwrap();
+
+    let first_points = first.path_query().unwrap().points().unwrap();
+    let second_points = second.path_query().unwrap().points().unwrap();
+    let mut expected = first_points.clone();
+    expected.extend(second_points);
+    expected.extend(first_points);
+    assert_eq!(MobjectTarget::from(&root).all_points().unwrap(), expected);
+    assert_eq!(
+        MobjectTarget::from(&first).all_points().unwrap(),
+        first.path_query().unwrap().points().unwrap()
+    );
+
+    let empty = scene.family(&[]).unwrap();
+    assert!(MobjectTarget::from(&empty).all_points().unwrap().is_empty());
 }
 
 #[test]
@@ -286,6 +356,45 @@ fn effective_queries_capture_one_live_affine_publication() {
             .unwrap(),
         (1., 2.5),
     );
+}
+
+#[test]
+fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
+    let mut scene = Scene::new();
+    let object = scene.rectangle(2., 1.).unwrap();
+    let family = scene.family(&[(&object).into()]).unwrap();
+    let mut target = object.target_editor().unwrap();
+    target.set_translation(0., 2.).unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &object,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.)
+        .unwrap();
+
+    let points = noon::integration::effective_all_points(
+        scene.integration_store(),
+        &session,
+        MobjectTarget::from(&family),
+    )
+    .unwrap();
+    let expected =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap()
+            .points()
+            .unwrap();
+    assert_eq!(points, expected);
+    assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
 }
 
 #[test]

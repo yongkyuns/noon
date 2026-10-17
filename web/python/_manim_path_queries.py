@@ -3,7 +3,7 @@ import operator
 import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
-from _manim_semantic_handles import _typed_manim_observation
+from _manim_semantic_handles import _all_points_observation, _typed_manim_observation
 
 
 def _query(value):
@@ -72,6 +72,17 @@ def point_count(value):
         return int(query.pointCount)
     finally:
         query.free()
+
+
+def all_points(value):
+    coordinates = _all_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_all_points requires a valid shared Rust handle")
+    try:
+        import numpy as np
+    except ImportError:
+        return _points(coordinates)
+    return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
 
 
 def has_new_path_started(value):

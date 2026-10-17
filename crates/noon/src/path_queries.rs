@@ -1,8 +1,10 @@
 //! Immutable observations of one retained path in an explicit coordinate space.
-use crate::{AuthoringError, ExecutionSession, Mobject, UnsupportedAuthoringOperation};
+use crate::{
+    AuthoringError, ExecutionSession, Mobject, MobjectTarget, UnsupportedAuthoringOperation,
+};
 use noon_core::{
-    GeometryRef, GeometryResource, SemanticObjectContent, SemanticStore, SemanticTransform2_5D,
-    StoredGeometry, VectorPath,
+    GeometryRef, GeometryResource, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticStore, SemanticTransform2_5D, StoredGeometry, VectorPath,
 };
 use noon_geometry::{
     canonical_outline_path, PathProportionError, PathProportionPlan, MANIM_LENGTH_SAMPLE_POINTS,
@@ -15,6 +17,9 @@ use std::{cell::RefCell, rc::Rc};
 #[derive(Clone, Debug)]
 pub struct PathQuery {
     plan: Option<PathProportionPlan>,
+    /// ManimCE's flattened four-point cubic storage, including padding between
+    /// an unfinished subpath and the next MoveTo.
+    manim_points: Vec<(f64, f64)>,
     transform: SemanticTransform2_5D,
     endpoints: Option<(noon_core::Vec2, noon_core::Vec2)>,
     unfinished_anchor: Option<noon_core::Vec2>,
@@ -32,6 +37,7 @@ impl PathQuery {
                 Err(error) => return Err(AuthoringError::PathQuery(error)),
             };
         Ok(Self {
+            manim_points: manim_points(path, plan.as_ref())?,
             plan,
             transform,
             endpoints: path.endpoints(),
@@ -42,17 +48,15 @@ impl PathQuery {
         })
     }
 
-    /// Number of complete curves; an unfinished MoveTo is an anchor only.
+    /// Number of complete four-point curves in Manim's stored point array.
     pub fn curve_count(&self) -> usize {
-        self.plan
-            .as_ref()
-            .map_or(0, PathProportionPlan::curve_count)
+        self.manim_points.len() / 4
     }
 
-    /// Manim's cubic control-point count, including an unfinished final anchor.
-    /// Lines and quadratics use the same four-point promotion as curve queries.
+    /// Manim's cubic point-array length, including unfinished anchors and any
+    /// degenerate curve padding used to start a new subpath.
     pub fn point_count(&self) -> usize {
-        4 * self.curve_count() + usize::from(self.unfinished_anchor.is_some())
+        self.manim_points.len()
     }
 
     /// Whether the path ends with a MoveTo anchor that has not joined a curve.
@@ -64,13 +68,19 @@ impl PathQuery {
     /// Cubic controls in this snapshot's coordinate space. Lines and quadratics
     /// are promoted exactly; the returned points are derived observations.
     pub fn curve_points(&self, index: usize) -> Result<[(f64, f64); 4], AuthoringError> {
-        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
-            PathProportionError::InvalidCurveIndex { index, count: 0 },
-        ))?;
-        Ok(plan
-            .curve_points(index)
-            .map_err(AuthoringError::PathQuery)?
-            .map(|p| self.transform_point(p.x, p.y)))
+        if index >= self.curve_count() {
+            return Err(AuthoringError::PathQuery(
+                PathProportionError::InvalidCurveIndex {
+                    index,
+                    count: self.curve_count(),
+                },
+            ));
+        }
+        let start = index * 4;
+        Ok(std::array::from_fn(|offset| {
+            let (x, y) = self.manim_points[start + offset];
+            self.transform_point(x, y)
+        }))
     }
 
     /// Evaluate one curve at each supplied parameter in this snapshot's
@@ -80,20 +90,14 @@ impl PathQuery {
         index: usize,
         parameters: &[f64],
     ) -> Result<Vec<(f64, f64, f64)>, AuthoringError> {
-        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
-            PathProportionError::InvalidCurveIndex { index, count: 0 },
-        ))?;
-        plan.curve_points_at(index, parameters)
-            .map(|points| {
-                points
-                    .into_iter()
-                    .map(|point| {
-                        let (x, y) = self.transform_point(point.x, point.y);
-                        (x, y, point.z)
-                    })
-                    .collect()
+        let controls = self.curve_points(index)?;
+        Ok(parameters
+            .iter()
+            .map(|&t| {
+                let (x, y) = evaluate_cubic(controls, t);
+                (x, y, 0.0)
             })
-            .map_err(AuthoringError::PathQuery)
+            .collect())
     }
 
     /// Straight-line sample lengths for one curve, matching ManimCE's
@@ -103,11 +107,26 @@ impl PathQuery {
         index: usize,
         sample_points: Option<usize>,
     ) -> Result<Vec<f64>, AuthoringError> {
-        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
-            PathProportionError::InvalidCurveIndex { index, count: 0 },
-        ))?;
-        plan.curve_length_pieces(index, sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS))
-            .map_err(AuthoringError::PathQuery)
+        let controls = self.curve_points(index)?;
+        let sample_points = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
+        if sample_points == 0 {
+            return Err(AuthoringError::PathQuery(
+                PathProportionError::InvalidSampleCount,
+            ));
+        }
+        if sample_points == 1 {
+            return Ok(Vec::new());
+        }
+        let mut pieces = Vec::with_capacity(sample_points - 1);
+        let mut previous = controls[0];
+        let denominator = (sample_points - 1) as f64;
+        for sample in 1..sample_points {
+            let t = sample as f64 / denominator;
+            let current = evaluate_cubic(controls, t);
+            pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
+            previous = current;
+        }
+        Ok(pieces)
     }
 
     /// Approximate length of one curve using the same samples as its pieces.
@@ -197,6 +216,15 @@ impl PathQuery {
             anchors.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
         }
         anchors
+    }
+
+    /// ManimCE's flattened cubic point array, including any padded subpaths.
+    pub fn points(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        Ok(self
+            .manim_points
+            .iter()
+            .map(|&(x, y)| self.transform_point(x, y))
+            .collect())
     }
 
     /// Whether first and last anchors coincide in this snapshot's coordinates.
@@ -298,6 +326,85 @@ pub(crate) fn points_coincide(left: (f64, f64), right: (f64, f64)) -> bool {
         && (left.1 - right.1).abs() <= 1e-6 + 1e-5 * right.1.abs()
 }
 
+fn evaluate_cubic(controls: [(f64, f64); 4], t: f64) -> (f64, f64) {
+    let u = 1.0 - t;
+    (
+        u * u * u * controls[0].0
+            + 3.0 * u * u * t * controls[1].0
+            + 3.0 * u * t * t * controls[2].0
+            + t * t * t * controls[3].0,
+        u * u * u * controls[0].1
+            + 3.0 * u * u * t * controls[1].1
+            + 3.0 * u * t * t * controls[2].1
+            + t * t * t * controls[3].1,
+    )
+}
+
+fn manim_points(
+    path: &VectorPath,
+    plan: Option<&PathProportionPlan>,
+) -> Result<Vec<(f64, f64)>, AuthoringError> {
+    let mut points = Vec::new();
+    let mut current = None;
+    let mut subpath_start = None;
+    let mut curve_index = 0;
+
+    for command in path.commands() {
+        match *command {
+            noon_core::PathCommand::MoveTo { to } => {
+                let remainder = points.len() % 4;
+                if remainder != 0 {
+                    let start_index = ((points.len() - 1) / 4) * 4;
+                    let start_anchor = points[start_index];
+                    for _ in 0..(4 - remainder) {
+                        points.push(start_anchor);
+                    }
+                }
+                points.push((f64::from(to.x), f64::from(to.y)));
+                current = Some(to);
+                subpath_start = Some(to);
+            }
+            noon_core::PathCommand::LineTo { to }
+            | noon_core::PathCommand::QuadraticTo { to, .. }
+            | noon_core::PathCommand::CubicTo { to, .. } => {
+                if current.is_some() {
+                    let controls = plan
+                        .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?
+                        .curve_points(curve_index)
+                        .map_err(AuthoringError::PathQuery)?
+                        .map(|point| (point.x, point.y));
+                    append_manim_curve(&mut points, controls);
+                    curve_index += 1;
+                }
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {
+                if let (Some(from), Some(start)) = (current, subpath_start) {
+                    if (from - start).length() > f32::EPSILON {
+                        let controls = plan
+                            .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?
+                            .curve_points(curve_index)
+                            .map_err(AuthoringError::PathQuery)?
+                            .map(|point| (point.x, point.y));
+                        append_manim_curve(&mut points, controls);
+                        curve_index += 1;
+                    }
+                    current = Some(start);
+                }
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn append_manim_curve(points: &mut Vec<(f64, f64)>, controls: [(f64, f64); 4]) {
+    if points.len() % 4 == 1 {
+        points.extend(controls.into_iter().skip(1));
+    } else {
+        points.extend(controls);
+    }
+}
+
 pub(crate) fn content_path(
     store: &SemanticStore,
     content: SemanticObjectContent,
@@ -339,6 +446,90 @@ pub(crate) fn prepare_content(
     transform: SemanticTransform2_5D,
 ) -> Result<PathQuery, AuthoringError> {
     PathQuery::prepare(content_path(store, content)?.as_ref(), transform)
+}
+
+fn family_point_occurrences(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+) -> Result<Vec<SemanticNodeId>, AuthoringError> {
+    fn visit(
+        store: &SemanticStore,
+        id: SemanticNodeId,
+        result: &mut Vec<SemanticNodeId>,
+    ) -> Result<(), AuthoringError> {
+        let node = store
+            .node(id)
+            .ok_or_else(|| AuthoringError::from(noon_core::SemanticStoreError::UnknownNode(id)))?;
+        match node.kind() {
+            SemanticNodeKind::AuthoringObject => result.push(id),
+            SemanticNodeKind::Family(_) => {
+                for member in node.members() {
+                    visit(store, member, result)?;
+                }
+            }
+            SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::Effect(_) => {}
+        }
+        Ok(())
+    }
+
+    let mut result = Vec::new();
+    visit(store, root, &mut result)?;
+    Ok(result)
+}
+
+fn authored_points_for_occurrences(
+    store: &SemanticStore,
+    occurrences: &[SemanticNodeId],
+) -> Result<Vec<(f64, f64)>, AuthoringError> {
+    let mut result = Vec::new();
+    for id in occurrences {
+        let state = store
+            .semantic_object_state_checked(*id)
+            .map_err(AuthoringError::from)?;
+        let transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        result.extend(prepare_content(store, state.content, transform)?.points()?);
+    }
+    Ok(result)
+}
+
+impl MobjectTarget<'_> {
+    /// Return authored points for this object/family in Manim's recursive
+    /// pre-order, preserving repeated family aliases as repeated point runs.
+    pub fn all_points(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        let occurrences = family_point_occurrences(&store, self.node_id())?;
+        authored_points_for_occurrences(&store, &occurrences)
+    }
+}
+
+/// Observe current effective points for all object occurrences below a target.
+/// Membership is snapshotted once; each immutable path query reads the same
+/// execution session and preserves Manim's recursive alias multiplicity.
+pub fn effective_all_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<Vec<(f64, f64)>, AuthoringError> {
+    if !Rc::ptr_eq(store, target.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    target.validate()?;
+    let occurrences = {
+        let semantics = store.borrow();
+        family_point_occurrences(&semantics, target.node_id())?
+    };
+    let mut result = Vec::new();
+    for id in occurrences {
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        result.extend(effective_path_query(store, execution, &object)?.points()?);
+    }
+    Ok(result)
 }
 
 /// Observe one object's exact current path from an existing coherent execution.

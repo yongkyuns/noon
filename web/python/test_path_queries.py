@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 import _manim_compat as compat
 import _manim_path_queries as queries
+import _manim_semantic_handles as semantic_handles
 from _typed_geometry_test_support import identity_only_wrapper
 
 
@@ -11,6 +12,65 @@ class PathQueryTests(unittest.TestCase):
     def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
         value = identity_only_wrapper(compat.VMobject)
         self.assertEqual(value.n_points_per_curve, 4)
+
+    def test_all_points_returns_a_two_column_array_and_boundary_aliases_it(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only array shape check")
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(
+            queries,
+            "_all_points_observation",
+            return_value=[0., 0., 1., 0., 2., 0., 3., 0.],
+        ) as observe:
+            points = value.get_all_points()
+            self.assertIsInstance(points, np.ndarray)
+            self.assertEqual(points.shape, (4, 2))
+            np.testing.assert_array_equal(points, [[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
+            boundary = value.get_points_defining_boundary()
+            self.assertEqual(boundary.shape, (4, 2))
+        self.assertEqual(observe.call_count, 2)
+
+    def test_all_points_uses_vec2_list_when_numpy_is_unavailable(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        with (
+            patch.object(
+                queries,
+                "_all_points_observation",
+                return_value=[0., 0., 1., 2.],
+            ),
+            patch.dict("sys.modules", {"numpy": None}),
+        ):
+            self.assertEqual(value.get_all_points(), [noon.Vec2(0., 0.), noon.Vec2(1., 2.)])
+
+    def test_shared_family_all_points_uses_live_or_authored_rust_handle(self):
+        value = identity_only_wrapper(compat.Group)
+        family = Mock()
+        value._semantic_family_handle = family
+        coordinates = [0., 0., 1., 2.]
+
+        context = Mock()
+        context.queryFamilyAllPoints.return_value = coordinates
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=context,
+        ):
+            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
+        context.queryFamilyAllPoints.assert_called_once_with(family)
+        family.allPoints.assert_not_called()
+
+        family.allPoints.return_value = coordinates
+        with patch.object(
+            semantic_handles,
+            "_group_live_layout_context",
+            return_value=None,
+        ):
+            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
+        family.allPoints.assert_called_once_with()
 
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
