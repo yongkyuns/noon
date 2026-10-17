@@ -17,7 +17,16 @@ class PathQueryTests(unittest.TestCase):
         group = identity_only_wrapper(compat.Group)
         group._semantic_family_handle = Mock(memberCount=2)
         self.assertEqual(group.get_num_points(), 0)
+        self.assertFalse(group.has_points())
+        self.assertTrue(group.has_no_points())
         self.assertEqual(group._semantic_family_handle.memberCount, 2)
+
+        with patch.object(value, "get_num_points", side_effect=[1, 1, 0, 0]) as count:
+            self.assertTrue(value.has_points())
+            self.assertFalse(value.has_no_points())
+            self.assertFalse(value.has_points())
+            self.assertTrue(value.has_no_points())
+        self.assertEqual(count.call_count, 4)
 
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)

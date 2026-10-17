@@ -898,7 +898,7 @@
         "max_differing_ratio": 0.0036,
         "max_mean_absolute_channel_error": 0.1
       },
-      "notes": "The executable ManimCE/Noon pair asserts Mobject.get_num_points for an empty base object, Rectangle, Circle, an empty-point Group, and ImageMobject's four-corner quad. The operation reports only the root object's own retained points; broader mesh/specialized object buffers remain separately scoped."
+      "notes": "The executable ManimCE/Noon pair asserts Mobject.get_num_points/has_points/has_no_points for an empty base object, Rectangle, Circle, an empty-point Group, and ImageMobject's four-corner quad. These operations inspect only the root object's own retained points; broader mesh/specialized object buffers remain separately scoped."
     },
     {
       "id": "animated-stroke-width",
