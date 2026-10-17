@@ -57,6 +57,7 @@ const exactFamilies = new Map([
   ["noon-agent-foundation.yml", "agent-authoring"],
   ["image-raster-qualification.yml", "renderer"],
   ["foreground-matching-qualification.yml", "manim"],
+  ["code-block-showcase-capture.yml", "capture-staging"],
 ]);
 
 function classifyWorkflow(name) {

@@ -1,4 +1,5 @@
 # Temporary, branch-scoped source capture. Remove this workflow before merge.
+# Temporarily registered as capture-staging; leave strict workflow inventory enabled.
 # No synthetic thumbnails: stage only completed renderer frames and their
 # source/build provenance from the existing curated showcase capture harness.
 name: Code Blocks showcase poster staging
