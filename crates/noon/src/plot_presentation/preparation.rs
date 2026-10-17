@@ -83,12 +83,7 @@ pub fn number_labels_excluding(
     let numbers = match numbers {
         Some(numbers) => numbers,
         None => {
-            generated = noon_geometry::number_line_tick_values(
-                frame.range(),
-                false,
-                exclude_zero,
-                MAX_PLOT_LABELS,
-            )?;
+            generated = frame.tick_values(false, false, MAX_PLOT_LABELS)?;
             &generated
         }
     };

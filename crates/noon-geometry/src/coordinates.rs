@@ -4,6 +4,8 @@
 //! the Semantic Scene; endpoints must come from either authored state or one
 //! coherent effective frame, never a mixture of the two.
 
+use noon_core::SemanticNumberLineScale;
+
 /// Default admission budget shared by linear NumberLine construction and queries.
 pub const DEFAULT_NUMBER_LINE_TICK_LIMIT: usize = 10_000;
 
@@ -52,24 +54,53 @@ pub struct NumberLineFrame {
     range: [f64; 3],
     start: [f64; 2],
     end: [f64; 2],
+    scale: SemanticNumberLineScale,
 }
 
 impl NumberLineFrame {
     pub fn new(range: [f64; 3], start: [f64; 2], end: [f64; 2]) -> Result<Self, CoordinateError> {
+        Self::with_scale(range, start, end, SemanticNumberLineScale::default())
+    }
+
+    pub fn with_scale(
+        range: [f64; 3],
+        start: [f64; 2],
+        end: [f64; 2],
+        scale: SemanticNumberLineScale,
+    ) -> Result<Self, CoordinateError> {
         validate_coordinate_range(range)?;
         finite_point(start)?;
         finite_point(end)?;
+        let mapped_start = scale.map(range[0]);
+        let mapped_end = scale.map(range[1]);
+        if mapped_start.is_none() || mapped_end.is_none() || mapped_start == mapped_end {
+            return Err(CoordinateError::InvalidRange);
+        }
         let length = (end[0] - start[0]).hypot(end[1] - start[1]);
         if !length.is_finite() {
             return Err(CoordinateError::InvalidPoint);
         }
         // Forward mapping remains meaningful when an animation collapses the
         // line. Only inverse queries reject that singular state.
-        Ok(Self { range, start, end })
+        Ok(Self {
+            range,
+            start,
+            end,
+            scale,
+        })
     }
 
     /// Prepare the centered line before applying the requested rotation.
     pub fn centered(range: [f64; 3], length: f64, rotation: f64) -> Result<Self, CoordinateError> {
+        Self::centered_with_scale(range, length, rotation, SemanticNumberLineScale::default())
+    }
+
+    pub fn centered_with_scale(
+        range: [f64; 3],
+        length: f64,
+        rotation: f64,
+        scale: SemanticNumberLineScale,
+    ) -> Result<Self, CoordinateError> {
         if !length.is_finite() || length <= 0.0 {
             return Err(CoordinateError::InvalidLength);
         }
@@ -78,7 +109,12 @@ impl NumberLineFrame {
         }
         let (sin, cos) = rotation.sin_cos();
         let half = length * 0.5;
-        Self::new(range, [-half * cos, -half * sin], [half * cos, half * sin])
+        Self::with_scale(
+            range,
+            [-half * cos, -half * sin],
+            [half * cos, half * sin],
+            scale,
+        )
     }
 
     pub const fn range(self) -> [f64; 3] {
@@ -93,11 +129,96 @@ impl NumberLineFrame {
         self.end
     }
 
-    pub fn number_to_point(self, number: f64) -> Result<[f64; 2], CoordinateError> {
-        if !number.is_finite() {
+    pub const fn scale(self) -> SemanticNumberLineScale {
+        self.scale
+    }
+
+    /// Geometric vector from the current line start to its end.
+    pub fn vector(self) -> [f64; 2] {
+        [self.end[0] - self.start[0], self.end[1] - self.start[1]]
+    }
+
+    /// Euclidean distance between the current line endpoints.
+    pub fn length(self) -> f64 {
+        let [dx, dy] = self.vector();
+        dx.hypot(dy)
+    }
+
+    /// Orientation of the current line in the XY plane.
+    pub fn angle(self) -> f64 {
+        let [dx, dy] = self.vector();
+        dy.atan2(dx)
+    }
+
+    /// Slope using the same angle/tangent convention as Manim's `Line`.
+    pub fn slope(self) -> f64 {
+        self.angle().tan()
+    }
+
+    /// Orthogonally project a point onto the infinite line through this frame.
+    /// A degenerate line projects every finite point to its sole endpoint, as
+    /// Manim's zero-vector normalization does for `Line.get_projection`.
+    pub fn project_point(self, point: [f64; 2]) -> Result<[f64; 2], CoordinateError> {
+        finite_point(point)?;
+        let [dx, dy] = self.vector();
+        let length = dx.hypot(dy);
+        if length == 0.0 {
+            return Ok(self.start);
+        }
+        if !length.is_finite() {
             return Err(CoordinateError::InvalidPoint);
         }
-        let alpha = (number - self.range[0]) / (self.range[1] - self.range[0]);
+        let unit = [dx / length, dy / length];
+        let distance = (point[0] - self.start[0]) * unit[0] + (point[1] - self.start[1]) * unit[1];
+        finite_point([
+            self.start[0] + distance * unit[0],
+            self.start[1] + distance * unit[1],
+        ])
+    }
+
+    pub fn scaled_range_start(self) -> Result<f64, CoordinateError> {
+        self.scale
+            .map(self.range[0])
+            .ok_or(CoordinateError::InvalidRange)
+    }
+
+    /// Return the value at which Manim clamps this axis to cross zero. The
+    /// returned value is in the externally visible coordinate space (after
+    /// applying this frame's scale).
+    pub fn origin_value(self) -> Result<f64, CoordinateError> {
+        let start = self
+            .scale
+            .map(self.range[0])
+            .ok_or(CoordinateError::InvalidRange)?;
+        let end = self
+            .scale
+            .map(self.range[1])
+            .ok_or(CoordinateError::InvalidRange)?;
+        let value = if start > 0.0 {
+            start
+        } else if end < 0.0 {
+            end
+        } else {
+            0.0
+        };
+        self.scale
+            .unmap(value)
+            .map(|_| value)
+            .ok_or(CoordinateError::InvalidRange)
+    }
+
+    fn origin_coordinate(self) -> Result<f64, CoordinateError> {
+        self.scale
+            .unmap(self.origin_value()?)
+            .ok_or(CoordinateError::InvalidRange)
+    }
+
+    pub fn number_to_point(self, number: f64) -> Result<[f64; 2], CoordinateError> {
+        let coordinate = self
+            .scale
+            .unmap(number)
+            .ok_or(CoordinateError::InvalidPoint)?;
+        let alpha = (coordinate - self.range[0]) / (self.range[1] - self.range[0]);
         finite_point([
             (1.0 - alpha) * self.start[0] + alpha * self.end[0],
             (1.0 - alpha) * self.start[1] + alpha * self.end[1],
@@ -145,11 +266,10 @@ impl NumberLineFrame {
         let alpha = ((point[0] - self.start[0]) * (dx / length)
             + (point[1] - self.start[1]) * (dy / length))
             / length;
-        let number = (1.0 - alpha) * self.range[0] + alpha * self.range[1];
-        if !number.is_finite() {
-            return Err(CoordinateError::InvalidPoint);
-        }
-        Ok(number)
+        let coordinate = (1.0 - alpha) * self.range[0] + alpha * self.range[1];
+        self.scale
+            .map(coordinate)
+            .ok_or(CoordinateError::InvalidPoint)
     }
 
     pub fn unit_size(self) -> f64 {
@@ -166,7 +286,10 @@ impl NumberLineFrame {
         exclude_origin: bool,
         limit: usize,
     ) -> Result<Vec<f64>, CoordinateError> {
-        number_line_tick_values(self.range, include_tip, exclude_origin, limit)
+        number_line_tick_values(self.range, include_tip, exclude_origin, limit)?
+            .into_iter()
+            .map(|value| self.scale.map(value).ok_or(CoordinateError::InvalidRange))
+            .collect()
     }
 }
 
@@ -190,6 +313,26 @@ impl AxesFrame {
         x_length: f64,
         y_length: f64,
     ) -> Result<Self, CoordinateError> {
+        Self::centered_with_scales(
+            x_range,
+            y_range,
+            x_length,
+            y_length,
+            SemanticNumberLineScale::default(),
+            SemanticNumberLineScale::default(),
+        )
+    }
+
+    /// Center both numerical range midpoints while mapping each axis through
+    /// its own Manim-compatible scale.
+    pub fn centered_with_scales(
+        x_range: [f64; 3],
+        y_range: [f64; 3],
+        x_length: f64,
+        y_length: f64,
+        x_scale: SemanticNumberLineScale,
+        y_scale: SemanticNumberLineScale,
+    ) -> Result<Self, CoordinateError> {
         validate_coordinate_range(x_range)?;
         validate_coordinate_range(y_range)?;
         if [x_length, y_length]
@@ -198,22 +341,36 @@ impl AxesFrame {
         {
             return Err(CoordinateError::InvalidLength);
         }
+        let x_axis = NumberLineFrame::with_scale(
+            x_range,
+            [-x_length * 0.5, 0.0],
+            [x_length * 0.5, 0.0],
+            x_scale,
+        )?;
+        let y_axis = NumberLineFrame::with_scale(
+            y_range,
+            [0.0, -y_length * 0.5],
+            [0.0, y_length * 0.5],
+            y_scale,
+        )?;
         let x_span = x_range[1] - x_range[0];
         let y_span = y_range[1] - y_range[0];
         // Normalize before centering: a large absolute range midpoint can
         // round onto an endpoint even though the span is representable.
-        let x_origin = ((origin_shift(x_range) - x_range[0]) / x_span - 0.5) * x_length;
-        let y_origin = ((origin_shift(y_range) - y_range[0]) / y_span - 0.5) * y_length;
+        let x_origin = ((x_axis.origin_coordinate()? - x_range[0]) / x_span - 0.5) * x_length;
+        let y_origin = ((y_axis.origin_coordinate()? - y_range[0]) / y_span - 0.5) * y_length;
         Ok(Self::new(
-            NumberLineFrame::new(
+            NumberLineFrame::with_scale(
                 x_range,
                 [-x_length * 0.5, y_origin],
                 [x_length * 0.5, y_origin],
+                x_scale,
             )?,
-            NumberLineFrame::new(
+            NumberLineFrame::with_scale(
                 y_range,
                 [x_origin, -y_length * 0.5],
                 [x_origin, y_length * 0.5],
+                y_scale,
             )?,
         ))
     }
@@ -227,7 +384,10 @@ impl AxesFrame {
     }
 
     pub fn coords_to_point(self, x: f64, y: f64) -> Result<[f64; 2], CoordinateError> {
-        let origin = self.x.number_to_point(origin_shift(self.x.range))?;
+        let origin = [
+            self.x.number_to_point(self.x.origin_value()?)?[0],
+            self.y.number_to_point(self.y.origin_value()?)?[1],
+        ];
         let x_point = self.x.number_to_point(x)?;
         let y_point = self.y.number_to_point(y)?;
         finite_point([
@@ -369,6 +529,7 @@ mod boundary_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon_core::SemanticNumberLineScale;
 
     fn near(left: [f64; 2], right: [f64; 2]) {
         assert!(
@@ -398,6 +559,86 @@ mod tests {
         for number in [-4.0, -2.0, 0.0, 0.75, 2.0, 4.0] {
             let point = frame.number_to_point(number).unwrap();
             assert!((frame.point_to_number(point).unwrap() - number).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn logarithmic_frames_map_queries_ticks_and_inverse_through_shared_scale() {
+        let frame = NumberLineFrame::centered_with_scale(
+            [-2.0, 2.0, 1.0],
+            4.0,
+            0.0,
+            SemanticNumberLineScale::log(10.0),
+        )
+        .unwrap();
+        near(frame.number_to_point(1.0).unwrap(), [0.0, 0.0]);
+        near(frame.number_to_point(10.0).unwrap(), [1.0, 0.0]);
+        assert!((frame.point_to_number([1.0, 0.0]).unwrap() - 10.0).abs() < 1.0e-10);
+        assert!(frame.number_to_point(0.0).is_err());
+        let ticks = frame.tick_values(false, false, 10).unwrap();
+        for (actual, expected) in ticks.into_iter().zip([0.01, 0.1, 1.0, 10.0, 100.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+        let tipped_ticks = frame.tick_values(true, false, 10).unwrap();
+        assert_eq!(tipped_ticks.len(), 4);
+        for (actual, expected) in tipped_ticks.into_iter().zip([0.01, 0.1, 1.0, 10.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn linear_scale_factor_preserves_inverse_queries_and_maps_tick_values() {
+        let frame = NumberLineFrame::centered_with_scale(
+            [-2.0, 2.0, 1.0],
+            4.0,
+            0.0,
+            SemanticNumberLineScale::linear(2.0),
+        )
+        .unwrap();
+        near(frame.number_to_point(0.0).unwrap(), [0.0, 0.0]);
+        near(frame.number_to_point(2.0).unwrap(), [1.0, 0.0]);
+        assert_eq!(
+            frame.tick_values(false, false, 10).unwrap(),
+            [-4.0, -2.0, 0.0, 2.0, 4.0]
+        );
+        assert!((frame.point_to_number([1.0, 0.0]).unwrap() - 2.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn axes_frames_keep_linear_defaults_and_map_each_scaled_axis() {
+        let default = AxesFrame::centered([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0).unwrap();
+        let explicit_linear = AxesFrame::centered_with_scales(
+            [-2.0, 2.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            4.0,
+            2.0,
+            SemanticNumberLineScale::default(),
+            SemanticNumberLineScale::default(),
+        )
+        .unwrap();
+        assert_eq!(default, explicit_linear);
+
+        let frame = AxesFrame::centered_with_scales(
+            [0.0, 4.0, 1.0],
+            [-2.0, 2.0, 1.0],
+            8.0,
+            4.0,
+            SemanticNumberLineScale::default(),
+            SemanticNumberLineScale::log(10.0),
+        )
+        .unwrap();
+        assert_eq!(frame.y().origin_value().unwrap(), 0.01);
+        near(frame.coords_to_point(1.0, 1.0).unwrap(), [-2.0, 0.0]);
+        near(frame.coords_to_point(2.0, 10.0).unwrap(), [0.0, 1.0]);
+        near(
+            frame
+                .point_to_coords(frame.coords_to_point(2.0, 10.0).unwrap())
+                .unwrap(),
+            [2.0, 10.0],
+        );
+        let ticks = frame.y().tick_values(false, false, 10).unwrap();
+        for (actual, expected) in ticks.into_iter().zip([0.01, 0.1, 1.0, 10.0, 100.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
         }
     }
 
@@ -464,6 +705,41 @@ mod tests {
         assert_eq!(
             frame.tick_values(true, true, 10).unwrap(),
             vec![-2.0, -1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn number_line_frame_exposes_geometric_line_observations() {
+        let frame = NumberLineFrame::with_scale(
+            [-2.0, 2.0, 1.0],
+            [1.0, 2.0],
+            [5.0, 2.0],
+            SemanticNumberLineScale::log(10.0),
+        )
+        .unwrap();
+        assert_eq!(frame.vector(), [4.0, 0.0]);
+        assert_eq!(frame.length(), 4.0);
+        assert_eq!(frame.angle(), 0.0);
+        assert_eq!(frame.slope(), 0.0);
+        near(frame.project_point([3.0, 6.0]).unwrap(), [3.0, 2.0]);
+
+        let vertical = NumberLineFrame::new([-2.0, 2.0, 1.0], [0.0, 0.0], [0.0, 4.0]).unwrap();
+        assert!((vertical.angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        near(vertical.project_point([3.0, 2.0]).unwrap(), [0.0, 2.0]);
+
+        let diagonal = NumberLineFrame::new([-2.0, 2.0, 1.0], [1.0, 2.0], [4.0, 6.0]).unwrap();
+        let reversed = NumberLineFrame::new([-2.0, 2.0, 1.0], [4.0, 6.0], [1.0, 2.0]).unwrap();
+        near(diagonal.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
+        near(reversed.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
+        assert_eq!(diagonal.length(), 5.0);
+        assert!((diagonal.slope() - 4.0 / 3.0).abs() < 1e-12);
+        assert!((reversed.slope() - 4.0 / 3.0).abs() < 1e-12);
+
+        let collapsed = NumberLineFrame::new([0.0, 1.0, 0.1], [2.0, 3.0], [2.0, 3.0]).unwrap();
+        near(collapsed.project_point([8.0, -4.0]).unwrap(), [2.0, 3.0]);
+        assert_eq!(
+            collapsed.project_point([f64::NAN, 0.0]),
+            Err(CoordinateError::InvalidPoint)
         );
     }
 

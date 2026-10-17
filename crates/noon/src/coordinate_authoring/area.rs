@@ -23,7 +23,7 @@ pub(crate) fn axes_area(
     } else {
         // Manim c2p(x) omits the y component: use the physical x-axis
         // baseline, including ranges that do not contain numeric zero.
-        let baseline = noon_geometry::origin_shift(frame.y().range());
+        let baseline = frame.y().origin_value()?;
         top.push(frame.coords_to_point(interval[1], baseline)?);
         top.insert(0, frame.coords_to_point(interval[0], baseline)?);
     }
@@ -164,7 +164,7 @@ impl RiemannRectanglePlan {
             let baseline = match (baseline_values, self.bounded_path.as_ref()) {
                 (Some(values), _) => values[index],
                 (None, Some(path)) => graph_y_at(self.frame, path, x)?,
-                (None, None) => noon_geometry::origin_shift(self.frame.y().range()),
+                (None, None) => self.frame.y().origin_value()?,
             };
             let bottom_left = self.frame.coords_to_point(x, baseline)?;
             let bottom_right = self.frame.coords_to_point(

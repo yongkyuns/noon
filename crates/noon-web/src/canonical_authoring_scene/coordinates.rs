@@ -134,43 +134,61 @@ mod tests {
 
     #[test]
     fn coordinate_queries_preserve_tip_endpoints_through_player_ownership() {
-        for include_tip in [false, true] {
-            let mut context = CanonicalAuthoringScene::default();
-            let options = noon::ManimNumberLineOptions {
-                length: Some(2.0),
-                include_tip,
-                ..noon::ManimNumberLineOptions::new([-1.0, 1.0, 1.0])
-            };
-            let line = context.scene.number_line(&options).unwrap();
-            let shaft = line.shaft().unwrap();
-            assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
-            context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
-            context.scene.add_many(&[line.family().into()]).unwrap();
-            let frame = context.number_line_frame(&line).unwrap();
-            assert_eq!(frame.number_to_point(-1.0).unwrap(), [-1.0, 0.0]);
-            assert_eq!(frame.number_to_point(1.0).unwrap(), [1.0, 0.0]);
-            if include_tip {
-                assert!(shaft.path_query().unwrap().end().unwrap().0 < 1.0);
+        let near = |actual: [f64; 2], expected: [f64; 2]| {
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
             }
+        };
+        for scale in [
+            noon_core::SemanticNumberLineScale::default(),
+            noon_core::SemanticNumberLineScale::linear(2.0),
+            noon_core::SemanticNumberLineScale::log(10.0),
+        ] {
+            for include_tip in [false, true] {
+                let first = scale.map(-1.0).unwrap();
+                let last = scale.map(1.0).unwrap();
+                let mut context = CanonicalAuthoringScene::default();
+                let options = noon::ManimNumberLineOptions {
+                    length: Some(2.0),
+                    include_tip,
+                    scale,
+                    ..noon::ManimNumberLineOptions::new([-1.0, 1.0, 1.0])
+                };
+                let line = context.scene.number_line(&options).unwrap();
+                let shaft = line.shaft().unwrap();
+                assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
+                context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
+                context.scene.add_many(&[line.family().into()]).unwrap();
+                let frame = context.number_line_frame(&line).unwrap();
+                near(frame.number_to_point(first).unwrap(), [-1.0, 0.0]);
+                near(frame.number_to_point(last).unwrap(), [1.0, 0.0]);
+                if include_tip {
+                    assert!(shaft.path_query().unwrap().end().unwrap().0 < 1.0);
+                }
 
-            let player = context.take_execution_player(1.0, 41).unwrap();
-            assert!(
-                context.number_line_frame(&line).is_err(),
-                "transferred owner"
-            );
-            context.return_execution_player(player).unwrap();
-            context
-                .active_live_player()
-                .unwrap()
-                .live_shift_family(line.family(), 2.0, -1.0)
-                .unwrap();
-            let frame = context.number_line_frame(&line).unwrap();
-            assert_eq!(frame.number_to_point(-1.0).unwrap(), [1.0, -1.0]);
-            assert_eq!(frame.number_to_point(1.0).unwrap(), [3.0, -1.0]);
-            assert_eq!(frame.unit_size(), 1.0);
+                let player = context.take_execution_player(1.0, 41).unwrap();
+                assert!(
+                    context.number_line_frame(&line).is_err(),
+                    "transferred owner"
+                );
+                context.return_execution_player(player).unwrap();
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_shift_family(line.family(), 2.0, -1.0)
+                    .unwrap();
+                let frame = context.number_line_frame(&line).unwrap();
+                near(frame.number_to_point(first).unwrap(), [1.0, -1.0]);
+                near(frame.number_to_point(last).unwrap(), [3.0, -1.0]);
+                assert_eq!(frame.unit_size(), 1.0);
+                assert_eq!(
+                    frame.point_to_number([2.0, -1.0]).unwrap(),
+                    scale.map(0.0).unwrap()
+                );
 
-            let mut foreign = CanonicalAuthoringScene::default();
-            assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
+                let mut foreign = CanonicalAuthoringScene::default();
+                assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
+            }
         }
     }
 

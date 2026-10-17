@@ -77,6 +77,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Use fixed Node test runner
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.20.0"
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -92,6 +96,7 @@ jobs:
           cat test-artifacts/python-coverage.txt
       - name: JavaScript coverage
         run: |
+          node --version
           npm install --no-save --ignore-scripts c8@10.1.3
           npx c8 \
             --reporter=json-summary \

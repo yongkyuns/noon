@@ -10,6 +10,7 @@ use noon::{
     ManimThreeDAxesFrame, ManimThreeDAxesOptions, NumberLineFrame, PlotSamplingOptions,
     RiemannRectangleOptions, RiemannSample,
 };
+use noon_core::SemanticNumberLineScale;
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::{js_error, AuthoringFailure};
@@ -31,6 +32,18 @@ pub(crate) enum CoordinateRequest {
     NumberPlane(noon::ManimNumberPlaneOptions),
     PolarPlane(noon::ManimPolarPlaneOptions),
     ThreeDAxes(ManimThreeDAxesOptions),
+}
+
+fn coordinate_scale(kind: &str, parameter: f64) -> Result<SemanticNumberLineScale, JsValue> {
+    let scale = match kind {
+        "linear" => SemanticNumberLineScale::linear(parameter),
+        "log" => SemanticNumberLineScale::log(parameter),
+        _ => return Err(js_error("unsupported coordinate scale kind")),
+    };
+    if !scale.is_valid() {
+        return Err(js_error("invalid coordinate scale parameter"));
+    }
+    Ok(scale)
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -243,6 +256,29 @@ impl WasmCoordinateOptions {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = setNumberLineScale)]
+    pub fn set_number_line_scale(&mut self, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberLine(options) = &mut self.request else {
+            return Err(js_error("scale settings require a NumberLine"));
+        };
+        options.scale = coordinate_scale(kind, parameter)?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxesScale)]
+    pub fn set_axes_scale(&mut self, axis: u32, kind: &str, parameter: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::Axes(options) = &mut self.request else {
+            return Err(js_error("scale settings require Axes"));
+        };
+        let scale = coordinate_scale(kind, parameter)?;
+        match axis {
+            0 => options.x_scale = scale,
+            1 => options.y_scale = scale,
+            _ => return Err(js_error("Axes axis index must be 0 or 1")),
+        }
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setTipLength)]
     pub fn set_tip_length(&mut self, length: f64) -> Result<(), JsValue> {
         let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
@@ -427,6 +463,39 @@ pub struct WasmNumberLineFrame {
 impl WasmNumberLineFrame {
     pub fn range(&self) -> Vec<f64> {
         self.frame.range().to_vec()
+    }
+
+    pub fn start(&self) -> Vec<f64> {
+        self.frame.start().to_vec()
+    }
+
+    pub fn end(&self) -> Vec<f64> {
+        self.frame.end().to_vec()
+    }
+
+    pub fn vector(&self) -> Vec<f64> {
+        self.frame.vector().to_vec()
+    }
+
+    pub fn length(&self) -> f64 {
+        self.frame.length()
+    }
+
+    pub fn angle(&self) -> f64 {
+        self.frame.angle()
+    }
+
+    pub fn slope(&self) -> f64 {
+        self.frame.slope()
+    }
+
+    #[wasm_bindgen(js_name = projectPoint)]
+    pub fn project_point(&self, x: f64, y: f64) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .project_point([x, y])
+            .map(|point| point.to_vec())
+            .map_err(coordinate_math_failure)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = tickValues)]

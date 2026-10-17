@@ -1170,7 +1170,9 @@ impl ExecutionSession {
                 .map_err(|_| super::ExecutionSessionPublicationError::UnknownObject(target))?;
             if !matches!(
                 state.role(),
-                SemanticObjectRole::Ordinary | SemanticObjectRole::Camera2D
+                SemanticObjectRole::Ordinary
+                    | SemanticObjectRole::NumberPlaneGridLine { .. }
+                    | SemanticObjectRole::Camera2D
             ) || !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
             {
                 continue;

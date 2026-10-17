@@ -28,7 +28,9 @@ impl ExecutionSession {
         };
         if !matches!(
             state.role(),
-            SemanticObjectRole::Ordinary | SemanticObjectRole::Camera2D
+            SemanticObjectRole::Ordinary
+                | SemanticObjectRole::NumberPlaneGridLine { .. }
+                | SemanticObjectRole::Camera2D
         ) || !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
             || state.signal_bindings().iter().any(|binding| {
                 matches!(

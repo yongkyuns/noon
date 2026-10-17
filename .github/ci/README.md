@@ -33,6 +33,13 @@ Unknown inputs, mixed changes, missing history and classification failures retai
 full qualification. PR and manual runs remain full when selected. Recovery and
 playback workflows keep isolated web unit-test edits in preflight as well.
 
+CUDA demonstration fidelity runs on changes to its scene, oracle, controls or
+qualification wiring. Other authoring PRs retain ordinary full CI without the
+additional exhaustive CUDA pass. The existing nightly/manual raster oracle runs
+all three positive and six negative CUDA cases against generic engine edits,
+using its already built WASM package. Missing change evidence or classifier
+output keeps the CUDA suite enabled; its original fifteen-minute budget remains.
+
 ## Required GPU numerical checks
 
 Linux jobs that set `NOON_REQUIRE_GPU_TESTS=1` must install both `libvulkan1`

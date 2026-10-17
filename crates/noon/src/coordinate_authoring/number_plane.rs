@@ -116,6 +116,34 @@ impl ManimNumberPlane {
         self.grid_family(1)
     }
 
+    /// Indices into the current background family, retaining authored axis
+    /// membership through copies and independent line/axis transforms.
+    /// Only this plane's direct major lines are visited; geometry is not read.
+    pub fn grid_line_indices(
+        &self,
+        horizontal: bool,
+    ) -> Result<Vec<u32>, CoordinateAuthoringError> {
+        let background = self.background_lines()?;
+        let store = self.family.integration_store().borrow();
+        store
+            .node(background.node_id())
+            .expect("validated grid family")
+            .members_iter()
+            .enumerate()
+            .filter(|&(_, id)| {
+                store
+                    .node(id)
+                    .and_then(|node| node.semantic_object_state())
+                    .is_some_and(|state| {
+                        state.role() == SemanticObjectRole::NumberPlaneGridLine { horizontal }
+                    })
+            })
+            .map(|(index, _)| {
+                u32::try_from(index).map_err(|_| CoordinateAuthoringError::InvalidTopology)
+            })
+            .collect()
+    }
+
     pub fn x_axis(&self) -> Result<ManimNumberLine, CoordinateAuthoringError> {
         self.axis(2)
     }
@@ -267,6 +295,7 @@ pub(crate) fn prepare_number_plane(
         frame.x(),
         frame.y(),
         &horizontal,
+        true,
         &options.background_line_style,
         &faded_style,
     )?;
@@ -277,6 +306,7 @@ pub(crate) fn prepare_number_plane(
         frame.y(),
         frame.x(),
         &vertical,
+        false,
         &options.background_line_style,
         &faded_style,
     )?;
@@ -372,6 +402,7 @@ fn stage_grid_lines(
     parallel: NumberLineFrame,
     perpendicular: NumberLineFrame,
     offsets: &[(f64, bool)],
+    horizontal: bool,
     background_style: &SemanticStyle,
     faded_style: &SemanticStyle,
 ) -> Result<(), CoordinateAuthoringError> {
@@ -390,14 +421,16 @@ fn stage_grid_lines(
         } else {
             faded_style
         };
-        let line = transaction.create_node(SemanticNodeCreation::object(line_state(
+        let mut state = line_state(
             [
                 parallel.start()[0] + delta[0],
                 parallel.start()[1] + delta[1],
             ],
             [parallel.end()[0] + delta[0], parallel.end()[1] + delta[1]],
             style,
-        )?));
+        )?;
+        state.set_role(SemanticObjectRole::NumberPlaneGridLine { horizontal });
+        let line = transaction.create_node(SemanticNodeCreation::object(state));
         transaction.add_member(if is_background { background } else { faded }, line);
     }
     Ok(())

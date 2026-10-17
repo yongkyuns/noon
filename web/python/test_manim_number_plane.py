@@ -8,13 +8,14 @@ import _manim_number_plane as number_plane
 
 
 class NumberPlaneAdapterTests(TestCase):
-    def test_format_precision_tracks_manims_float_range_step(self):
+    def test_format_precision_preserves_manims_authored_range_step(self):
         precision = number_plane._coordinate_decimal_places
-        self.assertEqual(precision((-2, 2, 1)), 1)
+        self.assertEqual(precision((-2, 2, 1)), 0)
         self.assertEqual(precision((-2.0, 2.0, 1.0)), 1)
         self.assertEqual(precision((-2, 2, 0.25)), 2)
         self.assertEqual(precision((-2, 2, 0.125)), 3)
-        self.assertEqual(precision(None), 1)
+        self.assertEqual(precision((-2, 2)), 0)
+        self.assertEqual(precision(None), 0)
 
     def setUp(self):
         self.addCleanup(patch.stopall)
@@ -42,6 +43,11 @@ class NumberPlaneAdapterTests(TestCase):
         patch.object(number_plane, "engine_call", side_effect=lambda fn, *args: fn(*args)).start()
         patch.object(number_plane._plot, "_coordinate_style", Mock(name="axis-style")).start()
         self.wrapped_parts = [Mock(name=f"wrapped-{index}") for index in range(4)]
+        # Deliberately interleaved aliases: selection comes from Rust's retained
+        # membership, not Python endpoint reads, sorting, or slicing assumptions.
+        self.grid_lines = [object() for _ in range(4)]
+        self.wrapped_parts[1].submobjects = self.grid_lines
+        self.handle.numberPlaneGridLineIndices.side_effect = lambda horizontal: [2, 0] if horizontal else [3, 1]
         self.lines = patch.object(
             number_plane, "_lines", side_effect=lambda handle: self.wrapped_parts[(self.lines.call_count - 1) % 2]
         ).start()
@@ -51,6 +57,7 @@ class NumberPlaneAdapterTests(TestCase):
             side_effect=lambda wrapper, handle: self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
         ).start()
         self.family = patch.object(number_plane._plot, "_family", side_effect=self._family).start()
+        patch.object(number_plane._plot._compat, "VGroup", side_effect=lambda *members: members).start()
         patch.object(
             number_plane.NumberPlane,
             "submobjects",
@@ -110,6 +117,95 @@ class NumberPlaneAdapterTests(TestCase):
         self.cold.assert_not_called()
         self.options.free.assert_not_called()
 
+    def test_constructor_attaches_numeric_labels_with_shared_and_per_axis_options(self):
+        plane = number_plane.NumberPlane(
+            (0, 2, 0.25), (1, 5, 2),
+            axis_config={
+                "include_numbers": True,
+                "numbers_to_exclude": [0, 1],
+                "font_size": 28,
+                "line_to_number_buff": 0.3,
+            },
+            x_axis_config={"numbers_to_include": [0.5, 1.5]},
+            y_axis_config={
+                "include_numbers": False,
+                "numbers_to_include": [2],
+                "label_direction": number_plane._plot._base.LEFT,
+                "decimal_number_config": {"num_decimal_places": 3},
+            },
+        )
+
+        x_axis, y_axis = plane.x_axis, plane.y_axis
+        x_axis.add_numbers.assert_called_once_with(
+            x_values=(0.5, 1.5), excluding=(0.0, 1.0), font_size=28.0,
+            direction=number_plane._plot._base.DR, buff=0.3,
+            decimal_places=2,
+        )
+        y_axis.add_numbers.assert_called_once_with(
+            x_values=(2.0,), excluding=(0.0, 1.0), font_size=28.0,
+            direction=number_plane._plot._base.LEFT, buff=0.3,
+            decimal_places=3,
+        )
+        self.assertEqual(x_axis.number_label_decimal_places, 2)
+        self.assertEqual(y_axis.number_label_decimal_places, 3)
+        self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
+        self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
+
+    def test_explicit_axis_stroke_color_overrides_general_color(self):
+        red, blue = number_plane._plot._base.RED, number_plane._plot._base.BLUE
+        for config, expected in (
+            ({"color": red}, red),
+            ({"color": red, "stroke_color": blue}, blue),
+        ):
+            with self.subTest(config=config):
+                self.construct(axis_config=config)
+                self.assertIs(number_plane._plot._coordinate_style.call_args.args[1], expected)
+
+    def test_constructor_preserves_integer_and_float_step_label_precision(self):
+        for axis_range, expected in (
+            ((-2, 2, 1), 0),
+            ((-2, 2, 1.0), 1),
+            (None, 0),
+        ):
+            with self.subTest(axis_range=axis_range):
+                plane = number_plane.NumberPlane(
+                    axis_range, axis_range,
+                    axis_config={"include_numbers": True},
+                )
+                self.assertEqual(plane.x_axis.number_label_decimal_places, expected)
+                self.assertEqual(plane.y_axis.number_label_decimal_places, expected)
+                self.assertEqual(
+                    plane.x_axis.add_numbers.call_args.kwargs["decimal_places"], expected
+                )
+                self.assertEqual(
+                    plane.y_axis.add_numbers.call_args.kwargs["decimal_places"], expected
+                )
+
+    def test_followup_labels_remember_constructor_decimal_configuration(self):
+        for config, expected in ((None, 0), ({}, 2), ({"num_decimal_places": 3}, 3)):
+            with self.subTest(config=config):
+                plane = number_plane.NumberPlane(
+                    (-2, 2, 1), (-2, 2, 1),
+                    axis_config={"include_numbers": True, "decimal_number_config": config},
+                )
+                self.assertEqual(plane.x_axis.number_label_decimal_places, expected)
+                self.assertEqual(plane.y_axis.number_label_decimal_places, expected)
+                # add_coordinates consumes this retained constructor configuration.
+                self.assertEqual(plane._coordinate_decimal_places, (expected, expected))
+
+    def test_unqualified_axis_config_fails_before_host_admission(self):
+        for kwargs, message in (
+            ({"axis_config": {"unknown": True}}, "unsupported axis_config"),
+            ({"x_axis_config": {"stroke_width": 3}}, "per-axis stroke_width"),
+            ({"y_axis_config": {"scaling": number_plane._plot.LogBase()}}, "nonlinear"),
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(NotImplementedError, message):
+                self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
+
     def test_ranges_and_lengths_are_forwarded_without_coordinate_math(self):
         self.construct()
         args = number_plane._plot._coordinate_options.numberPlane.call_args.args
@@ -144,6 +240,28 @@ class NumberPlaneAdapterTests(TestCase):
         )
         self.context.queryNumberPlaneFrame.assert_called_once_with(
             plane._semantic_family_handle
+        )
+
+    def test_inherited_axis_accessors_exclude_grid_line_siblings(self):
+        plane = self.construct()
+        x_axis, y_axis = plane.x_axis, plane.y_axis
+        self.assertEqual(plane.get_axes(), (x_axis, y_axis))
+        self.assertIs(plane.get_axis(0), x_axis)
+        self.assertIs(plane.get_axis(1), y_axis)
+        self.assertIs(plane.get_x_axis(), x_axis)
+        self.assertIs(plane.get_y_axis(), y_axis)
+
+    def test_grid_aliases_reuse_wrappers_in_rust_membership_order_without_geometry_reads(self):
+        with patch.object(number_plane._plot._compat.Line, "get_start",
+                          side_effect=AssertionError("unexpected endpoint read")), \
+             patch.object(number_plane._plot._compat.Line, "get_end",
+                          side_effect=AssertionError("unexpected endpoint read")):
+            plane = self.construct()
+        self.assertEqual(plane.x_lines, (self.grid_lines[2], self.grid_lines[0]))
+        self.assertEqual(plane.y_lines, (self.grid_lines[3], self.grid_lines[1]))
+        self.assertEqual(
+            [call.args for call in self.handle.numberPlaneGridLineIndices.call_args_list],
+            [(True,), (False,)],
         )
 
     def test_group_members_preserve_authoritative_part_identity_and_order(self):

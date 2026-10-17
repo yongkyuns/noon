@@ -20,8 +20,26 @@ struct Fixture {
 
 impl Fixture {
     fn new(affine: bool, reactive: bool) -> Self {
+        Self::with_grid_line(affine, reactive, None)
+    }
+
+    fn with_grid_line(affine: bool, reactive: bool, horizontal: Option<bool>) -> Self {
         let mut scene = Scene::new();
-        let marker = scene.square(1.0).unwrap();
+        let marker = if let Some(horizontal) = horizontal {
+            let plane = scene
+                .number_plane(&crate::ManimNumberPlaneOptions::default())
+                .unwrap();
+            let background = plane.background_lines().unwrap();
+            let index = plane.grid_line_indices(horizontal).unwrap()[0] as usize;
+            let id = scene
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(background.node_id())
+                .unwrap()[index];
+            Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap()
+        } else {
+            scene.square(1.0).unwrap()
+        };
         let neighbor = scene.square(0.5).unwrap();
         scene.add(&marker).unwrap();
         scene.add(&neighbor).unwrap();
@@ -87,6 +105,36 @@ impl Fixture {
 
     fn transform(&self) -> Transform2D {
         self.session.frame().objects[0].transform
+    }
+}
+
+#[test]
+fn grid_line_callback_placements_preserve_settled_affine_ownership() {
+    for horizontal in [true, false] {
+        let mut fixture = Fixture::with_grid_line(true, false, Some(horizontal));
+        fixture.finish_wait();
+        let time = fixture.session.frame().time;
+        let count = fixture.observed.borrow().len();
+        let effective = fixture.transform();
+        for (x, y) in [(3.0, -2.0), (-3.0, 2.0)] {
+            fixture
+                .scene
+                .live(&mut fixture.session)
+                .move_to_point(&fixture.marker, x, y)
+                .unwrap();
+            assert_eq!(
+                fixture.transform().translation,
+                Vec2::new(x as f32, y as f32)
+            );
+            assert_eq!(fixture.transform().rotation, effective.rotation);
+            assert_eq!(fixture.transform().scale, effective.scale);
+            assert_eq!(fixture.session.frame().time, time);
+            assert_eq!(fixture.observed.borrow().len(), count);
+            assert_eq!(
+                fixture.marker.state().unwrap().role(),
+                noon_core::SemanticObjectRole::NumberPlaneGridLine { horizontal }
+            );
+        }
     }
 }
 
