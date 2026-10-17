@@ -1,4 +1,4 @@
-//! Bounded PNG/JPEG decode at resource preparation, never on a render-frame path.
+//! Bounded PNG/JPEG/WebP decode at resource preparation, never on a render-frame path.
 use crate::{AuthoringError, ImageMobjectOptions};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use std::io::Cursor;
@@ -25,6 +25,7 @@ pub enum ImageDecodeError {
     InvalidLimits,
     EncodedSize { actual: usize, limit: usize },
     UnsupportedFormat,
+    AnimatedImageUnsupported,
     InvalidEncoding(String),
     DecodedSize { width: u32, height: u32, limit: u64 },
 }
@@ -33,8 +34,9 @@ impl std::fmt::Display for ImageDecodeError {
         match self {
             Self::InvalidLimits => f.write_str("image decode limits must be positive"),
             Self::EncodedSize { actual, limit } => write!(f, "encoded image has {actual} bytes, exceeding the limit {limit}"),
-            Self::UnsupportedFormat => f.write_str("only PNG and JPEG raster files are supported; other formats require explicit qualification"),
-            Self::InvalidEncoding(reason) => write!(f, "invalid PNG/JPEG image: {reason}"),
+            Self::UnsupportedFormat => f.write_str("only PNG, JPEG, and WebP raster files are supported; other formats require explicit qualification"),
+            Self::AnimatedImageUnsupported => f.write_str("animated WebP images are not supported"),
+            Self::InvalidEncoding(reason) => write!(f, "invalid PNG/JPEG/WebP image: {reason}"),
             Self::DecodedSize { width, height, limit } => write!(f, "decoded image {width}x{height} exceeds the RGBA8 byte limit {limit}"),
         }
     }
@@ -42,7 +44,7 @@ impl std::fmt::Display for ImageDecodeError {
 impl std::error::Error for ImageDecodeError {}
 
 impl ImageMobjectOptions {
-    /// Decode a PNG/JPEG resource with default bounded allocation. File/URL/blob
+    /// Decode a PNG/JPEG/WebP resource with default bounded allocation. File/URL/blob
     /// access stays with the host; identical decoded pixels deduplicate on admission.
     pub fn encoded(bytes: &[u8]) -> Result<Self, AuthoringError> {
         Self::encoded_with_limits(bytes, ImageDecodeLimits::default())
@@ -66,34 +68,60 @@ impl ImageMobjectOptions {
             .into());
         }
         let format = match image::guess_format(bytes) {
-            Ok(format @ (ImageFormat::Png | ImageFormat::Jpeg)) => format,
+            Ok(format @ (ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP)) => format,
             _ => return Err(ImageDecodeError::UnsupportedFormat.into()),
         };
-        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-        let mut allocation_limits = image::Limits::default();
-        allocation_limits.max_image_width = Some(limits.max_dimension);
-        allocation_limits.max_image_height = Some(limits.max_dimension);
-        allocation_limits.max_alloc = Some(limits.max_decoded_bytes);
-        reader.limits(allocation_limits);
-        let decoder = reader.into_decoder().map_err(decode_error)?;
-        let (width, height) = decoder.dimensions();
-        let rgba_bytes = u64::from(width)
-            .checked_mul(u64::from(height))
-            .and_then(|count| count.checked_mul(4));
-        if !rgba_bytes.is_some_and(|count| count <= limits.max_decoded_bytes) {
-            return Err(ImageDecodeError::DecodedSize {
-                width,
-                height,
-                limit: limits.max_decoded_bytes,
+        let (width, height, rgba) = if format == ImageFormat::WebP {
+            let decoder =
+                image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).map_err(decode_error)?;
+            if decoder.has_animation() {
+                return Err(ImageDecodeError::AnimatedImageUnsupported.into());
             }
-            .into());
-        }
-        let rgba = DynamicImage::from_decoder(decoder)
-            .map_err(decode_error)?
-            .into_rgba8();
-        Self::rgba8(width, height, rgba.into_raw())
+            decode_rgba8(decoder, limits)?
+        } else {
+            let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+            reader.limits(allocation_limits(limits));
+            let decoder = reader.into_decoder().map_err(decode_error)?;
+            decode_rgba8(decoder, limits)?
+        };
+        Self::rgba8(width, height, rgba)
     }
 }
+
+fn allocation_limits(limits: ImageDecodeLimits) -> image::Limits {
+    let mut allocation_limits = image::Limits::default();
+    allocation_limits.max_image_width = Some(limits.max_dimension);
+    allocation_limits.max_image_height = Some(limits.max_dimension);
+    allocation_limits.max_alloc = Some(limits.max_decoded_bytes);
+    allocation_limits
+}
+
+fn decode_rgba8(
+    mut decoder: impl ImageDecoder,
+    limits: ImageDecodeLimits,
+) -> Result<(u32, u32, Vec<u8>), AuthoringError> {
+    decoder
+        .set_limits(allocation_limits(limits))
+        .map_err(decode_error)?;
+    let (width, height) = decoder.dimensions();
+    let rgba_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|count| count.checked_mul(4));
+    if !rgba_bytes.is_some_and(|count| count <= limits.max_decoded_bytes) {
+        return Err(ImageDecodeError::DecodedSize {
+            width,
+            height,
+            limit: limits.max_decoded_bytes,
+        }
+        .into());
+    }
+    let rgba = DynamicImage::from_decoder(decoder)
+        .map_err(decode_error)?
+        .into_rgba8()
+        .into_raw();
+    Ok((width, height, rgba))
+}
+
 fn decode_error(error: image::ImageError) -> AuthoringError {
     ImageDecodeError::InvalidEncoding(error.to_string()).into()
 }
@@ -141,6 +169,49 @@ mod tests {
         assert_eq!(pixels[3], 255);
         assert_eq!(pixels[7], 255);
         assert!(pixels[0].abs_diff(90) <= 2);
+    }
+
+    #[test]
+    fn lossless_webp_decodes_to_canonical_rgba8() {
+        let expected = [
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 255,
+        ];
+        let mut webp = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+            .write_image(&expected, 2, 2, ExtendedColorType::Rgba8)
+            .unwrap();
+
+        let options = ImageMobjectOptions::encoded(&webp).unwrap();
+        assert_eq!((options.pixel_width(), options.pixel_height()), (2, 2));
+        let mut scene = crate::Scene::new();
+        let image = scene.image(options).unwrap();
+        let handle = image.state().unwrap().content.image().unwrap().resource();
+        let store = scene.integration_store().borrow();
+        assert_eq!(
+            store.raster_image_resources().get(handle).unwrap().rgba8(),
+            &expected,
+        );
+    }
+
+    #[test]
+    fn animated_webp_is_rejected_instead_of_silently_using_its_first_frame() {
+        // Two-frame 2x2 lossless WebP generated by Pillow 11.3.0.
+        let animated_webp = [
+            0x52, 0x49, 0x46, 0x46, 0x84, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+            0x38, 0x58, 0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x41, 0x4e, 0x49, 0x4d, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x41, 0x4e, 0x4d, 0x46, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x64, 0x00, 0x00, 0x02, 0x56, 0x50,
+            0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x01, 0x40, 0x00, 0x00, 0x07, 0x10, 0xfd,
+            0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00, 0x41, 0x4e, 0x4d, 0x46, 0x28, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x64, 0x00, 0x00, 0x00, 0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x01,
+            0x40, 0x00, 0x00, 0x07, 0x10, 0xd1, 0xff, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+        ];
+        let error = ImageMobjectOptions::encoded(&animated_webp).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("animated WebP images are not supported"));
     }
 
     #[test]

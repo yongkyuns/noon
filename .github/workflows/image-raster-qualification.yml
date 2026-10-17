@@ -46,7 +46,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config mesa-vulkan-drivers
-          python -m pip install --disable-pip-version-check manim==0.21.0
+          # Keep the Manim CE 0.21 camera oracle stable across newer Pillow releases.
+          python -m pip install --disable-pip-version-check manim==0.21.0 Pillow==11.3.0
       - name: Rust target
         run: |
           python3 scripts/test_ci_setup_rust.py

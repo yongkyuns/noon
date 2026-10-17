@@ -326,11 +326,11 @@
     {
       "id": "noon-raster-image",
       "title": "RasterImage",
-      "summary": "Immutable ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",
+      "summary": "Immutable PNG, JPEG, and WebP ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",
       "status": "ready",
       "path": "python/examples/raster_image.py",
       "category": "manim-compatible/images",
-      "features": ["ImageMobject", "FadeIn", "Transform", "FadeOut", "retained-image", "endpoint-parity", "Manim-compatible"],
+      "features": ["ImageMobject", "PNG", "JPEG", "WebP", "FadeIn", "Transform", "FadeOut", "retained-image", "endpoint-parity", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/raster-image.svg",

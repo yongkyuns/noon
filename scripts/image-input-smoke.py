@@ -1,7 +1,7 @@
 """Executed by the ordinary Python authoring worker, never a mock image host.
 
-The JS qualification harness supplies INPUT_CASES, INPUT_PNG_HEX,
-INPUT_JPEG_HEX and INPUT_URL as explicit, small test inputs.
+The JS qualification harness supplies INPUT_CASES, encoded PNG/JPEG/WebP bytes,
+and INPUT_URL as explicit, small test inputs.
 """
 from io import BytesIO
 from pathlib import Path
@@ -19,10 +19,13 @@ class ImageInputs(Scene):
 
         png = bytes.fromhex(INPUT_PNG_HEX)
         jpeg = bytes.fromhex(INPUT_JPEG_HEX)
+        webp = bytes.fromhex(INPUT_WEBP_HEX)
         png_path = Path("/tmp/noon-input.png")
         jpeg_path = Path("/tmp/noon-input.jpg")
+        webp_path = Path("/tmp/noon-input.webp")
         png_path.write_bytes(png)
         jpeg_path.write_bytes(jpeg)
+        webp_path.write_bytes(webp)
         gray = np.array([[32, 96, 160], [64, 128, 224]], dtype=np.uint8)
         rgb = np.repeat(gray[:, :, None], 3, axis=2)
         rgba = np.concatenate((rgb, np.full((2, 3, 1), 255, dtype=np.uint8)), axis=2)
@@ -45,8 +48,10 @@ class ImageInputs(Scene):
             "png-filename": str(png_path),
             "jpeg-bytes": jpeg,
             "jpeg-path": jpeg_path,
+            "webp-bytes": webp,
+            "webp-path": webp_path,
         }
-        assert set(INPUT_CASES) == set(inputs) | {"png-url", "png-blob"}
+        assert set(INPUT_CASES) == set(inputs) | {"png-url", "png-blob", "webp-url", "webp-blob"}
         background = Square(8).set_fill("#14283c", opacity=1).set_stroke(width=0)
         self.add(background)
 
@@ -70,6 +75,11 @@ class ImageInputs(Scene):
                 image = await ImageMobject.from_url(INPUT_URL)
             elif case == "png-blob":
                 blob = Blob.new(to_js([memoryview(png)]))
+                image = await ImageMobject.from_blob(blob)
+            elif case == "webp-url":
+                image = await ImageMobject.from_url(INPUT_WEBP_URL)
+            elif case == "webp-blob":
+                blob = Blob.new(to_js([memoryview(webp)]))
                 image = await ImageMobject.from_blob(blob)
             else:
                 image = ImageMobject(inputs[case])
