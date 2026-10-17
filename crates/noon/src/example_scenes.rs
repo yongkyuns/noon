@@ -11,6 +11,8 @@ pub mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
 pub mod cyclic_replace;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod diagram_composition;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
