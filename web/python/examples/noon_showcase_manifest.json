@@ -368,6 +368,45 @@
           "label": "Dense near-white exposure and rainbow direction ring"
         }
       ]
+    },
+    {
+      "id": "showcase-cuda-transpose",
+      "title": "One Extra Column",
+      "lesson": "Follow source-synchronized CUDA transpose accesses, then see how padding one shared-memory column removes a warp-wide bank conflict.",
+      "primary_feature": "cuda-shared-memory-bank-conflicts",
+      "category": "Algorithms and systems",
+      "path": "python/examples/cuda_transpose_banks.py",
+      "features": [
+        "CUDA",
+        "shared memory",
+        "transpose",
+        "warp bank conflicts",
+        "padding",
+        "syntax-highlighted code"
+      ],
+      "duration": 81.71,
+      "thumbnail_time": 64.0499998399999,
+      "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
+      "thumbnail_alt": "Actual Noon-rendered padded CUDA transpose: the highlighted tile read sends 32 numbered requests to 32 separate shared-memory banks",
+      "playback_capability": "deterministic-retained-replay",
+      "beats": [
+        {
+          "time": 6.29,
+          "label": "Load adjacent global-memory words into shared rows"
+        },
+        {
+          "time": 31.21,
+          "label": "Unpadded column read serializes 32 requests into one bank"
+        },
+        {
+          "time": 64.0499998399999,
+          "label": "Padded column read distributes lanes across all 32 banks"
+        },
+        {
+          "time": 79,
+          "label": "Compare padded and unpadded read rounds"
+        }
+      ]
     }
   ]
 }

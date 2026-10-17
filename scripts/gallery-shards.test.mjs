@@ -92,3 +92,13 @@ test("empty and duplicate manifest inventories cannot silently pass admission", 
   duplicate[0].entries.push(structuredClone(duplicate[1].entries[0]));
   assert.throws(() => galleryEntriesFromManifests(duplicate), /duplicate/);
 });
+
+test("CUDA source is exercised by all public browser galleries without redundant no-JSPI duplication", () => {
+  const entry = entries.find(item => item.id === "showcase-cuda-transpose");
+  assert.ok(entry, "gallery inventory dropped the CUDA lesson");
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    const cases = galleryCaseQueue(entries, browser).filter(value => value.entry.id === entry.id);
+    assert.deepEqual(cases.map(value => value.noJspi), [false],
+      browser + ": render the full CUDA lesson once; dedicated CUDA CI covers additional runtime permutations");
+  }
+});

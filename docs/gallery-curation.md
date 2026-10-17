@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog manifest currently lists twenty-two authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-four authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -35,6 +35,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 |---|---|---|
 | Your first scene | Construction, layout, motion | Every primitive/API variant |
 | A field in motion | Dense multi-sequence composition | A hardware-maximum claim |
+| One Extra Column | CUDA transpose addressing, shared-memory bank conflicts, and the effect of 32-to-33 row padding | Running CUDA in the browser or claiming measured GPU timing |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
 | Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal/re-ignition, and simultaneous path/math reveal with glow edits | A separate Python renderer or implied hardware benchmark |
@@ -115,7 +116,7 @@ Live review retains an unseeked first-pass image and state before any replay att
 
 ## Remaining coverage and migration
 
-The twenty-one curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
+The twenty-four curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
 
 - Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.
@@ -129,3 +130,25 @@ The twenty-one curated lessons are intentionally not exhaustive. Current master 
 Consolidate the public learning experience, not canonical fixtures. The 49-entry audit's source-preservation rule still applies. Its former suggestion to move the dynamic scene out of the showcase is superseded: keep the polished dynamic composition featured, while retaining the unchanged five-second stress workload for regression and profiling comparability.
 
 The default-catalog change must be qualified with actual animation and responsive-layout evidence before merging. A compiling source or generated contact sheet alone is insufficient.
+
+## CUDA transpose lesson
+
+**One Extra Column** uses the already published and validated source at
+`web/python/examples/cuda_transpose_banks.py`; the gallery does **not**
+copy this source or introduce a separate demonstration renderer.
+It illustrates a CUDA shared-memory transpose by comparing the unpadded
+32-column tile with 33-column stride padding, retaining matched code
+highlights, 32 bank destinations, lane labels and the existing storyboard.
+All data is driven by the one deterministic educational model; optional
+CUDA captures remain strictly outside gallery playback.
+
+The poster is the **unaltered, real 1280×720 WebGPU screenshot** from the
+successful CUDA fidelity CI run [39055762669](https://github.com/yongkyuns/noon/actions/runs/39055762669),
+artifact `12110234543`, case `column-3-speed-1-none`, at authored
+time `64.0499998399999`, padded bank transfer endpoint. The poster SHA-256
+and exact scene source SHA-256 are checked by a dedicated source-bound
+evidence sidecar rather than mislabeling the earlier 23-posters
+capture bundle with a different renderer build identity. Its provenance
+is independent of the Manim/reference catalog and the other showcase cards.
+Regular `scripts/showcase-capture.mjs` can independently recapture a
+complete refreshed 24-scene bundle, without changing the original source.

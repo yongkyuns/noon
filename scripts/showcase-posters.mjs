@@ -86,3 +86,49 @@ export function assertRetainedPoster(entry, record, source, png, captureIdentity
     assert.ok(record.interaction.recipe.includes("click"), `${entry.id}: actual selection recipe is missing`);
   }
 }
+
+/**
+ * Separate source-bound proof for a genuine CUDA fidelity-test screenshot.
+ * The earlier 23 showcase posters belong to one different renderer build.
+ * Never overwrite their aggregate build identity to make this card fit.
+ */
+export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
+  const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+  assert.equal(entry.id, "showcase-cuda-transpose");
+  assert.equal(entry.path, "python/examples/cuda_transpose_banks.py");
+  assert.equal(entry.thumbnail, "thumbnails/showcase/showcase-cuda-transpose.png");
+  assert.equal(record.schema, 1);
+  assert.equal(record.publication, "rendered-cuda-fidelity-frame");
+  assert.equal(record.id, entry.id);
+  assert.equal(record.sourcePath, entry.path);
+  assert.equal(record.thumbnail, entry.thumbnail);
+  assert.equal(record.sourceSha256, hash(source), "CUDA poster source changed; recapture required");
+  assert.equal(record.image.pngSha256, hash(png), "CUDA poster pixels differ from the captured renderer frame");
+  assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+    "CUDA poster must be a real PNG");
+  assert.equal(png.subarray(12, 16).toString("ascii"), "IHDR");
+  const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+  assert.equal(width, record.image.width);
+  assert.equal(height, record.image.height);
+  assert.equal(width, 1280);
+  assert.equal(height, 720);
+  assert.equal(record.sample.requestedTime, entry.thumbnail_time);
+  assert.equal(record.sample.publishedTime, entry.thumbnail_time);
+  assert.equal(record.sample.operation, "bank");
+  assert.equal(record.sample.stride, 33);
+  assert.equal(record.sample.column, 3);
+  const capture = record.capture;
+  assert.equal(capture.repository, "yongkyuns/noon");
+  assert.equal(capture.workflowRunId, 39055762669);
+  assert.equal(capture.artifactId, 12110234543);
+  assert.equal(capture.testedPrHead, "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d");
+  assert.equal(capture.reportStatus, "passed");
+  assert.equal(capture.positiveCases, 3);
+  assert.equal(capture.negativeControls, 6);
+  assert.equal(capture.oracle, "independent-cpu-closed-form");
+  assert.equal(capture.cudaValidated, false, "do not confuse renderer evidence with CUDA hardware execution");
+  assert.equal(capture.rendererBackend, "WebGPU");
+  assert.equal(capture.runtimeBuildIdentity.schema, 1);
+  assert.match(capture.runtimeBuildIdentity.sourceRevision, /^[0-9a-f]{40}$/);
+  assert.match(capture.runtimeBuildIdentity.buildId, /^[0-9a-f]{64}$/);
+}

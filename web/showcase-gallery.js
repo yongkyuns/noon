@@ -28,7 +28,8 @@ export function normalizeShowcaseManifest(manifest) {
       }
     }
     if (!/^showcase-[a-z0-9-]+$/.test(entry.id) || ids.has(entry.id)) throw new Error(`Invalid or duplicate showcase id: ${entry.id}`);
-    if (!/^python\/examples\/showcase_[a-z_]+\.py$/.test(entry.path) || sources.has(entry.path)) throw new Error(`${entry.id}: expected a unique local showcase source`);
+    const canonicalCuda = entry.id === "showcase-cuda-transpose" && entry.path === "python/examples/cuda_transpose_banks.py";
+    if ((!/^python\/examples\/showcase_[a-z_]+\.py$/.test(entry.path) && !canonicalCuda) || sources.has(entry.path)) throw new Error(`${entry.id}: expected a unique local showcase source`);
     if (primaryFeatures.has(entry.primary_feature)) throw new Error(`${entry.id}: duplicated primary learning outcome`);
     if (entry.thumbnail !== `thumbnails/showcase/${entry.id}.png`) throw new Error(`${entry.id}: poster must be a local captured PNG`);
     if (!Number.isFinite(entry.duration) || entry.duration <= 0) throw new Error(`${entry.id}: duration must be positive`);
