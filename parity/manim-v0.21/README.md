@@ -50,8 +50,18 @@ known default-cell font-metric difference. Rust/WASM and Python-worker pixels
 match exactly on WebGPU and WebGL2; the browser lifecycle verifies wrapper
 identity, copy independence, and table construction on both. Strict pinned
 ManimCE Cairo comparison passes unchanged thresholds with exact duration and
-0.17% worst differing pixels. Non-empty default-cell font metrics and custom
-element formatting remain unqualified.
+0.17% worst differing pixels. `MobjectTable` now invokes a supplied
+`element_to_mobject` callback with `element_to_mobject_config` for each input in
+row-major order and keeps the returned shared wrappers; the focused Python
+facade tests verify callback order, kwargs, wrapper identity, and invalid inputs.
+
+The non-empty default base-`Table` font remains unqualified. A focused local
+ManimCE `Paragraph` probe exceeded unchanged limits on both browser backends
+(44 px table-width bounds delta, 2.86% differing pixels, and 3.87 mean absolute
+channel error): the pinned constructor leaves its font family unspecified,
+while Noon uses its deterministic DejaVu Sans Mono default. Resolving this
+portably needs the shared text/font providers under #83/#364/#365; the failing
+probe was not added to the strict manifest and no raster threshold was changed.
 The retained façade's `get_rows()` and `get_columns()` include any supplied
 row, column, and corner labels in the displayed grid. `get_entries()` returns
 that row-major grid, while `get_entries_without_labels()` addresses body cells

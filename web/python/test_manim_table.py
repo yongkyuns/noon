@@ -356,6 +356,55 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)
         self.assertIs(children[5]._semantic_member_wrappers["4:1"], top_left_entry)
 
+    def test_mobject_table_element_converter_receives_config_and_retains_results(self):
+        inputs = [_FakeMobject(1), _FakeMobject(2)]
+        converted = [_FakeMobject(3), _FakeMobject(4)]
+        calls = []
+        context = types.SimpleNamespace()
+        handle = _MobjectTableHandle([], [], converted)
+
+        def convert(value, *, scale):
+            calls.append((value, scale))
+            return converted[len(calls) - 1]
+
+        def create(rows, *args):
+            self.assertEqual(rows, [[item._semantic_handle for item in converted]])
+            self.assertIs(args[-1], context)
+            return handle
+
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_mobject_table", side_effect=create), \
+                patch.object(table, "_live_constructor_context", return_value=context), \
+                patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_test_submobjects", family.submobjects),
+                    setattr(wrapper, "_canonical_live_target_context", context),
+                )), \
+                patch.object(table._compat.Group, "submobjects", new=property(
+                    lambda wrapper: wrapper._test_submobjects
+                )), \
+                patch.object(table, "_family_wrapper_key", side_effect=lambda value: (
+                    f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"
+                )):
+            value = table.MobjectTable(
+                [[inputs[0], inputs[1]]],
+                element_to_mobject=convert,
+                element_to_mobject_config={"scale": 0.5},
+            )
+
+        self.assertEqual(calls, [(inputs[0], 0.5), (inputs[1], 0.5)])
+        row = value._test_submobjects[1].submobjects[0]
+        self.assertIs(row._semantic_member_wrappers["3:1"], converted[0])
+        self.assertIs(row._semantic_member_wrappers["4:1"], converted[1])
+
+    def test_mobject_table_element_converter_validates_callable_and_config(self):
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            with self.assertRaisesRegex(TypeError, "element_to_mobject must be callable"):
+                table.MobjectTable([[_FakeMobject(1)]], element_to_mobject=object())
+            with self.assertRaisesRegex(TypeError, "element_to_mobject_config must be a dict"):
+                table.MobjectTable([[_FakeMobject(1)]], element_to_mobject_config=[])
+
     def test_mobject_table_top_left_entry_requires_both_label_sets(self):
         entry = _FakeMobject(1)
         top_left_entry = _FakeMobject(2)

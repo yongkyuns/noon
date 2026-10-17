@@ -412,6 +412,12 @@ class DecimalTable(Table):
 
 class MobjectTable(Table):
     def __init__(self, table, **kwargs):
+        element_to_mobject = kwargs.pop("element_to_mobject", lambda value: value)
+        element_to_mobject_config = kwargs.pop("element_to_mobject_config", {})
+        if not callable(element_to_mobject):
+            raise TypeError("MobjectTable element_to_mobject must be callable")
+        if not isinstance(element_to_mobject_config, dict):
+            raise TypeError("element_to_mobject_config must be a dict")
         row_label_mobjects = list(kwargs.pop("row_labels", None) or [])
         column_label_mobjects = list(kwargs.pop("col_labels", None) or [])
         top_left_entry = kwargs.pop("top_left_entry", None)
@@ -419,7 +425,10 @@ class MobjectTable(Table):
             raise ValueError("top_left_entry requires both row_labels and col_labels")
         if _create_mobject_table is None:
             raise RuntimeError("MobjectTable requires Noon’s shared Rust authoring runtime")
-        source_rows = [list(row) for row in table]
+        source_rows = [
+            [element_to_mobject(value, **element_to_mobject_config) for value in row]
+            for row in table
+        ]
         def handle(value):
             if not isinstance(value, _base.Mobject):
                 raise TypeError("MobjectTable entries must be shared Mobjects or Groups")
