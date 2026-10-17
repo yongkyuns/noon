@@ -58,6 +58,13 @@ that row-major grid, while `get_entries_without_labels()` addresses body cells
 only; both preserve the original retained wrappers. The upstream no-corner
 index offset is covered explicitly.
 
+`decimal-table-format` qualifies `DecimalTable.element_to_mobject_config` for
+precision, explicit signs, and comma grouping. The wrapper passes this bounded
+DecimalNumber format into Rust's shared numeric formatter. Rust/WASM and
+Python-worker pixels match exactly on both browser backends; strict pinned
+ManimCE Cairo comparison passes unchanged thresholds with exact duration and
+0.47% worst differing pixels.
+
 `table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
 outer rules retained. The option defaults to `True`, travels through the Rust,
 WASM, and Python constructors, and survives table-family rehydration. Its direct

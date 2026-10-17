@@ -217,19 +217,28 @@ impl CanonicalAuthoringSceneContext {
     pub fn live_create_decimal_table(
         &mut self,
         rows: js_sys::Array,
+        decimal_places: u32,
+        include_sign: bool,
+        group_with_commas: bool,
+        show_ellipsis: bool,
+        unit: Option<String>,
         options: WasmTableOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = number_rows(rows, "Table")?;
+        let format = noon::DecimalFormat {
+            decimal_places,
+            include_sign,
+            group_with_commas,
+            show_ellipsis,
+            unit,
+        };
         if self.inner.player_ownership.is_unstarted() {
             noon::DecimalTable::from_rows_with_options(
                 &mut self.inner.scene,
                 compiler,
                 rows,
-                noon::DecimalFormat {
-                    decimal_places: 1,
-                    ..Default::default()
-                },
+                format,
                 options.options,
             )
             .map(|value| WasmTableHandle::new(value.into_table()))
@@ -238,7 +247,7 @@ impl CanonicalAuthoringSceneContext {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_create_decimal_table(compiler, rows, options.options)
+                .live_create_decimal_table(compiler, rows, format, options.options)
                 .map(|value| WasmTableHandle::new(value.into_table()))
                 .map_err(js_error)
         }

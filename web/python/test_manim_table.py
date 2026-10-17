@@ -52,6 +52,10 @@ class _Context:
         self.calls.append(("create_with_labels", args))
         return self.handle
 
+    def liveCreateDecimalTable(self, *args):
+        self.calls.append(("create_decimal", args))
+        return self.handle
+
 
 class _MobjectHandle(_Handle):
     pass
@@ -97,6 +101,7 @@ class TableFacadeTests(unittest.TestCase):
         self.patches = [
             patch.object(table, "_create_table", side_effect=self.context.liveCreateTable),
             patch.object(table, "_create_table_with_labels", side_effect=self.context.liveCreateTableWithLabels),
+            patch.object(table, "_create_decimal_table", side_effect=self.context.liveCreateDecimalTable),
             patch.object(table, "_live_constructor_context", return_value=self.context),
             patch.object(table, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
             patch.object(table, "_attach_shared_family", side_effect=attach_family),
@@ -187,6 +192,37 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(value.get_row_labels().submobjects, [])
         self.assertEqual(value.get_col_labels().submobjects, [])
         self.assertEqual(value.get_labels().submobjects, [])
+
+    def test_decimal_table_forwards_supported_decimalnumber_format(self):
+        table.DecimalTable(
+            [[1234.5, -2.25]],
+            element_to_mobject_config={
+                "num_decimal_places": 3,
+                "include_sign": True,
+                "group_with_commas": False,
+                "show_ellipsis": True,
+                "unit": "m",
+            },
+        )
+        _, args = self.context.calls[-1]
+        self.assertEqual(args[0], [[1234.5, -2.25]])
+        self.assertEqual(args[1:6], (3, True, False, True, "m"))
+        self.assertEqual(args[6:10], (0.8, 1.3, False, True))
+
+    def test_decimal_table_matches_default_and_empty_config_precision(self):
+        table.DecimalTable([[1.25]])
+        default_args = self.context.calls[-1][1]
+        self.assertEqual(default_args[1:6], (1, False, True, False, None))
+
+        table.DecimalTable([[1.25]], element_to_mobject_config={})
+        empty_args = self.context.calls[-1][1]
+        self.assertEqual(empty_args[1:6], (2, False, True, False, None))
+
+    def test_decimal_table_rejects_unqualified_format_options(self):
+        with self.assertRaisesRegex(NotImplementedError, "decimal_places"):
+            table._decimal_format({"decimal_places": 2})
+        with self.assertRaisesRegex(ValueError, "between 0 and 12"):
+            table._decimal_format({"num_decimal_places": 13})
 
     def test_entry_queries_match_manims_display_grid_and_body_only_access(self):
         value = table.Table([["a", "b"], ["c", "d"]])

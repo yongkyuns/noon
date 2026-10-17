@@ -32,6 +32,10 @@ except ImportError:
 
 _OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines", "line_config"}
 _LINE_CONFIG_NAMES = {"color", "stroke_color", "stroke_width", "stroke_opacity"}
+_DECIMAL_CONFIG_NAMES = {
+    "num_decimal_places", "include_sign", "group_with_commas", "show_ellipsis", "unit"
+}
+_UNSET = object()
 
 
 def _options(kwargs):
@@ -65,6 +69,37 @@ def _options(kwargs):
         line_color.alpha,
         line_width,
         line_opacity,
+    )
+
+
+def _decimal_format(config):
+    if config is _UNSET:
+        config = {"num_decimal_places": 1}
+    elif not isinstance(config, dict):
+        raise TypeError("element_to_mobject_config must be a dict")
+    unknown = set(config) - _DECIMAL_CONFIG_NAMES
+    if unknown:
+        raise NotImplementedError(
+            "unsupported DecimalTable element option(s): " + ", ".join(sorted(unknown))
+        )
+    places = config.get("num_decimal_places", 2)
+    if isinstance(places, bool):
+        raise TypeError("num_decimal_places must be an integer")
+    try:
+        places = _index(places)
+    except TypeError as error:
+        raise TypeError("num_decimal_places must be an integer") from error
+    if not 0 <= places <= 12:
+        raise ValueError("num_decimal_places must be between 0 and 12")
+    unit = config.get("unit")
+    if unit is not None and not isinstance(unit, str):
+        raise TypeError("DecimalTable unit must be a string or None")
+    return (
+        places,
+        bool(config.get("include_sign", False)),
+        bool(config.get("group_with_commas", True)),
+        bool(config.get("show_ellipsis", False)),
+        unit,
     )
 
 
@@ -362,11 +397,17 @@ class IntegerTable(Table):
 
 
 class DecimalTable(Table):
-    def __init__(self, table, **kwargs):
+    def __init__(self, table, element_to_mobject_config=_UNSET, **kwargs):
         if _create_decimal_table is None:
             raise RuntimeError("DecimalTable requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("DecimalTable", allow_unstarted=True)
-        self._initialize_table(engine_call(_create_decimal_table, _rows(table, float), *_options(kwargs), context), context)
+        self._initialize_table(engine_call(
+            _create_decimal_table,
+            _rows(table, float),
+            *_decimal_format(element_to_mobject_config),
+            *_options(kwargs),
+            context,
+        ), context)
 
 
 class MobjectTable(Table):

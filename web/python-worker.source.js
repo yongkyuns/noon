@@ -373,9 +373,12 @@ async function initializePyodide() {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
     return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
   };
-  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
+  self.noonCreateAuthoringDecimalTableHandle = (rows, decimalPlaces, includeSign, groupWithCommas, showEllipsis, unit,
+    v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
-    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
+    return context.liveCreateDecimalTable(
+      Array.from(rows, row => Array.from(row)), decimalPlaces, includeSign, groupWithCommas,
+      showEllipsis, unit, tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity), latexCompiler);
   };
   self.noonCreateAuthoringMobjectTableHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, context) => {
     const entries = compositeRows(rows);

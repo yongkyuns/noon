@@ -12,6 +12,21 @@ class MathTableExample(Scene):
         self.wait(0.2)
 
 
+class DecimalTableFormatExample(Scene):
+    def construct(self):
+        table = DecimalTable(
+            [[1234.5, -2.25]],
+            element_to_mobject_config={
+                "num_decimal_places": 2,
+                "include_sign": True,
+                "group_with_commas": True,
+            },
+            include_outer_lines=True,
+        )
+        self.add(table)
+        self.wait(0.2)
+
+
 class TableLabelsExample(Scene):
     def construct(self):
         row_labels = [Circle(radius=0.15), Square(side_length=0.4)]

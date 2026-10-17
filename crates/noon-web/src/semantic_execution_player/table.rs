@@ -101,18 +101,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         backend: &mut impl noon::LatexBackend,
         rows: Vec<Vec<f64>>,
+        format: noon::DecimalFormat,
         options: noon::TableOptions,
     ) -> Result<noon::DecimalTable, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(noon::DecimalTable::from_rows_in_live_session(
-                live,
-                backend,
-                rows,
-                noon::DecimalFormat {
-                    decimal_places: 1,
-                    ..Default::default()
-                },
-                options,
+                live, backend, rows, format, options,
             ))
         })?
         .map_err(AuthoringFailure::from)

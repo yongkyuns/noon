@@ -1,8 +1,8 @@
 //! One retained plain, math, and composite-entry table scene for every host.
 
 use crate::{
-    Color, ExecutionSession, LatexBackend, MathTable, MathTex, Mobject, MobjectFamily,
-    MobjectTable, MobjectTarget, Scene, Table, TableOptions,
+    Color, DecimalFormat, DecimalTable, ExecutionSession, LatexBackend, MathTable, MathTex,
+    Mobject, MobjectFamily, MobjectTable, MobjectTarget, Scene, Table, TableOptions,
 };
 
 /// Scene counterpart of the Python fixture that exercises group-valued table
@@ -197,6 +197,32 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, Stri
             math.family().into(),
             composite.family().into(),
         ])
+        .map_err(|error| error.to_string())?;
+    scene.execution_session().map_err(|error| error.to_string())
+}
+
+/// DecimalTable counterpart for ManimCE's configurable DecimalNumber entries.
+pub fn decimal_format_session(backend: &mut impl LatexBackend) -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let table = DecimalTable::from_rows_with_options(
+        &mut scene,
+        backend,
+        [[1234.5, -2.25]],
+        DecimalFormat {
+            decimal_places: 2,
+            include_sign: true,
+            group_with_commas: true,
+            ..Default::default()
+        },
+        TableOptions {
+            include_outer_lines: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?
+    .into_table();
+    scene
+        .add_many(&[table.family().into()])
         .map_err(|error| error.to_string())?;
     scene.execution_session().map_err(|error| error.to_string())
 }

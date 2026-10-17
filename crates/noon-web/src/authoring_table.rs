@@ -78,6 +78,18 @@ pub async fn create_table_renderer(
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct WASM renderer counterpart of the configurable DecimalTable fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createDecimalTableFormatRenderer)]
+pub async fn create_decimal_table_format_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::table::decimal_format_session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct WASM renderer counterpart of the grouped-label table fixture.
 #[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
 #[wasm_bindgen(js_name = createMobjectTableFamilyLabelsRenderer)]

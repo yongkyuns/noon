@@ -229,6 +229,19 @@ class RasterManifestTests(unittest.TestCase):
         self.assertIn("empty native-text cells", fixture["notes"])
         self.assertIn("0.17% worst differing pixels", fixture["notes"])
 
+    def test_decimal_table_format_fixture_has_pinned_and_noon_sources(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(item for item in manifest["fixtures"] if item["id"] == "decimal-table-format")
+        self.assertEqual(fixture["scene"], "DecimalTableFormatExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertTrue(fixture["requires_latex"])
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        noon_source = (ROOT / fixture["noon_source"]).read_text(encoding="utf-8")
+        for text in (source, noon_source):
+            self.assertIn("num_decimal_places", text)
+            self.assertIn("include_sign", text)
+            self.assertIn("group_with_commas", text)
+
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         matching = [

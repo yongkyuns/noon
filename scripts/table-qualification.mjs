@@ -8,6 +8,10 @@ await qualifyPairedAuthoring({
     factory: "createTableRenderer", objectCount: 31,
     preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
   }, {
+    id: "decimal-table-format", file: "decimal_table_format.py", scene: "DecimalTableFormatExample",
+    factory: "createDecimalTableFormatRenderer", duration: 0.2,
+    preparation: { module: "/web/latex/backend.js", export: "prepareLatexBackend", wrapper: "WasmLatexCompiler" },
+  }, {
     id: "table-labels", file: "table_labels.py", scene: "TableLabelsExample",
     factory: "createTableLabelsRenderer", duration: 0.2,
   }, {
