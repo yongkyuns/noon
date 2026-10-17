@@ -1056,6 +1056,10 @@ struct ImageDrawEligibilityPreparation {
 pub struct RetainedFramePreparer {
     images: RasterImageFramePreparer,
     geometry: FramePreparer,
+    // Unit tests may lower the packed-only admission limit without shrinking
+    // unrelated text, image or multisample readback buffers on the GPU device.
+    #[cfg(test)]
+    packed_path_test_limit: Option<u64>,
     text: RetainedTextQuadPreparer,
     outlines: GlyphOutlineCache,
     scratch: FrameState,
@@ -1111,6 +1115,8 @@ impl Default for RetainedFramePreparer {
         Self {
             images: RasterImageFramePreparer::default(),
             geometry: FramePreparer::for_mixed_retained_path_draws(),
+            #[cfg(test)]
+            packed_path_test_limit: None,
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
@@ -1762,8 +1768,10 @@ impl RetainedFramePreparer {
             && !changes.has_stable_changes())
         .then(FrameChanges::default);
         let changes = stable_changes.as_ref().unwrap_or(changes);
-        self.geometry
-            .set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        let packed_limit = device.limits().max_buffer_size;
+        #[cfg(test)]
+        let packed_limit = packed_limit.min(self.packed_path_test_limit.unwrap_or(u64::MAX));
+        self.geometry.set_packed_path_buffer_limit(packed_limit);
 
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
@@ -4441,9 +4449,11 @@ mod tests {
             let mut old_preparer = RetainedFramePreparer::new();
             old_preparer.geometry = FramePreparer::for_individual_path_draws();
             let mut packed_preparer = RetainedFramePreparer::new();
+            let mut limited_preparer = RetainedFramePreparer::new();
             let painter_order = (0..frame.objects.len() as u32).collect::<Vec<_>>();
             old_preparer.set_painter_order(&painter_order);
             packed_preparer.set_painter_order(&painter_order);
+            limited_preparer.set_painter_order(&painter_order);
             let metrics = TextDeviceMetrics::uniform(32.0)
                 .unwrap()
                 .with_world_origin_pixels(Vec2::new(64.0, 32.0))
@@ -4459,10 +4469,14 @@ mod tests {
                 GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             let mut packed_renderer =
                 GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            let mut limited_renderer =
+                GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             setup(&mut old_renderer);
             setup(&mut packed_renderer);
+            setup(&mut limited_renderer);
             let mut old_text = old_renderer.create_retained_text_state(&device, &queue);
             let mut packed_text = packed_renderer.create_retained_text_state(&device, &queue);
+            let mut limited_text = limited_renderer.create_retained_text_state(&device, &queue);
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mixed mega native exact comparison"),
                 size: wgpu::Extent3d {
@@ -4768,7 +4782,61 @@ mod tests {
                 let (packed_pixels, packed_draws) =
                     render(&mut packed_renderer, &mut packed_text, &packed);
                 let packed_samples = raw_msaa(&packed_renderer, &packed_text, &packed);
+                if step == 0 {
+                    // Derive a strict packed-only budget from this actual
+                    // frame's stream size so both the packed and ordinary
+                    // lanes are exercised without constraining image/text
+                    // resources or the 4x MSAA sample-readback buffer.
+                    let full_bytes =
+                        std::mem::size_of_val(packed.geometry.mega_path_vertex_instances);
+                    let limited_bytes = crate::buffer_growth_capacity(full_bytes / 2);
+                    assert!(limited_bytes < crate::buffer_growth_capacity(full_bytes));
+                    limited_preparer.packed_path_test_limit = Some(limited_bytes as u64);
+                }
+                let limited = limited_preparer
+                    .prepare_with_image_resources(
+                        &device,
+                        &frame,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                assert!(
+                    limited.geometry.stats.mega_path_count > 0
+                        && limited.geometry.stats.mega_path_count
+                            < packed.geometry.stats.mega_path_count,
+                    "step {step}: the test must exercise both packed and ordinary paths"
+                );
+                let (limited_pixels, limited_draws) =
+                    render(&mut limited_renderer, &mut limited_text, &limited);
+                let limited_samples = raw_msaa(&limited_renderer, &limited_text, &limited);
                 assert_eq!(reference_samples.len(), (WIDTH * HEIGHT * 4 * 4) as usize);
+                if reference_samples != limited_samples {
+                    let byte = reference_samples
+                        .iter()
+                        .zip(&limited_samples)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    panic!(
+                        "step {step}: mixed packed-limit fallback changes MSAA sample {byte}: {} != {}",
+                        reference_samples[byte], limited_samples[byte]
+                    );
+                }
+                if reference_pixels != limited_pixels {
+                    let byte = reference_pixels
+                        .iter()
+                        .zip(&limited_pixels)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    panic!(
+                        "step {step}: mixed packed-limit fallback changes pixel {byte}: {} != {}",
+                        reference_pixels[byte], limited_pixels[byte]
+                    );
+                }
                 if reference_samples != packed_samples {
                     let byte = reference_samples
                         .iter()
@@ -4798,7 +4866,16 @@ mod tests {
                     packed_draws.images, 1,
                     "the packed mixed scene must show its image"
                 );
-                assert!(reference_draws.text.draw_calls > 0 && packed_draws.text.draw_calls > 0);
+                assert_eq!(limited_draws.images, 1);
+                assert!(
+                    reference_draws.text.draw_calls > 0
+                        && packed_draws.text.draw_calls > 0
+                        && limited_draws.text.draw_calls > 0
+                );
+                assert!(
+                    limited_draws.geometry.draw_calls > packed_draws.geometry.draw_calls,
+                    "step {step}: packed budget fallback must add individual draws"
+                );
                 assert!(
                     reference_draws.geometry.draw_calls > packed_draws.geometry.draw_calls + 32,
                     "step {step}: packing failed to reduce draw submissions: {} -> {}",
