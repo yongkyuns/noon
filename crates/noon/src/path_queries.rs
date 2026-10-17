@@ -526,6 +526,11 @@ impl MobjectTarget<'_> {
     ) -> Result<(f64, f64), AuthoringError> {
         boundary_point_for_xy_points(&self.all_points()?, direction_x, direction_y)
     }
+
+    /// Return the point extent along one coordinate dimension.
+    pub fn length_over_dim(&self, dim: usize) -> Result<f64, AuthoringError> {
+        length_over_xy_points(&self.all_points()?, dim)
+    }
 }
 
 /// Observe current effective points for all object occurrences below a target.
@@ -585,6 +590,16 @@ pub fn effective_boundary_point(
         direction_x,
         direction_y,
     )
+}
+
+/// Observe the current point extent along one coordinate dimension.
+pub fn effective_length_over_dim(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    dim: usize,
+) -> Result<f64, AuthoringError> {
+    length_over_xy_points(&effective_all_points(store, execution, target)?, dim)
 }
 
 /// Reduce caller-supplied flattened point rows in Rust, using Manim's key rule:
@@ -681,6 +696,18 @@ fn boundary_point_for_xy_points(
         }
     }
     Ok(boundary)
+}
+
+fn length_over_xy_points(points: &[(f64, f64)], dim: usize) -> Result<f64, AuthoringError> {
+    if points.is_empty() || dim == 2 {
+        return Ok(0.0);
+    }
+    if dim > 2 {
+        return Err(AuthoringError::InvalidPointDimension(dim as u32));
+    }
+    let minimum = extremum_for_xy_points(points, dim, -1.0)?;
+    let maximum = extremum_for_xy_points(points, dim, 1.0)?;
+    Ok(maximum - minimum)
 }
 
 /// Observe one object's exact current path from an existing coherent execution.

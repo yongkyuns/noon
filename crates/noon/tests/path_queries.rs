@@ -157,6 +157,10 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
             .unwrap(),
         0.
     );
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(0).unwrap(), 3.);
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(1).unwrap(), 0.);
+    assert_eq!(MobjectTarget::from(&root).length_over_dim(2).unwrap(), 0.);
+    assert!(MobjectTarget::from(&root).length_over_dim(3).is_err());
     assert_eq!(
         MobjectTarget::from(&first).all_points().unwrap(),
         first.path_query().unwrap().points().unwrap()
@@ -167,6 +171,7 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     let empty_center = MobjectTarget::from(&empty).center_of_mass().unwrap();
     assert!(empty_center.0.is_nan());
     assert!(empty_center.1.is_nan());
+    assert_eq!(MobjectTarget::from(&empty).length_over_dim(3).unwrap(), 0.);
     assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
 }
 
@@ -472,6 +477,36 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
     )
     .unwrap();
     assert_eq!(effective_top.1, 1.5);
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            0,
+        )
+        .unwrap(),
+        2.
+    );
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            1,
+        )
+        .unwrap(),
+        1.
+    );
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            MobjectTarget::from(&family),
+            2,
+        )
+        .unwrap(),
+        0.
+    );
     assert_eq!(
         MobjectTarget::from(&family)
             .extremum_along_dim(1, 1.)

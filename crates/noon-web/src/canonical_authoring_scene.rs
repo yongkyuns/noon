@@ -937,6 +937,21 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_length_over_dim(
+        &mut self,
+        handle: &noon::Mobject,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).length_over_dim(dim),
+            |player, handle| {
+                player.live_effective_length_over_dim(noon::MobjectTarget::from(handle), dim)
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_center_of_mass(
         &mut self,
         handle: &noon::Mobject,
@@ -1018,6 +1033,30 @@ impl CanonicalAuthoringScene {
         target
             .extremum_along_dim(dim, key)
             .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_length_over_dim(
+        &mut self,
+        family: &noon::MobjectFamily,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        let root = target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.identities.contains_key(&root) {
+            return Err("family is not bound to this canonical Scene".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_length_over_dim(target, dim);
+            }
+        }
+        target.length_over_dim(dim).map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -7113,6 +7152,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyLengthOverDim)]
+        pub fn query_family_length_over_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            dim: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .family_length_over_dim(&handle.semantic_family()?, dim as usize)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyCenterOfMass)]
         pub fn query_family_center_of_mass(
             &mut self,
@@ -7472,6 +7522,17 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .mobject_extremum_along_dim(handle.semantic_mobject(), dim as usize, key)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectLengthOverDim)]
+        pub fn query_mobject_length_over_dim(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dim: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_length_over_dim(handle.semantic_mobject(), dim as usize)
                 .map_err(typed_js_error)
         }
 

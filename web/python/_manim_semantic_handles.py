@@ -1945,6 +1945,10 @@ def _boundary_point_observation(
     )
 
 
+def _length_over_dim_observation(value: _base.Mobject, dim: int):
+    return _point_query_observation(value, "LengthOverDim", dim)
+
+
 def _extremum_from_points_observation(
     value: _base.Mobject,
     coordinates: list[float],

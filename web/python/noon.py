@@ -7,6 +7,7 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
+import operator
 from functools import partialmethod
 from typing import Any, Callable
 from enum import Enum
@@ -346,19 +347,32 @@ class Mobject:
     def get_bottom(self: Mobject) -> Vec2:
         return self.get_critical_point(DOWN)
 
+    def get_zenith(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
+    def get_nadir(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
     def get_coord(
         self: Mobject, dim: int, direction: object = ORIGIN
     ) -> float:
-        if dim not in (0, 1):
-            raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
+        dim = operator.index(dim)
+        normalized_dim = dim if dim >= 0 else 3 + dim
+        if not 0 <= normalized_dim < 3:
+            raise IndexError(f"index {dim} is out of bounds for axis 0 with size 3")
+        if normalized_dim == 2:
+            return self.get_extremum_along_dim(dim=2, key=0)
         point = self.get_critical_point(direction)
-        return float(point[dim])
+        return float(point[normalized_dim])
 
     def get_x(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(0, direction)
 
     def get_y(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(1, direction)
+
+    def get_z(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(2, direction)
 
     def scale_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
@@ -672,6 +686,10 @@ class Mobject:
     def get_center_of_mass(self) -> Vec2:
         from _manim_path_queries import center_of_mass
         return center_of_mass(self)
+
+    def length_over_dim(self, dim: int) -> float:
+        from _manim_path_queries import length_over_dim
+        return length_over_dim(self, dim)
 
     def get_boundary_point(self, direction: object) -> Vec2:
         from _manim_path_queries import boundary_point

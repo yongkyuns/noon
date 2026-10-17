@@ -10,6 +10,7 @@ from _manim_semantic_handles import (
     _extremum_along_dim_observation,
     _extremum_from_points_observation,
     _family_point_count_observation,
+    _length_over_dim_observation,
     _typed_manim_observation,
 )
 
@@ -121,6 +122,14 @@ def boundary_point(value, direction):
     if coordinates is None:
         raise NotImplementedError("get_boundary_point requires a valid shared Rust handle")
     return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def length_over_dim(value, dim):
+    dim = _normalize_point_dimension(dim, 3)
+    result = _length_over_dim_observation(value, dim)
+    if result is None:
+        raise NotImplementedError("length_over_dim requires a valid shared Rust handle")
+    return float(result)
 
 
 def _normalize_point_dimension(dim, point_dimensions):

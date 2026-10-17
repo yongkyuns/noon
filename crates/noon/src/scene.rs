@@ -600,6 +600,18 @@ impl Scene {
         )
     }
 
+    /// Query the effective point extent along one coordinate dimension.
+    pub fn effective_length_over_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_length_over_dim(&self.store, execution, target, dim)
+    }
+
     /// Read one persistent authored/base object declaration.
     ///
     /// This deliberately does not inspect the running Runtime. Use

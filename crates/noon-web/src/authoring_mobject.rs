@@ -1143,6 +1143,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .length_over_dim(dim as usize)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = extremumFromPoints)]
         pub fn extremum_from_points(
             &self,
@@ -1828,6 +1836,13 @@ mod wasm {
         pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
             noon::MobjectTarget::from(&self.handle)
                 .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .length_over_dim(dim as usize)
                 .map_err(js_error)
         }
 
