@@ -6300,12 +6300,20 @@ mod tests {
         assert!(image_items > 0);
         assert!(upload_a.images.pixel_bytes_uploaded > 0);
         assert!(upload_a.text.bytes_uploaded > 0);
+        assert!(renderer.mega_path_index_capacity_bytes() > 0);
+        assert!(renderer.mega_path_vertex_instance_capacity_bytes() > 0);
 
         let compacted = retained
             .compact_path_meshes(&device, &queue, &mut renderer, &requests)
             .unwrap();
         queue.submit([]);
         assert!(compacted.upload.bytes_uploaded > 0);
+        assert_eq!(compacted.upload.buffer_reallocations, 5);
+        // No packed resources remain current after replacing the empty-draw
+        // resident prefix. The old encoded (but not yet submitted) frame must
+        // nevertheless keep its old packed handles alive.
+        assert_eq!(renderer.mega_path_index_capacity_bytes(), 0);
+        assert_eq!(renderer.mega_path_vertex_instance_capacity_bytes(), 0);
 
         {
             let prepared_compacted = retained
@@ -6323,6 +6331,8 @@ mod tests {
             let upload =
                 renderer.upload_retained(&device, &queue, &prepared_compacted, &mut text_state);
             assert_eq!(upload.images.pixel_bytes_uploaded, 0);
+            assert!(renderer.mega_path_index_capacity_bytes() > 0);
+            assert!(renderer.mega_path_vertex_instance_capacity_bytes() > 0);
         }
 
         let next_image_handle = images.intern_rgba8(1, 1, vec![255, 192, 64, 255]).unwrap();

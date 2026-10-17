@@ -1083,19 +1083,35 @@ impl GpuRenderer {
             indices,
             wgpu::BufferUsages::INDEX,
         );
+        // A compaction frame has no packed draws. Retire prior high-water
+        // packed buffers together with the old geometry prefix, rather than
+        // leaving their allocations resident indefinitely after scene shrink.
+        // Stage replacements before mutating the renderer: previously encoded
+        // command buffers retain old GPU handles through wgpu's lifetimes.
+        let mega_path_index_buffer = empty_buffer(
+            device,
+            "Noon packed path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let mega_path_vertex_instance_buffer =
+            empty_instance_buffer(device, "Noon packed path vertex attributes");
         let bytes_uploaded = vertex_bytes_len + compact_vertex_bytes_len + index_bytes_len;
 
         self.path_vertex_buffer = path_vertex_buffer;
         self.compact_path_vertex_buffer = compact_path_vertex_buffer;
         self.path_index_buffer = path_index_buffer;
+        self.mega_path_index_buffer = mega_path_index_buffer;
+        self.mega_path_vertex_instance_buffer = mega_path_vertex_instance_buffer;
         self.compact_path_vertices = compact_vertices;
         self.path_vertex_capacity_bytes = vertex_bytes_len;
         self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
         self.path_index_capacity_bytes = index_bytes_len;
+        self.mega_path_index_capacity_bytes = 0;
+        self.mega_path_vertex_instance_capacity_bytes = 0;
 
         Ok(UploadStats {
             bytes_uploaded,
-            buffer_reallocations: 3,
+            buffer_reallocations: 5,
         })
     }
 
