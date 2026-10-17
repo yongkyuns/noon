@@ -2138,6 +2138,27 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addCubicBezierCurve)]
+        pub fn add_cubic_bezier_curve(
+            &mut self,
+            anchor1_x: f64,
+            anchor1_y: f64,
+            handle1_x: f64,
+            handle1_y: f64,
+            handle2_x: f64,
+            handle2_y: f64,
+            anchor2_x: f64,
+            anchor2_y: f64,
+        ) -> Result<(), JsValue> {
+            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            self.handle
+                .add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setPointsSmoothly)]
         pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
             self.handle

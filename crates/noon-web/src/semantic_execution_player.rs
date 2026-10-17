@@ -852,6 +852,24 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curve(
+        &mut self,
+        source: &noon::Mobject,
+        anchor1: noon_core::Vec2,
+        handle1: noon_core::Vec2,
+        handle2: noon_core::Vec2,
+        anchor2: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurve {
+            object: source,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_points_smoothly(
         &mut self,
         object: &noon::Mobject,

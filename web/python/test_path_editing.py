@@ -36,6 +36,26 @@ class PathEditingTests(unittest.TestCase):
                     context.liveSetPointsAsCorners.assert_called_once_with(handle, [1., 2., 3., 4.])
                     context.liveClearPoints.assert_called_once_with(handle)
 
+    def test_cubic_curve_dispatch_is_one_authored_or_live_edit(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        for context in (None, Mock()):
+            with patch.object(editing, '_handle_for', return_value=handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(
+                    value.add_cubic_bezier_curve((0, 1), (2, 3), (4, 5), (6, 7)),
+                    value,
+                )
+            if context is None:
+                handle.addCubicBezierCurve.assert_called_once_with(
+                    0., 1., 2., 3., 4., 5., 6., 7.
+                )
+            else:
+                context.liveAddCubicBezierCurve.assert_called_once_with(
+                    handle, 0., 1., 2., 3., 4., 5., 6., 7.
+                )
+
     def test_callback_resource_edits_reject_before_crossing_the_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch('_manim_updaters.canonical_callback_phase_active', return_value=True), \
@@ -57,11 +77,13 @@ class PathEditingTests(unittest.TestCase):
             value.add_line_to((3, 4))
             value.add_quadratic_bezier_curve_to((5, 6), (7, 8))
             value.add_cubic_bezier_curve_to((1, 2), (3, 4), (5, 6))
+            value.add_cubic_bezier_curve((0, 1), (2, 3), (4, 5), (6, 7))
             value.close_path()
         handle.startNewPath.assert_called_once_with(1., 2.)
         handle.addLineTo.assert_called_once_with(3., 4.)
         handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 7., 8.)
         handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 3., 4., 5., 6.)
+        handle.addCubicBezierCurve.assert_called_once_with(0., 1., 2., 3., 4., 5., 6., 7.)
         handle.closePath.assert_called_once_with()
 
     def test_partial_and_direction_use_shared_operands_in_authored_and_live_modes(self):

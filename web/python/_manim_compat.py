@@ -152,6 +152,15 @@ class VMobject(Mobject):
         from _manim_path_editing import edit_points
         return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
 
+    def add_cubic_bezier_curve(self, anchor1, handle1, handle2, anchor2):
+        from _manim_path_editing import edit_points
+        return edit_points(
+            self,
+            "addCubicBezierCurve",
+            "liveAddCubicBezierCurve",
+            (anchor1, handle1, handle2, anchor2),
+        )
+
     def insert_n_curves(self, n):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)

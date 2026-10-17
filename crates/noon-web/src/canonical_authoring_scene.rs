@@ -8128,6 +8128,36 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAddCubicBezierCurve)]
+        pub fn live_add_cubic_bezier_curve(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            anchor1_x: f64,
+            anchor1_y: f64,
+            handle1_x: f64,
+            handle1_y: f64,
+            handle2_x: f64,
+            handle2_y: f64,
+            anchor2_x: f64,
+            anchor2_y: f64,
+        ) -> Result<(), JsValue> {
+            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_cubic_bezier_curve(
+                    source.semantic_mobject(),
+                    anchor1,
+                    handle1,
+                    handle2,
+                    anchor2,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetPointsSmoothly)]
         pub fn live_set_points_smoothly(
             &mut self,

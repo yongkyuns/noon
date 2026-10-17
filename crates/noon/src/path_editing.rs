@@ -289,6 +289,25 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_cubic_bezier_curve(
+        &mut self,
+        object: &Mobject,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
+            )
+        })
+    }
+
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(store, root, execution, object, PathEdit::Close)
@@ -400,6 +419,7 @@ pub(crate) enum PathEdit<'a> {
     Line(Vec2),
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
+    CubicCurve(Vec2, Vec2, Vec2, Vec2),
     Close,
     Reverse,
     Subdivide(usize),
@@ -418,6 +438,18 @@ impl PathEdit<'_> {
     ) -> Result<Option<VectorPath>, AuthoringError> {
         if matches!(self, Self::Clear) {
             return Ok(Some(VectorPath::new()));
+        }
+        if let Self::CubicCurve(anchor1, handle1, handle2, anchor2) = self {
+            let mut path = world_path(store, state)?;
+            if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
+                path = path.cubic_to(handle1, handle2, anchor2);
+            } else {
+                path = path.move_to(anchor1).cubic_to(handle1, handle2, anchor2);
+            }
+            if !path.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(path));
         }
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
@@ -508,6 +540,7 @@ impl PathEdit<'_> {
                 | Self::Start(_)
                 | Self::Reverse
                 | Self::Subdivide(_)
+                | Self::CubicCurve(_, _, _, _)
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -732,6 +765,16 @@ impl Mobject {
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Cubic(control1, control2, anchor))
+    }
+    /// Append a cubic curve from its start anchor and two controls.
+    pub fn add_cubic_bezier_curve(
+        &mut self,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2))
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)

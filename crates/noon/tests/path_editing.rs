@@ -171,6 +171,83 @@ fn clear_points_uses_shared_authored_and_live_transactions() {
 }
 
 #[test]
+fn cubic_curve_appends_connected_and_disconnected_segments_authored_and_live() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+            .unwrap();
+        scene.add(&object).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let root = scene.root();
+        let append = |object: &mut noon::Mobject,
+                      execution: &mut noon::ExecutionSession,
+                      anchor1,
+                      handle1,
+                      handle2,
+                      anchor2| {
+            if live_mode {
+                noon::integration::publish_borrowed_path_edit(
+                    &store,
+                    root,
+                    execution,
+                    noon::integration::BorrowedPathEdit::CubicCurve {
+                        object,
+                        anchor1,
+                        handle1,
+                        handle2,
+                        anchor2,
+                    },
+                )
+            } else {
+                object.add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+            }
+        };
+
+        append(
+            &mut object,
+            &mut execution,
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(1., 1.),
+            Vec2::new(2., 1.),
+        )
+        .unwrap();
+        append(
+            &mut object,
+            &mut execution,
+            Vec2::new(2., 1.),
+            Vec2::new(3., 1.),
+            Vec2::new(3., 2.),
+            Vec2::new(4., 2.),
+        )
+        .unwrap();
+        append(
+            &mut object,
+            &mut execution,
+            Vec2::new(6., 2.),
+            Vec2::new(7., 2.),
+            Vec2::new(7., 3.),
+            Vec2::new(8., 3.),
+        )
+        .unwrap();
+
+        let query = if live_mode {
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object.path_query().unwrap()
+        };
+        assert_eq!(query.curve_count(), 3);
+        assert_eq!(query.subpaths().len(), 2);
+        assert_eq!(query.curve_points(0).unwrap()[0], (0., 0.));
+        assert_eq!(query.curve_points(1).unwrap()[0], (2., 1.));
+        assert_eq!(query.curve_points(2).unwrap()[0], (6., 2.));
+        assert_eq!(query.end().unwrap(), (8., 3.));
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene
