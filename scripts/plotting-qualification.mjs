@@ -1,5 +1,60 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { qualifyPairedAuthoring, qualifyPythonPlayback } from "./paired-authoring-qualification.mjs";
+import { rasterFixtureSource } from "./manim-raster-support.mjs";
+
+const plotExampleImport = "from manim import *";
+const upstreamPlotExample = await readFile(
+  new URL("../parity/manim-v0.21/upstream-examples/plot_example.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  upstreamPlotExample.split(plotExampleImport).length - 1,
+  1,
+  "pinned PlotExample must contain exactly one Manim wildcard import",
+);
+assert.ok(
+  upstreamPlotExample.startsWith(`${plotExampleImport}\n`),
+  "pinned PlotExample must preserve the upstream import as its first line",
+);
+const adaptedPlotExample = upstreamPlotExample.replace(plotExampleImport, "from noon import *");
+assert.equal(
+  adaptedPlotExample.replace("from noon import *", plotExampleImport),
+  upstreamPlotExample,
+  "PlotExample execution may change only the import line",
+);
+const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
+
+async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
+  const page = await context.newPage();
+  try {
+    page.setDefaultTimeout(90_000);
+    await page.goto(`${baseUrl}/web/manim-raster-host.html`);
+    await page.waitForFunction(() => window.noonHostRaster);
+    const loaded = await page.evaluate(
+      source => window.noonHostRaster.load(source, 1),
+      plotExampleSource,
+    );
+    assert.equal(loaded.kind, "semantic_execution");
+    assert.equal(loaded.duration, 0);
+    assert.equal(loaded.objectCount, 57);
+    assert.equal(loaded.rendererBackend, expectedBackend);
+    const metrics = await page.evaluate(
+      () => window.noonHostRaster.renderThrough(0, [0]),
+    );
+    assert.equal(metrics.error, null);
+    assert.equal(metrics.presented, true);
+    assert.equal(metrics.time, 0);
+    assert.equal(metrics.objectCount, 57);
+    const frame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+    assert.equal(frame.time, 0);
+    assert.equal(frame.objects.length, 57);
+    assert.ok(frame.objects.every(object => object.present));
+    console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample raster-host frame`);
+  } finally {
+    await page.close();
+  }
+}
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_PLOTTING_ARTIFACTS ?? "plotting-artifacts",
@@ -24,6 +79,41 @@ await qualifyPairedAuthoring({
       assert.equal(lifecycle.objectCount, 14);
       assert.ok(Math.abs(lifecycle.duration - 0.8) < 1e-6);
       assert.ok(lifecycle.presentedFrames > 0);
+      const plotExample = await page.evaluate(
+        source => window.noonManimCompat.runLive(source),
+        plotExampleSource,
+      );
+      assert.equal(plotExample.duration, 0, "upstream PlotExample is static");
+      assert.equal(plotExample.frame.time, 0, "static PlotExample is observed at authored time zero");
+      assert.equal(plotExample.metrics.backend, expectedBackend);
+      assert.equal(plotExample.metrics.objectCount, 57,
+        "three copied Axes should retain 54 line/tick leaves and three curves");
+      assert.ok(plotExample.metrics.drawCalls > 0);
+      assert.ok(plotExample.metrics.presentedFrames > 0);
+      assert.equal(plotExample.frame.objects.length, 57);
+      assert.ok(plotExample.frame.objects.every(object => object.present),
+        "all exact-source PlotExample objects must be present in the retained frame");
+      const strokeCounts = new Map();
+      for (const object of plotExample.frame.objects) {
+        const { red, green, blue } = object.stroke;
+        const color = [red, green, blue].map(channel => Number(channel.toFixed(6))).join(",");
+        strokeCounts.set(color, (strokeCounts.get(color) ?? 0) + 1);
+      }
+      assert.equal(strokeCounts.get("1,1,1"), 54,
+        "copied Axes must remain ordinary white line/tick objects");
+      const curves = [...strokeCounts].filter(([color]) => color !== "1,1,1");
+      assert.equal(curves.length, 3, "the three upstream curve colors must remain distinct");
+      assert.deepEqual(curves.map(([, count]) => count).sort(), [1, 1, 1]);
+      const curveRows = plotExample.frame.objects.filter(object => {
+        const { red, green, blue } = object.stroke;
+        return [red, green, blue].some(channel => Math.abs(channel - 1) > 1e-6)
+          || Math.abs(red - green) > 1e-6 || Math.abs(green - blue) > 1e-6;
+      });
+      assert.equal(curveRows.length, 3);
+      assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
+        "each upstream log curve must retain two-dimensional sampled bounds");
+      console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
+      await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *
 
 class CoordinateNumericLabels(Scene):
@@ -209,7 +299,6 @@ class NumberLineLineObservations(Scene):
         assert abs(line.get_angle() - PI / 2) < 1e-6
         projected = line.get_projection((3.5, 1.0))
         assert abs(projected.x - 0.5) < 1e-6 and abs(projected.y - 1.0) < 1e-6
-
         axes = Axes((-2, 2, 1), (-2, 2, 1), x_length=4, y_length=4,
                     x_axis_config={"scaling": LogBase(base=10)}, tips=False)
         axes.shift(UP * 0.25)
@@ -224,7 +313,16 @@ class NumberLineLineObservations(Scene):
         assert abs(outside_start.x + 4.0) < 1e-6
         assert abs(outside_start.y - 0.25) < 1e-6
         self.add(line, axes, guide, outside)
-        await self.wait(0.05)
+        await self.play(line.animate.rotate(-PI / 6), run_time=0.025)
+        line.set_length(6)
+        assert abs(line.get_length() - 6.0) < 1e-6
+        line.set_angle(PI / 4)
+        assert abs(line.get_angle() - PI / 4) < 1e-6
+        assert abs(line.get_slope() - 1.0) < 1e-6
+        line.set_angle(0, about_point=ORIGIN)
+        assert abs(line.get_angle()) < 1e-6
+        assert abs(line.get_length() - 6.0) < 1e-6
+        await self.wait(0.025)
 `;
       const observations = await qualifyPythonPlayback(
         context, baseUrl, lineObservationsSource, [0, 0.05],
