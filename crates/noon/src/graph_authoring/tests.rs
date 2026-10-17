@@ -1210,6 +1210,31 @@ fn kamada_kawai_layout_uses_shortest_paths_custom_inputs_and_final_rescaling() {
 }
 
 #[test]
+fn directed_kamada_kawai_matches_networkx_default_lbfgsb_termination() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        directed: true,
+        scale: 2.0,
+        center: (-0.3, 0.25),
+        ..Default::default()
+    };
+    let positions = options.positions(4, &[(0, 1), (2, 1), (2, 3)]).unwrap();
+    // Pinned NetworkX 3.4.2 directed fixture. Its default SciPy L-BFGS-B
+    // projected-gradient tolerance (1e-5) stops in a different basin than
+    // an over-solved 1e-9 run on this asymmetric distance matrix.
+    let networkx_reference = [
+        (1.7, 0.712_138_04),
+        (-0.270_191_71, 1.817_670_3),
+        (-1.867_670_42, 0.220_191_6),
+        (-0.762_137_87, -1.749_999_94),
+    ];
+    for (actual, expected) in positions.iter().zip(networkx_reference) {
+        assert!((actual.0 - expected.0).abs() < 0.01);
+        assert!((actual.1 - expected.1).abs() < 0.01);
+    }
+}
+
+#[test]
 fn kamada_kawai_layout_rejects_malformed_custom_inputs() {
     assert!(GraphLayoutOptions {
         layout: GraphLayout::KamadaKawai,
