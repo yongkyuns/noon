@@ -30,6 +30,25 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertIn(expected_base, scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
                 progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
+                # The CUDA lesson's awaited move_step method calls the real Scene.play
+                # through play_for. Count the authored transfers instead of requiring
+                # two syntactically direct calls to Scene.play in this one source.
+                if entry["id"] == "showcase-cuda-transpose":
+                    progression = {"move_step"}
+                    scene = scenes[0]
+                    move_step = next((n for n in scene.body if isinstance(n, ast.AsyncFunctionDef)
+                                      and n.name == "move_step"), None)
+                    play_for = next((n for n in scene.body if isinstance(n, ast.AsyncFunctionDef)
+                                     and n.name == "play_for"), None)
+                    self.assertIsNotNone(move_step)
+                    self.assertIsNotNone(play_for)
+                    # Verify the helper chain is actually awaited and reaches Noon.
+                    self.assertTrue(any(isinstance(n, ast.Await) and isinstance(n.value, ast.Call)
+                                        and isinstance(n.value.func, ast.Attribute)
+                                        and n.value.func.attr == "play_for" for n in ast.walk(move_step)))
+                    self.assertTrue(any(isinstance(n, ast.Await) and isinstance(n.value, ast.Call)
+                                        and isinstance(n.value.func, ast.Attribute)
+                                        and n.value.func.attr == "play" for n in ast.walk(play_for)))
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]
