@@ -30,7 +30,8 @@ pub struct MeshVertex {
     /// Fill vertices use the total stroke length so they remain hidden until
     /// a reveal reaches its endpoint.
     pub path_distance: f32,
-    /// `path_distance / stroke_length` in the inclusive range `[0, 1]`.
+    /// Manim curve-count reveal progress, independent of `path_distance`.
+    /// Do not interpret this as an arc-length fraction for moving dash patterns.
     pub path_progress: f32,
 }
 
@@ -2451,6 +2452,53 @@ mod tests {
         let three_quarters = mesh.reveal_head_position(0.75).expect("reveal head");
         assert!((three_quarters.x - 100.0).abs() < 1e-5);
         assert!((three_quarters.y - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn closed_stroke_exposes_both_distance_sides_of_its_seam() {
+        // A 3-4-5 loop has total travelled distance 12 even though its first
+        // and last anchor occupy the same position. Moving stroke patterns
+        // must preserve the distinct 0 and 12 parameter values at that seam.
+        // Coalescing them would interpolate a phase across the entire loop.
+        let path = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(3.0, 0.0))
+            .line_to(Vec2::new(3.0, 4.0))
+            .close();
+        let mesh =
+            tessellate_styled_with_fill(&path, 0.1, StrokeJoin::Miter, StrokeCap::Butt, false)
+                .unwrap();
+        let perimeter = 12.0_f32;
+        assert!((mesh.stroke_length - perimeter).abs() < 1e-4);
+        let stroke: Vec<_> = mesh
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.surface == PathSurface::Stroke)
+            .collect();
+        assert!(!stroke.is_empty());
+        assert!(stroke.iter().all(|vertex| {
+            vertex.path_distance.is_finite()
+                && vertex.path_distance >= -1e-4
+                && vertex.path_distance <= perimeter + 1e-4
+                && (0.0..=1.0).contains(&vertex.path_progress)
+        }));
+        let near_seam: Vec<_> = stroke
+            .into_iter()
+            .filter(|vertex| vertex.position.x.abs() < 0.2 && vertex.position.y.abs() < 0.2)
+            .collect();
+        assert!(!near_seam.is_empty(), "closure seam must be rendered");
+        assert!(
+            near_seam.iter().any(|vertex| vertex.path_distance.abs() < 1e-4),
+            "missing initial path distance at the loop seam"
+        );
+        assert!(
+            near_seam
+                .iter()
+                .any(|vertex| (vertex.path_distance - perimeter).abs() < 1e-4),
+            "missing final path distance at the loop seam"
+        );
+        assert!(near_seam.iter().any(|vertex| vertex.path_progress < 1e-4));
+        assert!(near_seam.iter().any(|vertex| vertex.path_progress > 1.0 - 1e-4));
     }
 
     #[test]
