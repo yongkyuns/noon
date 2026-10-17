@@ -314,7 +314,6 @@ pub(crate) fn edit_fade_to<S: PaintStyleEdit>(
 ) -> Result<(), AuthoringError> {
     validate_fade_to_inputs(target, amount)?;
     // VMobject.set_color changes fill/stroke color without changing their opacity.
-    // Family aliases therefore install the same color without compounding interpolation.
     let source = style.manim_color()?;
     let channel = |from: f32, to: f32| f64::from(from) + (f64::from(to) - f64::from(from)) * amount;
     let color = opaque_color(
@@ -343,6 +342,46 @@ pub(crate) fn validate_fade_to_inputs(target: Color, amount: f64) -> Result<(), 
         f64::from(target.blue),
     )?;
     Ok(())
+}
+
+pub(crate) fn edit_fade_to_occurrences<S: PaintStyleEdit>(
+    style: &mut S,
+    target: Color,
+    amount: f64,
+    mut occurrences: u64,
+) -> Result<(), AuthoringError> {
+    if occurrences == 1 {
+        return edit_fade_to(style, target, amount);
+    }
+    validate_fade_to_inputs(target, amount)?;
+    if occurrences == 0 {
+        return Ok(());
+    }
+    let source = style.manim_color()?;
+    // Compose the repeated affine blend in at most 64 steps. Keep the target
+    // weight separately: 1 - (1 - amount)^n loses tiny nonzero blends.
+    let (mut source_weight, mut target_weight) = (1.0, 0.0);
+    if source != opaque_paint_color(target) {
+        let (mut power, mut bias) = (1.0 - amount, amount);
+        while occurrences > 0 {
+            if occurrences & 1 != 0 {
+                source_weight *= power;
+                target_weight = target_weight * power + bias;
+            }
+            bias *= 1.0 + power;
+            power *= power;
+            occurrences >>= 1;
+        }
+    }
+    let channel =
+        |from: f32, to: f32| f64::from(from) * source_weight + f64::from(to) * target_weight;
+    edit_color(
+        style,
+        channel(source.red, target.red),
+        channel(source.green, target.green),
+        channel(source.blue, target.blue),
+        1.0,
+    )
 }
 
 pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
@@ -616,13 +655,14 @@ impl Mobject {
                     .ok_or(AuthoringError::MissingGeometryResource(handle))?
                 {
                     GeometryResource::Mesh(_) => Ok(true),
-                    GeometryResource::VectorPath(_) => {
-                        drop(store);
-                        Ok(self.local_path_query()?.point_count() > 0)
-                    }
+                    GeometryResource::VectorPath(path) => Ok(matches!(
+                        path.commands().last(),
+                        Some(noon_core::PathCommand::MoveTo { .. })
+                    ) || path.has_drawable_segments()),
                 }
             }
-            SemanticObjectContent::Geometry(_) => Ok(self.local_path_query()?.point_count() > 0),
+            // Analytic primitives retain control points even when degenerate.
+            SemanticObjectContent::Geometry(_) => Ok(true),
         }
     }
 }
@@ -630,6 +670,47 @@ impl Mobject {
 #[cfg(test)]
 mod opacity_tests {
     use super::*;
+
+    #[test]
+    fn repeated_fade_to_preserves_small_blends_and_bounds_shared_alias_work() {
+        let mut style = Style {
+            fill: Some(Color::rgb(1.0, 0.0, 0.0)),
+            ..Default::default()
+        };
+        edit_fade_to_occurrences(&mut style, Color::rgb(0.0, 0.0, 1.0), 1e-20, 2).unwrap();
+        let blue = style.fill.unwrap().blue;
+        assert!(blue > 1.9e-20 && blue < 2.1e-20);
+        edit_fade_to_occurrences(&mut style, Color::rgb(0.0, 0.0, 1.0), 0.5, u64::MAX).unwrap();
+        assert_eq!(style.fill, Some(Color::rgb(0.0, 0.0, 1.0)));
+        edit_fade_to_occurrences(&mut style, Color::rgb(0.0, 0.0, 1.0), 3.0, u64::MAX).unwrap();
+        assert_eq!(style.fill, Some(Color::rgb(0.0, 0.0, 1.0)));
+    }
+
+    #[test]
+    fn fade_to_point_filter_preserves_empty_paths_and_unfinished_anchors() {
+        let mut scene = crate::Scene::new();
+        for path in [
+            noon_core::VectorPath::new(),
+            noon_core::VectorPath::new().close(),
+            noon_core::VectorPath::new().move_to(noon_core::Vec2::ZERO),
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .close(),
+            noon_core::VectorPath::new().line_to(noon_core::Vec2::ZERO),
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::ZERO),
+        ] {
+            let object = scene
+                .geometry(crate::ManimGeometryOptions::path(path).unwrap())
+                .unwrap();
+            assert_eq!(
+                object.has_fade_to_points().unwrap(),
+                object.local_path_query().unwrap().point_count() > 0
+            );
+        }
+        assert!(scene.square(0.5).unwrap().has_fade_to_points().unwrap());
+    }
 
     #[test]
     fn authored_paint_edits_agree_with_effective_edits_for_intrinsic_alpha() {

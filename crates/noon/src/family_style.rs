@@ -2,7 +2,7 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
-        edit_color, edit_fade, edit_fade_occurrences, edit_fade_to, edit_fill_color,
+        edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
         edit_stroke_width, PaintStyleEdit,
     },
@@ -344,21 +344,15 @@ impl MobjectFamily {
         self.validate()?;
         let store = self.integration_store().borrow();
         let leaves = store.ordered_leaf_multiplicities(self.node_id())?;
-        let mut pointful = Vec::with_capacity(leaves.len());
-        for (leaf, _) in leaves {
-            let mobject = Mobject::from_node(self.integration_store().clone(), leaf)?;
-            if mobject.has_fade_to_points()? {
-                pointful.push(leaf);
-            }
-        }
         let mut transaction = SemanticMutationTransaction::new();
-        if pointful.is_empty() {
-            return Ok(transaction);
-        }
-        for leaf in pointful {
+        for (leaf, occurrences) in leaves {
+            let mobject = Mobject::from_node(self.integration_store().clone(), leaf)?;
+            if !mobject.has_fade_to_points()? {
+                continue;
+            }
             let previous = &store.semantic_object_state_checked(leaf)?.style;
             let mut next = previous.clone();
-            edit_fade_to(&mut next, target, amount)?;
+            edit_fade_to_occurrences(&mut next, target, amount, occurrences)?;
             if next != *previous {
                 transaction.replace_style(leaf, next);
             }
@@ -480,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_fade_to_interpolates_color_once_and_preserves_paint_opacity() {
+    fn recursive_fade_to_observes_alias_multiplicity_and_preserves_paint_opacity() {
         let mut scene = Scene::new();
         let mut a = scene.square(0.6).unwrap();
         let mut direct = scene.square(0.4).unwrap();
@@ -514,8 +508,8 @@ mod tests {
         let Some(SemanticPaint::Solid(fill)) = style.fill.as_ref() else {
             panic!("fade_to should preserve solid fill paint");
         };
-        assert!((fill.red - 0.5).abs() < 1e-6);
-        assert!((fill.blue - 0.5).abs() < 1e-6);
+        assert!((fill.red - 0.25).abs() < 1e-6);
+        assert!((fill.blue - 0.75).abs() < 1e-6);
         assert_eq!(fill.alpha, 1.0);
         assert!((style.fill_opacity - 0.5).abs() < 1e-6);
         assert!((style.stroke_opacity - 1.0).abs() < 1e-6);
@@ -580,8 +574,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(changes.len(), 1);
-        assert!((changes[0].1.fill.unwrap().red - 0.5).abs() < 1e-6);
-        assert!((changes[0].1.fill.unwrap().blue - 0.5).abs() < 1e-6);
+        assert!((changes[0].1.fill.unwrap().red - 0.25).abs() < 1e-6);
+        assert!((changes[0].1.fill.unwrap().blue - 0.75).abs() < 1e-6);
         assert_eq!(changes[0].1.fill.unwrap().alpha, 0.5);
         assert_eq!(changes[0].1.stroke.unwrap().alpha, 0.25);
         assert_eq!(changes[0].1.opacity, 0.3);

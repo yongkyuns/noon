@@ -120,45 +120,37 @@ impl MobjectFamily {
         operation: FamilyPaint,
         mut read: impl FnMut(SemanticNodeId) -> Result<Style, ExecutionSessionCallbackError>,
     ) -> Result<Vec<(SemanticNodeId, Style)>, FamilyCallbackPaintError> {
-        let mut leaves = self.callback_leaf_nodes(revision)?;
-        if matches!(operation, FamilyPaint::FadeTo { .. }) {
-            let store = self.integration_store().clone();
-            let mut pointful = Vec::with_capacity(leaves.len());
-            for node in leaves {
-                let object = Mobject::from_node(store.clone(), node)
-                    .map_err(FamilyCallbackPaintError::Authoring)?;
-                if object
-                    .has_fade_to_points()
-                    .map_err(FamilyCallbackPaintError::Authoring)?
-                {
-                    pointful.push(node);
-                }
-            }
-            leaves = pointful;
-            if leaves.is_empty() {
-                return Ok(Vec::new());
-            }
-        }
-        let multiplicities = if matches!(operation, FamilyPaint::Fade(_)) {
-            self.integration_store()
-                .borrow()
-                .ordered_leaf_multiplicities(self.node_id())
-                .map_err(FamilyCallbackPaintError::Store)?
-                .into_iter()
-                .collect::<std::collections::HashMap<_, _>>()
-        } else {
-            std::collections::HashMap::new()
-        };
-        if let FamilyPaint::FadeTo { color, amount } = operation {
-            crate::semantic_mobject::validate_fade_to_inputs(color, amount)
-                .map_err(FamilyCallbackPaintError::InvalidPaint)?;
-        } else {
+        let leaves = self.callback_leaf_nodes(revision)?;
+        let multiplicities =
+            if matches!(operation, FamilyPaint::Fade(_) | FamilyPaint::FadeTo { .. }) {
+                self.integration_store()
+                    .borrow()
+                    .ordered_leaf_multiplicities(self.node_id())
+                    .map_err(FamilyCallbackPaintError::Store)?
+                    .into_iter()
+                    .collect::<std::collections::HashMap<_, _>>()
+            } else {
+                std::collections::HashMap::new()
+            };
+        if !matches!(operation, FamilyPaint::FadeTo { .. }) {
             operation
                 .apply(&mut Style::default())
                 .map_err(FamilyCallbackPaintError::InvalidPaint)?;
         }
         let mut changes = Vec::with_capacity(leaves.len());
         for node in leaves {
+            if let FamilyPaint::FadeTo { color, amount } = operation {
+                let object = Mobject::from_node(self.integration_store().clone(), node)
+                    .map_err(FamilyCallbackPaintError::Authoring)?;
+                if !object
+                    .has_fade_to_points()
+                    .map_err(FamilyCallbackPaintError::Authoring)?
+                {
+                    continue;
+                }
+                crate::semantic_mobject::validate_fade_to_inputs(color, amount)
+                    .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+            }
             let previous = read(node).map_err(FamilyCallbackPaintError::Callback)?;
             let mut next = previous;
             match operation {
@@ -171,8 +163,13 @@ impl MobjectFamily {
                     .map_err(FamilyCallbackPaintError::InvalidPaint)?;
                 }
                 FamilyPaint::FadeTo { color, amount } => {
-                    crate::semantic_mobject::edit_fade_to(&mut next, color, amount)
-                        .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+                    crate::semantic_mobject::edit_fade_to_occurrences(
+                        &mut next,
+                        color,
+                        amount,
+                        multiplicities[&node],
+                    )
+                    .map_err(FamilyCallbackPaintError::InvalidPaint)?;
                 }
                 _ => operation
                     .apply(&mut next)
