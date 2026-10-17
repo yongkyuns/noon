@@ -429,6 +429,31 @@ class Mobject:
     def get_center(self) -> Vec2:
         return _callback_operations()._canonical_get_center(self)
 
+    def get_start(self) -> Vec2:
+        """Return the first point of this object's path."""
+        from _manim_path_queries import endpoint
+        return endpoint(self, False)
+
+    def get_end(self) -> Vec2:
+        """Return the last point of this object's path."""
+        from _manim_path_queries import endpoint
+        return endpoint(self, True)
+
+    def get_start_and_end(self) -> tuple[Vec2, Vec2]:
+        """Return the starting and ending point of this object's path."""
+        return self.get_start(), self.get_end()
+
+    def get_num_points(self) -> int:
+        """Return the number of points in this object's path."""
+        from _manim_path_queries import point_count
+        return point_count(self)
+
+    def has_points(self) -> bool:
+        return self.get_num_points() > 0
+
+    def has_no_points(self) -> bool:
+        return not self.has_points()
+
     @property
     def width(self) -> float:
         return _semantic_operations()._width(self)

@@ -27,6 +27,57 @@ class PathQueryTests(unittest.TestCase):
             query.arcLength.assert_called_with(20)
             self.assertEqual(query.free.call_count, 4)
 
+    def test_start_and_end_are_base_methods_and_keep_dynamic_getter_dispatch(self):
+        import noon
+
+        self.assertIn("get_start", noon.Mobject.__dict__)
+        self.assertIn("get_end", noon.Mobject.__dict__)
+        self.assertIn("get_start_and_end", noon.Mobject.__dict__)
+        self.assertIn("get_num_points", noon.Mobject.__dict__)
+        self.assertIn("has_points", noon.Mobject.__dict__)
+        self.assertIn("has_no_points", noon.Mobject.__dict__)
+        self.assertIs(compat.VMobject.get_num_points, noon.Mobject.get_num_points)
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.start.return_value = [1.0, 2.0]
+        query.end.return_value = [3.0, 4.0]
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(
+                value.get_start_and_end(),
+                (noon.Vec2(1.0, 2.0), noon.Vec2(3.0, 4.0)),
+            )
+            self.assertEqual(observe.call_count, 2)
+            self.assertEqual(query.start.call_count, 1)
+            self.assertEqual(query.end.call_count, 1)
+            self.assertEqual(query.free.call_count, 2)
+
+        line = identity_only_wrapper(compat.Line)
+        line.get_start = Mock(return_value=noon.Vec2(-1.0, 0.0))
+        line.get_end = Mock(return_value=noon.Vec2(2.0, 5.0))
+        self.assertEqual(
+            line.get_start_and_end(),
+            (noon.Vec2(-1.0, 0.0), noon.Vec2(2.0, 5.0)),
+        )
+        line.get_start.assert_called_once_with()
+        line.get_end.assert_called_once_with()
+
+    def test_base_point_count_queries_share_the_path_snapshot_contract(self):
+        import noon
+
+        value = identity_only_wrapper(noon.Mobject)
+        query = Mock()
+        query.pointCount = 4
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertEqual(value.get_num_points(), 4)
+            self.assertTrue(value.has_points())
+            self.assertFalse(value.has_no_points())
+            query.pointCount = 0
+            self.assertFalse(value.has_points())
+            self.assertTrue(value.has_no_points())
+        self.assertEqual(observe.call_count, 5)
+        self.assertEqual(query.free.call_count, 5)
+
     def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(queries, '_typed_manim_observation') as observe:

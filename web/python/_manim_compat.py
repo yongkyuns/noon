@@ -159,10 +159,6 @@ class VMobject(Mobject):
         from _manim_path_queries import curve_count
         return curve_count(self)
 
-    def get_num_points(self):
-        from _manim_path_queries import point_count
-        return point_count(self)
-
     def get_nth_curve_points(self, n):
         from _manim_path_queries import curve_points
         return curve_points(self, n)
@@ -302,14 +298,6 @@ class VMobject(Mobject):
     def point_from_proportion(self, alpha: float) -> _base.Vec2:
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
-
-    def get_start(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, False)
-
-    def get_end(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, True)
 
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
