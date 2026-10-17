@@ -444,6 +444,31 @@ def _canonical_edit_membership(
             raise NotImplementedError("spatial membership requires an ordinary continuation boundary")
         _stage_callback_membership(scene, callback, kind, values, key=key)
         return
+    if kind == "remove" and len(values) == 1:
+        target = values[0]
+        if (
+            isinstance(target, _base.Mobject)
+            and target._scene is scene
+            and getattr(target, "_semantic_handle", None) is not None
+        ):
+            live_context = _semantic_handles._live_mutation_context(target)
+            if live_context is not None:
+                # Keep Rust's active player's reachability in step with Scene
+                # membership. A later Create of this same identity must observe
+                # the removal through the player that owns the continuation.
+                handle = target._semantic_handle
+                if bool(engine_call(
+                    live_context.containsMobject,
+                    handle,
+                    operation="Scene.membership",
+                )):
+                    engine_call(
+                        live_context.liveRemove,
+                        handle,
+                        operation="Scene.remove",
+                    )
+                _sync_membership_wrapper_attachments(scene, kind, values)
+                return
     if key is not None and (
         kind != "add"
         or len(values) != 1

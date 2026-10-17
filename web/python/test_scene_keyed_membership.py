@@ -44,6 +44,9 @@ class Context:
     def __init__(self):
         self.edits = []
         self.reject = False
+        self.live_ownership = "inactive"
+        self.live_members = set()
+        self.live_removals = []
 
     def beginMembershipBatch(self, kind):
         return Batch(kind)
@@ -52,6 +55,16 @@ class Context:
         if self.reject:
             raise RuntimeError("injected Rust publication rejection")
         self.edits.append((batch.kind, tuple(batch.bindings), tuple(batch.members)))
+
+    def liveExecutionOwnership(self):
+        return self.live_ownership
+
+    def containsMobject(self, handle):
+        return handle.semanticSlot in self.live_members
+
+    def liveRemove(self, handle):
+        self.live_removals.append(handle.semanticSlot)
+        self.live_members.discard(handle.semanticSlot)
 
 
 class KeyedSceneMembershipTests(unittest.TestCase):
@@ -84,6 +97,15 @@ class KeyedSceneMembershipTests(unittest.TestCase):
             isinstance(value, compat.Group)
             and getattr(value, "_semantic_family_handle", None) is not None
         )
+        semantic_handles._live_mutation_context = lambda value: (
+            getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None)
+            if getattr(
+                getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None),
+                "live_ownership",
+                "inactive",
+            ) in {"active", "returned", "transferred"}
+            else None
+        )
         self.compile_definitions(
             "_manim_compat.py", {"_is_shared_family", "_leaf_mobjects"}, compat.__dict__
         )
@@ -102,6 +124,15 @@ class KeyedSceneMembershipTests(unittest.TestCase):
                 _is_shared_family=lambda value: (
                     isinstance(value, compat.Group)
                     and getattr(value, "_semantic_family_handle", None) is not None
+                ),
+                _live_mutation_context=lambda value: (
+                    getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None)
+                    if getattr(
+                        getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None),
+                        "live_ownership",
+                        "inactive",
+                    ) in {"active", "returned", "transferred"}
+                    else None
                 ),
             ),
             "_ir": ir,
@@ -169,6 +200,21 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertEqual(members, ((None, 100), (str(target.id), 11)))
         self.assertIs(child._scene, self.scene)
         self.assertIs(target._scene, self.scene)
+
+    def test_single_leaf_remove_during_active_continuation_updates_live_reachability(self):
+        target = self.mobject(21)
+        self.scene.add(target)
+        self.context.live_members.add(21)
+        self.context.live_ownership = "active"
+        edit_count = len(self.context.edits)
+
+        self.scene.remove(target)
+
+        self.assertEqual(self.context.live_removals, [21])
+        self.assertNotIn(21, self.context.live_members)
+        self.assertEqual(len(self.context.edits), edit_count)
+        self.assertIsNone(target._scene)
+        self.assertIs(target._canonical_live_target_context, self.context)
 
     def test_group_derived_surface_routes_family_and_single_mesh_membership(self):
         SurfaceWrapper = type("SurfaceWrapper", (Group, self.Mobject), {})
