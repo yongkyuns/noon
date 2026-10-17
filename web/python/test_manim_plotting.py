@@ -10,6 +10,7 @@ except ImportError:
     np = None
 
 import _manim_plotting as plotting
+import _manim_number_labels as number_labels
 import noon as public_api
 from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
 
@@ -65,6 +66,17 @@ class PlottingAdapterTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(TypeError, "num_decimal_places"):
                     constructor()
+
+    def test_axes_add_coordinates_forwards_positionals_and_rejects_obsolete_aliases(self):
+        axes = object.__new__(plotting.Axes)
+        with patch.object(number_labels, "add_coordinates", return_value=axes) as add:
+            self.assertIs(axes.add_coordinates((1, 2)), axes)
+        self.assertEqual(add.call_args.args, (axes, (1, 2)))
+        for keyword in ("x_values", "y_values"):
+            with self.subTest(keyword=keyword), patch.object(number_labels, "add_coordinates") as add:
+                with self.assertRaisesRegex(TypeError, "positional per-axis"):
+                    axes.add_coordinates(**{keyword: (2,)})
+                add.assert_not_called()
 
     def test_number_line_default_and_two_value_range_delegate_without_python_defaults(self):
         for values, expected in ((None, []), ([-2, 2], [-2, 2]), ([-2, 2, .5], [-2, 2, .5])):
@@ -142,13 +154,52 @@ class PlottingAdapterTests(unittest.TestCase):
         factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 2.0)
         self.assertIs(line.scaling, scaling)
 
-    def test_number_line_rejects_unqualified_scale_labels_before_host_admission(self):
+    def test_number_line_log_custom_labels_use_retained_integers_at_generated_ticks(self):
+        from _manim_numbers import Integer
+
+        labels = object()
+
+        def make_labels(line, values, **options):
+            line.numbers = labels
+            return labels
+
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line"), \
+             patch.object(number_labels, "number_mobjects", side_effect=make_labels) as add:
+            line = plotting.NumberLine(
+                (-2, 2, 1), scaling=plotting.LogBase(base=10),
+                include_numbers=True, numbers_to_exclude=[1],
+                decimal_number_config={"num_decimal_places": 2},
+            )
+
+        factory.numberLine.return_value.setNumberLineScale.assert_called_once_with("log", 10.0)
+        self.assertIs(line.labels, labels)
+        self.assertIs(line.numbers, labels)
+        self.assertEqual(add.call_args.args[:2], (line, None))
+        self.assertEqual(add.call_args.kwargs["excluding"], ())
+        self.assertEqual(add.call_args.kwargs["log_base"], 10.0)
+        self.assertIs(add.call_args.kwargs["number_class"], Integer)
+        self.assertEqual(add.call_args.kwargs["config"]["decimal_places"], 2)
+
+    def test_number_line_rejects_unsupported_scaling_before_host_admission(self):
         with patch.object(plotting, "_coordinate_constructor_context") as context, \
              patch.object(plotting, "_coordinate_options") as factory:
-            with self.assertRaisesRegex(NotImplementedError, "custom labels"):
-                plotting.NumberLine((-2, 2, 1), scaling=plotting.LogBase(), include_numbers=True)
             with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
                 plotting.NumberLine((-2, 2, 1), scaling=object())
+            context.assert_not_called()
+            factory.numberLine.assert_not_called()
+
+    def test_number_line_log_labels_reject_an_explicit_unit_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context, \
+             patch.object(plotting, "_coordinate_options") as factory:
+            with self.assertRaisesRegex(TypeError, "supply the exponent unit"):
+                plotting.NumberLine(
+                    (-2, 2, 1), scaling=plotting.LogBase(), include_numbers=True,
+                    decimal_number_config={"unit": "m"},
+                )
             context.assert_not_called()
             factory.numberLine.assert_not_called()
 
@@ -206,7 +257,7 @@ class PlottingAdapterTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 plotting.NumberLine(label_constructor=object)
             with self.assertRaises(NotImplementedError):
-                plotting.NumberLine(decimal_number_config={"group_with_commas": True})
+                plotting.NumberLine(decimal_number_config={"mob_class": object})
             with self.assertRaises(TypeError):
                 plotting.NumberLine(decimal_number_config=1)
             context.assert_not_called()
@@ -241,6 +292,51 @@ class PlottingAdapterTests(unittest.TestCase):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": True})
         with self.assertRaises(ValueError):
             plotting.NumberLine(decimal_number_config={"num_decimal_places": 13})
+
+    def test_number_line_decimal_format_options_are_retained_and_used_for_labels(self):
+        format_config = {
+            "num_decimal_places": 1,
+            "include_sign": True,
+            "group_with_commas": False,
+            "show_ellipsis": True,
+            "unit": r"\text{m}",
+        }
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options"), \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=object()), \
+             patch.object(plotting, "_attach_number_line"), \
+             patch("_manim_number_labels.number_mobjects") as build:
+            line = plotting.NumberLine(
+                [-2, 2, 0.5], include_numbers=True,
+                decimal_number_config=format_config,
+            )
+            self.assertEqual(line.decimal_number_config, format_config)
+            self.assertEqual(build.call_args.kwargs["config"]["decimal_places"], 1)
+            self.assertTrue(build.call_args.kwargs["config"]["include_sign"])
+            self.assertFalse(build.call_args.kwargs["config"]["group_with_commas"])
+            self.assertTrue(build.call_args.kwargs["config"]["show_ellipsis"])
+            self.assertEqual(build.call_args.kwargs["config"]["unit"], r"\text{m}")
+
+    def test_axes_label_decimal_precision_preserves_authored_step_type(self):
+        for step, expected in ((1, 0), (1.0, 1)):
+            with self.subTest(step=step):
+                axis = SimpleNamespace(add_numbers=Mock())
+                config = {
+                    "decimal_places": None,
+                    "include_numbers": True,
+                    "numbers_to_include": (1,),
+                    "numbers_to_exclude": (),
+                    "font_size": 36,
+                    "label_direction": plotting._base.DOWN,
+                    "line_to_number_buff": 0.1,
+                }
+                plotting._configure_axes_numeric_labels(axis, config, (-2, 2, step))
+                self.assertEqual(axis.number_label_decimal_places, expected)
+                self.assertEqual(axis.decimal_number_config,
+                                 {"num_decimal_places": expected})
+                self.assertEqual(axis.add_numbers.call_args.kwargs["decimal_places"],
+                                 expected)
 
     @unittest.skipIf(np is None, "NumPy protocol runs in the pinned reference lane")
     def test_number_line_get_tick_range_delegates_tip_and_origin_rules_to_rust(self):
@@ -530,12 +626,53 @@ class PlottingAdapterTests(unittest.TestCase):
                 plotting.Axes(axis_config={"unrecognized_axis_option": True})
             with self.assertRaisesRegex(NotImplementedError, "supports LinearBase and LogBase"):
                 plotting.Axes(x_axis_config={"scaling": object()})
-            with self.assertRaisesRegex(NotImplementedError, "TeX label profile"):
+            with self.assertRaisesRegex(TypeError, "supply the exponent unit"):
                 plotting.Axes(
-                    x_axis_config={"scaling": plotting.LogBase(), "include_numbers": True}
+                    x_axis_config={
+                        "scaling": plotting.LogBase(), "include_numbers": True,
+                        "decimal_number_config": {"unit": "m"},
+                    }
                 )
             context.assert_not_called()
             factory.axes.assert_not_called()
+
+    def test_axes_log_custom_labels_use_retained_integers_and_shared_formatter(self):
+        from _manim_numbers import Integer
+
+        labels = object()
+        x_axis = object.__new__(plotting.NumberLine)
+        y_axis = object.__new__(plotting.NumberLine)
+        handle = SimpleNamespace(coordinateAxis=Mock(side_effect=["x-axis", "y-axis"]))
+
+        def build_labels(line, values, **options):
+            line.numbers = labels
+            return labels
+
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_array", side_effect=list), \
+             patch.object(plotting, "_create_coordinates", return_value=handle), \
+             patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
+             patch.object(plotting._compat, "VGroup", return_value=object()), \
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(number_labels, "number_mobjects", side_effect=build_labels) as build:
+            axes = plotting.Axes(
+                x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+                x_axis_config={
+                    "scaling": plotting.LogBase(base=2), "include_numbers": True,
+                    "decimal_number_config": {"num_decimal_places": 1},
+                },
+                tips=False,
+            )
+
+        factory.axes.return_value.setAxesScale.assert_any_call(0, "log", 2.0)
+        self.assertIs(x_axis.numbers, labels)
+        self.assertIs(x_axis.labels, labels)
+        self.assertEqual(build.call_args.args[:2], (x_axis, None))
+        self.assertEqual(build.call_args.kwargs["log_base"], 2.0)
+        self.assertIs(build.call_args.kwargs["number_class"], Integer)
+        self.assertEqual(build.call_args.kwargs["config"]["decimal_places"], 1)
+        self.assertEqual(build.call_args.kwargs["excluding"], ())
 
     def test_axes_attach_configured_numeric_labels_with_axis_overrides(self):
         x_axis = SimpleNamespace(add_numbers=Mock())
@@ -556,7 +693,11 @@ class PlottingAdapterTests(unittest.TestCase):
                                "label_direction": plotting._base.UP},
                 y_axis_config={"numbers_to_include": [0.5], "include_numbers": False,
                                "font_size": 24,
-                               "decimal_number_config": {"num_decimal_places": 2}},
+                               "decimal_number_config": {
+                                   "num_decimal_places": 2, "include_sign": True,
+                                   "group_with_commas": False, "show_ellipsis": True,
+                                   "unit": r"\text{m}",
+                               }},
             )
 
         retain_axes.assert_called_once_with(x_axis, y_axis)
@@ -571,6 +712,11 @@ class PlottingAdapterTests(unittest.TestCase):
             direction=plotting._base._as_vec2(plotting._base.LEFT), buff=0.25,
             decimal_places=2,
         )
+        self.assertEqual(y_axis.decimal_number_config, {
+            "num_decimal_places": 2, "include_sign": True,
+            "group_with_commas": False, "show_ellipsis": True,
+            "unit": r"\text{m}",
+        })
         self.assertTrue(x_axis.include_numbers)
         self.assertFalse(y_axis.include_numbers)
         self.assertEqual(x_axis.number_label_decimal_places, 1)
@@ -622,31 +768,18 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertIs(axes.get_axes(), group)
             self.assertIs(axes.get_axes(), group)
 
-    def test_axes_label_uses_existing_live_critical_point_path(self):
+    def test_axis_label_forwards_one_shared_placement_with_default_frame_buffer(self):
         edge = plotting._base.Vec2(1, -1)
         direction = plotting._base.Vec2(1, 0.5)
-        label = Mock()
-        layout = SimpleNamespace(
-            criticalX=Mock(return_value=4.0),
-            criticalY=Mock(return_value=-3.0),
-        )
-        axis = object.__new__(plotting.NumberLine)
-        axis._semantic_family_handle = SimpleNamespace(layout=Mock(
-            side_effect=AssertionError("cold bounds bypass the current-frame owner")))
+        label, axis = object(), object()
         axes = object.__new__(plotting.Axes)
         axes.axes = (axis, object())
         with patch.object(plotting, "_axes_label_object", return_value=label), \
-             patch.object(plotting._shared, "_group_layout_observation", return_value=layout) as query:
+             patch.object(plotting._shared, "_next_to_edge_in_frame") as place:
             result = axes.get_x_axis_label("x", edge=edge, direction=direction, buff=0.25)
-
         self.assertIs(result, label)
-        query.assert_called_once_with(axis)
-        axis._semantic_family_handle.layout.assert_not_called()
-        layout.criticalX.assert_called_once_with(1.0, -1.0)
-        layout.criticalY.assert_called_once_with(1.0, -1.0)
-        label.next_to.assert_called_once_with(
-            plotting._base.Vec2(4.0, -3.0), direction=direction, buff=0.25,
-        )
+        place.assert_called_once_with(label, axis, edge, direction, 0.25,
+                                      plotting._base.MED_SMALL_BUFF)
 
     def test_axes_label_invalid_placement_rejects_before_constructing_text(self):
         axes = object.__new__(plotting.Axes)

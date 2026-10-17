@@ -264,6 +264,28 @@ async function initializePyodide() {
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
+  self.noonNumberLineDecimalNumberLabelFamily = (
+    line, values, automatic, options, attach,
+  ) => {
+    if (!latexCompiler) {
+      options.free();
+      throw new Error("Call await prepare_latex() before constructing NumberLine numbers");
+    }
+    return line.numberLineDecimalNumberLabelFamily(
+      values, automatic, options, attach, latexCompiler,
+    );
+  };
+  self.noonAxesDecimalCoordinateLabelFamilies = (
+    axes, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error("Call await prepare_latex() before constructing Axes coordinates");
+    }
+    return axes.axesDecimalCoordinateLabelFamilies(
+      xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);

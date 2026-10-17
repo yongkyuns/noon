@@ -1357,6 +1357,229 @@ mod tests {
     }
 
     #[test]
+    fn number_line_decimal_number_labels_keep_value_metadata_and_apply_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([-2.0, 2.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 1,
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers(
+                &mut backend,
+                Some(&[-1.0, 0.0, 1.0]),
+                &NumberLabelOptions {
+                    excluded_numbers: vec![0.0],
+                    ..options
+                },
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["-1.0", "1.0"],
+        );
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.value().unwrap())
+                .collect::<Vec<_>>(),
+            [-1.0, 1.0],
+        );
+        assert!(store
+            .borrow()
+            .semantic_family_members_checked(line.family().node_id())
+            .unwrap()
+            .contains(&labels.node_id()));
+    }
+
+    #[test]
+    fn axes_decimal_coordinate_labels_apply_independent_exact_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimAxes, ManimAxesOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let axes = ManimAxes::create(
+            Rc::clone(scene.integration_store()),
+            &ManimAxesOptions::default(),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let [x, y] = axes
+            .add_decimal_coordinates(
+                &mut backend,
+                Some(&[0.0, 1.0, 2.0]),
+                Some(&[-1.0, 0.0, 1.0]),
+                &NumberLabelOptions {
+                    excluded_numbers: vec![0.0, 2.0],
+                    ..options.clone()
+                },
+                &NumberLabelOptions {
+                    excluded_numbers: vec![-1.0],
+                    ..options
+                },
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let values = |family: &crate::MobjectFamily| {
+            store
+                .borrow()
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .into_iter()
+                .map(|member| {
+                    DecimalNumber::from_mobject(
+                        Mobject::from_node(Rc::clone(&store), member).unwrap(),
+                    )
+                    .unwrap()
+                    .value()
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(&x), [1.0]);
+        assert_eq!(values(&y), [0.0, 1.0]);
+    }
+
+    #[test]
+    fn decimal_number_coordinate_labels_keep_common_manim_formatting() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([0.0, 2_000.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 0,
+            include_sign: true,
+            group_with_commas: true,
+            show_ellipsis: true,
+            unit: Some("m".into()),
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers(&mut backend, Some(&[1_234.0, -0.001]), &options)
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["+1,234...m", "+0...m"]
+        );
+        assert!(numbers.iter().all(|number| {
+            number.format().unwrap()
+                == crate::DecimalFormat {
+                    decimal_places: 0,
+                    include_sign: true,
+                    group_with_commas: true,
+                    show_ellipsis: true,
+                    unit: Some("m".into()),
+                }
+        }));
+    }
+
+    #[test]
+    fn logarithmic_number_line_labels_format_base_and_exponent() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let mut line_options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+        line_options.scale = noon_core::SemanticNumberLineScale::log(10.0);
+        let line =
+            ManimNumberLine::create(Rc::clone(scene.integration_store()), &line_options).unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 0,
+            log_base: Some(10.0),
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers(&mut backend, None, &options)
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["10^{-2}", "10^{-1}", "10^{0}", "10^{1}", "10^{2}"],
+        );
+        assert!(numbers
+            .iter()
+            .all(|number| (number.value().unwrap() - 10.0).abs() < 1e-12));
+        let frame = line.authored_frame().unwrap();
+        for (label, coordinate) in numbers.iter().zip([0.01, 0.1, 1.0, 10.0, 100.0]) {
+            let expected_x = frame.number_to_point(coordinate).unwrap()[0];
+            assert!((label.mobject().center().unwrap().0 - expected_x).abs() < 1e-12);
+        }
+        assert!(numbers.iter().all(|number| {
+            number
+                .format()
+                .unwrap()
+                .unit
+                .as_deref()
+                .unwrap()
+                .starts_with("^{")
+        }));
+    }
+
+    #[test]
     fn callback_numeric_reentry_reads_the_prepared_signal_value() {
         use noon_core::{SemanticMutationTransaction, TextResourceLookup};
         let mut backend = RuleBackend;

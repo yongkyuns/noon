@@ -1624,6 +1624,21 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_next_layout_to_edge_in_frame(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        edge: (f64, f64),
+        args: noon::ManimNextToArgs,
+        frame_buff: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.next_layout_to_edge_in_frame(source, target, edge, args, frame_buff)
+        })
+        .map(|_| ())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_align_family_on_frame(
         &mut self,

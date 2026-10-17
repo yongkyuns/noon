@@ -7112,6 +7112,37 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveNextLayoutToEdgeInFrame)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to_edge_in_frame(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            edge_x: f64,
+            edge_y: f64,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            frame_buff: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_next_layout_to_edge_in_frame(
+                    &source.anchor,
+                    &target.anchor,
+                    (edge_x, edge_y),
+                    noon::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (0.0, 0.0),
+                        mask: (1.0, 1.0),
+                    },
+                    frame_buff,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_next_layout_to_point(

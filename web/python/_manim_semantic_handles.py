@@ -1124,6 +1124,24 @@ def _layout_anchor(value, index=None, *, callback_context=None):
     return engine_call(handle.layoutAnchor, _semantic_member_index(index))
 
 
+def _next_to_edge_in_frame(self, target, edge, direction, buff, frame_buff):
+    """Forward placement intent; Rust owns bounds, frame fitting and publication."""
+    source = _layout_anchor(self)
+    target_anchor = _layout_anchor(target)
+    if source is None or target_anchor is None:
+        raise RuntimeError("placement requires current shared Rust source and target handles")
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
+               else _live_mutation_context(self) or _live_constructor_context())
+    arguments = (edge.x, edge.y, direction.x, direction.y, float(buff), float(frame_buff))
+    try:
+        if context is None:
+            engine_call(source.nextToEdgeInFrame, target_anchor, *arguments)
+        else:
+            engine_call(context.liveNextLayoutToEdgeInFrame, source, target_anchor, *arguments)
+    except Exception as error:
+        raise_engine_error(error)
+
+
 def _shared_next_to(self, target, direction, buff, aligned_edge,
                       submobject_to_align, index, coor_mask):
     """Pass selection intent; Rust resolves members, observes bounds and places."""

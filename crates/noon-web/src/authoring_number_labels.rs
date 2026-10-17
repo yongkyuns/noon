@@ -83,6 +83,26 @@ impl WasmNumberLabelOptions {
     pub fn set_exclude_zero(&mut self, exclude: bool) {
         self.options.exclude_zero = exclude;
     }
+    #[wasm_bindgen(js_name = setIncludeSign)]
+    pub fn set_include_sign(&mut self, include: bool) {
+        self.options.include_sign = include;
+    }
+    #[wasm_bindgen(js_name = setGroupWithCommas)]
+    pub fn set_group_with_commas(&mut self, group: bool) {
+        self.options.group_with_commas = group;
+    }
+    #[wasm_bindgen(js_name = setShowEllipsis)]
+    pub fn set_show_ellipsis(&mut self, show: bool) {
+        self.options.show_ellipsis = show;
+    }
+    #[wasm_bindgen(js_name = setUnit)]
+    pub fn set_unit(&mut self, unit: Option<String>) {
+        self.options.unit = unit;
+    }
+    #[wasm_bindgen(js_name = setLogBase)]
+    pub fn set_log_base(&mut self, base: Option<f64>) {
+        self.options.log_base = base;
+    }
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(
         &mut self,
@@ -107,6 +127,27 @@ fn numbers(values: &[f64], automatic: bool) -> Result<Option<&[f64]>, JsValue> {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
+    /// Construct retained DecimalNumber labels on one NumberLine axis.
+    #[wasm_bindgen(js_name = numberLineDecimalNumberLabelFamily)]
+    pub fn number_line_decimal_number_label_family(
+        &self,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        attach: bool,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
+        let values = numbers(values, automatic)?;
+        let family = if attach {
+            line.add_decimal_numbers(compiler, values, &options.options)
+        } else {
+            line.decimal_number_labels(compiler, values, &options.options)
+        }
+        .map_err(failure)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
     /// Cold-only construction. Python rejects this call after live bootstrap.
     #[wasm_bindgen(js_name = numberLabelFamily)]
     pub fn number_label_family(
@@ -174,6 +215,31 @@ impl WasmAuthoringFamilyHandle {
         let axes = ManimAxes::from_family(self.semantic_family()?).map_err(failure)?;
         let families = axes
             .add_coordinates(
+                numbers(x_values, automatic_x)?,
+                numbers(y_values, automatic_y)?,
+                &x_options.options,
+                &y_options.options,
+            )
+            .map_err(failure)?;
+        Ok(label_family_handles(families))
+    }
+
+    /// Construct both Axes DecimalNumber label families atomically.
+    #[wasm_bindgen(js_name = axesDecimalCoordinateLabelFamilies)]
+    pub fn axes_decimal_coordinate_label_families(
+        &self,
+        x_values: &[f64],
+        automatic_x: bool,
+        y_values: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<js_sys::Array, JsValue> {
+        let axes = ManimAxes::from_family(self.semantic_family()?).map_err(failure)?;
+        let families = axes
+            .add_decimal_coordinates(
+                compiler,
                 numbers(x_values, automatic_x)?,
                 numbers(y_values, automatic_y)?,
                 &x_options.options,

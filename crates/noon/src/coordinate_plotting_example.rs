@@ -42,8 +42,18 @@ fn objects(scene: &mut Scene) -> Result<PlotObjects, Box<dyn std::error::Error>>
     let mut title =
         scene.text(Text::new("Shared axes: function and sampled data").with_font_size(28.0))?;
     title.shift(0.0, 3.0)?;
-    let mut label = scene.text(Text::new("Time (s)").with_font_size(22.0))?;
-    label.shift(0.0, -2.7)?;
+    let label = scene.text(Text::new("Time (s)").with_font_size(22.0))?;
+    crate::LayoutAnchor::from(&label).next_to_edge_in_frame(
+        &crate::LayoutAnchor::from(axes.x_axis()?.family()),
+        (1.0, 0.0),
+        crate::ManimNextToArgs {
+            direction: (1.0, 0.0),
+            buff: 0.2,
+            aligned_edge: (0.0, 0.0),
+            mask: (1.0, 1.0),
+        },
+        f64::from(noon_core::MED_SMALL_BUFF),
+    )?;
     Ok(PlotObjects {
         axes,
         curve,

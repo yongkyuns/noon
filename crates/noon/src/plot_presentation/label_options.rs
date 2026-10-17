@@ -9,6 +9,12 @@ pub struct NumberLabelOptions {
     pub font: String,
     pub font_size: f32,
     pub decimal_places: u32,
+    pub include_sign: bool,
+    pub group_with_commas: bool,
+    pub show_ellipsis: bool,
+    pub unit: Option<String>,
+    /// Show logarithmic coordinate ticks as `base^{exponent}` DecimalNumbers.
+    pub log_base: Option<f64>,
     pub exclude_zero: bool,
     /// Exact numeric exclusions, checked before allocating text resources.
     pub excluded_numbers: Vec<f64>,
@@ -19,12 +25,64 @@ pub struct NumberLabelOptions {
     pub color: crate::Color,
 }
 
+impl NumberLabelOptions {
+    pub(crate) fn decimal_presentation(
+        &self,
+        number: f64,
+    ) -> Result<(f64, noon_core::DecimalFormat), PlotPresentationError> {
+        let Some(base) = self.log_base else {
+            return Ok((
+                number,
+                noon_core::DecimalFormat {
+                    decimal_places: self.decimal_places,
+                    include_sign: self.include_sign,
+                    group_with_commas: self.group_with_commas,
+                    show_ellipsis: self.show_ellipsis,
+                    unit: self.unit.clone(),
+                },
+            ));
+        };
+        if !base.is_finite() || base <= 0.0 || base == 1.0 || number <= 0.0 {
+            return Err(PlotPresentationError::InvalidInput(
+                "logarithmic number labels require a valid base and positive values",
+            ));
+        }
+        if self.unit.is_some() {
+            return Err(PlotPresentationError::InvalidInput(
+                "logarithmic number labels supply their own exponent unit",
+            ));
+        }
+        let exponent = number.log(base);
+        if !exponent.is_finite() {
+            return Err(PlotPresentationError::InvalidInput(
+                "logarithmic number label exponent must be finite",
+            ));
+        }
+        let exponent = format!("{:.*}", self.decimal_places as usize, exponent);
+        Ok((
+            base,
+            noon_core::DecimalFormat {
+                decimal_places: 0,
+                include_sign: self.include_sign,
+                group_with_commas: self.group_with_commas,
+                show_ellipsis: self.show_ellipsis,
+                unit: Some(format!("^{{{exponent}}}")),
+            },
+        ))
+    }
+}
+
 impl Default for NumberLabelOptions {
     fn default() -> Self {
         Self {
             font: "DejaVu Sans Mono".into(),
             font_size: 18.0,
             decimal_places: 0,
+            include_sign: false,
+            group_with_commas: true,
+            show_ellipsis: false,
+            unit: None,
+            log_base: None,
             exclude_zero: true,
             excluded_numbers: Vec::new(),
             include_tip: false,

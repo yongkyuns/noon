@@ -2,7 +2,8 @@
 use super::*;
 use crate::coordinate_authoring::{
     prepare_axes, prepare_number_line, prepare_number_plane, prepare_polar_plane,
-    publish_prepared_axes, publish_prepared_number_line, resolve_family,
+    publish_prepared_axes, publish_prepared_number_line, publish_prepared_number_plane,
+    resolve_family,
 };
 use crate::AuthoringError;
 use crate::{
@@ -55,9 +56,11 @@ impl LiveSession<'_> {
         &mut self,
         options: &ManimNumberPlaneOptions,
     ) -> Result<ManimNumberPlane, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_plane(options)?;
-        let result = self.apply(transaction)?;
-        ManimNumberPlane::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
+        let prepared = prepare_number_plane(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_number_plane(prepared, store, publish)
+        })?;
+        ManimNumberPlane::from_family(MobjectFamily::from_node(Rc::clone(self.store), root)?)
     }
 
     /// Construct a detached retained PolarPlane through this execution's

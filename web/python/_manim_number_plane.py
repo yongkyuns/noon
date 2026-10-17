@@ -37,8 +37,31 @@ def _coordinate_decimal_places(axis_range):
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}
 _AXIS_LABEL_KEYS = _plot._AXES_CONFIG_KEYS - {"scaling"}
 _NUMBER_PLANE_AXIS_KEYS = _AXIS_STYLE_KEYS | _AXIS_LABEL_KEYS | {
-    "include_ticks", "include_tip", "scaling",
+    "include_ticks", "include_tip", "tick_size", "tip_width", "tip_height",
+    "exclude_origin_tick", "scaling",
 }
+
+
+def _axis_style_override(config, common):
+    """Normalize style differences from the shared axis style for Rust."""
+    override = {}
+    common_color = common.get("stroke_color", common.get("color"))
+    color = config.get("stroke_color", config.get("color"))
+    parsed = None if color is None else _plot._compat._as_color("color", color)
+    if parsed is not None and color != common_color:
+        override["color"] = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+    for key in ("stroke_width", "stroke_opacity", "opacity"):
+        value = config.get(key)
+        if key not in config or value is None:
+            continue
+        if key == "stroke_width":
+            normalized = _plot._compat._manim_stroke_width(value)
+        else:
+            normalized = _plot._compat._opacity(key, value)
+        if value != common.get(key):
+            override[key] = normalized
+    return override
 
 
 def _axis_configurations(axis_config, x_axis_config, y_axis_config):
@@ -46,6 +69,10 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         "stroke_width": 2,
         "include_ticks": False,
         "include_tip": False,
+        "tip_width": _plot._DEFAULT_NUMBER_LINE_TIP_SIZE,
+        "tip_height": _plot._DEFAULT_NUMBER_LINE_TIP_SIZE,
+        "tick_size": 0.1,
+        "exclude_origin_tick": True,
         "line_to_number_buff": _plot._base.SMALL_BUFF,
         "label_direction": _plot._base.DR,
         "font_size": 24,
@@ -63,43 +90,46 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
         ("x_axis_config", x_config, _plot._base.DR),
         ("y_axis_config", y_config, _plot._base.DR),
     ):
-        for key in ("include_ticks", "include_tip"):
-            value = config[key]
-            if not isinstance(value, bool):
+        for key in ("include_ticks", "include_tip", "exclude_origin_tick"):
+            if not isinstance(config[key], bool):
                 raise TypeError(f"{name}.{key} must be a boolean")
-            if value:
-                raise NotImplementedError("NumberPlane ticks and tips are not yet supported")
+        config["tick_size"] = _plot._finite_axis_option(
+            config["tick_size"], f"{name}.tick_size", nonnegative=True
+        )
+        for key in ("tip_width", "tip_height"):
+            config[key] = _plot._finite_axis_option(config[key], f"{name}.{key}")
+            if config[key] <= 0:
+                raise ValueError(f"{name}.{key} must be positive")
         if config.get("scaling") is not None:
             raise NotImplementedError("NumberPlane nonlinear axis scaling is not yet supported")
+        # Axes normalizes every linear axis to omit its origin tick after
+        # merging axis_config and x/y_axis_config. Match that inherited rule,
+        # including when the caller explicitly supplies False.
+        config["exclude_origin_tick"] = True
         labels = {key: config[key] for key in _AXIS_LABEL_KEYS if key in config}
         label_options = _plot._axes_label_options(
             labels, ("linear", 1.0, False), name, direction
         )
         axis_options.append((label_options, config))
 
-    # NumberPlane currently sends one shared style to Rust. Reject conflicting
-    # per-axis styles instead of silently applying the wrong axis's values.
-    for key in _AXIS_STYLE_KEYS:
-        common_value = common.get(key)
-        for name, config in (("x_axis_config", x_config), ("y_axis_config", y_config)):
-            if key in config and config[key] != common_value:
-                raise NotImplementedError(
-                    f"NumberPlane per-axis {key} is not yet supported ({name})"
-                )
-
     style = {key: common[key] for key in ("stroke_width", "stroke_opacity", "opacity")
              if key in common}
     color = common.get("stroke_color", common.get("color"))
-    return axis_options[0][0], axis_options[1][0], color, style
+    x_style = _axis_style_override(x_config, common)
+    y_style = _axis_style_override(y_config, common)
+    return (
+        axis_options[0][0], axis_options[1][0], color, style,
+        axis_options[0][1], axis_options[1][1], x_style, y_style,
+    )
 
 
 class NumberPlane(_plot.Axes):
     """Linear 2D axes with bounded retained major/faded grid lines.
 
     Supports ranges, lengths, grid stroke styles, common axis stroke style,
-    native Text constructor labels with per-axis formatting, and major x/y
-    grid-line aliases. Axis-specific stroke styles, tips, ticks and nonlinear
-    deformation remain unsupported.
+    native Text constructor labels with per-axis formatting, independent ticks
+    and axis styling, filled axis tips, and major x/y grid-line aliases.
+    Nonlinear deformation remains unsupported.
     Coordinates and plots use the same shared Rust AxesFrame.
     """
 
@@ -112,7 +142,8 @@ class NumberPlane(_plot.Axes):
         if isinstance(faded_line_ratio, bool):
             raise TypeError("faded_line_ratio must be an integer, not bool")
         ratio = index(faded_line_ratio)
-        x_options, y_options, color, style = _axis_configurations(
+        (x_options, y_options, color, style, x_axis_options, y_axis_options,
+         x_axis_style, y_axis_style) = _axis_configurations(
             axis_config, x_axis_config, y_axis_config
         )
         x_range_values = () if x_range is None else tuple(x_range)
@@ -127,10 +158,35 @@ class NumberPlane(_plot.Axes):
         )
         try:
             _plot._coordinate_style(options, color, style)
+            for axis_index, axis_style in enumerate((x_axis_style, y_axis_style)):
+                if axis_style:
+                    engine_call(
+                        options.setPlaneAxisStyle,
+                        axis_index,
+                        _plot._array(axis_style.get("color", ())),
+                        axis_style.get("stroke_width"),
+                        axis_style.get("stroke_opacity"),
+                        axis_style.get("opacity"),
+                    )
             if background_line_style is not None:
                 _line_style(options, background_line_style, faded=False)
             if faded_line_style is not None:
                 _line_style(options, faded_line_style, faded=True)
+            for axis_index, config in enumerate((x_axis_options, y_axis_options)):
+                engine_call(
+                    options.setPlaneAxisTicks,
+                    axis_index,
+                    config["include_ticks"],
+                    config["tick_size"],
+                    config["exclude_origin_tick"],
+                )
+                engine_call(
+                    options.setPlaneAxisTips,
+                    axis_index,
+                    config["include_tip"],
+                    config["tip_width"],
+                    config["tip_height"],
+                )
         except BaseException:
             options.free()
             raise
@@ -142,13 +198,24 @@ class NumberPlane(_plot.Axes):
         )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         x_axis = _plot._attach_number_line(
-            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 2)
+            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 2),
+            tick_size=x_axis_options["tick_size"],
+            include_ticks=x_axis_options["include_ticks"],
+            include_tip=x_axis_options["include_tip"],
+            exclude_origin_tick=x_axis_options["exclude_origin_tick"],
         )
+        x_axis.tip_width = x_axis_options["tip_width"]
+        x_axis.tip_height = x_axis_options["tip_height"]
         y_axis = _plot._attach_number_line(
-            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3)
+            object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, 3),
+            tick_size=y_axis_options["tick_size"],
+            include_ticks=y_axis_options["include_ticks"],
+            include_tip=y_axis_options["include_tip"],
+            exclude_origin_tick=y_axis_options["exclude_origin_tick"],
         )
-        x_axis.scaling = _plot.LinearBase()
-        y_axis.scaling = _plot.LinearBase()
+        y_axis.tip_width = y_axis_options["tip_width"]
+        y_axis.tip_height = y_axis_options["tip_height"]
+        x_axis.scaling = y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
         self.axes = _plot._compat.VGroup(x_axis, y_axis)
@@ -188,7 +255,9 @@ class NumberPlane(_plot.Axes):
             return engine_call(context.queryNumberPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
 
-    def add_coordinates(self, x_values=None, y_values=None, **kwargs):
+    def add_coordinates(self, *axes_numbers, **kwargs):
+        if "x_values" in kwargs or "y_values" in kwargs:
+            raise TypeError("add_coordinates uses positional per-axis values")
         from _manim_number_labels import add_number_plane_coordinates
         x_config = dict(kwargs.pop("x_config", None) or {})
         y_config = dict(kwargs.pop("y_config", None) or {})
@@ -199,8 +268,7 @@ class NumberPlane(_plot.Axes):
         kwargs.setdefault("buff", _base.SMALL_BUFF)
         return add_number_plane_coordinates(
             self,
-            x_values,
-            y_values,
+            *axes_numbers,
             x_config=x_config,
             y_config=y_config,
             config=kwargs,

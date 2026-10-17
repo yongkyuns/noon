@@ -193,19 +193,19 @@ class ManimVectorSpaceTests(unittest.TestCase):
             from noon import DR, RIGHT, SMALL_BUFF
 
             calls = []
-            def add_labels(plane, x, y, **kwargs):
-                calls.append((plane, x, y, kwargs))
+            def add_labels(plane, *axes_numbers, **kwargs):
+                calls.append((plane, axes_numbers, kwargs))
                 return plane
             _manim_number_labels.add_number_plane_coordinates = add_labels
             plane = object.__new__(NumberPlane)
             assert NumberPlane.add_coordinates(plane, (1, 2), (3,), decimal_places=1) is plane
-            assert calls == [(plane, (1, 2), (3,), {
+            assert calls == [(plane, ((1, 2), (3,)), {
                 "x_config": {"direction": DR}, "y_config": {"direction": DR},
                 "config": {"decimal_places": 1, "font_size": 24, "buff": SMALL_BUFF},
             })]
             NumberPlane.add_coordinates(plane, direction=RIGHT, font_size=30, buff=0.2,
                                         y_config={"font_size": 12})
-            assert calls[-1] == (plane, None, None, {
+            assert calls[-1] == (plane, (), {
                 "x_config": {}, "y_config": {"font_size": 12},
                 "config": {"direction": RIGHT, "font_size": 30, "buff": 0.2},
             })
@@ -229,10 +229,11 @@ class ManimVectorSpaceTests(unittest.TestCase):
         source = textwrap.dedent(
             """
             import _manim_number_labels as labels
+            from types import SimpleNamespace
             class Options:
                 def __init__(self, name): self.name, self.freed = name, False
                 def free(self): self.freed = True
-            x_axis, y_axis = object(), object()
+            x_axis, y_axis = SimpleNamespace(), SimpleNamespace()
             class Handle:
                 def numberPlaneCoordinateLabelFamilies(self, *args):
                     self.args = args
@@ -244,24 +245,29 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             labels._cold_labels = lambda: None
             labels._plot._array = lambda values: tuple(values)
+            labels._compat.VGroup = lambda *members: tuple(members)
             options = []
-            def make_options(config):
+            def make_options(config, *, excluding=()):
                 token = Options(len(options))
-                options.append((token, config))
+                options.append((token, config, tuple(excluding)))
                 return token, 18.0, "white"
             labels._options = make_options
             families, remembered = [], []
             labels._family = lambda handle, size, color: (handle, size, color)
-            labels._remember = lambda axis, family: remembered.append((axis, family))
+            def remember(axis, family):
+                axis.numbers = family
+                remembered.append((axis, family))
+            labels._remember = remember
 
             result = labels.add_number_plane_coordinates(
                 plane, (1, 2), (3,), x_config={"decimal_places": 1},
                 y_config={"decimal_places": 2}, config={"font_size": 17, "font": "Fixture Sans"},
             )
             assert result is plane
-            assert options[0][1]["direction"] is labels._base.DOWN
-            assert options[1][1]["direction"] is labels._base.LEFT
+            assert options[0][1]["direction"] is labels._base.DR
+            assert options[1][1]["direction"] is labels._base.DR
             assert [entry[1]["decimal_places"] for entry in options] == [1, 2]
+            assert [entry[2] for entry in options] == [(0.0,), (0.0,)]
             assert plane._semantic_family_handle.args[:4] == ((1, 2), False, (3,), False)
             assert plane._semantic_family_handle.args[4:] == (options[0][0], options[1][0])
             assert len(remembered) == 2

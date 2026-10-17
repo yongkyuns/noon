@@ -4799,8 +4799,8 @@
     },
     {
       "id": "reference-32ccd9416c553cdc",
-      "status": "blocked",
-      "reason": "Axes now supports native Text include_numbers/numbers_to_include configuration, per-axis overrides, exclusions, label direction, spacing, font size, and decimal precision. This fixture remains blocked because LogBase(custom_labels=True) requests TeX-generated custom labels, which are outside the qualified native-Text label profile.",
+      "status": "unqualified",
+      "reason": "Axes LogBase exponent labels share Rust DecimalNumber preparation. The literal pinned-source fixture is enrolled in retained Python-host execution; curated current-head semantic/raster qualification remains required before promotion.",
       "owners": [
         "#85",
         "#89",
@@ -4813,8 +4813,7 @@
         "directive_line": 1902,
         "name": "LogScalingExample",
         "source_sha256": "2e782f8956ae973849648208a0dc6cf10458d398d137afd9dd8555a68e07604b"
-      },
-      "blocker_kind": "behavior"
+      }
     },
     {
       "id": "reference-bf421ad3bee7f499",

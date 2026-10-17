@@ -10,9 +10,9 @@ use crate::{
     MobjectFamily, NumberLineFrame,
 };
 use noon_core::{
-    FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, TextResource,
+    format_decimal, FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, SemanticVec3, TextResource,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -28,7 +28,12 @@ fn prepare(
     numbers: Option<&[f64]>,
     options: &NumberLabelOptions,
 ) -> Result<Vec<PreparedLabel>, Error> {
-    let labels = options.prepare_values(frame, numbers)?;
+    let mut labels = options.prepare_values(frame, numbers)?;
+    for label in &mut labels {
+        let (value, format) = options.decimal_presentation(label.number)?;
+        label.text = format_decimal(value, &format)
+            .map_err(|_| PlotPresentationError::InvalidInput("invalid numeric label format"))?;
+    }
     prepare_display_labels(labels, options)
 }
 

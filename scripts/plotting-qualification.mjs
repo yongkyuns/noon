@@ -24,6 +24,24 @@ assert.equal(
   "PlotExample execution may change only the import line",
 );
 const plotExampleSource = rasterFixtureSource(adaptedPlotExample, "PlotExample");
+const upstreamLogScalingExample = await readFile(
+  new URL("../parity/manim-v0.21/core-examples/log_scaling_example.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  upstreamLogScalingExample.split(plotExampleImport).length - 1,
+  1,
+  "pinned LogScalingExample must contain exactly one Manim wildcard import",
+);
+const adaptedLogScalingExample = upstreamLogScalingExample.replace(plotExampleImport, "from noon import *");
+assert.equal(
+  adaptedLogScalingExample.replace("from noon import *", plotExampleImport),
+  upstreamLogScalingExample,
+  "LogScalingExample execution may change only the import line",
+);
+const logScalingExampleSource = rasterFixtureSource(
+  adaptedLogScalingExample, "LogScalingExample", { requires_latex: true },
+);
 
 async function qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend) {
   const page = await context.newPage();
@@ -63,12 +81,79 @@ await qualifyPairedAuthoring({
     { id: "coordinates", file: "coordinate_plotting_static.py", factory: "createCoordinatePlottingRenderer", objectCount: 17 },
     { id: "graph-queries", file: "graph_queries.py", factory: "createGraphQueriesRenderer", objectCount: 15 },
     { id: "polar-plane", file: "polar_plane.py", factory: "createPolarPlaneRenderer", objectCount: 34 },
-    { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
-    { id: "complex-plane", file: "complex_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
+    { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 26 },
+    { id: "complex-plane", file: "complex_plane.py", factory: "createComplexPlaneRenderer", objectCount: 24 },
     { id: "area", file: "area_helpers.py", factory: "createAreaHelpersRenderer", objectCount: 26 },
     { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
   ],
   async qualifyLifecycle(context, baseUrl, expectedBackend) {
+    const logLabelsSource = `from noon import *
+
+class LogBaseNumberLineLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        linear = NumberLine((-1, 1, 1), include_numbers=True)
+        assert tuple(label.get_value() for label in linear.numbers) == (-1, 0, 1)
+        line = NumberLine(
+            (-2, 2, 1), scaling=LogBase(base=10), include_numbers=True,
+            decimal_number_config={"num_decimal_places": 0},
+        )
+        assert tuple(label._source for label in line.numbers) == (
+            "10^{-2}", "10^{-1}", "10^{0}", "10^{1}", "10^{2}",
+        )
+        assert all(isinstance(label, Integer) for label in line.numbers)
+        assert tuple(label.get_value() for label in line.numbers) == (10, 10, 10, 10, 10)
+        for label, coordinate in zip(line.numbers, (0.01, 0.1, 1, 10, 100)):
+            assert abs(label.get_center().x - line.number_to_point(coordinate).x) < 1e-6
+        assert line.labels is line.numbers
+        self.add(line, linear)
+        await self.wait(0.05)
+`;
+    const logLabels = await qualifyPythonPlayback(
+      context, baseUrl, logLabelsSource, [0, 0.05],
+    );
+    assert.equal(logLabels.rendererBackend, expectedBackend);
+    assert.equal(logLabels.presented, true);
+    assert.ok(Math.abs(logLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: LogBase NumberLine exponent labels`);
+    const axesLogLabelsSource = `from noon import *
+
+class AxesLogBaseLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_length=4, y_length=2, tips=False,
+            x_axis_config={"scaling": LogBase(base=2), "include_numbers": True},
+            y_axis_config={"include_numbers": True, "numbers_to_exclude": []},
+        )
+        x_labels = axes.x_axis.numbers
+        assert tuple(label._source for label in x_labels) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        assert all(isinstance(label, Integer) for label in x_labels)
+        assert tuple(label.get_value() for label in x_labels) == (2, 2, 2, 2, 2)
+        for label, coordinate in zip(x_labels, (0.25, 0.5, 1, 2, 4)):
+            assert abs(label.get_center().x - axes.x_axis.number_to_point(coordinate).x) < 1e-6
+        assert tuple(label.get_value() for label in axes.y_axis.numbers) == (-1, 0, 1)
+        coordinate_axes = Axes(
+            x_range=(-2, 2, 1), y_range=(-1, 1, 1),
+            x_axis_config={"scaling": LogBase(base=2)}, tips=False,
+        )
+        coordinate_axes.add_coordinates()
+        assert tuple(label._source for label in coordinate_axes.x_axis.numbers) == (
+            "2^{-2}", "2^{-1}", "2^{0}", "2^{1}", "2^{2}",
+        )
+        self.add(axes, coordinate_axes)
+        await self.wait(0.05)
+`;
+    const axesLogLabels = await qualifyPythonPlayback(
+      context, baseUrl, axesLogLabelsSource, [0, 0.05],
+    );
+    assert.equal(axesLogLabels.rendererBackend, expectedBackend);
+    assert.equal(axesLogLabels.presented, true);
+    assert.ok(Math.abs(axesLogLabels.authoredDuration - 0.05) < 1e-6);
+    console.log(`[PASS] ${expectedBackend}: per-axis LogBase exponent labels`);
     const page = await context.newPage();
     try {
       page.setDefaultTimeout(90_000);
@@ -112,12 +197,28 @@ await qualifyPairedAuthoring({
       assert.equal(curveRows.length, 3);
       assert.ok(curveRows.every(object => object.bounds.width > 0 && object.bounds.height > 0),
         "each upstream log curve must retain two-dimensional sampled bounds");
+      const logScalingExample = await page.evaluate(
+        source => window.noonManimCompat.runLive(source),
+        logScalingExampleSource,
+      );
+      assert.equal(logScalingExample.duration, 0, "upstream LogScalingExample is static");
+      assert.equal(logScalingExample.frame.time, 0);
+      assert.equal(logScalingExample.metrics.backend, expectedBackend);
+      assert.ok(logScalingExample.metrics.objectCount > 0);
+      assert.ok(logScalingExample.metrics.presentedFrames > 0);
+      assert.equal(logScalingExample.frame.objects.length, logScalingExample.metrics.objectCount);
+      assert.ok(logScalingExample.frame.objects.every(object => object.present));
+      const plottedGraph = logScalingExample.frame.objects.at(-1);
+      assert.ok(plottedGraph && plottedGraph.bounds.width > 0 && plottedGraph.bounds.height > 0,
+        "the final retained object from upstream LogScalingExample must be its two-dimensional x^2 graph");
+      console.log(`[PASS] ${expectedBackend}: exact upstream LogScalingExample Python-host frame`);
       console.log(`[PASS] ${expectedBackend}: exact upstream PlotExample Python-host frame`);
       await qualifyPlotExampleRasterHost(context, baseUrl, expectedBackend);
       const labelSource = `from noon import *
 
 class CoordinateNumericLabels(Scene):
     async def construct(self):
+        await prepare_latex()
         for decimal_config, places, expected_text in (
             (None, 0, ("-1", "1")), ({}, 2, ("-1.00", "1.00")),
         ):
@@ -212,6 +313,182 @@ class CoordinateAccessors(Scene):
       assert.ok(accessors.objectCount > 0);
       assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
+      const addCoordinatesSource = `from noon import *
+
+class AxesAddCoordinates(Scene):
+    async def construct(self):
+        await prepare_latex()
+        default_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        assert default_axes.add_coordinates() is default_axes
+        assert len(default_axes.coordinate_labels.submobjects) == 2
+        assert default_axes.x_axis.numbers.submobjects
+        assert default_axes.y_axis.numbers.submobjects
+        assert all(isinstance(label, DecimalNumber)
+                   for label in default_axes.x_axis.numbers)
+        assert not any(label.get_value() == 0 for label in default_axes.x_axis.numbers)
+        assert not any(label.get_value() == 0 for label in default_axes.y_axis.numbers)
+
+        configured = Axes(
+            (0, 2, 1), (-1, 1, 1), tips=False,
+            x_axis_config={"numbers_to_exclude": (0, 2)},
+            y_axis_config={"numbers_to_exclude": (-1,)},
+        )
+        configured.add_coordinates((0, 1, 2), (-1, 0, 1))
+        assert tuple(label.get_value() for label in configured.x_axis.numbers) == (1,)
+        assert tuple(label.get_value() for label in configured.y_axis.numbers) == (0, 1)
+
+        override = Axes((0, 2, 1), (-1, 1, 1), tips=False)
+        override.add_coordinates((0, 1, 2), (-1, 0, 1), excluding=(2,))
+        assert tuple(label.get_value() for label in override.x_axis.numbers) == (0, 1)
+        assert tuple(label.get_value() for label in override.y_axis.numbers) == (-1, 0, 1)
+
+        x_only = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        x_only.add_coordinates((-1, 1))
+        assert len(x_only.coordinate_labels.submobjects) == 1
+        assert all(isinstance(label, DecimalNumber) for label in x_only.x_axis.numbers)
+        assert tuple(label.source for label in x_only.x_axis.numbers) == ("-1", "1")
+        assert not hasattr(x_only.y_axis, "numbers")
+
+        x_default = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        x_default.add_coordinates(None)
+        assert len(x_default.coordinate_labels.submobjects) == 1
+        assert x_default.x_axis.numbers.submobjects
+        assert not hasattr(x_default.y_axis, "numbers")
+
+        custom = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        custom.add_coordinates({-1: "Left", 1: "Right"})
+        assert len(custom.coordinate_labels.submobjects) == 1
+        assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
+
+        mixed = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        mixed.add_coordinates({0: "origin"}, (-1, 1))
+        assert len(mixed.coordinate_labels.submobjects) == 2
+        assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
+        assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
+
+        self.add(default_axes, configured, override, x_only, x_default, custom, mixed)
+        await self.wait(0.05)
+`;
+      const addCoordinates = await qualifyPythonPlayback(
+        context, baseUrl, addCoordinatesSource, [0, 0.05],
+      );
+      assert.equal(addCoordinates.rendererBackend, expectedBackend);
+      assert.equal(addCoordinates.presented, true);
+      assert.ok(addCoordinates.objectCount > 0);
+      assert.ok(Math.abs(addCoordinates.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes.add_coordinates positional/default/custom labels`);
+      const numberPlaneCoordinatesSource = `from noon import *
+
+class NumberPlaneAddCoordinates(Scene):
+    async def construct(self):
+        await prepare_latex()
+        default_plane = NumberPlane((-2, 2, 1), (-1, 1, 1))
+        assert default_plane.add_coordinates() is default_plane
+        assert len(default_plane.coordinate_labels.submobjects) == 2
+        assert default_plane.x_axis.numbers.submobjects
+        assert default_plane.y_axis.numbers.submobjects
+
+        x_only = NumberPlane((-2, 2, 1), (-1, 1, 1))
+        x_only.add_coordinates((-1, 1))
+        assert len(x_only.coordinate_labels.submobjects) == 1
+        assert tuple(label.source for label in x_only.x_axis.numbers) == ("-1", "1")
+        assert not hasattr(x_only.y_axis, "numbers")
+
+        x_default = NumberPlane((-2, 2, 1), (-1, 1, 1))
+        x_default.add_coordinates(None)
+        assert len(x_default.coordinate_labels.submobjects) == 1
+        assert x_default.x_axis.numbers.submobjects
+        assert not hasattr(x_default.y_axis, "numbers")
+
+        custom = NumberPlane((-2, 2, 1), (-1, 1, 1))
+        custom.add_coordinates({-1: "Left", 1: "Right"})
+        assert len(custom.coordinate_labels.submobjects) == 1
+        assert tuple(label.source for label in custom.x_axis.labels) == ("Left", "Right")
+
+        mixed = NumberPlane((-2, 2, 1), (-1, 1, 1))
+        mixed.add_coordinates({0: "origin"}, (-1, 1))
+        assert len(mixed.coordinate_labels.submobjects) == 2
+        assert tuple(label.source for label in mixed.x_axis.labels) == ("origin",)
+        assert tuple(label.source for label in mixed.y_axis.numbers) == ("-1", "1")
+
+        self.add(default_plane, x_only, x_default, custom, mixed)
+        await self.wait(0.05)
+`;
+      const numberPlaneCoordinates = await qualifyPythonPlayback(
+        context, baseUrl, numberPlaneCoordinatesSource, [0, 0.05],
+      );
+      assert.equal(numberPlaneCoordinates.rendererBackend, expectedBackend);
+      assert.equal(numberPlaneCoordinates.presented, true);
+      assert.ok(numberPlaneCoordinates.objectCount > 0);
+      assert.ok(Math.abs(numberPlaneCoordinates.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane.add_coordinates positional/default/custom labels`);
+      const numberPlaneTicksSource = `from noon import *
+
+class NumberPlaneAxisTicks(Scene):
+    async def construct(self):
+        plane = NumberPlane(
+            (-2, 2, 1), (-1, 1, 1),
+            axis_config={"include_ticks": True, "tick_size": 0.2,
+                         "exclude_origin_tick": True},
+            y_axis_config={"exclude_origin_tick": False, "tick_size": 0.3},
+        )
+        assert len(plane.x_axis.ticks.submobjects) == 4
+        assert len(plane.y_axis.ticks.submobjects) == 2
+        assert plane.x_axis.include_ticks is True
+        assert plane.y_axis.include_ticks is True
+        assert plane.x_axis.exclude_origin_tick is True
+        assert plane.y_axis.exclude_origin_tick is True
+        assert plane.x_axis.tick_size == 0.2
+        assert plane.y_axis.tick_size == 0.3
+        assert tuple(round(tick.get_center().x) for tick in plane.x_axis.ticks) == (-2, -1, 1, 2)
+        assert tuple(round(tick.get_center().y) for tick in plane.y_axis.ticks) == (-1, 1)
+        self.add(plane)
+        await self.wait(0.05)
+`;
+      const numberPlaneTicks = await qualifyPythonPlayback(
+        context, baseUrl, numberPlaneTicksSource, [0, 0.05],
+      );
+      assert.equal(numberPlaneTicks.rendererBackend, expectedBackend);
+      assert.equal(numberPlaneTicks.presented, true);
+      assert.ok(numberPlaneTicks.objectCount > 0);
+      assert.ok(Math.abs(numberPlaneTicks.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane per-axis ticks and Axes origin exclusion`);
+      const numberPlaneStylesSource = `from noon import *
+
+class NumberPlaneAxisStyles(Scene):
+    async def construct(self):
+        plane = NumberPlane(
+            (-2, 2, 1), (-1, 1, 1),
+            axis_config={"stroke_width": 2, "stroke_opacity": 0.8, "opacity": 0.9},
+            x_axis_config={
+                "color": GREEN, "stroke_width": 4,
+                "stroke_opacity": 0.4, "opacity": 0.6,
+            },
+            y_axis_config={"stroke_color": BLUE},
+        )
+        x_shaft, y_shaft = plane.x_axis.shaft, plane.y_axis.shaft
+        def color_matches(actual, expected):
+            return all(abs(a - e) < 1e-6 for a, e in zip(
+                (actual.red, actual.green, actual.blue),
+                (expected.red, expected.green, expected.blue),
+            ))
+        assert color_matches(x_shaft.get_stroke_color(), GREEN)
+        assert color_matches(y_shaft.get_stroke_color(), BLUE)
+        assert abs(x_shaft.get_stroke_width() - 4) < 1e-6
+        assert abs(y_shaft.get_stroke_width() - 2) < 1e-6
+        assert abs(x_shaft.get_stroke_opacity() - 0.4) < 1e-6
+        assert abs(y_shaft.get_stroke_opacity() - 0.8) < 1e-6
+        self.add(plane)
+        await self.wait(0.05)
+`;
+      const numberPlaneStyles = await qualifyPythonPlayback(
+        context, baseUrl, numberPlaneStylesSource, [0, 0.05],
+      );
+      assert.equal(numberPlaneStyles.rendererBackend, expectedBackend);
+      assert.equal(numberPlaneStyles.presented, true);
+      assert.ok(numberPlaneStyles.objectCount > 0);
+      assert.ok(Math.abs(numberPlaneStyles.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberPlane independent axis stroke styles`);
       const axisLabelsSource = `from noon import *
 
 await prepare_latex()
@@ -237,8 +514,16 @@ class AxesLabels(Scene):
         plane_labels = plane.get_axis_labels(Text("u"), "v")
         assert plane.axis_labels is plane_labels
         assert len(plane_labels.submobjects) == 2
+
+        edge_axes = Axes((-2, 2, 1), (-1, 1, 1), tips=False)
+        edge_axes.shift(RIGHT * 6.5 + UP * 3.5)
+        edge_label = edge_axes.get_x_axis_label("edge", edge=UR, direction=UR, buff=0.1)
+        assert edge_label.get_right().x <= DEFAULT_FRAME_WIDTH / 2 - MED_SMALL_BUFF + 1e-6
+        assert edge_label.get_top().y <= DEFAULT_FRAME_HEIGHT / 2 - MED_SMALL_BUFF + 1e-6
+
         live_label = Text("live x")
-        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels, live_label)
+        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels, live_label,
+                 edge_axes, edge_label)
         await self.play(axes.animate.shift(RIGHT * 0.7 + UP * 0.4),
                         run_time=0.025, rate_func=linear)
         edge = axes.get_x_axis().get_edge_center(DOWN)
@@ -332,6 +617,30 @@ class NumberLineLineObservations(Scene):
       assert.ok(observations.objectCount > 0);
       assert.ok(Math.abs(observations.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: NumberLine line observations`);
+      const numberLabelsSource = `from noon import *
+
+class NumberLineDecimalNumberLabels(Scene):
+    async def construct(self):
+        await prepare_latex()
+        line = NumberLine((-2, 2, 1), length=4, include_ticks=True)
+        detached = line.get_number_mobjects(1, -1, 1)
+        assert all(isinstance(label, DecimalNumber) for label in detached)
+        assert tuple(label.get_value() for label in detached) == (1, -1, 1)
+        assert len(line.submobjects) == 2
+        assert line.add_numbers((0, 1, -1), excluding=(0,)) is line
+        assert tuple(label.get_value() for label in line.numbers) == (1, -1)
+        assert all(isinstance(label, DecimalNumber) for label in line.numbers)
+        self.add(line, detached)
+        await self.wait(0.05)
+`;
+      const numberLabels = await qualifyPythonPlayback(
+        context, baseUrl, numberLabelsSource, [0, 0.05],
+      );
+      assert.equal(numberLabels.rendererBackend, expectedBackend);
+      assert.equal(numberLabels.presented, true);
+      assert.ok(numberLabels.objectCount > 0);
+      assert.ok(Math.abs(numberLabels.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberLine DecimalNumber labels`);
       return lifecycle;
     } finally {
       await page.close();

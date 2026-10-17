@@ -139,8 +139,8 @@ def _leaf(handle, kind=_compat.Line):
     return wrapper
 
 
-def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
-                        exclude_origin_tick=False):
+def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_ticks=None,
+                        include_tip=False, exclude_origin_tick=False):
     shaft = _leaf(engine_call(handle.coordinateShaft))
     ticks = _family(
         object.__new__(_compat.VGroup),
@@ -152,6 +152,8 @@ def _attach_number_line(wrapper, handle, *, tick_size=0.1, include_tip=False,
         wrapper.tip = _leaf(engine_call(handle.coordinateTip), _compat.VMobject)
         members.append(wrapper.tip)
     wrapper.tick_size = tick_size
+    if include_ticks is not None:
+        wrapper.include_ticks = include_ticks
     wrapper.include_tip = include_tip
     wrapper.exclude_origin_tick = exclude_origin_tick
     return _coordinate_family(wrapper, handle, members)
@@ -221,11 +223,6 @@ class LogBase:
             return math.log(item, self.base)
         return _map_scale_values(value, inverse)
 
-    def get_custom_labels(self, values, **kwargs):
-        raise NotImplementedError(
-            "LogBase custom labels require the TeX label profile"
-        )
-
 
 def _map_scale_values(value, function):
     try:
@@ -262,6 +259,10 @@ _AXES_CONFIG_KEYS = {
     "scaling", "include_numbers", "numbers_to_include", "numbers_to_exclude",
     "font_size", "label_direction", "line_to_number_buff", "decimal_number_config",
 }
+
+_DECIMAL_NUMBER_FORMAT_KEYS = frozenset((
+    "num_decimal_places", "include_sign", "group_with_commas", "show_ellipsis", "unit",
+))
 
 
 def _coordinate_config(config, name, allowed_keys):
@@ -303,23 +304,8 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
     direction = _base._as_vec2(direction)
     buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
     infer_precision = decimal_config is None
-    decimal_config = {} if infer_precision else decimal_config
-    if not isinstance(decimal_config, Mapping):
-        raise TypeError(f"{name}.decimal_number_config must be a mapping")
-    if any(not isinstance(key, str) for key in decimal_config):
-        raise TypeError(f"{name}.decimal_number_config keys must be strings")
-    unknown = sorted(set(decimal_config) - {"num_decimal_places"})
-    if unknown:
-        raise NotImplementedError(
-            f"unsupported {name}.decimal_number_config option(s): " + ", ".join(unknown)
-        )
-    precision = None if infer_precision else 2
-    if "num_decimal_places" in decimal_config:
-        precision = decimal_config["num_decimal_places"]
-        if not isinstance(precision, int) or isinstance(precision, bool):
-            raise TypeError(f"{name}.num_decimal_places must be an integer")
-        if not 0 <= precision <= 12:
-            raise ValueError(f"{name}.num_decimal_places must be between 0 and 12")
+    normalized = _decimal_number_options(decimal_config, f"{name}.decimal_number_config")
+    precision = None if infer_precision else normalized.get("num_decimal_places", 2)
     return font_size, direction, buff, precision
 
 
@@ -333,16 +319,17 @@ def _axes_label_options(config, scale, name, default_direction):
     numbers_to_exclude = _axes_number_values(
         config.get("numbers_to_exclude"), f"{name}.numbers_to_exclude", [0.0]
     )
-    if scale[2] and (include_numbers or numbers_to_include is not None):
-        raise NotImplementedError(
-            "Axes LogBase custom labels require the TeX label profile"
-        )
-
     font_size, direction, buff, decimal_places = _number_label_style(
         config.get("font_size", 36), config.get("label_direction", default_direction),
         config.get("line_to_number_buff", _base.MED_SMALL_BUFF),
         config.get("decimal_number_config"), name,
     )
+    decimal_config = _decimal_number_options(
+        config.get("decimal_number_config"), f"{name}.decimal_number_config",
+    )
+    custom_log_labels = scale[0] == "log" and scale[2]
+    if custom_log_labels and decimal_config.get("unit") is not None:
+        raise TypeError("Axes LogBase custom labels supply the exponent unit")
 
     return {
         "scaling": config.get("scaling"),
@@ -353,7 +340,36 @@ def _axes_label_options(config, scale, name, default_direction):
         "label_direction": direction,
         "line_to_number_buff": buff,
         "decimal_places": decimal_places,
+        "decimal_number_config": decimal_config,
     }
+
+
+def _decimal_number_options(value, name):
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise TypeError(f"{name} keys must be strings")
+    unknown = sorted(set(value) - _DECIMAL_NUMBER_FORMAT_KEYS)
+    if unknown:
+        raise NotImplementedError(
+            f"unsupported {name} option(s): " + ", ".join(unknown)
+        )
+    normalized = dict(value)
+    if "num_decimal_places" in normalized:
+        places = normalized["num_decimal_places"]
+        if not isinstance(places, int) or isinstance(places, bool):
+            raise TypeError(f"{name}.num_decimal_places must be an integer")
+        if not 0 <= places <= 12:
+            raise ValueError(f"{name}.num_decimal_places must be between 0 and 12")
+    for key in ("include_sign", "group_with_commas", "show_ellipsis"):
+        if key in normalized and not isinstance(normalized[key], bool):
+            raise TypeError(f"{name}.{key} must be a boolean")
+    unit = normalized.get("unit")
+    if unit is not None and not isinstance(unit, str):
+        raise TypeError(f"{name}.unit must be a string or None")
+    return normalized
 
 
 def _axes_number_values(values, name, default):
@@ -380,7 +396,9 @@ def _configure_axes_numeric_labels(axis, config, range_values):
     axis.label_direction = config["label_direction"]
     axis.line_to_number_buff = config["line_to_number_buff"]
     axis.number_label_decimal_places = places
-    axis.decimal_number_config = {"num_decimal_places": places}
+    decimal_config = dict(config.get("decimal_number_config", {}))
+    decimal_config.setdefault("num_decimal_places", places)
+    axis.decimal_number_config = decimal_config
     if axis.include_numbers or axis.numbers_to_include is not None:
         axis.add_numbers(
             x_values=axis.numbers_to_include,
@@ -498,10 +516,6 @@ class NumberLine(_compat.Group):
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
         scale_kind, scale_parameter, custom_scale_labels = _number_line_scale(scaling)
-        if custom_scale_labels and (include_numbers or numbers_to_include is not None):
-            raise NotImplementedError(
-                "NumberLine LogBase custom labels require the TeX label profile"
-            )
         tick_size = _finite_axis_option(tick_size, "tick_size", nonnegative=True)
         font_size, label_direction, line_to_number_buff, decimal_places = _number_label_style(
             font_size, _base.DOWN if label_direction is None else label_direction,
@@ -522,6 +536,11 @@ class NumberLine(_compat.Group):
             raise NotImplementedError(
                 "NumberLine constructor label_constructor requires the TeX label profile"
             )
+        decimal_number_config = _decimal_number_options(
+            decimal_number_config, "NumberLine.decimal_number_config",
+        )
+        if custom_scale_labels and decimal_number_config.get("unit") is not None:
+            raise TypeError("LogBase custom labels supply the exponent unit")
         numbers_to_include = (
             None if numbers_to_include is None else list(numbers_to_include)
         )
@@ -549,6 +568,7 @@ class NumberLine(_compat.Group):
             self,
             engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
             tick_size=tick_size,
+            include_ticks=bool(include_ticks),
             include_tip=bool(include_tip),
             exclude_origin_tick=bool(exclude_origin_tick),
         )
@@ -565,7 +585,8 @@ class NumberLine(_compat.Group):
             # Manim derives precision before coercing the range to floats.
             step = values[2] if len(values) == 3 else 1
             decimal_places = _decimal_places_from_step(step)
-        self.decimal_number_config = {"num_decimal_places": decimal_places}
+        decimal_number_config.setdefault("num_decimal_places", decimal_places)
+        self.decimal_number_config = decimal_number_config
         self.number_label_decimal_places = decimal_places
         if self.include_numbers or numbers_to_include is not None:
             self.add_numbers(
@@ -709,7 +730,10 @@ class NumberLine(_compat.Group):
         return self.ticks
 
     def get_number_mobject(self, number, **kwargs):
-        """Return one detached ordinary Text label at a numeric position."""
+        """Return one detached DecimalNumber label at a numeric position.
+
+        Pass ``font=...`` to select the explicit native-Text subset.
+        """
         from _manim_number_labels import number_mobjects
         number = _base._ir._finite_number("number", number)
         config = self._number_label_config(kwargs)
@@ -728,15 +752,21 @@ class NumberLine(_compat.Group):
         return number_mobjects(self, numbers or None, attach=False, config=config)
 
     def _number_label_config(self, values):
-        config = dict(values)
+        config = dict(getattr(self, "decimal_number_config", {}))
+        config.update(values)
+        if "decimal_places" in values:
+            config.pop("num_decimal_places", None)
+        elif "num_decimal_places" in values:
+            config.pop("decimal_places", None)
+        elif "num_decimal_places" in config:
+            config["decimal_places"] = config.pop("num_decimal_places")
         config.setdefault("direction", getattr(self, "label_direction", _base.DOWN))
         config.setdefault(
             "buff", getattr(self, "line_to_number_buff", _base.MED_SMALL_BUFF)
         )
         config.setdefault("font_size", getattr(self, "font_size", 36))
-        config.setdefault(
-            "decimal_places", getattr(self, "number_label_decimal_places", 0)
-        )
+        if "decimal_places" not in config:
+            config["decimal_places"] = getattr(self, "number_label_decimal_places", 0)
         return config
 
     def add_labels(self, dict_values, direction=None, buff=None, font_size=None,
@@ -762,18 +792,37 @@ class NumberLine(_compat.Group):
         return self
 
     def add_numbers(self, x_values=None, excluding=None, **kwargs):
-        """Atomically append native Text labels before playback; expose .numbers.
+        """Atomically append DecimalNumber labels before playback; expose .numbers.
 
         Repeated calls append another label family, rather than replacing the
-        earlier one. This bounded subset does not construct DecimalNumber/TeX.
+        earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
+        into the native-Text subset. LogBase(custom_labels=True) uses Integer
+        exponent labels for the generated logarithmic ticks.
         """
         from _manim_number_labels import number_mobjects
         config = self._number_label_config(kwargs)
         config.setdefault("exclude_zero", False)
         if excluding is None:
             excluding = getattr(self, "numbers_to_exclude", ())
-        number_mobjects(self, x_values, attach=True, config=config,
-                        excluding=excluding)
+        log_base = None
+        number_class = None
+        if _number_line_scale(getattr(self, "scaling", None))[2]:
+            from _manim_numbers import Integer
+
+            log_base = self.scaling.base
+            number_class = Integer
+            x_values = None
+            excluding = ()
+        if log_base is not None:
+            labels = number_mobjects(
+                self, x_values, attach=True, config=config, excluding=excluding,
+                log_base=log_base, number_class=number_class,
+            )
+            self.labels = labels
+        else:
+            number_mobjects(
+                self, x_values, attach=True, config=config, excluding=excluding,
+            )
         return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):
@@ -854,6 +903,7 @@ class Axes(_compat.Group):
                 object.__new__(NumberLine),
                 engine_call(handle.coordinateAxis, index),
                 tick_size=float(tick_size),
+                include_ticks=bool(include_ticks),
                 include_tip=bool(tips),
                 exclude_origin_tick=exclude_origin,
             )
@@ -889,7 +939,8 @@ class Axes(_compat.Group):
         direction = _base._as_vec2(direction)
         buff = _finite_axis_option(buff, "buff", nonnegative=True)
         label = _axes_label_object(label)
-        label.next_to(axis.get_edge_center(edge), direction=direction, buff=buff)
+        _shared._next_to_edge_in_frame(label, axis, edge, direction, buff,
+                                       _base.MED_SMALL_BUFF)
         return label
 
     def get_x_axis_label(self, label, edge=_base.UR, direction=_base.UR,
@@ -1111,14 +1162,16 @@ class Axes(_compat.Group):
         members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
         return _family(object.__new__(_compat.VGroup), handle, members)
 
-    def add_coordinates(self, x_values=None, y_values=None, *, x_config=None, y_config=None, **kwargs):
-        """Atomically append both axes' native Text label families before playback.
+    def add_coordinates(self, *axes_numbers, x_config=None, y_config=None, **kwargs):
+        """Add default or positional per-axis coordinate labels.
 
-        Options shared by both axes may be overridden with x_config/y_config.
-        Labels become members and follow subsequent transforms and copies.
+        Numeric defaults use retained DecimalNumber labels and require
+        ``await prepare_latex()``. Passing ``font`` selects native Text.
         """
+        if "x_values" in kwargs or "y_values" in kwargs:
+            raise TypeError("add_coordinates uses positional per-axis values")
         from _manim_number_labels import add_coordinates
-        return add_coordinates(self, x_values, y_values, x_config=x_config,
+        return add_coordinates(self, *axes_numbers, x_config=x_config,
                                y_config=y_config, config=kwargs)
 
     def time_series_plan(self, samples, *, run_time):

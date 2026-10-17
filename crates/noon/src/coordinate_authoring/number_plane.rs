@@ -2,6 +2,8 @@
 use super::*;
 use noon_core::{StrokeCap, StrokeJoin, BLUE_D};
 
+const DEFAULT_NUMBER_PLANE_TIP_SIZE: f64 = 0.35;
+
 /// Inert Manim-compatible cartesian plane request.  The result contains only
 /// ordinary line objects and families; it does not introduce a grid primitive.
 #[derive(Clone, Debug)]
@@ -11,6 +13,19 @@ pub struct ManimNumberPlaneOptions {
     pub x_length: Option<f64>,
     pub y_length: Option<f64>,
     pub axis_style: SemanticStyle,
+    /// Optional style replacement for the x axis; omitted inherits `axis_style`.
+    pub x_axis_style: Option<SemanticStyle>,
+    /// Optional style replacement for the y axis; omitted inherits `axis_style`.
+    pub y_axis_style: Option<SemanticStyle>,
+    /// Manim's NumberPlane defaults to no tip on either axis.
+    pub x_include_tip: bool,
+    pub y_include_tip: bool,
+    pub x_tip_width: f64,
+    pub x_tip_height: f64,
+    pub y_tip_width: f64,
+    pub y_tip_height: f64,
+    pub x_ticks: CoordinateTicks,
+    pub y_ticks: CoordinateTicks,
     pub background_line_style: SemanticStyle,
     pub faded_line_style: Option<SemanticStyle>,
     pub faded_line_ratio: u32,
@@ -61,6 +76,24 @@ impl Default for ManimNumberPlaneOptions {
             x_length: None,
             y_length: None,
             axis_style: number_plane_axis_style(),
+            x_axis_style: None,
+            y_axis_style: None,
+            x_include_tip: false,
+            y_include_tip: false,
+            x_tip_width: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            x_tip_height: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            y_tip_width: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            y_tip_height: DEFAULT_NUMBER_PLANE_TIP_SIZE,
+            x_ticks: CoordinateTicks {
+                enabled: false,
+                exclude_origin: true,
+                ..CoordinateTicks::default()
+            },
+            y_ticks: CoordinateTicks {
+                enabled: false,
+                exclude_origin: true,
+                ..CoordinateTicks::default()
+            },
             background_line_style,
             faded_line_style: None,
             faded_line_ratio: 1,
@@ -88,11 +121,13 @@ impl ManimNumberPlane {
         store: Rc<RefCell<SemanticStore>>,
         options: &ManimNumberPlaneOptions,
     ) -> Result<Self, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_plane(options)?;
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        Self::from_family(resolve_family(store, &result, root)?)
+        let prepared = prepare_number_plane(options)?;
+        let root = publish_prepared_number_plane(
+            prepared,
+            &mut store.borrow_mut(),
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_family(MobjectFamily::from_node(store, root)?)
     }
 
     pub fn from_family(family: MobjectFamily) -> Result<Self, CoordinateAuthoringError> {
@@ -190,11 +225,12 @@ impl Scene {
         &mut self,
         options: &ManimNumberPlaneOptions,
     ) -> Result<ManimNumberPlane, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_number_plane(options)?;
-        let result = self.apply_semantic_transaction(transaction)?;
-        ManimNumberPlane::from_family(resolve_family(
+        let prepared = prepare_number_plane(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_number_plane(prepared, store, publish)
+        })?;
+        ManimNumberPlane::from_family(MobjectFamily::from_node(
             Rc::clone(self.integration_store()),
-            &result,
             root,
         )?)
     }
@@ -235,9 +271,53 @@ fn plane_members(family: &MobjectFamily) -> Result<[SemanticNodeId; 4], Coordina
     ])
 }
 
+pub(crate) struct PreparedNumberPlane {
+    transaction: SemanticMutationTransaction,
+    root: SemanticLocalNodeToken,
+    axes: [PreparedNumberLine; 2],
+}
+
+pub(crate) fn publish_prepared_number_plane(
+    prepared: PreparedNumberPlane,
+    store: &mut SemanticStore,
+    mut publish: impl FnMut(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    let PreparedNumberPlane {
+        mut transaction,
+        root,
+        axes,
+    } = prepared;
+    let paths = axes
+        .iter()
+        .filter_map(|axis| axis.tip_path.clone())
+        .collect::<Vec<_>>();
+    store.with_geometry_paths(paths, |store, handles| {
+        let mut handles = handles.iter().copied();
+        for axis in axes {
+            let group = stage_line(&mut transaction, axis.states);
+            if axis.tip_path.is_some() {
+                let handle = handles.next().ok_or(AuthoringError::NonFiniteObjectState)?;
+                let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                state.set_role(SemanticObjectRole::CoordinateTip);
+                state.style = axis.tip_style.ok_or(AuthoringError::NonFiniteObjectState)?;
+                let tip = transaction.create_node(SemanticNodeCreation::object(state));
+                transaction.add_member(group, tip);
+            }
+            transaction.add_member(root, group);
+        }
+        let result = publish(store, transaction)?;
+        result
+            .resolve(root)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(root))
+    })
+}
+
 pub(crate) fn prepare_number_plane(
     options: &ManimNumberPlaneOptions,
-) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
+) -> Result<PreparedNumberPlane, CoordinateAuthoringError> {
     let x_length = options
         .x_length
         .unwrap_or(options.x_range[1] - options.x_range[0]);
@@ -246,6 +326,12 @@ pub(crate) fn prepare_number_plane(
         .unwrap_or(options.y_range[1] - options.y_range[0]);
     let frame = AxesFrame::centered(options.x_range, options.y_range, x_length, y_length)?;
     validate_plane_style(&options.axis_style, "invalid axis style")?;
+    if let Some(style) = options.x_axis_style.as_ref() {
+        validate_plane_style(style, "invalid x-axis style")?;
+    }
+    if let Some(style) = options.y_axis_style.as_ref() {
+        validate_plane_style(style, "invalid y-axis style")?;
+    }
     validate_plane_style(
         &options.background_line_style,
         "invalid background line style",
@@ -266,28 +352,40 @@ pub(crate) fn prepare_number_plane(
     let root = transaction.create_node(SemanticNodeCreation::family());
     let faded = transaction.create_node(SemanticNodeCreation::family());
     let background = transaction.create_node(SemanticNodeCreation::family());
-    let x_axis = stage_line(
-        &mut transaction,
-        prepare_line(
+    let x_style = options.x_axis_style.as_ref().unwrap_or(&options.axis_style);
+    let y_style = options.y_axis_style.as_ref().unwrap_or(&options.axis_style);
+    let prepare_axis = |frame, ticks, style: &SemanticStyle, include_tip, tip_width, tip_height| {
+        prepare_number_line_in_frame(
+            frame,
+            &ManimNumberLineOptions {
+                range: frame.range(),
+                ticks,
+                style: style.clone(),
+                include_tip,
+                tip_width,
+                tip_height,
+                ..Default::default()
+            },
+        )
+    };
+    let axes = [
+        prepare_axis(
             frame.x(),
-            CoordinateTicks {
-                enabled: false,
-                ..CoordinateTicks::default()
-            },
-            &options.axis_style,
+            options.x_ticks,
+            x_style,
+            options.x_include_tip,
+            options.x_tip_width,
+            options.x_tip_height,
         )?,
-    );
-    let y_axis = stage_line(
-        &mut transaction,
-        prepare_line(
+        prepare_axis(
             frame.y(),
-            CoordinateTicks {
-                enabled: false,
-                ..CoordinateTicks::default()
-            },
-            &options.axis_style,
+            options.y_ticks,
+            y_style,
+            options.y_include_tip,
+            options.y_tip_width,
+            options.y_tip_height,
         )?,
-    );
+    ];
     stage_grid_lines(
         &mut transaction,
         faded,
@@ -311,10 +409,14 @@ pub(crate) fn prepare_number_plane(
         &faded_style,
     )?;
     // Pinned Manim add_to_back ordering: faded, background, then axes.
-    for child in [faded, background, x_axis, y_axis] {
+    for child in [faded, background] {
         transaction.add_member(root, child);
     }
-    Ok((transaction, root))
+    Ok(PreparedNumberPlane {
+        transaction,
+        root,
+        axes,
+    })
 }
 
 fn validate_plane_style(
