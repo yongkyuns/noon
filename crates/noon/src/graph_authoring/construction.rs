@@ -146,10 +146,24 @@ where
             return Err(GraphAuthoringError::DuplicateVertexKey { vertex_index });
         }
         let id = topology.add_vertex();
-        let options = vertex_options(position, &options)?;
+        let radius = options
+            .vertex_radius_overrides
+            .get(&vertex_index)
+            .copied()
+            .unwrap_or(options.vertex_radius);
+        let options = vertex_options_with_radius(position, &options, radius)?;
         vertex_lookup.insert(key.clone(), planned_vertices.len());
         positions.push(position);
         planned_vertices.push(PlannedVertex { key, id, options });
+    }
+    if options
+        .vertex_radius_overrides
+        .keys()
+        .any(|&index| index >= planned_vertices.len())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "per-vertex radius override index must refer to an existing vertex",
+        ));
     }
 
     let mut planned_edges = Vec::new();
@@ -365,7 +379,15 @@ pub(super) fn vertex_options(
     position: (f64, f64),
     options: &GraphOptions,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
-    let mut vertex = ManimGeometryOptions::circle(options.vertex_radius)?;
+    vertex_options_with_radius(position, options, options.vertex_radius)
+}
+
+pub(super) fn vertex_options_with_radius(
+    position: (f64, f64),
+    options: &GraphOptions,
+    radius: f64,
+) -> Result<ManimGeometryOptions, AuthoringError> {
+    let mut vertex = ManimGeometryOptions::circle(radius)?;
     vertex.set_translation(position.0, position.1)?;
     let fill = options.vertex_fill;
     vertex.set_fill(
@@ -383,6 +405,7 @@ pub(super) fn vertex_options(
         f64::from(stroke.alpha),
     )?;
     vertex.set_stroke_width(options.vertex_stroke_width)?;
+    vertex.set_stroke_opacity(options.vertex_stroke_opacity)?;
     Ok(vertex)
 }
 
@@ -401,6 +424,7 @@ pub(super) fn line_options(
         f64::from(color.alpha),
     )?;
     line.set_stroke_width(options.edge_stroke_width)?;
+    line.set_stroke_opacity(options.edge_stroke_opacity)?;
     Ok(line)
 }
 
@@ -419,5 +443,6 @@ pub(super) fn arrow_options(
         f64::from(color.alpha),
     )?;
     arrow.set_stroke_width(options.edge_stroke_width)?;
+    arrow.set_stroke_opacity(options.edge_stroke_opacity)?;
     Ok(arrow)
 }

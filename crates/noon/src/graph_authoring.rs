@@ -33,13 +33,18 @@ pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
 #[derive(Clone, Debug)]
 pub struct GraphOptions {
     pub vertex_radius: f64,
+    /// Optional per-vertex radius overrides keyed by insertion-order index.
+    /// Language adapters use this for Manim's keyed `vertex_config` radius.
+    pub vertex_radius_overrides: HashMap<usize, f64>,
     pub vertex_fill: Color,
     /// Opacity applied to every vertex fill independently from its color alpha.
     pub vertex_fill_opacity: f64,
     pub vertex_stroke: Color,
     pub vertex_stroke_width: f64,
+    pub vertex_stroke_opacity: f64,
     pub edge_color: Color,
     pub edge_stroke_width: f64,
+    pub edge_stroke_opacity: f64,
     pub directed_edge_buff: Option<f64>,
 }
 
@@ -47,12 +52,15 @@ impl Default for GraphOptions {
     fn default() -> Self {
         Self {
             vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
+            vertex_radius_overrides: HashMap::new(),
             vertex_fill: WHITE,
             vertex_fill_opacity: 1.0,
             vertex_stroke: WHITE,
             vertex_stroke_width: DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+            vertex_stroke_opacity: 1.0,
             edge_color: WHITE,
             edge_stroke_width: DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+            edge_stroke_opacity: 1.0,
             directed_edge_buff: None,
         }
     }
@@ -410,6 +418,19 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         mutation::add_vertices(scene, &mut self.inner, vertices)
     }
 
+    /// Append vertices with an individual appearance, publishing topology and
+    /// styled geometry together through the Scene's current publication path.
+    pub fn add_vertices_with_options<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    {
+        mutation::add_vertices_with_options(scene, &mut self.inner, vertices)
+    }
+
     /// Append graph edges through the Scene's current publication path.
     pub fn add_edges<E>(
         &mut self,
@@ -420,6 +441,32 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         E: IntoIterator<Item = (K, K)>,
     {
         mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    /// Append individually styled graph edges through one Scene publication.
+    pub fn add_edges_with_options<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_edges_with_options(scene, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one Scene publication.
+    pub fn add_vertices_and_edges_with_options<V, E>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(scene, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices<V>(
@@ -472,6 +519,17 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         mutation::add_vertices(live, &mut self.inner, vertices)
     }
 
+    pub fn add_vertices_live_with_options<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    {
+        mutation::add_vertices_with_options(live, &mut self.inner, vertices)
+    }
+
     pub fn add_edges_live<E>(
         &mut self,
         live: &mut crate::LiveSession<'_>,
@@ -481,6 +539,32 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         E: IntoIterator<Item = (K, K)>,
     {
         mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    /// Append individually styled graph edges through one live publication.
+    pub fn add_edges_live_with_options<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_edges_with_options(live, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one live publication.
+    pub fn add_vertices_and_edges_live_with_options<V, E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(live, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices_live<V>(
@@ -636,6 +720,17 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         mutation::add_vertices(scene, &mut self.inner, vertices)
     }
 
+    pub fn add_vertices_with_options<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    {
+        mutation::add_vertices_with_options(scene, &mut self.inner, vertices)
+    }
+
     pub fn add_edges<E>(
         &mut self,
         scene: &mut Scene,
@@ -645,6 +740,32 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         E: IntoIterator<Item = (K, K)>,
     {
         mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    /// Append individually styled directed edges through one Scene publication.
+    pub fn add_edges_with_options<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_edges_with_options(scene, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one Scene publication.
+    pub fn add_vertices_and_edges_with_options<V, E>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(scene, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices<V>(
@@ -697,6 +818,17 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         mutation::add_vertices(live, &mut self.inner, vertices)
     }
 
+    pub fn add_vertices_live_with_options<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+    {
+        mutation::add_vertices_with_options(live, &mut self.inner, vertices)
+    }
+
     pub fn add_edges_live<E>(
         &mut self,
         live: &mut crate::LiveSession<'_>,
@@ -706,6 +838,32 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         E: IntoIterator<Item = (K, K)>,
     {
         mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    /// Append individually styled directed edges through one live publication.
+    pub fn add_edges_live_with_options<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_edges_with_options(live, &mut self.inner, edges)
+    }
+
+    /// Append vertices and their incident edges in one live publication.
+    pub fn add_vertices_and_edges_live_with_options<V, E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64), GraphOptions)>,
+        E: IntoIterator<Item = (K, K, GraphOptions)>,
+    {
+        mutation::add_vertices_and_edges_with_options(live, &mut self.inner, vertices, edges)
     }
 
     pub fn remove_vertices_live<V>(
