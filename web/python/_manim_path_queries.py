@@ -194,6 +194,14 @@ def curve_functions_with_lengths(value, **kwargs):
     )
 
 
+def path_direction(value):
+    query = _query(value)
+    try:
+        return str(engine_call(query.direction))
+    finally:
+        query.free()
+
+
 def curve_length_pieces(value, n, sample_points):
     import numpy as np
 

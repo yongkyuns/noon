@@ -134,6 +134,24 @@ fn curve_function_queries_evaluate_batches_and_extrapolate_in_snapshot_space() {
 }
 
 #[test]
+fn path_direction_matches_manim_anchor_trapezoid_and_snapshot_transform() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-1., -1.))
+        .line_to(Vec2::new(1., -1.))
+        .line_to(Vec2::new(1., 1.))
+        .line_to(Vec2::new(-1., 1.))
+        .close();
+    let mut object = scene.path(path, Default::default()).unwrap();
+    assert_eq!(object.path_query().unwrap().direction(), "CCW");
+    object.reverse_direction().unwrap();
+    assert_eq!(object.path_query().unwrap().direction(), "CW");
+    object.set_translation(7., -3.).unwrap();
+    assert_eq!(object.path_query().unwrap().direction(), "CCW");
+    assert_eq!(object.local_path_query().unwrap().direction(), "CW");
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()

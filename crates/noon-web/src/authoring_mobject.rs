@@ -1542,6 +1542,9 @@ mod wasm {
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
         }
+        pub fn direction(&self) -> String {
+            self.value.direction().to_owned()
+        }
         #[wasm_bindgen(js_name = curvePoints)]
         pub fn curve_points(&self, index: u32) -> Result<Vec<f64>, JsValue> {
             self.value
