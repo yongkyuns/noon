@@ -732,19 +732,8 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         radians: f64,
     ) -> Result<(), AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .set_angle_value(mobject, radians)
-        .map(|_| ())
-        .map_err(AuthoringFailure::from)
+        self.with_live_session(|live| live.set_angle_value(mobject, radians))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
