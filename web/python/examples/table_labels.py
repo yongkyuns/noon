@@ -26,5 +26,13 @@ class TableLabelsExample(Scene):
         assert copied.row_labels[0] is not row_labels[0]
         assert copied.col_labels[0] is not column_labels[0]
         assert copied.top_left_entry is not top_left_entry
+        assert len(table.get_entries()) == 6
+        assert table.get_entries((1, 1)) is top_left_entry
+        assert table.get_entries((1, 2)) is column_labels[0]
+        assert table.get_entries((2, 1)) is row_labels[0]
+        assert table.get_entries((2, 2)) is table.get_entries_without_labels((1, 1))
+        assert len(table.get_entries_without_labels()) == 2
+        assert len(table.get_rows()) == 3
+        assert len(table.get_columns()) == 2
         self.add(table)
         self.wait(0.2)

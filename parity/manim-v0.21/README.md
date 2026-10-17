@@ -52,6 +52,11 @@ identity, copy independence, and table construction on both. Strict pinned
 ManimCE Cairo comparison passes unchanged thresholds with exact duration and
 0.17% worst differing pixels. Non-empty default-cell font metrics and custom
 element formatting remain unqualified.
+The retained façade's `get_rows()` and `get_columns()` include any supplied
+row, column, and corner labels in the displayed grid. `get_entries()` returns
+that row-major grid, while `get_entries_without_labels()` addresses body cells
+only; both preserve the original retained wrappers. The upstream no-corner
+index offset is covered explicitly.
 
 `table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
 outer rules retained. The option defaults to `True`, travels through the Rust,

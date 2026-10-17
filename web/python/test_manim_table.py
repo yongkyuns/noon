@@ -188,6 +188,90 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(value.get_col_labels().submobjects, [])
         self.assertEqual(value.get_labels().submobjects, [])
 
+    def test_entry_queries_match_manims_display_grid_and_body_only_access(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        wrappers = [
+            types.SimpleNamespace(_semantic_handle=handle)
+            for handle in self.handle.entries()
+        ]
+        value._entry_family = lambda: types.SimpleNamespace(submobjects=[
+            types.SimpleNamespace(submobjects=wrappers[:2]),
+            types.SimpleNamespace(submobjects=wrappers[2:]),
+        ])
+        row_labels = [object(), object()]
+        column_labels = [object(), object()]
+        corner = object()
+        value.row_labels = row_labels
+        value.col_labels = column_labels
+        value.top_left_entry = corner
+
+        entries = value.get_entries().submobjects
+        self.assertEqual(
+            entries,
+            [corner, *column_labels, row_labels[0], *wrappers[:2], row_labels[1], *wrappers[2:]],
+        )
+        self.assertIs(value.get_entries((1, 1)), corner)
+        self.assertIs(value.get_entries((2, 2)), wrappers[0])
+        self.assertEqual(value.get_entries_without_labels().submobjects, wrappers)
+        self.assertIs(value.get_entries_without_labels((1, 1)), wrappers[0])
+        self.assertEqual(
+            [row.submobjects for row in value.get_rows().submobjects],
+            [[corner, *column_labels], [row_labels[0], *wrappers[:2]], [row_labels[1], *wrappers[2:]]],
+        )
+        self.assertEqual(
+            [column.submobjects for column in value.get_columns().submobjects],
+            [[corner, *row_labels], [column_labels[0], wrappers[0], wrappers[2]],
+             [column_labels[1], wrappers[1], wrappers[3]]],
+        )
+
+    def test_missing_top_left_placeholder_matches_manims_flat_entry_indexing(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        wrappers = [types.SimpleNamespace(_semantic_handle=handle) for handle in self.handle.entries()]
+        value._entry_family = lambda: types.SimpleNamespace(submobjects=[
+            types.SimpleNamespace(submobjects=wrappers[:2]),
+            types.SimpleNamespace(submobjects=wrappers[2:]),
+        ])
+        value.row_labels = [object(), object()]
+        value.col_labels = [object(), object()]
+        value.top_left_entry = None
+
+        self.assertEqual(len(value.get_entries().submobjects), 8)
+        self.assertIsInstance(value.get_rows().submobjects[0].submobjects[0], types.SimpleNamespace)
+        self.assertIs(value.get_entries((1, 1)), wrappers[-1])
+
+    def test_single_axis_labels_expand_only_the_matching_display_dimension(self):
+        wrappers = [types.SimpleNamespace(_semantic_handle=handle) for handle in self.handle.entries()]
+        body_rows = [
+            types.SimpleNamespace(submobjects=wrappers[:2]),
+            types.SimpleNamespace(submobjects=wrappers[2:]),
+        ]
+        row_labels = [object(), object()]
+        row_labeled = table.Table([["a", "b"], ["c", "d"]])
+        row_labeled._entry_family = lambda: types.SimpleNamespace(submobjects=body_rows)
+        row_labeled.row_labels = row_labels
+        rows = row_labeled.get_rows().submobjects
+        columns = row_labeled.get_columns().submobjects
+        self.assertEqual([row.submobjects for row in rows], [
+            [row_labels[0], *wrappers[:2]], [row_labels[1], *wrappers[2:]],
+        ])
+        self.assertEqual([column.submobjects for column in columns], [
+            row_labels, [wrappers[0], wrappers[2]], [wrappers[1], wrappers[3]],
+        ])
+
+        column_labels = [object(), object()]
+        column_labeled = table.Table([["a", "b"], ["c", "d"]])
+        column_labeled._entry_family = lambda: types.SimpleNamespace(submobjects=body_rows)
+        column_labeled.col_labels = column_labels
+        rows = column_labeled.get_rows().submobjects
+        columns = column_labeled.get_columns().submobjects
+        self.assertEqual([row.submobjects for row in rows], [
+            column_labels, wrappers[:2], wrappers[2:],
+        ])
+        self.assertEqual([column.submobjects for column in columns], [
+            [column_labels[0], wrappers[0], wrappers[2]],
+            [column_labels[1], wrappers[1], wrappers[3]],
+        ])
+
     def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
         entry = _FakeMobject(1)
         row_label = _FakeFamily(2)

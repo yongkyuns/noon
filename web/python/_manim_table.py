@@ -168,7 +168,7 @@ class Table(_compat.VGroup):
             getattr(self, "_canonical_live_target_context", None),
         )
 
-    def get_entries(self, pos=None):
+    def _get_entries_without_labels(self, pos=None):
         if pos is not None:
             row, column = _cell_position(pos)
             handle = engine_call(self._table_handle.entryAt, row, column)
@@ -186,6 +186,41 @@ class Table(_compat.VGroup):
             for item in row.submobjects
         }
         return _compat.VGroup(*[known[_handle_key(item)] for item in entries])
+
+    def _rows_with_labels(self):
+        rows = [list(row.submobjects) for row in self._entry_family().submobjects]
+        if self.row_labels:
+            rows = [[label, *row] for label, row in zip(self.row_labels, rows)]
+        if self.col_labels:
+            if self.row_labels:
+                corner = self.top_left_entry
+                if corner is None:
+                    corner = _compat.VGroup()
+                rows.insert(0, [corner, *self.col_labels])
+            else:
+                rows.insert(0, list(self.col_labels))
+        return rows
+
+    def get_entries_without_labels(self, pos=None):
+        """Return body entries without any row, column, or corner labels."""
+        return self._get_entries_without_labels(pos)
+
+    def get_entries(self, pos=None):
+        """Return entries in ManimCE's displayed grid, including supplied labels."""
+        if not (self.row_labels or self.col_labels):
+            return self._get_entries_without_labels(pos)
+
+        rows = self._rows_with_labels()
+        entries = [item for row in rows for item in row]
+        missing_corner = bool(self.row_labels and self.col_labels) and self.top_left_entry is None
+        if missing_corner:
+            # ManimCE drops its empty grid placeholder from ``elements``.
+            entries.pop(0)
+        if pos is not None:
+            row, column = _cell_position(pos)
+            index = len(rows[0]) * row + column - int(missing_corner)
+            return entries[index]
+        return _compat.VGroup(*entries)
 
     def _entry_family(self):
         return self.submobjects[1]
@@ -213,7 +248,10 @@ class Table(_compat.VGroup):
         return self._line_group("getVerticalLines", "_vertical_lines_cache")
 
     def get_rows(self):
-        return _compat.VGroup(*self._entry_family().submobjects)
+        return _compat.VGroup(*[
+            _compat.VGroup(*row)
+            for row in self._rows_with_labels()
+        ])
 
     def get_columns(self):
         known = {
@@ -221,10 +259,24 @@ class Table(_compat.VGroup):
             for row in self._entry_family().submobjects
             for item in row.submobjects
         }
-        return _compat.VGroup(*[
-            _compat.VGroup(*[known[_handle_key(item)] for item in column])
+        columns = [
+            [known[_handle_key(item)] for item in column]
             for column in engine_call(self._table_handle.columns)
-        ])
+        ]
+        if self.col_labels:
+            columns = [
+                [label, *column]
+                for label, column in zip(self.col_labels, columns)
+            ]
+        if self.row_labels:
+            label_column = list(self.row_labels)
+            if self.col_labels:
+                corner = self.top_left_entry
+                if corner is None:
+                    corner = _compat.VGroup()
+                label_column.insert(0, corner)
+            columns.insert(0, label_column)
+        return _compat.VGroup(*[_compat.VGroup(*column) for column in columns])
 
     def get_row_labels(self):
         return _compat.VGroup(*(self.row_labels or []))
