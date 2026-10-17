@@ -15,6 +15,20 @@ const source = await readFile(
   path.join(repoRoot, "web/python/examples/perf_host_updater.py"),
   "utf8",
 );
+const discoveryRegression = `
+import gc
+import weakref
+from noon import Circle
+
+def _abandoned_updater():
+    value = Circle(0.1)
+    value.add_updater(lambda obj, target=value: None)
+    return weakref.ref(value)
+
+_abandoned_ref = _abandoned_updater()
+gc.collect()
+assert _abandoned_ref() is None, "updater discovery retained an abandoned wrapper"
+`;
 
 let serverOutput = "";
 const server = spawn(
@@ -68,7 +82,7 @@ try {
 
   const output = await page.evaluate(
     ({ pythonSource, times }) => window.noonUpdaterSmoke.run(pythonSource, times),
-    { pythonSource: source, times: [0.25, 0.75] },
+    { pythonSource: discoveryRegression + source, times: [0.25, 0.75] },
   );
   assert.equal(errors.length, 0, errors.join("\n"));
   assert.equal(output.result.kind, "semantic_scene");
