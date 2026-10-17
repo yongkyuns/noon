@@ -67,6 +67,29 @@ impl PathQuery {
             .map(|p| self.transform_point(p.x, p.y)))
     }
 
+    /// Evaluate one curve at each supplied parameter in this snapshot's
+    /// coordinate space. Parameters outside `[0, 1]` extrapolate the curve.
+    pub fn curve_points_at(
+        &self,
+        index: usize,
+        parameters: &[f64],
+    ) -> Result<Vec<(f64, f64, f64)>, AuthoringError> {
+        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
+            PathProportionError::InvalidCurveIndex { index, count: 0 },
+        ))?;
+        plan.curve_points_at(index, parameters)
+            .map(|points| {
+                points
+                    .into_iter()
+                    .map(|point| {
+                        let (x, y) = self.transform_point(point.x, point.y);
+                        (x, y, point.z)
+                    })
+                    .collect()
+            })
+            .map_err(AuthoringError::PathQuery)
+    }
+
     /// Straight-line sample lengths for one curve, matching ManimCE's
     /// `get_nth_curve_length_pieces` default of ten Bezier samples.
     pub fn curve_length_pieces(

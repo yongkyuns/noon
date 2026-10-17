@@ -103,6 +103,37 @@ fn curve_length_piece_queries_match_sample_count_and_world_scale() {
 }
 
 #[test]
+fn curve_function_queries_evaluate_batches_and_extrapolate_in_snapshot_space() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+        Vec2::new(1., 2.),
+        Vec2::new(2., 2.),
+        Vec2::new(3., 0.),
+    );
+    let mut object = scene.path(path, Default::default()).unwrap();
+    object.set_scale(2., 0.5).unwrap();
+    object.set_translation(10., -2.).unwrap();
+    let query = object.path_query().unwrap();
+
+    let points = query.curve_points_at(0, &[0., 0.5, 1., 1.5]).unwrap();
+    assert_eq!(points.len(), 4);
+    for (actual, expected) in points.iter().zip([
+        (10., -2., 0.),
+        (13., -1.25, 0.),
+        (16., -2., 0.),
+        (19., -4.25, 0.),
+    ]) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-12
+                && (actual.1 - expected.1).abs() < 1e-12
+                && (actual.2 - expected.2).abs() < 1e-12,
+            "{actual:?} != {expected:?}"
+        );
+    }
+    assert!(query.curve_points_at(1, &[0.5]).is_err());
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()

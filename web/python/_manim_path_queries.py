@@ -86,11 +86,117 @@ def _curve_sample_count(sample_points):
 
 
 def _assert_curve_index(query, index):
+    if index < 0:
+        raise IndexError("curve index must be non-negative")
     if index >= int(query.curveCount):
         raise AssertionError
 
 
+class _CurveQuerySnapshot:
+    """Keep one immutable Rust path observation alive for returned callables."""
+
+    __slots__ = ("query",)
+
+    def __init__(self, query):
+        self.query = query
+
+    def __del__(self):
+        query = getattr(self, "query", None)
+        if query is not None:
+            self.query = None
+            try:
+                query.free()
+            except Exception:
+                # Finalizers must not surface errors during interpreter teardown.
+                pass
+
+
+def _curve_callable(snapshot, index):
+    def curve(t):
+        import numpy as np
+
+        parameters = np.asarray(t, dtype=np.float64)
+        flat = parameters.reshape(-1).tolist()
+        coordinates = engine_call(
+            snapshot.query.curvePointsAt, index, flat
+        )
+        points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
+        if parameters.ndim == 0:
+            return points[0]
+        if parameters.ndim == 2 and parameters.shape[1] == 1:
+            return points.reshape((parameters.shape[0], 3))
+        return points.reshape((*parameters.shape, 3))
+
+    curve.__name__ = "cubic_bezier"
+    return curve
+
+
+def _curve_functions(value, with_lengths, sample_points=None):
+    import numpy as np
+
+    samples = _curve_sample_count(sample_points) if with_lengths else None
+    query = _query(value)
+    snapshot = _CurveQuerySnapshot(query)
+    try:
+        count = int(query.curveCount)
+        for index in range(count):
+            function = _curve_callable(snapshot, index)
+            if with_lengths:
+                length = np.float64(engine_call(query.curveLength, index, samples))
+                yield function, length
+            else:
+                yield function
+    except Exception:
+        snapshot.__del__()
+        raise
+
+
+def curve_function(value, n):
+    index = operator.index(n)
+    query = _query(value)
+    snapshot = _CurveQuerySnapshot(query)
+    try:
+        _assert_curve_index(query, index)
+        return _curve_callable(snapshot, index)
+    except Exception:
+        snapshot.__del__()
+        raise
+
+
+def curve_function_with_length(value, n, sample_points=None):
+    import numpy as np
+
+    index = operator.index(n)
+    samples = _curve_sample_count(sample_points)
+    query = _query(value)
+    snapshot = _CurveQuerySnapshot(query)
+    try:
+        _assert_curve_index(query, index)
+        function = _curve_callable(snapshot, index)
+        length = np.float64(engine_call(query.curveLength, index, samples))
+        return function, length
+    except Exception:
+        snapshot.__del__()
+        raise
+
+
+def curve_functions(value):
+    return _curve_functions(value, with_lengths=False)
+
+
+def curve_functions_with_lengths(value, **kwargs):
+    unexpected = set(kwargs) - {"sample_points"}
+    if unexpected:
+        name = sorted(unexpected)[0]
+        raise TypeError(f"unexpected keyword argument: {name!r}")
+    yield from _curve_functions(
+        value, with_lengths=True, sample_points=kwargs.get("sample_points")
+    )
+
+
 def curve_length_pieces(value, n, sample_points):
+    import numpy as np
+
     index = operator.index(n)
     if index < 0:
         raise IndexError("curve index must be between 0 and 4294967295")
@@ -98,12 +204,16 @@ def curve_length_pieces(value, n, sample_points):
     query = _query(value)
     try:
         _assert_curve_index(query, index)
-        return [float(piece) for piece in engine_call(query.curveLengthPieces, index, samples)]
+        return np.asarray(
+            engine_call(query.curveLengthPieces, index, samples), dtype=np.float64
+        )
     finally:
         query.free()
 
 
 def curve_length(value, n, sample_points):
+    import numpy as np
+
     index = operator.index(n)
     if index < 0:
         raise IndexError("curve index must be between 0 and 4294967295")
@@ -111,7 +221,7 @@ def curve_length(value, n, sample_points):
     query = _query(value)
     try:
         _assert_curve_index(query, index)
-        return float(engine_call(query.curveLength, index, samples))
+        return np.float64(engine_call(query.curveLength, index, samples))
     finally:
         query.free()
 

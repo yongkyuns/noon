@@ -26,6 +26,10 @@ class UserVectors(unittest.TestCase):
             expected = ("numpy",) if name in optional else ()
             self.assertEqual(namespace.required_packages(f"{name}([])"), expected)
         self.assertEqual(namespace.required_packages("from noon import normalize as unit\nunit([1, 2])"), ("numpy",))
+        for name in ("get_nth_curve_function", "get_nth_curve_function_with_length",
+                     "get_curve_functions", "get_curve_functions_with_lengths",
+                     "get_nth_curve_length_pieces", "get_nth_curve_length"):
+            self.assertEqual(namespace.required_packages(f"path.{name}(0)"), ("numpy",))
 
     def test_cold_import_and_pure_complex_conversion(self):
         subprocess.run([sys.executable, "-S", "-c", "import sys; import _manim_user_vectors as h; "
