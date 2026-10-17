@@ -538,6 +538,10 @@ class Mobject:
     def fade(self, darkness: float = 0.5, family: bool = True) -> Mobject:
         return _callback_operations()._canonical_fade(self, darkness, family)
 
+    def fade_to(self, color: Color, alpha: float, family: bool = True) -> Mobject:
+        """Interpolate this object's color toward ``color`` by ``alpha``."""
+        return _callback_operations()._canonical_fade_to(self, color, alpha, family)
+
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
         return _callback_operations()._canonical_set_opacity(self, opacity)

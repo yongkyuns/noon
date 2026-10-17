@@ -726,6 +726,16 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_angle_value(
+        &mut self,
+        mobject: &noon::Mobject,
+        radians: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_angle_value(mobject, radians))
+            .map(|_| ())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_move_to(
         &mut self,
@@ -1247,6 +1257,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_fade_to(
+        &mut self,
+        family: &noon::MobjectFamily,
+        color: noon::Color,
+        amount: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_to_family(family, color, amount))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,
@@ -1375,6 +1396,17 @@ impl SemanticExecutionPlayer {
         darkness: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.fade(mobject, darkness))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_fade_to(
+        &mut self,
+        mobject: &noon::Mobject,
+        color: noon::Color,
+        amount: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_to(mobject, color, amount))
             .map(|_| ())
     }
 

@@ -930,7 +930,10 @@ pub(super) fn validate_glow_source_profile(
     lower_semantic_style(owner, state)?;
     if !geometry_supported
         || object_requires_spatial_lowering(state, store)
-        || state.role() != SemanticObjectRole::Ordinary
+        || !matches!(
+            state.role(),
+            SemanticObjectRole::Ordinary | SemanticObjectRole::NumberPlaneGridLine { .. }
+        )
         || !state.transform.is_valid()
         || state.transform.planar_rotation().is_none()
         || state.transform.scale.x == 0.0
@@ -1392,6 +1395,19 @@ mod tests {
         path_state.style.fill = None;
         let path_id = store.insert_semantic_object(path_state.clone());
         validate_glow_source_profile(path_id, &path_state, &store).unwrap();
+
+        // Grid membership is retained metadata; these same ordinary lines
+        // supported glow before the membership marker was introduced.
+        for horizontal in [true, false] {
+            let mut grid = SemanticObjectState::new(StoredGeometry::Line {
+                start: Vec2::ZERO,
+                end: Vec2::new(1.0, 0.0),
+            });
+            grid.style = path_state.style.clone();
+            grid.set_role(SemanticObjectRole::NumberPlaneGridLine { horizontal });
+            let id = store.insert_semantic_object(grid.clone());
+            validate_glow_source_profile(id, &grid, &store).unwrap();
+        }
 
         let text = store
             .import_text_resource(

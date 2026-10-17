@@ -1292,6 +1292,23 @@ mod wasm {
             self.semantic_family()?.fade(darkness).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = fadeTo)]
+        pub fn fade_to(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            amount: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .fade_to(
+                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                    amount,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = gridOptions)]
         pub fn grid_options(
             &self,
@@ -1810,6 +1827,11 @@ mod wasm {
             self.handle.angle_value(degrees).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setAngleValue)]
+        pub fn set_angle_value(&mut self, radians: f64) -> Result<(), JsValue> {
+            self.handle.set_angle_value(radians).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimLineEndpoints)]
         pub fn manim_line_endpoints(&self) -> Result<WasmManimLineEndpoints, JsValue> {
             self.handle
@@ -2235,6 +2257,23 @@ mod wasm {
         #[wasm_bindgen(js_name = fade)]
         pub fn fade(&mut self, darkness: f64) -> Result<(), JsValue> {
             self.handle.fade(darkness).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = fadeTo)]
+        pub fn fade_to(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            amount: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .fade_to(
+                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                    amount,
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = becomeHandle)]

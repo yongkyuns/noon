@@ -3,6 +3,7 @@ name: Arrow tip Manim regression
 on:
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - "scripts/ci-setup-rust.sh"
       - "scripts/test_ci_setup_rust.py"
       - "crates/noon/src/arrow_*.rs"
@@ -64,7 +65,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
-          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+          python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt "manim[typst]==0.21.0" "typst==0.15.0"
       - name: Render actual Manim frames and observe tip geometry
         run: python scripts/manim-arrow-tip-reference.py
       - name: Use repository-pinned Rust and WASM target

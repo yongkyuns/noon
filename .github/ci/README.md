@@ -27,11 +27,30 @@ select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact
 product protocol and mixed production changes keep their existing qualification.
 Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
 
+Noon integration-test-only edits keep Rust qualification without selecting the
+Product Gate's four production builds and measurement cohorts. PR Fast Gate runs
+all workspace library tests and the shared CPU family target in one Cargo
+invocation; production, toolchain, Cargo configuration and mixed changes retain
+Product qualification.
+
+Pages reuses the complete push-diff classifier on its existing runner. Pushes
+containing only Cargo integration tests, CI policy tests, the CI README or
+unrelated workflows skip compilation and publication. Production, mixed, unknown
+and incomplete-history changes keep the optimized build/deploy/verification path.
+Manual dispatch always deploys; PR validation is unchanged.
+
 Master CI reads the complete before/after Git diff and skips its compiled/browser
 jobs only for documentation, named preflight-only policies or web unit tests.
 Unknown inputs, mixed changes, missing history and classification failures retain
 full qualification. PR and manual runs remain full when selected. Recovery and
 playback workflows keep isolated web unit-test edits in preflight as well.
+
+CUDA demonstration fidelity runs on changes to its scene, oracle, controls or
+qualification wiring. Other authoring PRs retain ordinary full CI without the
+additional exhaustive CUDA pass. The existing nightly/manual raster oracle runs
+all three positive and six negative CUDA cases against generic engine edits,
+using its already built WASM package. Missing change evidence or classifier
+output keeps the CUDA suite enabled; its original fifteen-minute budget remains.
 
 ## Required GPU numerical checks
 
@@ -100,6 +119,8 @@ After the architecture gate, use the relevant existing test path:
 ```sh
 # Shared semantics and authoring.
 cargo test -p noon-core -p noon --lib --all-features
+# Related CPU family integration cases share one ordinary Rust module tree.
+cargo test -p noon --test family --all-features
 # Compiler/runtime.
 cargo test -p noon-compile -p noon-runtime --lib --all-features
 # Native and browser platform compilation.

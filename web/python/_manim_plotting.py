@@ -302,7 +302,8 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise ValueError(f"{name}.font_size must be positive")
     direction = _base._as_vec2(direction)
     buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
-    decimal_config = {} if decimal_config is None else decimal_config
+    infer_precision = decimal_config is None
+    decimal_config = {} if infer_precision else decimal_config
     if not isinstance(decimal_config, Mapping):
         raise TypeError(f"{name}.decimal_number_config must be a mapping")
     if any(not isinstance(key, str) for key in decimal_config):
@@ -312,7 +313,7 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
         raise NotImplementedError(
             f"unsupported {name}.decimal_number_config option(s): " + ", ".join(unknown)
         )
-    precision = None
+    precision = None if infer_precision else 2
     if "num_decimal_places" in decimal_config:
         precision = decimal_config["num_decimal_places"]
         if not isinstance(precision, int) or isinstance(precision, bool):
@@ -368,7 +369,7 @@ def _axes_number_values(values, name, default):
 
 
 def _configure_axes_numeric_labels(axis, config, range_values):
-    step = range_values[2] if len(range_values) == 3 else 1.0
+    step = range_values[2] if len(range_values) == 3 else 1
     places = config["decimal_places"]
     if places is None:
         places = _decimal_places_from_step(step)
@@ -457,6 +458,22 @@ def _three_d_axis_label_object(label):
     if isinstance(label, _base.Mobject):
         return _compat.Group(label)
     raise TypeError("ThreeDAxes labels require strings or retained text objects")
+
+
+def _axes_label_object(label):
+    if isinstance(label, bool):
+        raise TypeError("Axes labels require strings, numbers, or retained text objects")
+    if isinstance(label, (int, float)):
+        label = str(label)
+    if isinstance(label, str):
+        return _three_d_axis_label_object(label)
+    if isinstance(label, (_base.Mobject, _compat.Group)):
+        if getattr(label, "_semantic_family_handle", None) is None and getattr(
+            label, "_semantic_handle", None
+        ) is None:
+            raise TypeError("Axes labels require a retained semantic text object")
+        return label
+    raise TypeError("Axes labels require strings, numbers, or retained text objects")
 
 
 class NumberLine(_compat.Group):
@@ -605,6 +622,50 @@ class NumberLine(_compat.Group):
     def get_unit_size(self):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
+
+    def get_start(self):
+        return self.get_start_and_end()[0]
+
+    def get_end(self):
+        return self.get_start_and_end()[1]
+
+    def get_start_and_end(self):
+        with _owned(self._coordinate_frame()) as frame:
+            start = engine_call(frame.start)
+            end = engine_call(frame.end)
+        return _base.Vec2(*start), _base.Vec2(*end)
+
+    def get_vector(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return _base.Vec2(*engine_call(frame.vector))
+
+    def get_length(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.length))
+
+    def get_angle(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.angle))
+
+    def get_slope(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.slope))
+
+    def get_projection(self, point):
+        point = _base._as_vec2(point)
+        with _owned(self._coordinate_frame()) as frame:
+            projected = engine_call(frame.projectPoint, point.x, point.y)
+        return _base.Vec2(*projected)
+
+    def set_angle(self, angle, about_point=None):
+        angle = _base._ir._finite_number("angle", angle)
+        if about_point is None:
+            about_point = self.get_start()
+        return self.rotate(angle - self.get_angle(), about_point=about_point)
+
+    def set_length(self, length):
+        length = _base._ir._finite_number("length", length)
+        return self.scale(length / self.get_length())
 
     def rotate_about_zero(self, angle, axis=_base.OUT, **kwargs):
         return self.rotate(
@@ -799,8 +860,113 @@ class Axes(_compat.Group):
             axis.scaling = config["scaling"] if config["scaling"] is not None else LinearBase()
             members.append(axis)
         _coordinate_family(self, handle, members)
+        self.axes = _compat.VGroup(*members)
         for axis, (_, config, _, range_values) in zip(members, axis_setups):
             _configure_axes_numeric_labels(axis, config, range_values)
+
+    def get_axes(self):
+        """Return a retained family grouping the two coordinate axes."""
+        return self.axes
+
+    def get_axis(self, index):
+        """Return one axis by its Manim index (x=0, y=1)."""
+        return self.get_axes()[index]
+
+    def get_x_axis(self):
+        return self.get_axis(0)
+
+    def get_y_axis(self):
+        return self.get_axis(1)
+
+    def get_x_unit_size(self):
+        return self.get_x_axis().get_unit_size()
+
+    def get_y_unit_size(self):
+        return self.get_y_axis().get_unit_size()
+
+    def _get_axis_label(self, label, axis, edge, direction, buff=_base.SMALL_BUFF):
+        edge = _base._as_vec2(edge)
+        direction = _base._as_vec2(direction)
+        buff = _finite_axis_option(buff, "buff", nonnegative=True)
+        label = _axes_label_object(label)
+        label.next_to(axis.get_edge_center(edge), direction=direction, buff=buff)
+        return label
+
+    def get_x_axis_label(self, label, edge=_base.UR, direction=_base.UR,
+                         buff=_base.SMALL_BUFF, **kwargs):
+        """Create a retained label next to the upper-right x-axis edge.
+
+        Strings and numeric values use MathTex; call await prepare_latex() first.
+        Retained text mobjects are placed without recompiling.
+        """
+        if kwargs:
+            raise TypeError("unsupported Axes label option(s): " + ", ".join(sorted(kwargs)))
+        return self._get_axis_label(label, self.get_x_axis(), edge, direction, buff)
+
+    def get_y_axis_label(self, label, edge=_base.UR,
+                         direction=_base.UP * 0.5 + _base.RIGHT,
+                         buff=_base.SMALL_BUFF, **kwargs):
+        """Create a retained label next to the upper-right y-axis edge."""
+        if kwargs:
+            raise TypeError("unsupported Axes label option(s): " + ", ".join(sorted(kwargs)))
+        return self._get_axis_label(label, self.get_y_axis(), edge, direction, buff)
+
+    def get_axis_labels(self, x_label="x", y_label="y"):
+        """Create and retain the default x/y label pair."""
+        self.axis_labels = _compat.VGroup(
+            self.get_x_axis_label(x_label), self.get_y_axis_label(y_label)
+        )
+        return self.axis_labels
+
+    def get_line_from_axis_to_point(self, index, point, line_func=None,
+                                    line_config=None, color=None, stroke_width=2):
+        """Create a retained line from one coordinate axis to a scene point.
+
+        Projection uses the selected NumberLine's current shared Rust frame;
+        this wrapper only selects the axis and forwards constructor options.
+        """
+        if isinstance(index, bool):
+            raise TypeError("axis index must be an integer, not a boolean")
+        try:
+            index = _index(index)
+        except TypeError:
+            raise TypeError("axis index must be an integer") from None
+        if index not in (0, 1):
+            raise IndexError("2D Axes axis index must be 0 or 1")
+        if line_func is None:
+            line_func = _base.DashedLine
+        if not callable(line_func):
+            raise TypeError("line_func must be callable")
+        if line_config is None:
+            options = {}
+        elif isinstance(line_config, Mapping):
+            options = dict(line_config)
+        else:
+            raise TypeError("line_config must be a mapping")
+
+        point = _base._as_vec2(point)
+        axis = self.get_axis(index)
+        axis_point = axis.get_projection(point)
+        options["color"] = _compat._as_color(
+            "line color", _base.WHITE if color is None else color
+        )
+        options["stroke_width"] = stroke_width
+        return line_func(axis_point, point, **options)
+
+    def get_vertical_line(self, point, **kwargs):
+        """Create a vertical line from the x-axis to a scene point."""
+        return self.get_line_from_axis_to_point(0, point, **kwargs)
+
+    def get_horizontal_line(self, point, **kwargs):
+        """Create a horizontal line from the y-axis to a scene point."""
+        return self.get_line_from_axis_to_point(1, point, **kwargs)
+
+    def get_lines_to_point(self, point, **kwargs):
+        """Create horizontal and vertical guide lines to a scene point."""
+        return _compat.VGroup(
+            self.get_horizontal_line(point, **kwargs),
+            self.get_vertical_line(point, **kwargs),
+        )
 
     @property
     def x_axis(self):

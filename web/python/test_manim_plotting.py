@@ -276,6 +276,58 @@ class PlottingAdapterTests(unittest.TestCase):
         frame.pointToNumber.assert_called_once_with(3.0, 4.0)
         self.assertEqual(frame.free.call_count, 2)
 
+    def test_number_line_line_observations_use_one_shared_frame_query_each(self):
+        line = object.__new__(plotting.NumberLine)
+        frame = SimpleNamespace(
+            start=Mock(return_value=[1.0, 2.0]),
+            end=Mock(return_value=[5.0, 2.0]),
+            vector=Mock(return_value=[4.0, 0.0]),
+            length=Mock(return_value=4.0),
+            angle=Mock(return_value=0.0),
+            slope=Mock(return_value=0.0),
+            projectPoint=Mock(return_value=[3.0, 2.0]),
+            free=Mock(),
+        )
+        with patch.object(plotting.NumberLine, "_coordinate_frame", return_value=frame), \
+             patch.object(plotting, "engine_call", side_effect=lambda fn, *args: fn(*args)):
+            start, end = line.get_start_and_end()
+            self.assertEqual((start, end), (plotting._base.Vec2(1.0, 2.0),
+                                            plotting._base.Vec2(5.0, 2.0)))
+            self.assertEqual(line.get_vector(), plotting._base.Vec2(4.0, 0.0))
+            self.assertEqual(line.get_length(), 4.0)
+            self.assertEqual(line.get_angle(), 0.0)
+            self.assertEqual(line.get_slope(), 0.0)
+            self.assertEqual(line.get_projection((3.0, 8.0)), plotting._base.Vec2(3.0, 2.0))
+
+        frame.start.assert_called_once_with()
+        frame.end.assert_called_once_with()
+        frame.vector.assert_called_once_with()
+        frame.length.assert_called_once_with()
+        frame.angle.assert_called_once_with()
+        frame.slope.assert_called_once_with()
+        frame.projectPoint.assert_called_once_with(3.0, 8.0)
+        self.assertEqual(frame.free.call_count, 6)
+
+    def test_number_line_line_mutators_reuse_shared_rotate_and_scale(self):
+        line = object.__new__(plotting.NumberLine)
+        start = plotting._base.Vec2(-2.0, 3.0)
+        about = plotting._base.Vec2(1.0, 2.0)
+        line.get_start = Mock(return_value=start)
+        line.get_angle = Mock(return_value=0.25)
+        line.rotate = Mock(return_value=line)
+        line.get_length = Mock(return_value=4.0)
+        line.scale = Mock(return_value=line)
+
+        self.assertIs(line.set_angle(1.25), line)
+        line.rotate.assert_called_once_with(1.0, about_point=start)
+
+        line.rotate.reset_mock()
+        self.assertIs(line.set_angle(0.5, about_point=about), line)
+        line.rotate.assert_called_once_with(0.25, about_point=about)
+
+        self.assertIs(line.set_length(10), line)
+        line.scale.assert_called_once_with(2.5)
+
     def test_number_line_rotation_helpers_use_the_requested_data_anchor(self):
         line = object.__new__(plotting.NumberLine)
         point = plotting._base.Vec2(2.0, 0.0)
@@ -455,7 +507,8 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]) as attach, \
-             patch.object(plotting, "_coordinate_family"):
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(plotting._compat, "VGroup", side_effect=lambda *members: members) as retain_axes:
             plotting.Axes(
                 axis_config={"scaling": common},
                 y_axis_config={"scaling": y_scale},
@@ -493,8 +546,9 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting, "_array", side_effect=list), \
              patch.object(plotting, "_create_coordinates", return_value=handle), \
              patch.object(plotting, "_attach_number_line", side_effect=[x_axis, y_axis]), \
-             patch.object(plotting, "_coordinate_family"):
-            plotting.Axes(
+             patch.object(plotting, "_coordinate_family"), \
+             patch.object(plotting._compat, "VGroup", side_effect=lambda *members: members) as retain_axes:
+            axes = plotting.Axes(
                 x_range=(-2, 2, 0.5), y_range=(-1, 1, 1),
                 axis_config={"include_numbers": True, "font_size": 30,
                              "line_to_number_buff": 0.25},
@@ -505,6 +559,8 @@ class PlottingAdapterTests(unittest.TestCase):
                                "decimal_number_config": {"num_decimal_places": 2}},
             )
 
+        retain_axes.assert_called_once_with(x_axis, y_axis)
+        self.assertEqual(axes.axes, (x_axis, y_axis))
         x_axis.add_numbers.assert_called_once_with(
             x_values=(-1.0, 1.0), excluding=[0.0], font_size=30.0,
             direction=plotting._base._as_vec2(plotting._base.UP), buff=0.25,
@@ -519,6 +575,163 @@ class PlottingAdapterTests(unittest.TestCase):
         self.assertFalse(y_axis.include_numbers)
         self.assertEqual(x_axis.number_label_decimal_places, 1)
         self.assertEqual(y_axis.number_label_decimal_places, 2)
+
+    def test_axes_accessors_preserve_axis_identity_and_current_frame_queries(self):
+        x_axis = SimpleNamespace(get_unit_size=Mock(return_value=2.5))
+        y_axis = SimpleNamespace(get_unit_size=Mock(return_value=1.25))
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (x_axis, y_axis)
+        origin = plotting._base.Vec2(3, -2)
+        with patch.object(axes, "c2p", return_value=origin) as coords_to_point:
+            self.assertEqual(axes.get_origin(), origin)
+        coords_to_point.assert_called_once_with(0.0, 0.0)
+        self.assertIs(axes.get_axes()[0], x_axis)
+        self.assertIs(axes.get_axis(1), y_axis)
+        self.assertIs(axes.get_x_axis(), x_axis)
+        self.assertIs(axes.get_y_axis(), y_axis)
+        self.assertEqual(axes.get_x_unit_size(), 2.5)
+        self.assertEqual(axes.get_y_unit_size(), 1.25)
+        x_axis.get_unit_size.assert_called_once_with()
+        y_axis.get_unit_size.assert_called_once_with()
+
+    def test_explicit_empty_decimal_config_uses_decimal_number_default_precision(self):
+        for config, expected in ((None, None), ({}, 2), ({"num_decimal_places": 0}, 0)):
+            with self.subTest(config=config):
+                style = plotting._number_label_style(
+                    36, plotting._base.DOWN, 0.25, config, "axis"
+                )
+                self.assertEqual(style[-1], expected)
+
+    def test_axes_default_and_explicit_label_steps_preserve_authored_precision(self):
+        for axis_range, expected in (((), 0), ((-2, 2), 0),
+                                     ((-2, 2, 1), 0), ((-2, 2, 1.0), 1)):
+            with self.subTest(axis_range=axis_range):
+                axis = SimpleNamespace(add_numbers=Mock())
+                config = plotting._axes_label_options(
+                    {}, ("linear", 1.0, False), "axis", plotting._base.DOWN
+                )
+                plotting._configure_axes_numeric_labels(axis, config, axis_range)
+                self.assertEqual(axis.number_label_decimal_places, expected)
+
+    def test_axes_get_axes_reuses_the_retained_group_without_semantic_construction(self):
+        axes = object.__new__(plotting.Axes)
+        group = object()
+        axes.axes = group
+        with patch.object(plotting._compat, "VGroup", side_effect=AssertionError(
+                "axis access must not create a family during callbacks")):
+            self.assertIs(axes.get_axes(), group)
+            self.assertIs(axes.get_axes(), group)
+
+    def test_axes_label_uses_existing_live_critical_point_path(self):
+        edge = plotting._base.Vec2(1, -1)
+        direction = plotting._base.Vec2(1, 0.5)
+        label = Mock()
+        layout = SimpleNamespace(
+            criticalX=Mock(return_value=4.0),
+            criticalY=Mock(return_value=-3.0),
+        )
+        axis = object.__new__(plotting.NumberLine)
+        axis._semantic_family_handle = SimpleNamespace(layout=Mock(
+            side_effect=AssertionError("cold bounds bypass the current-frame owner")))
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (axis, object())
+        with patch.object(plotting, "_axes_label_object", return_value=label), \
+             patch.object(plotting._shared, "_group_layout_observation", return_value=layout) as query:
+            result = axes.get_x_axis_label("x", edge=edge, direction=direction, buff=0.25)
+
+        self.assertIs(result, label)
+        query.assert_called_once_with(axis)
+        axis._semantic_family_handle.layout.assert_not_called()
+        layout.criticalX.assert_called_once_with(1.0, -1.0)
+        layout.criticalY.assert_called_once_with(1.0, -1.0)
+        label.next_to.assert_called_once_with(
+            plotting._base.Vec2(4.0, -3.0), direction=direction, buff=0.25,
+        )
+
+    def test_axes_label_invalid_placement_rejects_before_constructing_text(self):
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (object(), object())
+        for options, error in (
+            ({"buff": -0.1}, ValueError),
+            ({"buff": float("nan")}, ValueError),
+            ({"buff": True}, TypeError),
+            ({"edge": object()}, TypeError),
+            ({"direction": object()}, TypeError),
+        ):
+            with self.subTest(options=options), \
+                 patch.object(plotting, "_axes_label_object") as construct:
+                with self.assertRaises(error):
+                    axes.get_x_axis_label("x", **options)
+                construct.assert_not_called()
+
+    def test_axes_label_numbers_reuse_mathtex_label_path(self):
+        label = object()
+        with patch.object(plotting, "_three_d_axis_label_object", return_value=label) as create:
+            self.assertIs(plotting._axes_label_object(2.5), label)
+        create.assert_called_once_with("2.5")
+
+    def test_axes_label_group_is_retained_on_axes(self):
+        x_label, y_label, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        axes.get_x_axis_label = Mock(return_value=x_label)
+        axes.get_y_axis_label = Mock(return_value=y_label)
+        with patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            self.assertIs(axes.get_axis_labels(), group)
+        axes.get_x_axis_label.assert_called_once_with("x")
+        axes.get_y_axis_label.assert_called_once_with("y")
+        make_group.assert_called_once_with(x_label, y_label)
+        self.assertIs(axes.axis_labels, group)
+
+    def test_axes_line_to_point_projects_through_current_coordinate_frame(self):
+        point = plotting._base.Vec2(3.0, 4.0)
+        projected = plotting._base.Vec2(3.0, 0.0)
+        label_color = object()
+        line = object()
+        line_func = Mock(return_value=line)
+        axes = object.__new__(plotting.Axes)
+        axis = Mock()
+        axis.get_projection.return_value = projected
+        axis.point_to_number.side_effect = AssertionError("physical projection must not enter a logarithmic coordinate domain")
+        axis.number_to_point.side_effect = AssertionError("physical projection must not remap a numeric coordinate")
+        axes.get_axis = Mock(return_value=axis)
+        line_config = {"dashed_ratio": 0.75, "stroke_width": 99}
+
+        with patch.object(plotting._compat, "_as_color", return_value=label_color) as parse_color:
+            result = axes.get_line_from_axis_to_point(
+                0, point, line_func=line_func, line_config=line_config,
+                color=plotting._base.RED, stroke_width=2,
+            )
+
+        self.assertIs(result, line)
+        axes.get_axis.assert_called_once_with(0)
+        axis.get_projection.assert_called_once_with(point)
+        parse_color.assert_called_once_with("line color", plotting._base.RED)
+        line_func.assert_called_once_with(
+            projected, point, dashed_ratio=0.75, color=label_color, stroke_width=2,
+        )
+        self.assertEqual(line_config, {"dashed_ratio": 0.75, "stroke_width": 99})
+
+    def test_axes_line_to_point_rejects_invalid_axis_before_coordinate_queries(self):
+        axes = object.__new__(plotting.Axes)
+        axes.get_axis = Mock()
+        for index, error in ((True, TypeError), (2, IndexError), (0.5, TypeError)):
+            with self.subTest(index=index), self.assertRaises(error):
+                axes.get_line_from_axis_to_point(index, plotting._base.ORIGIN)
+        axes.get_axis.assert_not_called()
+
+    def test_axes_lines_to_point_returns_horizontal_then_vertical(self):
+        point = object()
+        horizontal, vertical, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        axes.get_horizontal_line = Mock(return_value=horizontal)
+        axes.get_vertical_line = Mock(return_value=vertical)
+        with patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            result = axes.get_lines_to_point(point, color=plotting._base.BLUE)
+
+        self.assertIs(result, group)
+        axes.get_horizontal_line.assert_called_once_with(point, color=plotting._base.BLUE)
+        axes.get_vertical_line.assert_called_once_with(point, color=plotting._base.BLUE)
+        make_group.assert_called_once_with(horizontal, vertical)
 
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf

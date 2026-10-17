@@ -3,6 +3,7 @@ name: Manim raster differential
 on:
   pull_request:
     paths:
+      - ".github/ci/manim-reference-constraints.txt"
       - "crates/noon/src/diagnostics.rs"
       - "crates/noon/src/example_scenes/following_graph_camera.rs"
       - "web/python/examples/manim_example_following_graph_camera.py"
@@ -73,6 +74,7 @@ on:
       - "parity/manim-v0.21/vector_space.py"
       - "parity/manim-v0.21/vector_space_features.py"
       - "parity/manim-v0.21/core-examples/**"
+      - "parity/manim-v0.21/upstream-examples/**"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
       - "scripts/semantic-preview-*"
@@ -166,7 +168,7 @@ jobs:
             dvisvgm
       - name: Install pinned ManimCE reference
         run: |
-          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "manimpango==0.6.1" "typst==0.15.0"
+          python -m pip install --disable-pip-version-check --constraint .github/ci/manim-reference-constraints.txt "manim[typst]==0.21.0" "manimpango==0.6.1" "typst==0.15.0"
           python -m pip show manimpango
           latex --version
           dvisvgm --version
@@ -300,6 +302,20 @@ jobs:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/shared-playback-raster.mjs
+      - name: Test complete CUDA demo visual fidelity
+        timeout-minutes: 15
+        run: |
+          python3 tests/cuda_visual_validation_test.py
+          node --test scripts/cuda-transpose-pixels.test.mjs scripts/cuda-transpose-report.test.mjs
+          node scripts/cuda-transpose-qualification.mjs
+      - name: Preserve CUDA demo fidelity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cuda-transpose-fidelity
+          path: cuda-transpose-qualification
+          if-no-files-found: warn
+          retention-days: 3
       - name: Upload Manim/Noon/diff artifacts
         if: always()
         uses: actions/upload-artifact@v7

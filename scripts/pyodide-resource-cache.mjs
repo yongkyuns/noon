@@ -1,6 +1,6 @@
 import { LATEX_ASSETS } from "../web/latex/assets.js";
 
-// Job-local byte reuse for pinned Python and optional LaTeX assets. Scene/worker sources and
+// Job-local byte reuse for pinned Python, editor modules and optional LaTeX assets. Scene/worker sources and
 // browser state remain isolated; this does not retry a failed gallery case.
 export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 1024) {
   const moduleUrl = workerSource.match(
@@ -9,6 +9,9 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
   if (!moduleUrl) throw new Error('Gallery cache requires the worker to pin a Pyodide release');
   const baseUrl = new URL('.', moduleUrl).href;
   const latexUrls = new Set([LATEX_ASSETS.bundle, LATEX_ASSETS.metrics]);
+  // Reuse public versioned CodeMirror modules across otherwise fresh contexts.
+  // Version ranges and unrelated ESM URLs still use ordinary browser requests.
+  const editorModule = /^\/(?:codemirror|@codemirror\/[^/]+|@lezer\/[^/]+|crelt|style-mod|w3c-keyname)@\d+\.\d+\.\d+(?:\/|$)/;
   const entries = new Map();
   const counts = {
     requests: 0,
@@ -65,7 +68,8 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
 
   return {
     async install(context) {
-      await context.route(url => url.href.startsWith(baseUrl) || latexUrls.has(url.href), async route => {
+      await context.route(url => url.href.startsWith(baseUrl) || latexUrls.has(url.href)
+        || (url.origin === 'https://esm.sh' && editorModule.test(url.pathname)), async route => {
         if (route.request().method() !== 'GET') return route.continue();
         counts.requests++;
         const url = route.request().url();

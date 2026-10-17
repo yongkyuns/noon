@@ -937,6 +937,8 @@ class _CanonicalCallbackContext:
         styles = [[*node, row.style.to_wire()] for node, row in rows.items()]
         if operation == "Color":
             paint = (True, *arguments, None, None)
+        elif operation == "FadeTo":
+            paint = (True, *arguments[:4], None, arguments[4])
         elif operation == "Fill":
             paint = (*arguments[:5], None, arguments[5])
         elif operation == "Stroke":
@@ -1153,6 +1155,21 @@ class _CanonicalCallbackContext:
             *_phase_optional_color_args(style.fill),
             *_phase_optional_color_args(style.stroke), darkness,
             operation="Mobject.fade")
+        return (_phase_callback_paint_color(result, "fill"),
+                _phase_callback_paint_color(result, "stroke"))
+
+    def paint_fade_to(
+        self, style: _PhaseStyle, color: tuple[float, float, float, float], amount: float
+    ):
+        from _noon_errors import engine_call
+        result = engine_call(
+            self._operations.callbackPaintFadeTo,
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke),
+            *color,
+            amount,
+            operation="Mobject.fade_to",
+        )
         return (_phase_callback_paint_color(result, "fill"),
                 _phase_callback_paint_color(result, "stroke"))
 
@@ -1785,6 +1802,42 @@ def _canonical_fade(self, darkness=0.5, family=True):
         key, row = context.row(self)
         before = row.style
         fill, stroke = context.paint_fade(before, darkness)
+        row.style = replace(before, fill=fill, stroke=stroke)
+        context.style_changed(key, before, row)
+    return self
+
+
+def _canonical_fade_to(self, color, alpha, family=True):
+    from _manim_compat import _as_color, _is_shared_family
+    if not family and _is_shared_family(self):
+        # A Group has no points of its own; pinned Manim only enters its
+        # submobjects when family=True.
+        return self
+    if not _is_shared_family(self):
+        from _manim_image import ImageMobject
+        if isinstance(self, ImageMobject):
+            return self
+        point_count = getattr(self, "get_num_points", None)
+        if point_count is not None and getattr(self, "_semantic_handle", None) is not None:
+            try:
+                if point_count() == 0:
+                    return self
+            except (NotImplementedError, RuntimeError):
+                # Text/resource-backed leaves may not expose a queryable planar path.
+                pass
+    parsed = _as_color("color", color)
+    target = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    alpha = _base._ir._finite_number("alpha", alpha)
+    context = (_ACTIVE_CANONICAL_CONTEXT.get() if _is_shared_family(self)
+               else _canonical_phase_context(self))
+    if context is None:
+        return _base._semantic_operations()._fade_to(self, target, alpha, family)
+    if _is_shared_family(self):
+        context.paint_family(self._semantic_family_handle, "FadeTo", (*target, alpha))
+    else:
+        key, row = context.row(self)
+        before = row.style
+        fill, stroke = context.paint_fade_to(before, target, alpha)
         row.style = replace(before, fill=fill, stroke=stroke)
         context.style_changed(key, before, row)
     return self

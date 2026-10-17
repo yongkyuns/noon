@@ -1,5 +1,4 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
-import math
 from operator import index
 
 import noon as _base
@@ -30,15 +29,9 @@ def _lines(handle):
 
 
 def _coordinate_decimal_places(axis_range):
-    """Mirror NumberLine's formatting inference after its range becomes floats."""
-    try:
-        step = 1.0 if axis_range is None or len(axis_range) < 3 else float(axis_range[2])
-    except (TypeError, ValueError, IndexError):
-        return 1
-    if not math.isfinite(step):
-        return 1
-    spelling = str(step)
-    return len(spelling.partition(".")[2]) if "." in spelling else 0
+    """Mirror NumberLine formatting without normalizing the authored step type."""
+    step = 1 if axis_range is None or len(axis_range) < 3 else axis_range[2]
+    return _plot._decimal_places_from_step(step)
 
 
 _AXIS_STYLE_KEYS = {"color", "stroke_color", "stroke_width", "stroke_opacity", "opacity"}
@@ -103,9 +96,10 @@ def _axis_configurations(axis_config, x_axis_config, y_axis_config):
 class NumberPlane(_plot.Axes):
     """Linear 2D axes with bounded retained major/faded grid lines.
 
-    Supports ranges, lengths, grid stroke styles, common axis stroke style and
-    native Text constructor labels with per-axis formatting. Axis-specific
-    stroke styles, tips, ticks and nonlinear deformation remain unsupported.
+    Supports ranges, lengths, grid stroke styles, common axis stroke style,
+    native Text constructor labels with per-axis formatting, and major x/y
+    grid-line aliases. Axis-specific stroke styles, tips, ticks and nonlinear
+    deformation remain unsupported.
     Coordinates and plots use the same shared Rust AxesFrame.
     """
 
@@ -141,9 +135,10 @@ class NumberPlane(_plot.Axes):
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
-        self._coordinate_decimal_places = (
-            _coordinate_decimal_places(None if x_range is None else x_range_values),
-            _coordinate_decimal_places(None if y_range is None else y_range_values),
+        self._coordinate_decimal_places = tuple(
+            config["decimal_places"] if config["decimal_places"] is not None
+            else _coordinate_decimal_places(axis_range)
+            for config, axis_range in ((x_options, x_range_values), (y_options, y_range_values))
         )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         x_axis = _plot._attach_number_line(
@@ -156,6 +151,11 @@ class NumberPlane(_plot.Axes):
         y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
+        self.axes = _plot._compat.VGroup(x_axis, y_axis)
+        background = self.background_lines.submobjects
+        for name, horizontal in (("x_lines", True), ("y_lines", False)):
+            indices = engine_call(handle.numberPlaneGridLineIndices, horizontal)
+            setattr(self, name, _plot._compat.VGroup(*(background[i] for i in indices)))
         for axis_index, (axis, config, axis_range) in enumerate((
             (x_axis, x_options, x_range_values),
             (y_axis, y_options, y_range_values),

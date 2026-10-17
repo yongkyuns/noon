@@ -23,7 +23,8 @@
         2,
         2.2
       ],
-      "qualification_status": "candidate",
+      "qualification_status": "parity-qualified",
+      "qualification_note": "Qualified for this exact ordinary-source profile only; partial-foreground source families and anchorless target-only layers remain unqualified.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,
@@ -43,7 +44,8 @@
         2,
         2.2
       ],
-      "qualification_status": "candidate",
+      "qualification_status": "parity-qualified",
+      "qualification_note": "Qualified for this exact foreground-source profile only; partial-foreground source families and anchorless target-only layers remain unqualified.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,
@@ -63,7 +65,8 @@
         2,
         2.2
       ],
-      "qualification_status": "candidate",
+      "qualification_status": "parity-qualified",
+      "qualification_note": "Qualified for this exact foreground-anchored target-layer profile only; partial-foreground source families and genuinely anchorless target-only layers remain unqualified.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,

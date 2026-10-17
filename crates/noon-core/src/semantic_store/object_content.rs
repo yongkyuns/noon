@@ -271,6 +271,10 @@ pub enum SemanticObjectRole {
     SampleSpaceHorizontalPart,
     /// Identifies an ordinary retained rectangle in a Manim SampleSpace vertical partition.
     SampleSpaceVerticalPart,
+    /// Authored axis membership of an ordinary NumberPlane grid line.
+    NumberPlaneGridLine {
+        horizontal: bool,
+    },
 }
 
 impl SemanticObjectRole {
@@ -288,6 +292,7 @@ impl SemanticObjectRole {
             | Self::ArrowEndTip
             | Self::ArrowStartTip
             | Self::CoordinateTip
+            | Self::NumberPlaneGridLine { .. }
             | Self::SampleSpaceHorizontalPart
             | Self::SampleSpaceVerticalPart => true,
         }
