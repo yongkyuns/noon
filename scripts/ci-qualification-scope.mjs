@@ -36,6 +36,21 @@ export function needsFullCiQualification({ event, before, after }, runGit = exec
   }
 }
 
+// Reuse the complete NUL-delimited diff, without the event path-list limit.
+// Keep manual runs, unknown inputs, mixed changes and incomplete history eligible.
+export function needsPagesDeployment({ event, before, after }, runGit = execFileSync) {
+  if (event !== "push" || !validRevision(before) || !validRevision(after)) return true;
+  try {
+    return changedPaths(before, after, runGit).some(path =>
+      !/^crates\/[^/]+\/tests\//.test(path) &&
+      !/^\.github\/ci\/[^/]+\.test\.mjs$/.test(path) &&
+      path !== ".github/ci/README.md" &&
+      !(path.startsWith(".github/workflows/") && path !== ".github/workflows/pages.yml"));
+  } catch {
+    return true;
+  }
+}
+
 // Ordinary PRs qualify the feature they change; the existing nightly/manual
 // raster oracle still runs every CUDA fidelity case against generic engine edits.
 export function needsCudaDemoQualification({ event, before, after }, runGit = execFileSync) {
@@ -68,9 +83,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     before: process.env.BEFORE_REVISION,
     after: process.env.GITHUB_SHA,
   };
-  const full = needsFullCiQualification(input);
-  const cuda = needsCudaDemoQualification(input);
-  appendFileSync(process.env.GITHUB_OUTPUT, `full=${full}\ncuda_demo=${cuda}\n`);
-  console.log(`Full CI qualification required: ${full}`);
-  console.log(`CUDA scene fidelity required: ${cuda}`);
+  if (process.argv[2] === "pages") {
+    const deploy = needsPagesDeployment(input);
+    appendFileSync(process.env.GITHUB_OUTPUT, `deploy=${deploy}\n`);
+    console.log(`Pages deployment required: ${deploy}`);
+  } else {
+    const full = needsFullCiQualification(input);
+    const cuda = needsCudaDemoQualification(input);
+    appendFileSync(process.env.GITHUB_OUTPUT, `full=${full}\ncuda_demo=${cuda}\n`);
+    console.log(`Full CI qualification required: ${full}`);
+    console.log(`CUDA scene fidelity required: ${cuda}`);
+  }
 }

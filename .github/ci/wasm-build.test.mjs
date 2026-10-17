@@ -603,8 +603,15 @@ test("Pages builds and deploys the optimized production package on one runner", 
   assert.ok(upload > browserBuild && deploy > upload && verify > deploy,
     "Pages must build, upload, deploy and verify sequentially on the same runner");
   assert.match(buildJob, /environment:\n\s+name: github-pages\n\s+url: \$\{\{ steps\.deployment\.outputs\.page_url \}\}/);
-  assert.doesNotMatch(buildJob, /^\s+(?:if|continue-on-error):/m,
-    "Pages must stop before deployment when an earlier step fails");
+  assert.doesNotMatch(buildJob, /^\s+continue-on-error:/m);
+  const steps = buildJob.split("      - name: ").slice(1);
+  assert.equal(steps[1].split("\n")[0], "Classify complete push for deployment");
+  assert.match(steps[1], /BEFORE_REVISION: \$\{\{ github\.event\.before \}\}/);
+  for (const step of steps.slice(2)) {
+    assert.match(step, /^        if: \$\{\{ steps\.scope\.outputs\.deploy != 'false' \}\}$/m,
+      "only an explicit false skips work; implicit success() keeps failures blocking");
+    assert.equal([...step.matchAll(/^\s+if:/gm)].length, 1);
+  }
   assert.match(workflow, /cancel-in-progress: false/);
 
   const product = productConfig("candidate");
