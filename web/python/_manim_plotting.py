@@ -460,6 +460,34 @@ def _three_d_axis_label_object(label):
     raise TypeError("ThreeDAxes labels require strings or retained text objects")
 
 
+def _axes_label_object(label):
+    if isinstance(label, bool):
+        raise TypeError("Axes labels require strings, numbers, or retained text objects")
+    if isinstance(label, (int, float)):
+        label = str(label)
+    if isinstance(label, str):
+        return _three_d_axis_label_object(label)
+    if isinstance(label, (_base.Mobject, _compat.Group)):
+        if getattr(label, "_semantic_family_handle", None) is None and getattr(
+            label, "_semantic_handle", None
+        ) is None:
+            raise TypeError("Axes labels require a retained semantic text object")
+        return label
+    raise TypeError("Axes labels require strings, numbers, or retained text objects")
+
+
+def _axis_edge_center(axis, edge):
+    family = getattr(axis, "_semantic_family_handle", None)
+    if family is None or not hasattr(family, "layout"):
+        raise TypeError("Axes labels require current retained coordinate axes")
+    edge = _base._as_vec2(edge)
+    layout = engine_call(family.layout)
+    return _base.Vec2(
+        engine_call(layout.criticalX, edge.x, edge.y),
+        engine_call(layout.criticalY, edge.x, edge.y),
+    )
+
+
 class NumberLine(_compat.Group):
     """Linear or LogBase number line with shared Rust queries and retained ticks."""
     set_opacity = _compat.VGroup.set_opacity
@@ -834,6 +862,40 @@ class Axes(_compat.Group):
 
     def get_y_unit_size(self):
         return self.get_y_axis().get_unit_size()
+
+    def _get_axis_label(self, label, axis, edge, direction, buff=_base.SMALL_BUFF):
+        label = _axes_label_object(label)
+        edge = _base._as_vec2(edge)
+        direction = _base._as_vec2(direction)
+        buff = _finite_axis_option(buff, "buff", nonnegative=True)
+        label.next_to(_axis_edge_center(axis, edge), direction=direction, buff=buff)
+        return label
+
+    def get_x_axis_label(self, label, edge=_base.UR, direction=_base.UR,
+                         buff=_base.SMALL_BUFF, **kwargs):
+        """Create a retained label next to the upper-right x-axis edge.
+
+        Strings and numeric values use the existing MathTex family. Retained
+        Text, MathTex, and other text mobjects are placed without recompiling.
+        """
+        if kwargs:
+            raise TypeError("unsupported Axes label option(s): " + ", ".join(sorted(kwargs)))
+        return self._get_axis_label(label, self.get_x_axis(), edge, direction, buff)
+
+    def get_y_axis_label(self, label, edge=_base.UR,
+                         direction=_base.UP * 0.5 + _base.RIGHT,
+                         buff=_base.SMALL_BUFF, **kwargs):
+        """Create a retained label next to the upper-right y-axis edge."""
+        if kwargs:
+            raise TypeError("unsupported Axes label option(s): " + ", ".join(sorted(kwargs)))
+        return self._get_axis_label(label, self.get_y_axis(), edge, direction, buff)
+
+    def get_axis_labels(self, x_label="x", y_label="y"):
+        """Create and retain the default x/y label pair."""
+        self.axis_labels = _compat.VGroup(
+            self.get_x_axis_label(x_label), self.get_y_axis_label(y_label)
+        )
+        return self.axis_labels
 
     @property
     def x_axis(self):

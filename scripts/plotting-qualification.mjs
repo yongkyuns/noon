@@ -107,6 +107,34 @@ class CoordinateAccessors(Scene):
       assert.ok(accessors.objectCount > 0);
       assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
+      const axisLabelsSource = `from noon import *
+
+class AxesLabels(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)
+        explicit_x = axes.get_x_axis_label(Text("x-values"), edge=DOWN,
+                                          direction=DOWN, buff=0.2)
+        explicit_y = axes.get_y_axis_label("y", edge=LEFT,
+                                          direction=LEFT, buff=0.2)
+        labels = axes.get_axis_labels("x", Text("y-values"))
+        assert axes.axis_labels is labels
+        assert len(labels.submobjects) == 2
+        assert all(getattr(label, "_semantic_family_handle", None) is not None
+                   for label in labels.submobjects)
+
+        plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
+        plane_labels = plane.get_axis_labels(Text("u"), "v")
+        assert plane.axis_labels is plane_labels
+        assert len(plane_labels.submobjects) == 2
+        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels)
+        await self.wait(0.05)
+`;
+      const axisLabels = await qualifyPythonPlayback(context, baseUrl, axisLabelsSource, [0, 0.05]);
+      assert.equal(axisLabels.rendererBackend, expectedBackend);
+      assert.equal(axisLabels.presented, true);
+      assert.ok(axisLabels.objectCount > 0);
+      assert.ok(Math.abs(axisLabels.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane text labels`);
       return lifecycle;
     } finally {
       await page.close();
