@@ -33,6 +33,7 @@ pub struct TableOptions {
     pub h_buff: f64,
     pub v_buff: f64,
     pub include_outer_lines: bool,
+    pub include_inner_lines: bool,
     pub label_buff: f64,
 }
 
@@ -42,6 +43,7 @@ impl Default for TableOptions {
             h_buff: DEFAULT_TABLE_H_BUFF,
             v_buff: DEFAULT_TABLE_V_BUFF,
             include_outer_lines: false,
+            include_inner_lines: true,
             label_buff: DEFAULT_TABLE_LABEL_BUFF,
         }
     }
@@ -208,6 +210,7 @@ impl Table {
                 v_buff: layout.v_buff(),
                 label_buff: layout.label_buff(),
                 include_outer_lines: layout.include_outer_lines(),
+                include_inner_lines: layout.include_inner_lines(),
             })
             .ok_or(TableAuthoringError::InvalidStructure)
     }
@@ -1098,6 +1101,46 @@ mod tests {
                 .chain(table_leaves)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn table_can_omit_inner_lines_and_rehydrates_the_option() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entries = vec![
+            circle(&store, 0.3),
+            circle(&store, 0.2),
+            circle(&store, 0.25),
+            circle(&store, 0.15),
+        ];
+        let table = MobjectTable::from_rows_with_options(
+            &mut scene,
+            vec![
+                vec![entries[0].clone(), entries[1].clone()],
+                vec![entries[2].clone(), entries[3].clone()],
+            ],
+            TableOptions {
+                include_outer_lines: true,
+                include_inner_lines: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_table();
+
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(table.line_family().node_id())
+                .unwrap()
+                .len(),
+            4,
+            "outer rules remain while both inner rules are omitted"
+        );
+        let rehydrated = Table::from_family(table.family().clone()).unwrap();
+        let options = rehydrated.options().unwrap();
+        assert!(options.include_outer_lines);
+        assert!(!options.include_inner_lines);
     }
 
     #[test]

@@ -105,6 +105,7 @@ class TableFacadeTests(unittest.TestCase):
 
     def test_entries_columns_and_cells_keep_the_shared_handle_contract(self):
         value = table.Table([["a", "b"], ["c", "d"]])
+        self.assertEqual(self.context.calls[0][1][1:5], (0.8, 1.3, False, True))
         leaves = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
         rows = [types.SimpleNamespace(submobjects=leaves[:2]),
                 types.SimpleNamespace(submobjects=leaves[2:])]
@@ -151,12 +152,13 @@ class TableFacadeTests(unittest.TestCase):
         context = types.SimpleNamespace()
         handle = _MobjectTableHandle([row_label], [column_label], [entry], top_left_entry)
 
-        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, _context):
+        def create(rows, row_labels, column_labels, top_left_entries, v_buff, h_buff, outer_lines, inner_lines, _context):
             self.assertEqual(rows, [[entry._semantic_handle]])
             self.assertEqual(row_labels, [row_label._semantic_handle])
             self.assertEqual(column_labels, [column_label._semantic_handle])
             self.assertEqual(top_left_entries, [top_left_entry._semantic_handle])
             self.assertEqual((v_buff, h_buff, outer_lines), (0.4, 0.7, True))
+            self.assertTrue(inner_lines)
             return handle
 
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -200,6 +202,13 @@ class TableFacadeTests(unittest.TestCase):
                 table.MobjectTable._label_handle(_FakeFamily(1))
             with self.assertRaisesRegex(NotImplementedError, "unsupported Table option"):
                 table._options({"top_left_entry": _FakeMobject(2)})
+
+    def test_include_inner_lines_is_forwarded_and_defaults_to_manimce_true(self):
+        self.assertEqual(table._options({}), (0.8, 1.3, False, True))
+        self.assertEqual(
+            table._options({"include_outer_lines": True, "include_inner_lines": False}),
+            (0.8, 1.3, True, False),
+        )
 
 
 if __name__ == "__main__":

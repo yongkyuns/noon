@@ -28,14 +28,19 @@ except ImportError:
     _create_decimal_table = _create_mobject_table = _highlight_table = _get_highlighted_table = _table_cell = None
 
 
-_OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines"}
+_OPTION_NAMES = {"v_buff", "h_buff", "include_outer_lines", "include_inner_lines"}
 
 
 def _options(kwargs):
     unknown = set(kwargs) - _OPTION_NAMES
     if unknown:
         raise NotImplementedError("unsupported Table option(s): " + ", ".join(sorted(unknown)))
-    return (kwargs.get("v_buff", .8), kwargs.get("h_buff", 1.3), kwargs.get("include_outer_lines", False))
+    return (
+        kwargs.get("v_buff", .8),
+        kwargs.get("h_buff", 1.3),
+        kwargs.get("include_outer_lines", False),
+        kwargs.get("include_inner_lines", True),
+    )
 
 
 def _rows(values, convert):

@@ -261,7 +261,10 @@ impl GridLayout {
             ys.last().unwrap() - self.heights.last().unwrap() / 2.0 - self.options.v_buff / 2.0;
         let mut output = Vec::new();
         for row in 0..=ys.len() {
-            if self.options.include_outer_lines || (row > 0 && row < ys.len()) {
+            let is_outer = row == 0 || row == ys.len();
+            if (is_outer && self.options.include_outer_lines)
+                || (!is_outer && self.options.include_inner_lines)
+            {
                 let y = if row == 0 {
                     max_y
                 } else if row == ys.len() {
@@ -278,7 +281,10 @@ impl GridLayout {
             }
         }
         for column in 0..=xs.len() {
-            if self.options.include_outer_lines || (column > 0 && column < xs.len()) {
+            let is_outer = column == 0 || column == xs.len();
+            if (is_outer && self.options.include_outer_lines)
+                || (!is_outer && self.options.include_inner_lines)
+            {
                 let x = if column == 0 {
                     min_x
                 } else if column == xs.len() {
@@ -438,7 +444,8 @@ fn stage(
             options.v_buff,
             options.label_buff,
             options.include_outer_lines,
-        ),
+        )
+        .with_inner_lines(options.include_inner_lines),
     );
     if let Some(member) = row_labels {
         tx.add_member(root, member);

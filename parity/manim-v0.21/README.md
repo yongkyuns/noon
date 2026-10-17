@@ -32,3 +32,12 @@ retained objects and Rust-owned layout. Rust/WASM and Python-worker pixels match
 on WebGPU and WebGL2; strict pinned ManimCE Cairo raster qualification passes the
 unchanged thresholds on both backends with exact duration and 0.12% worst pixel
 difference.
+
+`table-inner-lines-omitted` covers ManimCE's `include_inner_lines=False` with
+outer rules retained. The option defaults to `True`, travels through the Rust,
+WASM, and Python constructors, and survives table-family rehydration. Its direct
+Rust/WASM and Python-worker captures are pixel-identical on WebGPU and WebGL2;
+the strict pinned Cairo differential passes unchanged limits on both backends
+with exact duration and 0.18% worst differing pixels. Broader `line_config`,
+background styling, and remaining table variants stay open under #2014; this
+fixture does not claim those options.

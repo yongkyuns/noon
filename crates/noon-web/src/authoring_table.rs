@@ -23,6 +23,13 @@ impl WasmTableOptions {
             },
         }
     }
+
+    /// Match ManimCE's default-on inner grid lines while preserving the
+    /// existing three-argument constructor for JavaScript callers.
+    #[wasm_bindgen(js_name = setIncludeInnerLines)]
+    pub fn set_include_inner_lines(&mut self, include_inner_lines: bool) {
+        self.options.include_inner_lines = include_inner_lines;
+    }
 }
 
 #[wasm_bindgen]

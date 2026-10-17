@@ -6,6 +6,7 @@ pub struct SemanticTableLayout {
     v_buff: f64,
     label_buff: f64,
     include_outer_lines: bool,
+    include_inner_lines: bool,
 }
 impl SemanticTableLayout {
     pub const fn new(h_buff: f64, v_buff: f64, label_buff: f64, include_outer_lines: bool) -> Self {
@@ -14,7 +15,12 @@ impl SemanticTableLayout {
             v_buff,
             label_buff,
             include_outer_lines,
+            include_inner_lines: true,
         }
+    }
+    pub const fn with_inner_lines(mut self, include_inner_lines: bool) -> Self {
+        self.include_inner_lines = include_inner_lines;
+        self
     }
     pub const fn h_buff(self) -> f64 {
         self.h_buff
@@ -27,6 +33,9 @@ impl SemanticTableLayout {
     }
     pub const fn include_outer_lines(self) -> bool {
         self.include_outer_lines
+    }
+    pub const fn include_inner_lines(self) -> bool {
+        self.include_inner_lines
     }
     /// Apply the world-axis factors from a direct Table family scale.
     ///
@@ -56,7 +65,7 @@ mod tests {
     fn repeated_layout_writes_observe_prior_transaction_values() {
         let mut store = SemanticStore::new();
         let original = SemanticTableLayout::new(1.0, 1.0, 0.5, false);
-        let changed = SemanticTableLayout::new(2.0, 0.5, 0.25, true);
+        let changed = SemanticTableLayout::new(2.0, 0.5, 0.25, true).with_inner_lines(false);
         let mut tx = SemanticMutationTransaction::new();
         let root = tx.create_node(SemanticNodeCreation::family());
         tx.set_table_layout(root, original);
@@ -91,7 +100,10 @@ mod tests {
 
         let mut tx = SemanticMutationTransaction::new();
         let root = tx.create_node(SemanticNodeCreation::family());
-        tx.set_table_layout(root, SemanticTableLayout::new(2.0, 1.0, 0.5, true));
+        tx.set_table_layout(
+            root,
+            SemanticTableLayout::new(2.0, 1.0, 0.5, true).with_inner_lines(false),
+        );
         let result = tx.apply(&mut store).unwrap();
         let root = result.resolve(root).unwrap();
         assert_eq!(
