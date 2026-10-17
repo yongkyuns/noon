@@ -50,14 +50,14 @@ known default-cell font-metric difference. Rust/WASM and Python-worker pixels
 match exactly on WebGPU and WebGL2; the browser lifecycle verifies wrapper
 identity, copy independence, and table construction on both. Strict pinned
 ManimCE Cairo comparison passes unchanged thresholds with exact duration and
-0.17% worst differing pixels. `MobjectTable` now invokes a supplied
-`element_to_mobject` callback with `element_to_mobject_config` for each input in
-row-major order and keeps the returned shared wrappers; the focused Python
-facade tests verify callback order, kwargs, wrapper identity, and invalid inputs.
-An explicit `Table.element_to_mobject` callback uses that same retained-Mobject
-path, allowing callers to supply their own shared native or geometric cell
-objects. Passing formatting config without an explicit converter is rejected
-until the default Paragraph font provider is portable.
+0.17% worst differing pixels. `Table`, `MobjectTable`, `MathTable`,
+`IntegerTable`, and `DecimalTable` now accept an explicit `element_to_mobject`
+callback with `element_to_mobject_config`. Each callback runs once per input in
+row-major order, and its returned shared Mobject or Group wrappers are retained
+as cell entries through the common Rust table path. Focused Python facade tests
+verify callback order, kwargs, wrapper identity, delegation, and invalid inputs.
+Base `Table` rejects non-empty default Paragraph formatting config without an
+explicit shared-Mobject converter until the font provider is portable.
 
 The non-empty default base-`Table` font remains unqualified. A focused local
 ManimCE `Paragraph` probe exceeded unchanged limits on both browser backends

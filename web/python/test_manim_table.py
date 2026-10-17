@@ -430,6 +430,32 @@ class TableFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "requires an explicit shared-Mobject converter"):
             table.Table([["alpha"]], element_to_mobject_config={"font": "DejaVu Sans"})
 
+    def test_numeric_and_math_table_custom_converters_use_the_shared_mobject_path(self):
+        calls = []
+        converter = lambda value, *, marker: (value, marker)
+
+        def initialize(wrapper, rows, **kwargs):
+            calls.append((type(wrapper).__name__, rows, kwargs))
+
+        cases = [
+            (table.MathTable, [["x"]]),
+            (table.IntegerTable, [[1]]),
+            (table.DecimalTable, [[1.5]]),
+        ]
+        with patch.object(table.MobjectTable, "__init__", autospec=True, side_effect=initialize):
+            for constructor, rows in cases:
+                constructor(
+                    rows,
+                    element_to_mobject=converter,
+                    element_to_mobject_config={"marker": constructor.__name__},
+                )
+
+        self.assertEqual([name for name, _, _ in calls], ["MathTable", "IntegerTable", "DecimalTable"])
+        for (_, rows, kwargs), (constructor, source_rows) in zip(calls, cases):
+            self.assertEqual(rows, source_rows)
+            self.assertIs(kwargs["element_to_mobject"], converter)
+            self.assertEqual(kwargs["element_to_mobject_config"]["marker"], constructor.__name__)
+
     def test_mobject_table_top_left_entry_requires_both_label_sets(self):
         entry = _FakeMobject(1)
         top_left_entry = _FakeMobject(2)

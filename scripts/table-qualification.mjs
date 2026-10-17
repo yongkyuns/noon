@@ -53,6 +53,33 @@ class TableLifecycle(Scene):
             assert len(numeric.get_entries()) == 4
             self.add(numeric)
             self.remove(numeric)
+        converted = []
+        def as_text(value, *, font_size):
+            result = Text(str(value), font="DejaVu Sans Mono", font_size=font_size)
+            converted.append(result)
+            return result
+        for table_type, values in (
+            (Table, [["plain"]]),
+            (MathTable, [["math"]]),
+            (IntegerTable, [[7]]),
+            (DecimalTable, [[1.25]]),
+        ):
+            converted_table = table_type(
+                values,
+                element_to_mobject=as_text,
+                element_to_mobject_config={"font_size": 18},
+            )
+            assert converted_table.get_entries((1, 1)) is converted[-1]
+        converted_entry = Circle(radius=0.2)
+        def scale_entry(value, *, factor):
+            value.scale(factor)
+            return value
+        converted_mobject_table = MobjectTable(
+            [[converted_entry]],
+            element_to_mobject=scale_entry,
+            element_to_mobject_config={"factor": 0.75},
+        )
+        assert converted_mobject_table.get_entries((1, 1)) is converted_entry
         await self.wait(0.0625)
         entry = Circle(radius=0.18)
         row_label = Square(side_length=0.14, color=YELLOW)

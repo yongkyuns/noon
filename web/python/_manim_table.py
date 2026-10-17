@@ -103,6 +103,35 @@ def _decimal_format(config):
     )
 
 
+def _use_custom_element_converter(owner, rows, kwargs, config=_UNSET, *, require_converter=False):
+    converter = kwargs.pop("element_to_mobject", _UNSET)
+    if config is _UNSET:
+        config = kwargs.pop("element_to_mobject_config", _UNSET)
+    if converter is _UNSET:
+        if require_converter and config is not _UNSET:
+            if not isinstance(config, dict):
+                raise TypeError("element_to_mobject_config must be a dict")
+            if config:
+                raise NotImplementedError(
+                    f"{type(owner).__name__} element_to_mobject_config requires an explicit shared-Mobject converter"
+                )
+        return False
+    if not callable(converter):
+        raise TypeError(f"{type(owner).__name__} element_to_mobject must be callable")
+    if config is _UNSET:
+        config = {}
+    if not isinstance(config, dict):
+        raise TypeError("element_to_mobject_config must be a dict")
+    MobjectTable.__init__(
+        owner,
+        rows,
+        element_to_mobject=converter,
+        element_to_mobject_config=config,
+        **kwargs,
+    )
+    return True
+
+
 def _rows(values, convert):
     return [[convert(value) for value in row] for row in values]
 
@@ -137,30 +166,8 @@ def _cell_position(pos):
 class Table(_compat.VGroup):
     """A normal retained family: entries, lines and highlights remain Rust handles."""
     def __init__(self, table, **kwargs):
-        element_to_mobject = kwargs.pop("element_to_mobject", _UNSET)
-        element_to_mobject_config = kwargs.pop("element_to_mobject_config", _UNSET)
-        if element_to_mobject is not _UNSET:
-            if not callable(element_to_mobject):
-                raise TypeError("Table element_to_mobject must be callable")
-            if element_to_mobject_config is _UNSET:
-                element_to_mobject_config = {}
-            if not isinstance(element_to_mobject_config, dict):
-                raise TypeError("element_to_mobject_config must be a dict")
-            MobjectTable.__init__(
-                self,
-                table,
-                element_to_mobject=element_to_mobject,
-                element_to_mobject_config=element_to_mobject_config,
-                **kwargs,
-            )
+        if _use_custom_element_converter(self, table, kwargs, require_converter=True):
             return
-        if element_to_mobject_config is not _UNSET:
-            if not isinstance(element_to_mobject_config, dict):
-                raise TypeError("element_to_mobject_config must be a dict")
-            if element_to_mobject_config:
-                raise NotImplementedError(
-                    "Table element_to_mobject_config requires an explicit shared-Mobject converter"
-                )
         row_label_mobjects = kwargs.pop("row_labels", None)
         column_label_mobjects = kwargs.pop("col_labels", None)
         top_left_entry = kwargs.pop("top_left_entry", None)
@@ -410,6 +417,8 @@ class Table(_compat.VGroup):
 
 class MathTable(Table):
     def __init__(self, table, **kwargs):
+        if _use_custom_element_converter(self, table, kwargs, require_converter=True):
+            return
         if _create_math_table is None:
             raise RuntimeError("MathTable requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("MathTable", allow_unstarted=True)
@@ -418,6 +427,8 @@ class MathTable(Table):
 
 class IntegerTable(Table):
     def __init__(self, table, **kwargs):
+        if _use_custom_element_converter(self, table, kwargs, require_converter=True):
+            return
         if _create_integer_table is None:
             raise RuntimeError("IntegerTable requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("IntegerTable", allow_unstarted=True)
@@ -425,7 +436,16 @@ class IntegerTable(Table):
 
 
 class DecimalTable(Table):
-    def __init__(self, table, element_to_mobject_config=_UNSET, **kwargs):
+    def __init__(self, table, element_to_mobject=_UNSET,
+                 element_to_mobject_config=_UNSET, **kwargs):
+        if _use_custom_element_converter(
+            self,
+            table,
+            {**kwargs, "element_to_mobject": element_to_mobject}
+            if element_to_mobject is not _UNSET else kwargs,
+            element_to_mobject_config,
+        ):
+            return
         if _create_decimal_table is None:
             raise RuntimeError("DecimalTable requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("DecimalTable", allow_unstarted=True)
