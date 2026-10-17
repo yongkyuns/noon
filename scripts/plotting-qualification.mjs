@@ -299,6 +299,8 @@ class NumberLineLineObservations(Scene):
         assert abs(line.get_angle() - PI / 2) < 1e-6
         projected = line.get_projection((3.5, 1.0))
         assert abs(projected.x - 0.5) < 1e-6 and abs(projected.y - 1.0) < 1e-6
+        self.add(line)
+        await self.play(line.animate.rotate(-PI / 6), run_time=0.025)
         line.set_length(6)
         assert abs(line.get_length() - 6.0) < 1e-6
         line.set_angle(PI / 4)
@@ -322,7 +324,7 @@ class NumberLineLineObservations(Scene):
         assert abs(outside_start.x + 4.0) < 1e-6
         assert abs(outside_start.y - 0.25) < 1e-6
         self.add(line, axes, guide, outside)
-        await self.wait(0.05)
+        await self.wait(0.025)
 `;
       const observations = await qualifyPythonPlayback(
         context, baseUrl, lineObservationsSource, [0, 0.05],
