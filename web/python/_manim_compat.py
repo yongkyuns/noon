@@ -94,6 +94,11 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    @property
+    def n_points_per_curve(self) -> int:
+        """The fixed cubic stride used by Noon path queries."""
+        return 4
+
     def get_group_class(self):
         return VGroup
 

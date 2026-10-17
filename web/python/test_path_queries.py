@@ -8,6 +8,10 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
+        value = identity_only_wrapper(compat.VMobject)
+        self.assertEqual(value.n_points_per_curve, 4)
+
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
