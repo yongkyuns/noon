@@ -72,7 +72,10 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(query.free.call_count, 8)
 
     def test_curve_length_queries_forward_sample_count_and_free_snapshots(self):
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy contracts run in the pinned utility lane")
 
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
