@@ -647,11 +647,25 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.angle))
 
+    def get_slope(self):
+        with _owned(self._coordinate_frame()) as frame:
+            return float(engine_call(frame.slope))
+
     def get_projection(self, point):
         point = _base._as_vec2(point)
         with _owned(self._coordinate_frame()) as frame:
             projected = engine_call(frame.projectPoint, point.x, point.y)
         return _base.Vec2(*projected)
+
+    def set_angle(self, angle, about_point=None):
+        angle = _base._ir._finite_number("angle", angle)
+        if about_point is None:
+            about_point = self.get_start()
+        return self.rotate(angle - self.get_angle(), about_point=about_point)
+
+    def set_length(self, length):
+        length = _base._ir._finite_number("length", length)
+        return self.scale(length / self.get_length())
 
     def rotate_about_zero(self, angle, axis=_base.OUT, **kwargs):
         return self.rotate(

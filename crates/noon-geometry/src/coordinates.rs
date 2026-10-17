@@ -150,6 +150,11 @@ impl NumberLineFrame {
         dy.atan2(dx)
     }
 
+    /// Slope using the same angle/tangent convention as Manim's `Line`.
+    pub fn slope(self) -> f64 {
+        self.angle().tan()
+    }
+
     /// Orthogonally project a point onto the infinite line through this frame.
     /// A degenerate line projects every finite point to its sole endpoint, as
     /// Manim's zero-vector normalization does for `Line.get_projection`.
@@ -715,6 +720,7 @@ mod tests {
         assert_eq!(frame.vector(), [4.0, 0.0]);
         assert_eq!(frame.length(), 4.0);
         assert_eq!(frame.angle(), 0.0);
+        assert_eq!(frame.slope(), 0.0);
         near(frame.project_point([3.0, 6.0]).unwrap(), [3.0, 2.0]);
 
         let vertical = NumberLineFrame::new([-2.0, 2.0, 1.0], [0.0, 0.0], [0.0, 4.0]).unwrap();
@@ -726,6 +732,8 @@ mod tests {
         near(diagonal.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
         near(reversed.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
         assert_eq!(diagonal.length(), 5.0);
+        assert!((diagonal.slope() - 4.0 / 3.0).abs() < 1e-12);
+        assert!((reversed.slope() - 4.0 / 3.0).abs() < 1e-12);
 
         let collapsed = NumberLineFrame::new([0.0, 1.0, 0.1], [2.0, 3.0], [2.0, 3.0]).unwrap();
         near(collapsed.project_point([8.0, -4.0]).unwrap(), [2.0, 3.0]);
