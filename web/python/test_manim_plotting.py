@@ -611,6 +611,57 @@ class PlottingAdapterTests(unittest.TestCase):
         make_group.assert_called_once_with(x_label, y_label)
         self.assertIs(axes.axis_labels, group)
 
+    def test_axes_line_to_point_projects_through_current_coordinate_frame(self):
+        point = plotting._base.Vec2(3.0, 4.0)
+        projected = plotting._base.Vec2(3.0, 0.0)
+        label_color = object()
+        line = object()
+        line_func = Mock(return_value=line)
+        axes = object.__new__(plotting.Axes)
+        axis = Mock()
+        axis.point_to_number.return_value = 1.5
+        axis.number_to_point.return_value = projected
+        axes.get_axis = Mock(return_value=axis)
+        line_config = {"dashed_ratio": 0.75, "stroke_width": 99}
+
+        with patch.object(plotting._compat, "_as_color", return_value=label_color) as parse_color:
+            result = axes.get_line_from_axis_to_point(
+                0, point, line_func=line_func, line_config=line_config,
+                color=plotting._base.RED, stroke_width=2,
+            )
+
+        self.assertIs(result, line)
+        axes.get_axis.assert_called_once_with(0)
+        axis.point_to_number.assert_called_once_with(point)
+        axis.number_to_point.assert_called_once_with(1.5)
+        parse_color.assert_called_once_with("line color", plotting._base.RED)
+        line_func.assert_called_once_with(
+            projected, point, dashed_ratio=0.75, color=label_color, stroke_width=2,
+        )
+        self.assertEqual(line_config, {"dashed_ratio": 0.75, "stroke_width": 99})
+
+    def test_axes_line_to_point_rejects_invalid_axis_before_coordinate_queries(self):
+        axes = object.__new__(plotting.Axes)
+        axes.get_axis = Mock()
+        for index, error in ((True, TypeError), (2, IndexError), (0.5, TypeError)):
+            with self.subTest(index=index), self.assertRaises(error):
+                axes.get_line_from_axis_to_point(index, plotting._base.ORIGIN)
+        axes.get_axis.assert_not_called()
+
+    def test_axes_lines_to_point_returns_horizontal_then_vertical(self):
+        point = object()
+        horizontal, vertical, group = object(), object(), object()
+        axes = object.__new__(plotting.Axes)
+        axes.get_horizontal_line = Mock(return_value=horizontal)
+        axes.get_vertical_line = Mock(return_value=vertical)
+        with patch.object(plotting._compat, "VGroup", return_value=group) as make_group:
+            result = axes.get_lines_to_point(point, color=plotting._base.BLUE)
+
+        self.assertIs(result, group)
+        axes.get_horizontal_line.assert_called_once_with(point, color=plotting._base.BLUE)
+        axes.get_vertical_line.assert_called_once_with(point, color=plotting._base.BLUE)
+        make_group.assert_called_once_with(horizontal, vertical)
+
     def test_bar_labels_wrap_existing_tex_leaves_without_recompiling(self):
         from _manim_latex import _CompiledTexLeaf
 

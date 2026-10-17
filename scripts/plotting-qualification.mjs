@@ -135,6 +135,34 @@ class AxesLabels(Scene):
       assert.ok(axisLabels.objectCount > 0);
       assert.ok(Math.abs(axisLabels.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane text labels`);
+      const guideLinesSource = `from noon import *
+
+class AxesGuideLines(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)
+        axes.shift(RIGHT * 0.25)
+        point = axes.c2p(1, 0.5)
+        vertical = axes.get_vertical_line(point, line_func=Line, color=RED)
+        horizontal = axes.get_horizontal_line(point, line_func=Line, color=BLUE)
+        guides = axes.get_lines_to_point(point, line_func=Line)
+        expected_vertical = axes.c2p(1, 0)
+        expected_horizontal = axes.c2p(0, 0.5)
+        def near(actual, expected):
+            return abs(actual.x - expected.x) < 1e-6 and abs(actual.y - expected.y) < 1e-6
+        assert near(vertical.get_start(), expected_vertical)
+        assert near(horizontal.get_start(), expected_horizontal)
+        assert len(guides.submobjects) == 2
+        assert near(guides.submobjects[0].get_start(), expected_horizontal)
+        assert near(guides.submobjects[1].get_start(), expected_vertical)
+        self.add(axes, vertical, horizontal, guides)
+        await self.wait(0.05)
+`;
+      const guideLines = await qualifyPythonPlayback(context, baseUrl, guideLinesSource, [0, 0.05]);
+      assert.equal(guideLines.rendererBackend, expectedBackend);
+      assert.equal(guideLines.presented, true);
+      assert.ok(guideLines.objectCount > 0);
+      assert.ok(Math.abs(guideLines.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes line-to-point guides`);
       return lifecycle;
     } finally {
       await page.close();
