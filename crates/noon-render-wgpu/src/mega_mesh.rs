@@ -439,19 +439,15 @@ mod tests {
         let high_end = ranges[count - 1].end as usize;
         assert_eq!(preparer.path_vertices.len(), high_end);
         assert!(
-            crate::buffer_growth_capacity(
-                high_end * std::mem::size_of::<crate::PathVertex>()
-            ) <= LIMIT
+            crate::buffer_growth_capacity(high_end * std::mem::size_of::<crate::PathVertex>())
+                <= LIMIT
         );
         assert!(
-            crate::buffer_growth_capacity(
-                high_end * std::mem::size_of::<PathInstance>()
-            ) > LIMIT
+            crate::buffer_growth_capacity(high_end * std::mem::size_of::<PathInstance>()) > LIMIT
         );
         assert!(
-            crate::buffer_growth_capacity(
-                preparer.path_indices.len() * std::mem::size_of::<u32>()
-            ) <= LIMIT
+            crate::buffer_growth_capacity(preparer.path_indices.len() * std::mem::size_of::<u32>())
+                <= LIMIT
         );
 
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
@@ -473,9 +469,9 @@ mod tests {
         let unbounded = preparer.prepare(&frame);
         assert_eq!(unbounded.stats.mega_path_count, 1);
         assert!(
-            crate::buffer_growth_capacity(
-                std::mem::size_of_val(unbounded.mega_path_vertex_instances)
-            ) > LIMIT,
+            crate::buffer_growth_capacity(std::mem::size_of_val(
+                unbounded.mega_path_vertex_instances
+            )) > LIMIT,
             "the real preparer produces a packed allocation exceeding the device"
         );
 
@@ -487,9 +483,9 @@ mod tests {
         assert_eq!(bounded.stats.unsupported_count, 0);
         assert!(bounded.mega_path_indices.is_empty());
         assert!(bounded.mega_path_vertex_instances.is_empty());
-        assert!(bounded.ordered_render_batches().any(|batch| {
-            matches!(batch.batch.primitive, RenderPrimitive::Path { .. })
-        }));
+        assert!(bounded
+            .ordered_render_batches()
+            .any(|batch| { matches!(batch.batch.primitive, RenderPrimitive::Path { .. }) }));
         renderer.upload(&device, &queue, &bounded);
 
         // The ordinary pipeline still encodes and submits on this exact device.
@@ -551,11 +547,11 @@ mod tests {
         assert_eq!(appended.stats.full_rebuilds, 0);
         assert_eq!(appended.stats.mega_path_count, 1);
         assert_eq!(appended.stats.unsupported_count, 0);
-        assert_eq!(appended.mega_path_vertex_instances, packed_prefix);
+        assert_eq!(appended.mega_path_vertex_instances, packed_prefix.as_slice());
         assert_eq!(appended.mega_path_instance_dirty_ranges.len(), 0);
-        assert!(appended.ordered_render_batches().any(|batch| {
-            matches!(batch.batch.primitive, RenderPrimitive::Path { .. })
-        }));
+        assert!(appended
+            .ordered_render_batches()
+            .any(|batch| { matches!(batch.batch.primitive, RenderPrimitive::Path { .. }) }));
 
         let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
         assert_eq!(clean.stats.full_rebuilds, 0);

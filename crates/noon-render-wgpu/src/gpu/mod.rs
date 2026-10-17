@@ -30,9 +30,9 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
-    PathVertex, PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
-    buffer_growth_capacity,
+    buffer_growth_capacity, CircleInstance, LineInstance, OrderedRenderBatch, PathBatch,
+    PathCoverage, PathInstance, PathVertex, PreparedDerivedDisplay, PreparedFrame,
+    RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
