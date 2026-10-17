@@ -476,18 +476,6 @@ def _axes_label_object(label):
     raise TypeError("Axes labels require strings, numbers, or retained text objects")
 
 
-def _axis_edge_center(axis, edge):
-    family = getattr(axis, "_semantic_family_handle", None)
-    if family is None or not hasattr(family, "layout"):
-        raise TypeError("Axes labels require current retained coordinate axes")
-    edge = _base._as_vec2(edge)
-    layout = engine_call(family.layout)
-    return _base.Vec2(
-        engine_call(layout.criticalX, edge.x, edge.y),
-        engine_call(layout.criticalY, edge.x, edge.y),
-    )
-
-
 class NumberLine(_compat.Group):
     """Linear or LogBase number line with shared Rust queries and retained ticks."""
     set_opacity = _compat.VGroup.set_opacity
@@ -894,11 +882,11 @@ class Axes(_compat.Group):
         return self.get_y_axis().get_unit_size()
 
     def _get_axis_label(self, label, axis, edge, direction, buff=_base.SMALL_BUFF):
-        label = _axes_label_object(label)
         edge = _base._as_vec2(edge)
         direction = _base._as_vec2(direction)
         buff = _finite_axis_option(buff, "buff", nonnegative=True)
-        label.next_to(_axis_edge_center(axis, edge), direction=direction, buff=buff)
+        label = _axes_label_object(label)
+        label.next_to(axis.get_edge_center(edge), direction=direction, buff=buff)
         return label
 
     def get_x_axis_label(self, label, edge=_base.UR, direction=_base.UR,

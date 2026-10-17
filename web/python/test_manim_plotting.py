@@ -598,7 +598,7 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertIs(axes.get_axes(), group)
         make_group.assert_called_once_with(x_axis, y_axis)
 
-    def test_axes_label_uses_current_axis_layout_edge_and_next_to_contract(self):
+    def test_axes_label_uses_existing_live_critical_point_path(self):
         edge = plotting._base.Vec2(1, -1)
         direction = plotting._base.Vec2(1, 0.5)
         label = Mock()
@@ -606,21 +606,39 @@ class PlottingAdapterTests(unittest.TestCase):
             criticalX=Mock(return_value=4.0),
             criticalY=Mock(return_value=-3.0),
         )
-        axis = SimpleNamespace(
-            _semantic_family_handle=SimpleNamespace(layout=Mock(return_value=layout))
-        )
+        axis = object.__new__(plotting.NumberLine)
+        axis._semantic_family_handle = SimpleNamespace(layout=Mock(
+            side_effect=AssertionError("cold bounds bypass the current-frame owner")))
         axes = object.__new__(plotting.Axes)
         axes.axes = (axis, object())
         with patch.object(plotting, "_axes_label_object", return_value=label), \
-             patch.object(plotting, "engine_call", side_effect=lambda fn, *args: fn(*args)):
+             patch.object(plotting._shared, "_group_layout_observation", return_value=layout) as query:
             result = axes.get_x_axis_label("x", edge=edge, direction=direction, buff=0.25)
 
         self.assertIs(result, label)
+        query.assert_called_once_with(axis)
+        axis._semantic_family_handle.layout.assert_not_called()
         layout.criticalX.assert_called_once_with(1.0, -1.0)
         layout.criticalY.assert_called_once_with(1.0, -1.0)
         label.next_to.assert_called_once_with(
             plotting._base.Vec2(4.0, -3.0), direction=direction, buff=0.25,
         )
+
+    def test_axes_label_invalid_placement_rejects_before_constructing_text(self):
+        axes = object.__new__(plotting.Axes)
+        axes.axes = (object(), object())
+        for options, error in (
+            ({"buff": -0.1}, ValueError),
+            ({"buff": float("nan")}, ValueError),
+            ({"buff": True}, TypeError),
+            ({"edge": object()}, TypeError),
+            ({"direction": object()}, TypeError),
+        ):
+            with self.subTest(options=options), \
+                 patch.object(plotting, "_axes_label_object") as construct:
+                with self.assertRaises(error):
+                    axes.get_x_axis_label("x", **options)
+                construct.assert_not_called()
 
     def test_axes_label_numbers_reuse_mathtex_label_path(self):
         label = object()
@@ -649,6 +667,8 @@ class PlottingAdapterTests(unittest.TestCase):
         axes = object.__new__(plotting.Axes)
         axis = Mock()
         axis.get_projection.return_value = projected
+        axis.point_to_number.side_effect = AssertionError("physical projection must not enter a logarithmic coordinate domain")
+        axis.number_to_point.side_effect = AssertionError("physical projection must not remap a numeric coordinate")
         axes.get_axis = Mock(return_value=axis)
         line_config = {"dashed_ratio": 0.75, "stroke_width": 99}
 

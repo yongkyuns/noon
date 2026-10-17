@@ -126,8 +126,17 @@ class AxesLabels(Scene):
         plane_labels = plane.get_axis_labels(Text("u"), "v")
         assert plane.axis_labels is plane_labels
         assert len(plane_labels.submobjects) == 2
-        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels)
-        await self.wait(0.05)
+        live_label = Text("live x")
+        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels, live_label)
+        await self.play(axes.animate.shift(RIGHT * 0.7 + UP * 0.4),
+                        run_time=0.025, rate_func=linear)
+        edge = axes.get_x_axis().get_edge_center(DOWN)
+        assert axes.get_x_axis_label(live_label, edge=DOWN, direction=DOWN,
+                                     buff=0.2) is live_label
+        top = live_label.get_top()
+        assert abs(top.x - edge.x) < 1e-4
+        assert abs(top.y - edge.y + 0.2) < 1e-4
+        await self.wait(0.025)
 `;
       const axisLabels = await qualifyPythonPlayback(context, baseUrl, axisLabelsSource, [0, 0.05]);
       assert.equal(axisLabels.rendererBackend, expectedBackend);
@@ -189,7 +198,11 @@ class NumberLineLineObservations(Scene):
         actual = guide.get_start()
         assert abs(actual.x - expected.x) < 1e-6
         assert abs(actual.y - expected.y) < 1e-6
-        self.add(line, axes, guide)
+        outside = axes.get_vertical_line((-4.0, 1.0), line_func=Line)
+        outside_start = outside.get_start()
+        assert abs(outside_start.x + 4.0) < 1e-6
+        assert abs(outside_start.y - 0.25) < 1e-6
+        self.add(line, axes, guide, outside)
         await self.wait(0.05)
 `;
       const observations = await qualifyPythonPlayback(

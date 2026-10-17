@@ -721,6 +721,12 @@ mod tests {
         assert!((vertical.angle() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
         near(vertical.project_point([3.0, 2.0]).unwrap(), [0.0, 2.0]);
 
+        let diagonal = NumberLineFrame::new([-2.0, 2.0, 1.0], [1.0, 2.0], [4.0, 6.0]).unwrap();
+        let reversed = NumberLineFrame::new([-2.0, 2.0, 1.0], [4.0, 6.0], [1.0, 2.0]).unwrap();
+        near(diagonal.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
+        near(reversed.project_point([1.0, 7.0]).unwrap(), [3.4, 5.2]);
+        assert_eq!(diagonal.length(), 5.0);
+
         let collapsed = NumberLineFrame::new([0.0, 1.0, 0.1], [2.0, 3.0], [2.0, 3.0]).unwrap();
         near(collapsed.project_point([8.0, -4.0]).unwrap(), [2.0, 3.0]);
         assert_eq!(
