@@ -96,7 +96,22 @@ class CoordinateAccessors(Scene):
         assert all(any(line is member for member in clone.background_lines.submobjects)
                    for line in clone.x_lines.submobjects + clone.y_lines.submobjects)
         self.add(plane, clone)
+        callback_axes = (Axes((-2, 2, 1), (-1, 1, 1), tips=False),
+                         NumberPlane((-2, 2, 1), (-1, 1, 1)),
+                         PolarPlane(radius_max=2, size=4))
+        callback_driver = Dot()
+        observed = []
+        def first_access(mob, dt):
+            for coordinate in callback_axes:
+                assert coordinate.get_axes() is coordinate.axes
+                assert coordinate.get_x_axis() is coordinate.x_axis
+                assert coordinate.get_y_axis() is coordinate.y_axis
+            observed.append(True)
+        callback_driver.add_updater(first_access)
+        self.add(*callback_axes, callback_driver)
         await self.wait(0.025)
+        assert observed
+        callback_driver.clear_updaters()
         assert clone.get_x_axis() is clone.x_axis
         assert abs(clone.get_x_unit_size() - clone.x_axis.get_unit_size()) < 1e-6
         await self.wait(0.025)
@@ -107,6 +122,118 @@ class CoordinateAccessors(Scene):
       assert.ok(accessors.objectCount > 0);
       assert.ok(Math.abs(accessors.authoredDuration - 0.05) < 1e-6);
       console.log(`[PASS] ${expectedBackend}: retained coordinate accessors, copies and grid aliases`);
+      const axisLabelsSource = `from noon import *
+
+await prepare_latex()
+
+class AxesLabels(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)
+        explicit_x = axes.get_x_axis_label(Text("x-values"), edge=DOWN,
+                                          direction=DOWN, buff=0.2)
+        explicit_y = axes.get_y_axis_label("y", edge=LEFT,
+                                          direction=LEFT, buff=0.2)
+        retained_y = Text("y-values")
+        labels = axes.get_axis_labels("x", retained_y)
+        assert axes.axis_labels is labels
+        assert len(labels.submobjects) == 2
+        assert isinstance(labels.submobjects[0], MathTex)
+        assert labels.submobjects[1] is retained_y
+        assert all(getattr(label, "_semantic_family_handle", None) is not None
+                   or getattr(label, "_semantic_handle", None) is not None
+                   for label in labels.submobjects)
+
+        plane = NumberPlane((-2, 2, 1), (-1, 1, 1), faded_line_ratio=1)
+        plane_labels = plane.get_axis_labels(Text("u"), "v")
+        assert plane.axis_labels is plane_labels
+        assert len(plane_labels.submobjects) == 2
+        live_label = Text("live x")
+        self.add(axes, explicit_x, explicit_y, labels, plane, plane_labels, live_label)
+        await self.play(axes.animate.shift(RIGHT * 0.7 + UP * 0.4),
+                        run_time=0.025, rate_func=linear)
+        edge = axes.get_x_axis().get_edge_center(DOWN)
+        assert axes.get_x_axis_label(live_label, edge=DOWN, direction=DOWN,
+                                     buff=0.2) is live_label
+        top = live_label.get_top()
+        assert abs(top.x - edge.x) < 1e-4
+        assert abs(top.y - edge.y + 0.2) < 1e-4
+        await self.wait(0.025)
+`;
+      const axisLabels = await qualifyPythonPlayback(context, baseUrl, axisLabelsSource, [0, 0.05]);
+      assert.equal(axisLabels.rendererBackend, expectedBackend);
+      assert.equal(axisLabels.presented, true);
+      assert.ok(axisLabels.objectCount > 0);
+      assert.ok(Math.abs(axisLabels.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes and NumberPlane text labels`);
+      const guideLinesSource = `from noon import *
+
+class AxesGuideLines(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-1, 1, 0.5), x_length=4, y_length=2, tips=False)
+        axes.shift(RIGHT * 0.25)
+        point = axes.c2p(1, 0.5)
+        vertical = axes.get_vertical_line(point, line_func=Line, color=RED)
+        horizontal = axes.get_horizontal_line(point, line_func=Line, color=BLUE)
+        guides = axes.get_lines_to_point(point, line_func=Line)
+        expected_vertical = axes.c2p(1, 0)
+        expected_horizontal = axes.c2p(0, 0.5)
+        def near(actual, expected):
+            return abs(actual.x - expected.x) < 1e-6 and abs(actual.y - expected.y) < 1e-6
+        assert near(vertical.get_start(), expected_vertical)
+        assert near(horizontal.get_start(), expected_horizontal)
+        assert len(guides.submobjects) == 2
+        assert near(guides.submobjects[0].get_start(), expected_horizontal)
+        assert near(guides.submobjects[1].get_start(), expected_vertical)
+        self.add(axes, vertical, horizontal, guides)
+        await self.wait(0.05)
+`;
+      const guideLines = await qualifyPythonPlayback(context, baseUrl, guideLinesSource, [0, 0.05]);
+      assert.equal(guideLines.rendererBackend, expectedBackend);
+      assert.equal(guideLines.presented, true);
+      assert.ok(guideLines.objectCount > 0);
+      assert.ok(Math.abs(guideLines.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: Axes line-to-point guides`);
+      const lineObservationsSource = `from noon import *
+
+class NumberLineLineObservations(Scene):
+    async def construct(self):
+        line = NumberLine((-2, 2, 1), length=4, rotation=PI / 2,
+                          scaling=LogBase(base=10), include_ticks=False)
+        line.shift(RIGHT * 0.5)
+        start, end = line.get_start_and_end()
+        vector = line.get_vector()
+        assert abs(start.x - 0.5) < 1e-6 and abs(start.y + 2.0) < 1e-6
+        assert abs(end.x - 0.5) < 1e-6 and abs(end.y - 2.0) < 1e-6
+        assert abs(vector.x) < 1e-6 and abs(vector.y - 4.0) < 1e-6
+        assert abs(line.get_length() - 4.0) < 1e-6
+        assert abs(line.get_angle() - PI / 2) < 1e-6
+        projected = line.get_projection((3.5, 1.0))
+        assert abs(projected.x - 0.5) < 1e-6 and abs(projected.y - 1.0) < 1e-6
+
+        axes = Axes((-2, 2, 1), (-2, 2, 1), x_length=4, y_length=4,
+                    x_axis_config={"scaling": LogBase(base=10)}, tips=False)
+        axes.shift(UP * 0.25)
+        point = axes.c2p(1, 1)
+        guide = axes.get_vertical_line(point, line_func=Line)
+        expected = axes.c2p(1, 0)
+        actual = guide.get_start()
+        assert abs(actual.x - expected.x) < 1e-6
+        assert abs(actual.y - expected.y) < 1e-6
+        outside = axes.get_vertical_line((-4.0, 1.0), line_func=Line)
+        outside_start = outside.get_start()
+        assert abs(outside_start.x + 4.0) < 1e-6
+        assert abs(outside_start.y - 0.25) < 1e-6
+        self.add(line, axes, guide, outside)
+        await self.wait(0.05)
+`;
+      const observations = await qualifyPythonPlayback(
+        context, baseUrl, lineObservationsSource, [0, 0.05],
+      );
+      assert.equal(observations.rendererBackend, expectedBackend);
+      assert.equal(observations.presented, true);
+      assert.ok(observations.objectCount > 0);
+      assert.ok(Math.abs(observations.authoredDuration - 0.05) < 1e-6);
+      console.log(`[PASS] ${expectedBackend}: NumberLine line observations`);
       return lifecycle;
     } finally {
       await page.close();

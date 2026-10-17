@@ -151,6 +151,7 @@ class NumberPlane(_plot.Axes):
         y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
+        self.axes = _plot._compat.VGroup(x_axis, y_axis)
         background = self.background_lines.submobjects
         for name, horizontal in (("x_lines", True), ("y_lines", False)):
             indices = engine_call(handle.numberPlaneGridLineIndices, horizontal)
