@@ -244,6 +244,26 @@ def _manim_set_xy() -> Any:
     return _object_observation(obj)
 
 
+def _noon_set_z_zero() -> Any:
+    obj = noon.Circle(radius=0.4).shift(noon.RIGHT * 1.25 + noon.DOWN * 0.75)
+    result = obj.set_z(0.0)
+    return {
+        "object": _object_observation(obj),
+        "z": _round_float(obj.get_z()),
+        "returned_self": result is obj,
+    }
+
+
+def _manim_set_z_zero() -> Any:
+    obj = manim.Circle(radius=0.4).shift(manim.RIGHT * 1.25 + manim.DOWN * 0.75)
+    result = obj.set_z(0.0)
+    return {
+        "object": _object_observation(obj),
+        "z": _round_float(obj.get_z()),
+        "returned_self": result is obj,
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2513,6 +2533,7 @@ FIXTURES = [
     Fixture("to_corner", _noon_to_corner, _manim_to_corner),
     Fixture("vgroup_arrange", _noon_arrange, _manim_arrange),
     Fixture("set_xy", _noon_set_xy, _manim_set_xy),
+    Fixture("set_z_zero", _noon_set_z_zero, _manim_set_z_zero),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
@@ -2568,6 +2589,7 @@ UNSUPPORTED = {
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "set_cap_style": "the default AUTO cap style is a supported no-op; other cap styles require shared renderer cap semantics",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
+    "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
     "vgroup_root_style": "VGroup root style getters remain unqualified because Noon family wrappers do not model Manim's separate VMobject-owned root paint profile",
 }
 

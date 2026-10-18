@@ -545,6 +545,12 @@ class Mobject:
     def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_y(self, y, direction)
 
+    def set_z(self, z: float, direction: object = ORIGIN) -> Mobject:
+        """Keep planar objects on z=0; spatial z placement is unsupported."""
+        if float(z) != 0.0:
+            raise NotImplementedError("Noon currently supports only planar z=0 placement")
+        return self
+
     def set_coord(self, value: float, dim: int, direction: object = ORIGIN) -> Mobject:
         from _manim_shared_geometry import _set_coord
         return _set_coord(self, value, dim, direction)
