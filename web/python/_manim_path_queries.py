@@ -170,6 +170,27 @@ def all_points(value):
 
 
 def boundary_points(value):
+    try:
+        integer_stride = operator.index(
+            getattr(value, "n_points_per_cubic_curve", 4)
+        )
+    except TypeError:
+        integer_stride = None
+    if integer_stride != 4:
+        family = value.get_family()
+        anchors = [
+            point
+            for member in family
+            for point in member.get_anchors()
+        ]
+        try:
+            import numpy as np
+        except ImportError:
+            return anchors
+        return np.asarray(
+            [[float(point[0]), float(point[1])] for point in anchors],
+            dtype=np.float64,
+        ).reshape((-1, 2))
     coordinates = _path_boundary_points_observation(value)
     if coordinates is None:
         raise NotImplementedError(

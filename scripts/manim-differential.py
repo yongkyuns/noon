@@ -621,6 +621,10 @@ def _curve_function_queries(api):
                 [_point_observation(point) for point in subpath]
                 for subpath in custom_stride_path.get_subpaths()
             ],
+            "boundary": [
+                _point_observation(point)
+                for point in custom_stride_path.get_points_defining_boundary()
+            ],
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()

@@ -385,6 +385,48 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(observe.call_count, 1)
         boundary_observe.assert_called_once_with(value)
 
+    def test_vector_boundary_points_follow_mutable_stride_anchors(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only array shape check")
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.get_family = Mock(return_value=[value])
+        query = Mock()
+        query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            boundary = value.get_points_defining_boundary()
+
+        np.testing.assert_array_equal(
+            boundary,
+            [[0., 0.], [1., 0.], [2., 0.], [3., 0.]],
+        )
+        value.get_family.assert_called_once_with()
+        self.assertEqual(query.free.call_count, 1)
+
+    def test_vector_boundary_points_without_numpy_keep_vec2_values(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.get_family = Mock(return_value=[value])
+        query = Mock()
+        query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        with (
+            patch.object(queries, "_typed_manim_observation", return_value=query),
+            patch.dict("sys.modules", {"numpy": None}),
+        ):
+            self.assertEqual(
+                value.get_points_defining_boundary(),
+                [
+                    noon.Vec2(0., 0.), noon.Vec2(1., 0.),
+                    noon.Vec2(2., 0.), noon.Vec2(3., 0.),
+                ],
+            )
+        self.assertEqual(query.free.call_count, 1)
+
     def test_all_points_uses_vec2_list_when_numpy_is_unavailable(self):
         import noon
 
