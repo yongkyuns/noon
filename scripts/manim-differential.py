@@ -516,6 +516,15 @@ def _curve_function_queries(api):
     )
     vector_family = api.VGroup(family_first, family_second)
     empty_vector_family = api.VGroup()
+    alias_first = api.VMobject().add_cubic_bezier_curve(
+        (0, 0, 0), (40, 20, 0), (40, -20, 0), (2, 0, 0)
+    )
+    alias_second = api.VMobject().add_cubic_bezier_curve(
+        (3, 1, 0), (3, 40, 0), (5, 40, 0), (6, 1, 0)
+    )
+    aliased_vector_family = api.VGroup(
+        api.VGroup(alias_first, alias_second), alias_first
+    )
     default_stride_anchor_edit = api.VMobject().set_anchors_and_handles(
         [(0, 0, 0), (2, 0, 0)],
         [(1, 0, 0), (3, 0, 0)],
@@ -618,6 +627,10 @@ def _curve_function_queries(api):
         "empty_vector_family_boundary_shape": list(
             empty_vector_family.get_points_defining_boundary().shape
         ),
+        "aliased_vector_family_boundary": [
+            _point_observation(point)
+            for point in aliased_vector_family.get_points_defining_boundary()
+        ],
         "default_stride_anchor_edit": [
             _point_observation(point)
             for point in default_stride_anchor_edit.get_anchors()

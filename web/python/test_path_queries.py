@@ -454,6 +454,31 @@ class PathQueryTests(unittest.TestCase):
         first.get_anchors.assert_called_once_with()
         second.get_anchors.assert_called_once_with()
 
+    def test_vgroup_boundary_points_preserve_nested_alias_order(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only family ordering check")
+        import noon
+
+        root = identity_only_wrapper(compat.VGroup)
+        root._semantic_family_handle = object()
+        nested = identity_only_wrapper(compat.VGroup)
+        first = identity_only_wrapper(compat.VMobject)
+        second = identity_only_wrapper(compat.VMobject)
+        first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
+        second.get_anchors = Mock(return_value=[noon.Vec2(3, 1), noon.Vec2(6, 1)])
+        # Rust supplies Manim's last-occurrence order for the aliased family.
+        root.get_family = Mock(return_value=[root, nested, second, first])
+
+        boundary = root.get_points_defining_boundary()
+
+        np.testing.assert_array_equal(
+            boundary,
+            [[3, 1], [6, 1], [0, 0], [2, 0]],
+        )
+        root.get_family.assert_called_once_with()
+
     def test_empty_vgroup_boundary_points_keep_pinned_numpy_shape(self):
         try:
             import numpy as np
