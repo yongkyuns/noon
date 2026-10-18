@@ -2166,6 +2166,21 @@ def _vgroup_root_style_copy_target_probe(api, scene=None):
     }
 
 
+def _plain_group_restore_extension_probe(api):
+    family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    family.save_state()
+    family.set_color(api.GREEN)
+    try:
+        family.restore()
+    except Exception as error:
+        return {"status": "raised", "error_type": type(error).__name__}
+    return {
+        "status": "restored",
+        "root": _paint_rgb(family.get_color()),
+        "children": [_paint_rgb(member.get_color()) for member in family.submobjects],
+    }
+
+
 def _vgroup_root_style_play_probe(api, scene=None):
     child = api.VMobject(
         fill_color=api.RED,
@@ -3325,6 +3340,7 @@ FIXTURES = [
 # are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
     "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
+    "plain_group_save_restore": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 Group.restore() delegates to base Mobject.become(), whose base interpolate_color() raises NotImplementedError for a plain Group. Noon restores shared Rust family state for Group; scripts/manim-differential-noon.mjs separately checks root and child colors through actual product Pyodide. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2161-L2166 and #L3172-L3180.",
     "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",

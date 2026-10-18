@@ -70,7 +70,7 @@ try {
     return JSON.parse(await pyodide.runPythonAsync(`
 import sys, json
 sys.path.insert(0, "/tmp")
-from noon_differential import _compare, noon_observations
+from noon_differential import _compare, noon_observations, _plain_group_restore_extension_probe
 import noon
 from _manim_compat import VMobject
 import numpy as np
@@ -466,6 +466,7 @@ curves = np.array([
 batch.add_cubic_bezier_curves(curves)
 cubic_batch_extension = batch.get_all_points().tolist()
 observations = noon_observations()
+plain_group_restore_extension = _plain_group_restore_extension_probe(noon)
 expectedFamilyPointCounts = {
     "group": {
         "before": {"root": 0, "has_points": False, "has_no_points": True, "leaf": 4},
@@ -520,6 +521,10 @@ def assert_color(actual, expected):
                )
 def rgba(color, opacity):
     return [*color_components(color), opacity]
+assert plain_group_restore_extension["status"] == "restored"
+assert_color(plain_group_restore_extension["root"], noon.WHITE)
+assert_color(plain_group_restore_extension["children"][0], noon.RED)
+assert_color(plain_group_restore_extension["children"][1], noon.BLUE)
 assert_color(family_paint["plain_default"][0], noon.WHITE)
 assert_color(family_paint["plain_default"][1][0], noon.RED)
 assert_color(family_paint["plain_default"][1][1], noon.BLUE)
@@ -603,6 +608,7 @@ assert_color(family_paint_play["children"][0], noon.RED)
 assert_color(family_paint_play["children"][1], noon.BLUE)
 json.dumps({
     "observations": observations,
+    "plain_group_restore_extension": plain_group_restore_extension,
     "custom_stride_anchor_gate": custom_stride_gate,
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
     "custom_stride_live_queries": custom_stride_live_queries,
@@ -856,11 +862,12 @@ json.dumps({
     [0, 0], [1, 0], [1, 1], [2, 1],
     [2, 1], [3, 1], [3, 2], [4, 2],
   ]);
+  assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(observations, null, 2)}\n`);
   console.log(`Observed ${Object.keys(observations).length} shared Rust/Python semantic fixtures`);
-  console.log("Observed two custom-stride dispositions and the intentional cubic-batch extension in product Pyodide");
+  console.log("Observed plain Group restore as a Noon extension, two custom-stride dispositions, and the intentional cubic-batch extension in product Pyodide");
 } finally {
   await browser?.close();
   await server.close();
