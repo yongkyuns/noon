@@ -686,7 +686,7 @@ class PathQueryTests(unittest.TestCase):
         query.curveCount = 1
         query.pointCount = 4
         query.pointFromProportion.return_value = [2.5, -1.0]
-        query.arcLength.return_value = 7.25
+        query.curveLength.return_value = 7.25
         query.start.return_value = [1., 2.]
         query.end.return_value = [3., 4.]
         with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
@@ -698,7 +698,7 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(value.get_end(), (3., 4.))
             query.end.assert_called_once_with()
             self.assertEqual(value.get_arc_length(20), 7.25)
-            query.arcLength.assert_called_with(20)
+            query.curveLength.assert_called_with(0, 20)
         self.assertEqual(query.free.call_count, 6)
 
     def test_start_and_end_are_base_methods_and_keep_dynamic_getter_dispatch(self):
@@ -859,25 +859,30 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
-        query.arcLength.return_value = 0.0
+        query.pointCount = 8
+        query.curveLength.return_value = 0.0
         with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
             with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
                 value.get_arc_length(0)
             self.assertEqual(value.get_arc_length(1), 0.0)
-            query.arcLength.assert_any_call(1)
+            self.assertEqual(
+                [call.args for call in query.curveLength.call_args_list],
+                [(0, 1), (1, 1)],
+            )
             for samples, error in ((-1, ValueError), (2**32, ValueError), (2.5, TypeError)):
                 with self.subTest(samples=samples), self.assertRaises(error):
                     value.get_arc_length(samples)
-            self.assertEqual(query.arcLength.call_count, 1)
+            self.assertEqual(query.curveLength.call_count, 2)
             self.assertEqual(query.free.call_count, 5)
         self.assertEqual(observe.call_count, 5)
 
         empty_query = Mock()
         empty_query.curveCount = 0
+        empty_query.pointCount = 0
         with patch.object(queries, '_typed_manim_observation', return_value=empty_query):
             for samples in (-1, 2.5, 2**32, object()):
                 self.assertEqual(value.get_arc_length(samples), 0.0)
-        self.assertEqual(empty_query.arcLength.call_count, 0)
+        self.assertEqual(empty_query.curveLength.call_count, 0)
         self.assertEqual(empty_query.free.call_count, 4)
 
         with patch.object(queries, '_typed_manim_observation') as observe:
@@ -1065,7 +1070,7 @@ class PathQueryTests(unittest.TestCase):
             query.curveLength.assert_called_once_with(0, None)
             with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
                 value.get_arc_length(0)
-            query.arcLength.assert_not_called()
+            query.curveLength.assert_called_once_with(0, None)
             self.assertEqual(query.free.call_count, 6)
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_length_pieces(2)
@@ -1138,6 +1143,10 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(len(lengths), 2)
             self.assertAlmostEqual(float(lengths[0][1]), 1 / 3)
             self.assertAlmostEqual(float(lengths[1][1]), 1 / 3)
+            self.assertAlmostEqual(
+                float(value.get_arc_length(sample_points_per_curve=2)),
+                2 / 3,
+            )
 
         high_grade = identity_only_wrapper(compat.VMobject)
         high_grade.n_points_per_cubic_curve = 5
@@ -1161,6 +1170,17 @@ class PathQueryTests(unittest.TestCase):
                 function(np.array([[0., .25], [.5, 1.]])).shape,
                 (4, 3),
             )
+
+        negative_stride = identity_only_wrapper(compat.VMobject)
+        negative_stride.n_points_per_cubic_curve = -1
+        negative_stride_query = Mock()
+        negative_stride_query.pointCount = 4
+        with patch.object(
+            queries,
+            "_typed_manim_observation",
+            return_value=negative_stride_query,
+        ):
+            self.assertEqual(negative_stride.get_arc_length(-1), 0.0)
 
     def test_curve_functions_keep_snapshot_and_vectorize_numpy_parameters(self):
         try:

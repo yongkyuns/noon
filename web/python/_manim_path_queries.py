@@ -60,23 +60,21 @@ def proportion_from_point(value, point):
 def arc_length(value, sample_points_per_curve):
     query = _query(value)
     try:
-        # Manim only reaches np.linspace while iterating actual curves. Empty
-        # paths therefore return zero without validating this otherwise-unused
-        # argument.
-        if int(query.curveCount) == 0:
+        point_count = int(query.pointCount)
+        curve_count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
+        curve_indices = range(curve_count)
+        if curve_count <= 0:
             return 0.0
-        samples = (
-            None
-            if sample_points_per_curve is None
-            else operator.index(sample_points_per_curve)
-        )
-        if samples is not None and samples < 0:
-            raise ValueError(f"Number of samples, {samples}, must be non-negative.")
-        if samples is not None and samples > 0xFFFFFFFF:
-            raise ValueError("sample_points_per_curve must be between 0 and 4294967295")
+        samples = _curve_sample_count(sample_points_per_curve)
         if samples == 0:
             _raise_zero_sample_length_axis_error()
-        return float(engine_call(query.arcLength, samples))
+        total = 0.0
+        for index in curve_indices:
+            selection = _nth_curve_selection(value, index, query)
+            if selection is None:
+                raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+            total += _curve_length_from_selection(query, selection, samples)
+        return float(total)
     finally:
         query.free()
 
@@ -581,6 +579,18 @@ def _selected_curve_callable(snapshot, selection):
     return _range_curve_callable(snapshot, selection[1], selection[2])
 
 
+def _curve_length_from_selection(query, selection, samples):
+    if selection[0] == "cubic":
+        return float(engine_call(query.curveLength, selection[1], samples))
+    pieces = engine_call(
+        query.bezierLengthPiecesRange,
+        selection[1],
+        selection[2],
+        samples,
+    )
+    return float(sum(pieces))
+
+
 def _empty_curve_callable():
     def curve(_t):
         raise IndexError("index 0 is out of bounds for axis 1 with size 0")
@@ -590,15 +600,13 @@ def _empty_curve_callable():
 
 
 def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None):
-    import numpy as np
-
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
         point_count = int(query.pointCount)
         count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
         curve_indices = range(count)
-        if with_lengths and count and extra_kwargs:
+        if with_lengths and count > 0 and extra_kwargs:
             unexpected = set(extra_kwargs) - {"sample_points"}
             if unexpected:
                 # Match Manim's lazy per-curve dispatch, including subclass
@@ -608,8 +616,12 @@ def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None)
                         index, **extra_kwargs
                     )
                 return
-        samples = _curve_sample_count(sample_points) if with_lengths and count else None
-        if with_lengths and count and samples == 0:
+        samples = (
+            _curve_sample_count(sample_points)
+            if with_lengths and count > 0
+            else None
+        )
+        if with_lengths and count > 0 and samples == 0:
             _raise_zero_sample_length_axis_error()
         for index in curve_indices:
             selection = _nth_curve_selection(value, index, query)
@@ -619,20 +631,13 @@ def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None)
                 else _selected_curve_callable(snapshot, selection)
             )
             if with_lengths:
+                import numpy as np
+
                 if selection is None:
                     raise IndexError("index 0 is out of bounds for axis 1 with size 0")
-                if selection[0] == "cubic":
-                    length = np.float64(
-                        engine_call(query.curveLength, selection[1], samples)
-                    )
-                else:
-                    pieces = engine_call(
-                        query.bezierLengthPiecesRange,
-                        selection[1],
-                        selection[2],
-                        samples,
-                    )
-                    length = np.float64(sum(pieces))
+                length = np.float64(
+                    _curve_length_from_selection(query, selection, samples)
+                )
                 yield function, length
             else:
                 yield function
@@ -668,18 +673,9 @@ def curve_function_with_length(value, n, sample_points=None):
         if selection is None:
             raise IndexError("index 0 is out of bounds for axis 1 with size 0")
         function = _selected_curve_callable(snapshot, selection)
-        if selection[0] == "cubic":
-            length = np.float64(
-                engine_call(query.curveLength, selection[1], samples)
-            )
-        else:
-            pieces = engine_call(
-                query.bezierLengthPiecesRange,
-                selection[1],
-                selection[2],
-                samples,
-            )
-            length = np.float64(sum(pieces))
+        length = np.float64(
+            _curve_length_from_selection(query, selection, samples)
+        )
         return function, length
     except Exception:
         snapshot.__del__()
@@ -747,17 +743,7 @@ def curve_length(value, n, sample_points):
             _raise_zero_sample_length_axis_error()
         if selection is None:
             raise IndexError("index 0 is out of bounds for axis 1 with size 0")
-        if selection[0] == "cubic":
-            return np.float64(
-                engine_call(query.curveLength, selection[1], samples)
-            )
-        pieces = engine_call(
-            query.bezierLengthPiecesRange,
-            selection[1],
-            selection[2],
-            samples,
-        )
-        return np.float64(sum(pieces))
+        return np.float64(_curve_length_from_selection(query, selection, samples))
     finally:
         query.free()
 

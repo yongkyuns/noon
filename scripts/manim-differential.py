@@ -516,6 +516,10 @@ def _curve_function_queries(api):
         [(0, 0, 0), (1, 0, 0), (2, 1, 0), (3, 1, 0)]
     )
     high_grade_path.n_points_per_cubic_curve = 5
+    negative_stride_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0)]
+    )
+    negative_stride_path.n_points_per_cubic_curve = -1
     parameters = np.array([[0.0], [0.25], [0.5], [1.0]])
 
     def sample(function):
@@ -591,6 +595,12 @@ def _curve_function_queries(api):
         ],
         "mutable_custom_stride": {
             "count": custom_stride_path.get_num_curves(),
+            "arc_length": float(
+                custom_stride_path.get_arc_length(sample_points_per_curve=2)
+            ),
+            "negative_stride_arc_length": capture(
+                lambda: float(negative_stride_path.get_arc_length(-1))
+            ),
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()
