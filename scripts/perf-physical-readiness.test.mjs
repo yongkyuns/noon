@@ -4,11 +4,11 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { browserArgs } from "./manim-raster-support.mjs";
 import { EXPECTED, powerSource, classifyWebgl, assessReadiness, browserProbeSource,
   runReadiness, parseBuildProcesses } from "./perf-physical-readiness.mjs";
 
-const flags = ["--disable-features=WebGPU", "--use-gpu-in-tests", "--ignore-gpu-blocklist",
-  "--force-high-performance-gpu", "--disable-gpu-sandbox", "--disable-dev-shm-usage"];
+const flags = browserArgs("webgl", { gpuMode: "hardware" });
 const gl = { backend: "WebGL2", unmaskedVendor: "Apple Inc.",
   unmaskedRenderer: "ANGLE (Apple, Apple M4, Metal)", readbackValid: true,
   contextLost: false };
@@ -119,7 +119,7 @@ for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild",
   const dir = await mkdtemp(path.join(os.tmpdir(), "noon-device-builds-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(path.join(dir, "scripts")); await mkdir(path.join(dir, "bin"));
-  for (const file of ["perf-device-run.mjs", "perf-physical-readiness.mjs"]) {
+  for (const file of ["perf-device-run.mjs", "perf-physical-readiness.mjs", "manim-raster-support.mjs"]) {
     await copyFile(new URL(file, import.meta.url), path.join(dir, "scripts", file));
   }
   const marker = path.join(dir, "building");

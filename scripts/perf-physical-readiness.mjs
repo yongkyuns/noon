@@ -6,6 +6,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { browserArgs } from "./manim-raster-support.mjs";
 
 export const EXPECTED = Object.freeze({
   platform: "darwin", node: "v22.23.3", chromium: "151.0.7922.34",
@@ -139,10 +140,8 @@ export async function runReadiness({ launch, flags, outfile }) {
   };
   let browser;
   try {
-    assert.deepEqual(flags, [
-      "--disable-features=WebGPU", "--use-gpu-in-tests", "--ignore-gpu-blocklist",
-      "--force-high-performance-gpu", "--disable-gpu-sandbox", "--disable-dev-shm-usage",
-    ], "hardware flags must be exactly the shared renderer support flags");
+    assert.deepEqual(flags, browserArgs("webgl", { gpuMode: "hardware" }),
+      "hardware flags must be exactly the shared renderer support flags");
     browser = await launch({ headless: false, args: flags, timeout: 30_000 });
     observation.observed.browser = browser.version();
     const context = await browser.newContext({ viewport: { width: 64, height: 64 } });
@@ -170,11 +169,8 @@ export async function runReadiness({ launch, flags, outfile }) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const outfile = process.argv[2];
   assert.ok(outfile && process.argv.length === 3, "usage: node perf-physical-readiness.mjs OUTPUT.json");
-  // Dynamic imports keep the pure admission tests independent of Playwright and
-  // make the existing GPU mode/flags implementation authoritative.
-  const [{ default: playwright }, { browserArgs }] = await Promise.all([
-    import("playwright"), import("./manim-raster-support.mjs"),
-  ]);
+  // Keep the pure admission tests independent of Playwright.
+  const { default: playwright } = await import("playwright");
   const result = await runReadiness({ launch: options => playwright.chromium.launch(options),
     flags: browserArgs("webgl", { gpuMode: "hardware" }), outfile });
   console.log(JSON.stringify({ status: result.decision.status, blockers: result.decision.blockers,
