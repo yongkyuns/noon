@@ -40,10 +40,10 @@ class DataLinks(Scene):
         data_rail = Line(*outgoing, color="#404040", stroke_width=2.5)
         status_rail = Line(*returning, color="#404040", stroke_width=2.5)
         data_label = Text(
-            "SENSOR SAMPLES   →", font_size=19, color="#00ffff",
+            "SENSOR SAMPLES   →", font_size=19, color=TEAL,
         ).move_to((0, 1.23, 0))
         status_label = Text(
-            "←   ESTIMATOR STATUS", font_size=19, color="#ffcc00",
+            "←   ESTIMATOR STATUS", font_size=19, color=YELLOW,
         ).move_to((0, -1.23, 0))
         resolved = Text(
             "Only the messages disappear — the connections stay.",
