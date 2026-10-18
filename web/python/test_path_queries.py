@@ -1036,6 +1036,8 @@ class PathQueryTests(unittest.TestCase):
                 value.get_start_anchors,
                 value.get_end_anchors,
                 value.get_anchors_and_handles,
+                lambda: value.get_num_curves(),
+                lambda: value.get_arc_length(5),
             ):
                 with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
                     query()

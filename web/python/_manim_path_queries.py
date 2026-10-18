@@ -17,13 +17,6 @@ from _manim_semantic_handles import (
 )
 
 
-def _query(value):
-    query = _typed_manim_observation(value, "pathQuery", "queryMobjectPath")
-    if query is None:
-        raise RuntimeError("path queries require the shared Rust authoring host")
-    return query
-
-
 def _reject_staged_custom_stride_query(value):
     stride = getattr(value, "n_points_per_cubic_curve", 4)
     try:
@@ -39,9 +32,16 @@ def _reject_staged_custom_stride_query(value):
             )
 
 
+def _query(value):
+    _reject_staged_custom_stride_query(value)
+    query = _typed_manim_observation(value, "pathQuery", "queryMobjectPath")
+    if query is None:
+        raise RuntimeError("path queries require the shared Rust authoring host")
+    return query
+
+
 def point_from_proportion(value, alpha):
     alpha = _ir._finite_number("alpha", alpha)
-    _reject_staged_custom_stride_query(value)
     query = _query(value)
     try:
         stride = getattr(value, "n_points_per_cubic_curve", 4)
@@ -119,7 +119,6 @@ def proportion_from_point(value, point):
     else:
         raise ValueError("point must have two or three coordinates")
 
-    _reject_staged_custom_stride_query(value)
     query = _query(value)
     try:
         stride = getattr(value, "n_points_per_cubic_curve", 4)
@@ -905,7 +904,6 @@ def path_points(value, method):
     except TypeError:
         integer_stride = None
     if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
-        _reject_staged_custom_stride_query(value)
         query = _query(value)
         try:
             points = _points(engine_call(query.points))
@@ -932,7 +930,6 @@ def anchors_and_handles(value):
     if stride <= 0:
         return []
     if stride != 4:
-        _reject_staged_custom_stride_query(value)
         query = _query(value)
         try:
             points = _points(engine_call(query.points))
