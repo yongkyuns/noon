@@ -12393,7 +12393,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_composition_candidate_surfaces_foreign_and_stale_handles_before_bootstrap() {
+    fn ordinary_composition_activation_rejects_foreign_and_stale_handles_before_bootstrap() {
         let mut context = CanonicalAuthoringScene::default();
         let source = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &source).unwrap();
@@ -12409,7 +12409,8 @@ mod tests {
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
 
         assert!(context
-            .validate_ordinary_mixed_composition(
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
                 &[
                     bound_transform_child(&source, unsupported.clone(), child),
                     bound_transform_child(&source, foreign, child),
@@ -12428,7 +12429,8 @@ mod tests {
             .apply(&mut context.scene.integration_store().borrow_mut())
             .unwrap();
         assert!(context
-            .validate_ordinary_mixed_composition(
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
                 &[
                     bound_transform_child(&source, unsupported, child),
                     bound_transform_child(&source, stale, child),
