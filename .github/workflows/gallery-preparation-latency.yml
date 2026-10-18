@@ -1,0 +1,52 @@
+name: Gallery preparation latency diagnostic
+on:
+  push:
+    branches: [diagnostic/gallery-preparation-latency]
+    paths:
+      - scripts/gallery-preparation-latency.mjs
+      - .github/workflows/gallery-preparation-latency.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: gallery-preparation-latency-diagnostic
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NOON_PREPARATION_CASES: showcase-first-scene,showcase-code-blocks,showcase-dynamic-scene
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+      - name: Install isolated browser dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/noon-preparation-deps" --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
+          ln -s "$RUNNER_TEMP/noon-preparation-deps/node_modules" node_modules
+          node_modules/.bin/playwright install --with-deps chromium
+      - name: Fetch and verify exact deployed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/yongkyuns/noon/actions/artifacts/12144481866/zip \
+            --output "$RUNNER_TEMP/noon-pages.zip"
+          echo 'dfdeabbbfed46dc7261ee782417b6659eb05439a0646f6d16489a196428528ab  '"$RUNNER_TEMP/noon-pages.zip" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/noon-pages"
+          unzip -q "$RUNNER_TEMP/noon-pages.zip" -d "$RUNNER_TEMP/noon-pages"
+          tar -xf "$RUNNER_TEMP/noon-pages/artifact.tar" -C web
+          node --check scripts/gallery-preparation-latency.mjs
+      - name: Measure unchanged gallery sources
+        run: node scripts/gallery-preparation-latency.mjs
+      - name: Retain all results including failures
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gallery-preparation-latency
+          path: browser-smoke-artifacts/gallery-preparation
+          if-no-files-found: warn
+          retention-days: 7
