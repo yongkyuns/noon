@@ -26,6 +26,21 @@ pub(crate) fn gradient_colors(
 }
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn radial_gradient_colors(
+    values: &[f64],
+) -> Result<(noon::Color, noon::Color), crate::authoring_error::AuthoringFailure> {
+    let colors = gradient_colors(values)?;
+    match colors.as_slice() {
+        [inner, outer] => Ok((*inner, *outer)),
+        _ => Err(crate::authoring_error::AuthoringFailure::new(
+            "invalid_input",
+            "radial_gradient.color_count",
+            "radial gradients require exactly two RGBA colors",
+        )),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn style_update(
     fill_enabled: bool,
@@ -1249,6 +1264,20 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setRadialColorGradient)]
+        pub fn set_radial_color_gradient(
+            &self,
+            center_x: f64,
+            center_y: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.semantic_family()?
+                .set_color_by_radial_gradient((center_x, center_y), radius, inner, outer)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(
@@ -2138,6 +2167,20 @@ mod wasm {
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
             let colors = super::gradient_colors(values).map_err(js_error)?;
             self.handle.set_color_by_gradient(&colors).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setRadialColorGradient)]
+        pub fn set_radial_color_gradient(
+            &mut self,
+            center_x: f64,
+            center_y: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.handle
+                .set_color_by_radial_gradient((center_x, center_y), radius, inner, outer)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStyle)]

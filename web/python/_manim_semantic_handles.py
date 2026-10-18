@@ -1296,6 +1296,40 @@ def _set_color_by_gradient(self, *colors):
     return self
 
 
+def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color):
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+        raise NotImplementedError(
+            "radial gradients in host callbacks require staged paint publication"
+        )
+    inner = _compat._as_color("inner gradient color", inner_color)
+    outer = _compat._as_color("outer gradient color", outer_color)
+    radius = _compat._ir._finite_number("radius", radius)
+    center = self.get_center() if center is None else _base._as_vec2(center)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("radial gradients require the shared Rust authoring host")
+    arguments = _gradient_components((inner, outer))
+    if context is None:
+        engine_call(
+            target.setRadialColorGradient,
+            center.x,
+            center.y,
+            radius,
+            arguments,
+        )
+    else:
+        engine_call(
+            getattr(context, f"liveSet{suffix}ColorRadialGradient"),
+            target,
+            center.x,
+            center.y,
+            radius,
+            arguments,
+        )
+    return self
+
+
 def _style_target(value):
     if _is_shared_family(value):
         return value._semantic_family_handle, _group_target_context(value), "Family"

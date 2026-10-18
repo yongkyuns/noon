@@ -480,6 +480,29 @@ class Mobject:
         from _manim_semantic_handles import _set_color_by_gradient
         return _set_color_by_gradient(self, *parsed)
 
+    def set_colors_by_radial_gradient(
+        self,
+        center: object | None = None,
+        radius: float = 1,
+        inner_color: object = WHITE,
+        outer_color: object = BLACK,
+    ) -> Mobject:
+        from _manim_semantic_handles import _set_color_by_radial_gradient
+        return _set_color_by_radial_gradient(
+            self, center, radius, inner_color, outer_color
+        )
+
+    def set_submobject_colors_by_radial_gradient(
+        self,
+        center: object | None = None,
+        radius: float = 1,
+        inner_color: object = WHITE,
+        outer_color: object = BLACK,
+    ) -> Mobject:
+        return self.set_colors_by_radial_gradient(
+            center, radius, inner_color, outer_color
+        )
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)

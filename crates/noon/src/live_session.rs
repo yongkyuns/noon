@@ -3014,6 +3014,88 @@ impl<'a> LiveSession<'a> {
         )
     }
 
+    pub fn set_family_color_by_radial_gradient(
+        &mut self,
+        family: &MobjectFamily,
+        center: (f64, f64),
+        radius: f64,
+        inner: Color,
+        outer: Color,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_gradient::validate_radial_gradient_inputs(center, radius, inner, outer)
+            .map_err(LiveSessionError::from)?;
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_last_occurrence_leaf_nodes(family.node_id())
+            .map_err(crate::AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        for leaf in leaves {
+            let object =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
+            if !object
+                .has_fade_to_points()
+                .map_err(LiveSessionError::from)?
+            {
+                continue;
+            }
+            let member_center = self.effective_layout(&object)?.center;
+            let color = crate::family_gradient::radial_gradient_color(
+                crate::family_gradient::radial_distance(member_center, center),
+                radius,
+                inner,
+                outer,
+            );
+            let mut style = self.capture_mobject_state(&object)?.style;
+            edit_color(
+                &mut style,
+                color.red.into(),
+                color.green.into(),
+                color.blue.into(),
+                color.alpha.into(),
+            )
+            .map_err(LiveSessionError::from)?;
+            transaction.replace_style(leaf, style);
+        }
+        self.apply(transaction)
+    }
+
+    pub fn set_color_by_radial_gradient(
+        &mut self,
+        object: &Mobject,
+        center: (f64, f64),
+        radius: f64,
+        inner: Color,
+        outer: Color,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_gradient::validate_radial_gradient_inputs(center, radius, inner, outer)
+            .map_err(LiveSessionError::from)?;
+        self.require_mobject(object)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        if !object
+            .has_fade_to_points()
+            .map_err(LiveSessionError::from)?
+        {
+            return self.apply(SemanticMutationTransaction::new());
+        }
+        let member_center = self.effective_layout(object)?.center;
+        let color = crate::family_gradient::radial_gradient_color(
+            crate::family_gradient::radial_distance(member_center, center),
+            radius,
+            inner,
+            outer,
+        );
+        self.set_color(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )
+    }
+
     /// Recolor a family's unique leaves through one coherent authored publication.
     pub fn set_family_color(
         &mut self,

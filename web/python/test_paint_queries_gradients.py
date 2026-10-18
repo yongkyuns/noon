@@ -103,3 +103,28 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         self.assertEqual(len(components.call_args.args[0]), 2)
         self.assertEqual(components.call_args.args[0][0].red, 1.0)
         self.assertEqual(components.call_args.args[0][1].blue, 1.0)
+
+    def test_radial_gradient_is_one_shared_request_for_authored_and_live_targets(self):
+        family = identity_only_wrapper(compat.VGroup)
+        handle = Mock()
+        argument = object()
+        for context in (None, SimpleNamespace(liveSetFamilyColorRadialGradient=Mock())):
+            with self.subTest(live=context is not None), \
+                 patch.object(handles, '_style_target', return_value=(handle, context, 'Family')), \
+                 patch.object(handles, '_gradient_components', return_value=argument) as components:
+                self.assertIs(
+                    family.set_colors_by_radial_gradient(
+                        center=(1, -2), radius=3, inner_color='#FF0000', outer_color='#0000FF'
+                    ),
+                    family,
+                )
+            method = (
+                context.liveSetFamilyColorRadialGradient
+                if context is not None
+                else handle.setRadialColorGradient
+            )
+            expected = ((handle,) if context is not None else ()) + (1.0, -2.0, 3.0, argument)
+            method.assert_called_once_with(*expected)
+            self.assertEqual(len(components.call_args.args[0]), 2)
+            self.assertEqual(components.call_args.args[0][0].red, 1.0)
+            self.assertEqual(components.call_args.args[0][1].blue, 1.0)

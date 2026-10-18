@@ -419,6 +419,29 @@ def _base_mobject_color_gradient_probe(api) -> Any:
     }
 
 
+def _radial_family_gradient_probe(api) -> Any:
+    near = api.Square(color=api.YELLOW, fill_opacity=0.3, stroke_opacity=0.6)
+    near.shift(api.LEFT)
+    center = api.Circle(color=api.GREEN)
+    far = api.Square(color=api.YELLOW).shift(api.RIGHT * 2)
+    point_free = api.VMobject(color=api.GREEN)
+    family = api.VGroup(near, api.VGroup(point_free, center, far))
+    result = family.set_submobject_colors_by_radial_gradient(
+        center=api.ORIGIN,
+        radius=2,
+        inner_color=api.RED,
+        outer_color=api.BLUE,
+    )
+    default_center = api.Square(color=api.GREEN)
+    default_result = default_center.set_colors_by_radial_gradient()
+    return {
+        "returns_self": result is family and default_result is default_center,
+        "colors": [_paint_rgb(member.get_color()) for member in (near, point_free, center, far)],
+        "opacity": [float(near.get_fill_opacity()), float(near.get_stroke_opacity())],
+        "default_center_color": _paint_rgb(default_center.get_color()),
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2703,6 +2726,8 @@ FIXTURES = [
             lambda: _to_original_color_probe(manim)),
     Fixture("base_mobject_color_gradient", lambda: _base_mobject_color_gradient_probe(noon),
             lambda: _base_mobject_color_gradient_probe(manim)),
+    Fixture("radial_family_gradient", lambda: _radial_family_gradient_probe(noon),
+            lambda: _radial_family_gradient_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
@@ -2748,6 +2773,7 @@ FIXTURES = [
 # are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
     "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
+    "radial_gradient_edges": "Common-success qualification covers planar families with finite positive radii. Noon rejects zero/negative radii, nonzero-z centers, staged callback use, and Text/Image/resource/spatial family parity remain unqualified; ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",

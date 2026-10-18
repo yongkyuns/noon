@@ -7744,6 +7744,52 @@ mod wasm {
                 .live_set_family_color_gradient(&target.semantic_family()?, &colors)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetColorRadialGradient)]
+        pub fn live_set_color_radial_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            center_x: f64,
+            center_y: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) =
+                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_color_radial_gradient(
+                    &target.semantic_mobject(),
+                    (center_x, center_y),
+                    radius,
+                    inner,
+                    outer,
+                )
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyColorRadialGradient)]
+        pub fn live_set_family_color_radial_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            center_x: f64,
+            center_y: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) =
+                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_color_radial_gradient(
+                    &target.semantic_family()?,
+                    (center_x, center_y),
+                    radius,
+                    inner,
+                    outer,
+                )
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = queryMobjectColor)]
         pub fn query_mobject_color(
             &mut self,
