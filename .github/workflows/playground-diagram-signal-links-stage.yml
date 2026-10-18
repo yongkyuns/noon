@@ -6,7 +6,7 @@ on:
       - 'web/python/examples/showcase_data_links.py'
       - 'web/python/examples/staging_data_links_manifest.json'
       - 'scripts/showcase-capture.mjs'
-      - '.github/workflows/diagram-signal-links-stage.yml'
+      - '.github/workflows/playground-diagram-signal-links-stage.yml'
 
 permissions:
   contents: read
