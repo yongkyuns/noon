@@ -277,6 +277,16 @@ def cubic_bezier_tuples_from_points(value, points):
     return np.array(groups)
 
 
+def cubic_bezier_tuples(value):
+    """Group the object's current Rust-owned point snapshot by cubic stride."""
+    query = _query(value)
+    try:
+        coordinates = engine_call(query.points)
+    finally:
+        query.free()
+    return cubic_bezier_tuples_from_points(value, _format_points(coordinates))
+
+
 def _format_points(coordinates):
     try:
         import numpy as np

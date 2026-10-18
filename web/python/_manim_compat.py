@@ -263,6 +263,10 @@ class VMobject(Mobject):
         from _manim_path_queries import cubic_bezier_tuples_from_points
         return cubic_bezier_tuples_from_points(self, points)
 
+    def get_cubic_bezier_tuples(self):
+        from _manim_path_queries import cubic_bezier_tuples
+        return cubic_bezier_tuples(self)
+
     def is_closed(self):
         from _manim_path_queries import is_closed
         return is_closed(self)

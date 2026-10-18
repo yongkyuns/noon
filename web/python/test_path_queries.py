@@ -225,6 +225,43 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(handle.cubicBezierPointRanges.call_args_list[0].args, (10, 4.0))
         self.assertEqual(handle.cubicBezierPointRanges.call_args_list[-1].args, (10, 3.0))
 
+    def test_cubic_tuple_getter_groups_the_current_rust_path_snapshot(self):
+        import numpy as np
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.points.return_value = [
+            0., 0., 1., 0., 1., 1., 2., 1.,
+            2., 1., 3., 1., 3., 2., 4., 2.,
+        ]
+        handle = Mock()
+
+        def ranges(point_count, stride):
+            stride = int(stride)
+            complete = point_count // stride * stride
+            return [
+                index
+                for start in range(0, complete, stride)
+                for index in (start, start + stride)
+            ]
+
+        handle.cubicBezierPointRanges.side_effect = ranges
+        with patch.object(queries, "_typed_manim_observation", return_value=query), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            default = value.get_cubic_bezier_tuples()
+            value.n_points_per_cubic_curve = 3
+            custom = value.get_cubic_bezier_tuples()
+
+        self.assertIsInstance(default, np.ndarray)
+        self.assertEqual(default.shape, (2, 4, 2))
+        np.testing.assert_array_equal(default, np.asarray(query.points.return_value).reshape((2, 4, 2)))
+        self.assertEqual(custom.shape, (2, 3, 2))
+        np.testing.assert_array_equal(custom, np.asarray(query.points.return_value[:-4]).reshape((2, 3, 2)))
+        self.assertEqual(query.free.call_count, 2)
+        self.assertEqual(handle.cubicBezierPointRanges.call_args_list[0].args, (8, 4.0))
+        self.assertEqual(handle.cubicBezierPointRanges.call_args_list[1].args, (8, 3.0))
+
     def test_cubic_tuple_helpers_preserve_negative_and_zero_stride_behavior(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

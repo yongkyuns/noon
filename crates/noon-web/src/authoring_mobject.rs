@@ -1617,6 +1617,9 @@ mod wasm {
         pub fn point_count(&self) -> u32 {
             self.value.point_count() as u32
         }
+        pub fn points(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.points().map(flat_points).map_err(js_error)
+        }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
