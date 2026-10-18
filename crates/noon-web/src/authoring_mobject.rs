@@ -1832,6 +1832,27 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = subpathSplitIndices)]
+        pub fn subpath_split_indices(
+            &self,
+            points: Vec<f64>,
+            point_count: u32,
+            point_dimensions: u32,
+            compared_dimensions: u32,
+            absolute_tolerance: f64,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            noon::manim_subpath_split_indices(
+                &points,
+                point_count as usize,
+                point_dimensions as usize,
+                compared_dimensions as usize,
+                absolute_tolerance,
+            )
+            .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+            .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pointsAllClose)]
         pub fn points_allclose(
             &self,

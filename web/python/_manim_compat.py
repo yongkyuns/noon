@@ -94,6 +94,7 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    n_points_per_cubic_curve = 4
     tolerance_for_point_equality = 1e-6
 
     @property
@@ -210,6 +211,10 @@ class VMobject(Mobject):
     def get_subpaths(self):
         from _manim_path_queries import subpaths
         return subpaths(self)
+
+    def get_subpath_split_indices_from_points(self, points, n_dims=3):
+        from _manim_path_queries import subpath_split_indices
+        return subpath_split_indices(self, points, n_dims)
 
     def is_closed(self):
         from _manim_path_queries import is_closed

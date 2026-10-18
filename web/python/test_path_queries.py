@@ -42,6 +42,57 @@ class PathQueryTests(unittest.TestCase):
         value.tolerance_for_point_equality = 3e-5
         self.assertEqual(value.tolerance_for_point_equality, 3e-5)
 
+    def test_vmobject_exposes_canonical_cubic_stride_name(self):
+        value = identity_only_wrapper(compat.VMobject)
+        self.assertEqual(value.n_points_per_curve, 4)
+        self.assertEqual(value.n_points_per_cubic_curve, 4)
+        self.assertEqual(compat.VMobject.n_points_per_cubic_curve, 4)
+
+    def test_subpath_split_query_uses_rust_and_returns_numpy_index_ranges(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy array result shape")
+        value = identity_only_wrapper(compat.VMobject)
+        value.tolerance_for_point_equality = 2e-5
+        handle = Mock()
+        handle.subpathSplitIndices.return_value = [0, 4, 4, 8]
+        points = np.arange(24, dtype=np.float64).reshape((8, 3))
+        with patch.object(queries, "_handle_for", return_value=handle):
+            ranges = value.get_subpath_split_indices_from_points(points, n_dims=-1)
+        self.assertIsInstance(ranges, np.ndarray)
+        self.assertEqual(ranges.shape, (2, 2))
+        np.testing.assert_array_equal(ranges, [[0, 4], [4, 8]])
+        handle.subpathSplitIndices.assert_called_once_with(
+            points.reshape(-1).tolist(), 8, 3, 2, 2e-5
+        )
+
+    def test_subpath_split_query_without_numpy_returns_range_lists(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        handle.subpathSplitIndices.return_value = [0, 4, 4, 8]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            ranges = value.get_subpath_split_indices_from_points(
+                [[0, 0], [1, 0], [2, 0], [3, 0], [3, 0], [4, 0], [5, 0], [6, 0]],
+                n_dims=3,
+            )
+        self.assertEqual(ranges, [[0, 4], [4, 8]])
+        handle.subpathSplitIndices.assert_called_once_with(
+            [0., 0., 1., 0., 2., 0., 3., 0., 3., 0., 4., 0., 5., 0., 6., 0.],
+            8, 2, 2, 1e-6,
+        )
+
+    def test_subpath_split_query_rejects_ragged_or_nonmatrix_points_before_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(queries, "_handle_for") as handle:
+            with self.assertRaises(ValueError):
+                value.get_subpath_split_indices_from_points([[0, 0], [1, 0, 0]])
+            with self.assertRaises(ValueError):
+                value.get_subpath_split_indices_from_points([0, 1, 2, 3])
+        handle.assert_not_called()
+
     def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
         value = identity_only_wrapper(compat.VMobject)
         self.assertEqual(value.n_points_per_curve, 4)

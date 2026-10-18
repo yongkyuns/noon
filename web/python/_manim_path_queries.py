@@ -134,6 +134,52 @@ def consider_points_equals_2d(value, p0, p1):
     return bool(engine_call(handle.points2dClose, left, right, tolerance))
 
 
+def subpath_split_indices(value, points, n_dims=3):
+    """Return Manim's [start, end) point ranges for connected cubic runs."""
+    n_dims = operator.index(n_dims)
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+        try:
+            rows = [list(row) for row in points]
+        except (TypeError, ValueError) as error:
+            raise ValueError("points must be a two-dimensional point array") from error
+        point_count = len(rows)
+        point_dimensions = len(rows[0]) if rows else 0
+        if any(len(row) != point_dimensions for row in rows):
+            raise ValueError("point rows must have a consistent number of dimensions")
+        coordinates = [float(coordinate) for row in rows for coordinate in row]
+    else:
+        array = np.asarray(points, dtype=np.float64)
+        if array.ndim != 2:
+            raise ValueError("points must be a two-dimensional point array")
+        point_count, point_dimensions = array.shape
+        coordinates = array.reshape(-1).tolist()
+
+    compared_dimensions = slice(None, n_dims).indices(point_dimensions)[1]
+    if point_count > 0xFFFFFFFF or point_dimensions > 0xFFFFFFFF:
+        raise ValueError("points exceed the supported array size")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("subpath queries require a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    indices = engine_call(
+        handle.subpathSplitIndices,
+        coordinates,
+        point_count,
+        point_dimensions,
+        compared_dimensions,
+        tolerance,
+    )
+    indices = [int(index) for index in indices]
+    if len(indices) % 2:
+        raise RuntimeError("Rust subpath query returned an incomplete index range")
+    if np is None:
+        return [indices[index:index + 2] for index in range(0, len(indices), 2)]
+    return np.asarray(indices, dtype=np.int_).reshape((-1, 2))
+
+
 def _format_points(coordinates):
     try:
         import numpy as np

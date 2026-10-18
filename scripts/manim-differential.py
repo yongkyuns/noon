@@ -1225,6 +1225,58 @@ def _path_editing(api):
             [1.0, 2.0, 0.0], [1.0, 2.0, 100.0]
         ),
     }
+    split_points = [
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0],
+        [3.0000005, 0.0, 0.0], [4.0, 0.0, 0.0], [5.0, 0.0, 0.0], [6.0, 0.0, 0.0],
+        [6.0, 0.0, 0.1], [7.0, 0.0, 0.1], [8.0, 0.0, 0.1], [9.0, 0.0, 0.1],
+        [9.0, 0.0, 0.1], [10.0, 0.0, 0.1], [11.0, 0.0, 0.1], [12.0, 0.0, 0.1],
+    ]
+    manim_reference = getattr(api, "__name__", None) == "manim"
+    if manim_reference:
+        import numpy as np
+
+        split_points = np.asarray(split_points)
+    nonfinite_split_points = [
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, float("inf")],
+        [3.0, 0.0, float("inf")], [4.0, 0.0, 0.0], [5.0, 0.0, 0.0], [6.0, 0.0, float("nan")],
+        [6.0, 0.0, float("nan")], [7.0, 0.0, 0.0], [8.0, 0.0, 0.0], [9.0, 0.0, 0.0],
+    ]
+    if manim_reference:
+        nonfinite_split_points = np.asarray(nonfinite_split_points)
+    overflow_split_points = [
+        [-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.7e308, 0.0, 0.0],
+        [1.7e308, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+    ]
+    if manim_reference:
+        overflow_split_points = np.asarray(overflow_split_points)
+    split_query = api.VMobject()
+    split_query.tolerance_for_point_equality = 1.0e-6
+    overflow_query = api.VMobject()
+    overflow_query.tolerance_for_point_equality = float("inf")
+
+    def as_index_rows(indices):
+        return indices.tolist() if hasattr(indices, "tolist") else indices
+
+    subpath_splits = {
+        "three_dimensional": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points)
+        ),
+        "two_dimensional": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points, n_dims=2)
+        ),
+        "negative_dimension_slice": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points, n_dims=-1)
+        ),
+        "short_input": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points[:3])
+        ),
+        "nonfinite_boundaries": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(nonfinite_split_points)
+        ),
+        "overflowing_difference": as_index_rows(
+            overflow_query.get_subpath_split_indices_from_points(overflow_split_points)
+        ),
+    }
 
     return {
         "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
@@ -1244,6 +1296,7 @@ def _path_editing(api):
         "zero_handle_scale": observe(collapsed_handles),
         "negative_handle_scale": observe(reversed_handles),
         "point_equality": point_equality,
+        "subpath_split_indices": subpath_splits,
     }
 
 

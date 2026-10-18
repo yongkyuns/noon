@@ -725,6 +725,61 @@ pub fn manim_points_allclose(left: &[f64], right: &[f64], absolute_tolerance: f6
             .all(|(&a, &b)| manim_numpy_isclose(a, b, absolute_tolerance))
 }
 
+/// Return ManimCE's point-index ranges for contiguous groups of cubic curves.
+///
+/// A new range starts at each four-point boundary whose preceding endpoint is
+/// not NumPy-close to the next curve's start point. `compared_dimensions`
+/// mirrors `points[:, :n_dims]`; it is clamped to the row width by the caller.
+/// A trailing partial cubic remains in the final range, as in ManimCE.
+pub fn manim_subpath_split_indices(
+    points: &[f64],
+    point_count: usize,
+    point_dimensions: usize,
+    compared_dimensions: usize,
+    absolute_tolerance: f64,
+) -> Result<Vec<usize>, AuthoringError> {
+    if point_dimensions > 0 && point_count.checked_mul(point_dimensions) != Some(points.len()) {
+        return Err(AuthoringError::InvalidPointCoordinates(points.len()));
+    }
+    if point_dimensions == 0 && !points.is_empty() {
+        return Err(AuthoringError::InvalidPointCoordinates(points.len()));
+    }
+    if point_count < 4 {
+        return Ok(Vec::new());
+    }
+
+    let compared_dimensions = compared_dimensions.min(point_dimensions);
+    if compared_dimensions == 0 {
+        return Ok(vec![0, point_count]);
+    }
+    let mut starts = vec![0];
+    for boundary in (4..point_count).step_by(4) {
+        let end_offset = (boundary - 1) * point_dimensions;
+        let start_offset = boundary * point_dimensions;
+        let previous_end = &points[end_offset..end_offset + compared_dimensions];
+        let next_start = &points[start_offset..start_offset + compared_dimensions];
+        if !manim_subpath_points_close(previous_end, next_start, absolute_tolerance) {
+            starts.push(boundary);
+        }
+    }
+    starts.push(point_count);
+    Ok(starts
+        .windows(2)
+        .flat_map(|range| [range[0], range[1]])
+        .collect())
+}
+
+fn manim_subpath_points_close(left: &[f64], right: &[f64], absolute_tolerance: f64) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(&a, &b)| {
+            if a == b {
+                return true;
+            }
+            let difference = (a - b).abs();
+            difference <= absolute_tolerance + 1.0e-5 * b.abs() && difference.is_finite()
+        })
+}
+
 /// Compare the two planar coordinates using ManimCE's explicit 2D helper.
 /// Unlike NumPy's vectorized `allclose`, this implementation also rejects an
 /// overflowing coordinate difference before applying the tolerance.
@@ -933,5 +988,90 @@ mod point_equality_tests {
             [-f64::MAX, 1.0],
             f64::INFINITY,
         ));
+    }
+
+    #[test]
+    fn subpath_ranges_match_manim_curve_boundaries_and_dimensions() {
+        let points = [
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 3.0000005, 0.0, 0.0, 4.0,
+            0.0, 0.0, 5.0, 0.0, 0.0, 6.0, 0.0, 0.0, 6.0, 0.0, 0.1, 7.0, 0.0, 0.1, 8.0, 0.0, 0.1,
+            9.0, 0.0, 0.1, 9.0, 0.0, 0.1, 10.0, 0.0, 0.1, 11.0, 0.0, 0.1, 12.0, 0.0, 0.1,
+        ];
+        assert_eq!(
+            manim_subpath_split_indices(&points, 16, 3, 3, 1.0e-6).unwrap(),
+            [0, 8, 8, 16]
+        );
+        assert_eq!(
+            manim_subpath_split_indices(&points, 16, 3, 2, 1.0e-6).unwrap(),
+            [0, 16]
+        );
+    }
+
+    #[test]
+    fn subpath_ranges_preserve_nonfinite_and_trailing_point_behavior() {
+        let points = [
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
+            0.0,
+            3.0,
+            0.0,
+            f64::NAN,
+            3.0,
+            0.0,
+            f64::NAN,
+            4.0,
+            0.0,
+            0.0,
+            5.0,
+            0.0,
+            0.0,
+            6.0,
+            0.0,
+            0.0,
+            6.0,
+            0.0,
+            0.0,
+            7.0,
+            0.0,
+            0.0,
+            8.0,
+            0.0,
+            0.0,
+            9.0,
+            0.0,
+            0.0,
+            20.0,
+            0.0,
+            0.0,
+        ];
+        assert_eq!(
+            manim_subpath_split_indices(&points, 13, 3, 3, 1.0e-6).unwrap(),
+            [0, 4, 4, 12, 12, 13]
+        );
+        assert!(manim_subpath_split_indices(&[], 3, 0, 3, 1.0e-6)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            manim_subpath_split_indices(&[], 4, 0, 3, 1.0e-6).unwrap(),
+            [0, 4]
+        );
+        assert!(manim_subpath_split_indices(&[1.0], 2, 3, 2, 1.0e-6).is_err());
+        assert_eq!(
+            manim_subpath_split_indices(
+                &[-1.0, 0.0, 0.0, -1.7e308, 1.7e308, 0.0, 0.0, 0.0],
+                8,
+                1,
+                1,
+                f64::INFINITY,
+            )
+            .unwrap(),
+            [0, 4, 4, 8]
+        );
     }
 }

@@ -67,6 +67,7 @@ const expectedJavascriptSurface = [
   "liveNextLayoutTo(",
   "liveNextLayoutToPoint(",
   "export class WasmAuthoringMobjectHandle",
+  "subpathSplitIndices(",
   "export class SemanticExecutionPlayer",
   "seekDirect(",
   "resourceBundleBytes(",
@@ -298,6 +299,7 @@ const expectedTypeSurface = [
   "queryMobjectColor(handle: WasmAuthoringMobjectHandle): WasmManimColor",
   "queryMobjectFillOpacity(handle: WasmAuthoringMobjectHandle): number",
   "queryMobjectStrokeOpacity(handle: WasmAuthoringMobjectHandle): number",
+  "subpathSplitIndices(",
 
   "resumeExecutionPlayer(): SemanticExecutionPlayer",
   "export class WasmMobjectLayoutObservation",
