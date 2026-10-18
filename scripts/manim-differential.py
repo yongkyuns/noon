@@ -485,6 +485,17 @@ def _cubic_tuple_groups(api):
     return {"default": default, "custom_stride": custom}
 
 
+def _proportion_from_point(api):
+    path = api.VMobject().add_subpath([
+        (-2, 0, 0), (-1.5, 0, 0), (-0.5, 0, 0), (0, 0, 0),
+        (0, 0, 0), (0.5, 0, 0), (1.5, 0, 0), (2, 0, 0),
+    ])
+    return [
+        float(path.proportion_from_point(point))
+        for point in ((-1, 0, 0), (0, 0, 0), (1, 0, 0))
+    ]
+
+
 def _z_index_probe(api):
     a, b = api.Square(z_index=2.5), api.Circle(z_index=2.5)
     nested = api.VGroup(a, b, z_index=2.5)
@@ -1514,6 +1525,7 @@ FIXTURES = [
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
+    Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),

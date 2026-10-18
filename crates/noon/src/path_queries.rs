@@ -279,6 +279,30 @@ impl PathQuery {
         Ok(self.transform_point(point.x, point.y))
     }
 
+    /// Find the arc-length proportion of a point on this planar path, matching
+    /// ManimCE's rounded Bézier-root intersection and latest-parameter choice.
+    pub fn proportion_from_point(
+        &self,
+        point: (f64, f64, f64),
+    ) -> Result<Option<f64>, AuthoringError> {
+        let total_length = self.arc_length(None)?;
+        let mut target_length = 0.0;
+        for index in 0..self.curve_count() {
+            let controls = self.curve_points(index)?;
+            let length = self.curve_length(index, None)?;
+            let parameters = if point.2 == 0.0 {
+                cubic_parameters_for_point(controls, (point.0, point.1))
+            } else {
+                Vec::new()
+            };
+            if let Some(parameter) = parameters.into_iter().reduce(f64::max) {
+                return Ok(Some((target_length + length * parameter) / total_length));
+            }
+            target_length += length;
+        }
+        Ok(None)
+    }
+
     fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
         let x = x * self.transform.scale.x;
         let y = y * self.transform.scale.y;
@@ -338,6 +362,118 @@ fn evaluate_cubic(controls: [(f64, f64); 4], t: f64) -> (f64, f64) {
             + 3.0 * u * t * t * controls[2].1
             + t * t * t * controls[3].1,
     )
+}
+
+/// Return Manim's six-decimal real parameters where a cubic crosses a 2D point.
+fn cubic_parameters_for_point(controls: [(f64, f64); 4], point: (f64, f64)) -> Vec<f64> {
+    let x_roots = cubic_coordinate_roots(controls.map(|control| control.0), point.0);
+    let y_roots = cubic_coordinate_roots(controls.map(|control| control.1), point.1);
+    match (x_roots, y_roots) {
+        (None, None) => Vec::new(),
+        (Some(roots), None) | (None, Some(roots)) => roots,
+        (Some(mut x), Some(y)) => {
+            x.retain(|root| {
+                y.binary_search_by(|candidate| candidate.total_cmp(root))
+                    .is_ok()
+            });
+            x
+        }
+    }
+}
+
+/// `None` means this coordinate is constant and equal to the requested value.
+fn cubic_coordinate_roots(controls: [f64; 4], point: f64) -> Option<Vec<f64>> {
+    let coefficients = [
+        controls[0] - point,
+        3.0 * (controls[1] - controls[0]),
+        3.0 * (controls[0] - 2.0 * controls[1] + controls[2]),
+        -controls[0] + 3.0 * controls[1] - 3.0 * controls[2] + controls[3],
+    ];
+    if coefficients.iter().all(|coefficient| *coefficient == 0.0) {
+        return None;
+    }
+
+    let mut roots = real_polynomial_roots(coefficients)
+        .into_iter()
+        .map(|root| (root * 1_000_000.0).round_ties_even() / 1_000_000.0)
+        .filter(|root| (0.0..=1.0).contains(root))
+        .collect::<Vec<_>>();
+    roots.sort_by(f64::total_cmp);
+    roots.dedup();
+    Some(roots)
+}
+
+/// Solve a cubic or lower-degree polynomial with coefficients in ascending order.
+fn real_polynomial_roots(coefficients: [f64; 4]) -> Vec<f64> {
+    if coefficients
+        .iter()
+        .any(|coefficient| !coefficient.is_finite())
+    {
+        return Vec::new();
+    }
+    let mut degree = 3;
+    while degree > 0 && coefficients[degree] == 0.0 {
+        degree -= 1;
+    }
+    match degree {
+        0 => Vec::new(),
+        1 => vec![-coefficients[0] / coefficients[1]],
+        2 => quadratic_real_roots(coefficients[2], coefficients[1], coefficients[0]),
+        _ => cubic_real_roots(
+            coefficients[3],
+            coefficients[2],
+            coefficients[1],
+            coefficients[0],
+        ),
+    }
+}
+
+fn quadratic_real_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 || !discriminant.is_finite() {
+        return Vec::new();
+    }
+    if discriminant == 0.0 {
+        return vec![-b / (2.0 * a)];
+    }
+    let square_root = discriminant.sqrt();
+    let q = -0.5 * (b + b.signum() * square_root);
+    if q == 0.0 {
+        vec![
+            (-b - square_root) / (2.0 * a),
+            (-b + square_root) / (2.0 * a),
+        ]
+    } else {
+        vec![q / a, c / q]
+    }
+}
+
+fn cubic_real_roots(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
+    let a2 = b / a;
+    let a1 = c / a;
+    let a0 = d / a;
+    let p = a1 - a2 * a2 / 3.0;
+    let q = 2.0 * a2 * a2 * a2 / 27.0 - a2 * a1 / 3.0 + a0;
+    let half_q = q * 0.5;
+    let third_p = p / 3.0;
+    let discriminant = half_q * half_q + third_p * third_p * third_p;
+
+    if discriminant > 0.0 {
+        let square_root = discriminant.sqrt();
+        vec![(-half_q + square_root).cbrt() + (-half_q - square_root).cbrt() - a2 / 3.0]
+    } else if discriminant < 0.0 {
+        let radius = 2.0 * (-third_p).sqrt();
+        let angle = (3.0 * q / (2.0 * p) * (-3.0 / p).sqrt()).acos();
+        (0..3)
+            .map(|index| {
+                radius * ((angle + 2.0 * std::f64::consts::PI * index as f64) / 3.0).cos()
+                    - a2 / 3.0
+            })
+            .collect()
+    } else {
+        let repeated = (-half_q).cbrt();
+        vec![2.0 * repeated - a2 / 3.0, -repeated - a2 / 3.0]
+    }
 }
 
 fn manim_points(

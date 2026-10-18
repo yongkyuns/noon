@@ -102,6 +102,50 @@ fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
 }
 
 #[test]
+fn proportion_from_point_matches_manim_cubic_root_and_arc_length_rules() {
+    let mut scene = Scene::new();
+    let path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(-2., 0.))
+                .cubic_to(Vec2::new(-1.5, 0.), Vec2::new(-0.5, 0.), Vec2::ZERO)
+                .cubic_to(Vec2::new(0.5, 0.), Vec2::new(1.5, 0.), Vec2::new(2., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = path.path_query().unwrap();
+    for (point, expected) in [
+        ((-1., 0., 0.), 0.25),
+        ((0., 0., 0.), 0.5),
+        ((1., 0., 0.), 0.75),
+    ] {
+        let actual = query.proportion_from_point(point).unwrap().unwrap();
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+    assert_eq!(query.proportion_from_point((1., 1., 0.)).unwrap(), None);
+    assert_eq!(query.proportion_from_point((1., 0., 0.1)).unwrap(), None);
+
+    let loop_path = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(1., 0.),
+                Vec2::new(-1., 0.),
+                Vec2::ZERO,
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        loop_path
+            .path_query()
+            .unwrap()
+            .proportion_from_point((0., 0., 0.))
+            .unwrap(),
+        Some(1.0)
+    );
+}
+
+#[test]
 fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     let mut scene = Scene::new();
     let first = scene

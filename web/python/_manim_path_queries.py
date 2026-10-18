@@ -34,6 +34,29 @@ def point_from_proportion(value, alpha):
         query.free()
 
 
+def proportion_from_point(value, point):
+    """Return the shared Rust path's arc-length proportion for a point on it."""
+    try:
+        dimensions = len(point)
+    except (TypeError, AttributeError):
+        raise ValueError("point must have two or three coordinates") from None
+    if dimensions == 2:
+        coordinates = (float(point[0]), float(point[1]), 0.0)
+    elif dimensions == 3:
+        coordinates = (float(point[0]), float(point[1]), float(point[2]))
+    else:
+        raise ValueError("point must have two or three coordinates")
+
+    query = _query(value)
+    try:
+        proportion = engine_call(query.proportionFromPoint, *coordinates)
+        if proportion is None:
+            raise ValueError(f"Point {point} does not lie on this curve.")
+        return float(proportion)
+    finally:
+        query.free()
+
+
 def arc_length(value, sample_points_per_curve):
     samples = None if sample_points_per_curve is None else operator.index(sample_points_per_curve)
     if samples is not None and not 2 <= samples <= 0xFFFFFFFF:

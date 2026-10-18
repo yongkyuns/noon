@@ -415,6 +415,11 @@ class VMobject(Mobject):
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
 
+    def proportion_from_point(self, point: object) -> float:
+        self.throw_error_if_no_points()
+        from _manim_path_queries import proportion_from_point
+        return proportion_from_point(self, point)
+
     def get_last_point(self) -> _base.Vec2:
         from _manim_path_queries import last_point
         return last_point(self)

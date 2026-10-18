@@ -1723,6 +1723,17 @@ mod wasm {
                 .map(|(x, y)| vec![x, y])
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = proportionFromPoint)]
+        pub fn proportion_from_point(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+        ) -> Result<Option<f64>, JsValue> {
+            self.value
+                .proportion_from_point((x, y, z))
+                .map_err(js_error)
+        }
         pub fn start(&self) -> Result<Vec<f64>, JsValue> {
             self.value
                 .start()

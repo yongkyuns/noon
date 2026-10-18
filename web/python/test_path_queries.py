@@ -48,6 +48,37 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(value.n_points_per_cubic_curve, 4)
         self.assertEqual(compat.VMobject.n_points_per_cubic_curve, 4)
 
+    def test_proportion_from_point_uses_shared_curve_lengths_and_maximum_parameter(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.throw_error_if_no_points = Mock()
+        query = Mock()
+        query.proportionFromPoint.return_value = 0.8125
+        with patch.object(queries, "_typed_manim_observation", return_value=query), patch.dict(
+            "sys.modules", {"numpy": None}
+        ):
+            self.assertEqual(value.proportion_from_point(compat._base.Vec2(1, 1)), 0.8125)
+
+        value.throw_error_if_no_points.assert_called_once_with()
+        query.proportionFromPoint.assert_called_once_with(1.0, 1.0, 0.0)
+        query.free.assert_called_once_with()
+
+    def test_proportion_from_point_preserves_off_curve_and_empty_path_errors(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.throw_error_if_no_points = Mock()
+        query = Mock()
+        query.proportionFromPoint.return_value = None
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            with self.assertRaisesRegex(ValueError, "Point .* does not lie on this curve"):
+                value.proportion_from_point((1, 1, 0))
+        query.free.assert_called_once_with()
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.throw_error_if_no_points = Mock(side_effect=Exception("no points"))
+        with patch.object(queries, "_typed_manim_observation") as observe:
+            with self.assertRaisesRegex(Exception, "no points"):
+                value.proportion_from_point((0, 0, 0))
+            observe.assert_not_called()
+
     def test_vmobject_constructor_accepts_query_stride_and_tolerance(self):
         import numpy as np
 
