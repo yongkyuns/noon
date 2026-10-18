@@ -2,6 +2,12 @@ import sys
 import types
 import unittest
 from unittest.mock import Mock, patch
+
+try:
+    import numpy
+except ImportError:
+    numpy = None
+
 import _manim_compat as compat
 import _manim_path_editing as editing
 from _typed_geometry_test_support import identity_only_wrapper
@@ -97,6 +103,7 @@ class PathEditingTests(unittest.TestCase):
         with self.assertRaisesRegex(ZeroDivisionError, "integer modulo by zero"):
             value.start_new_path((1, 2, 0))
 
+    @unittest.skipIf(numpy is None, "NumPy resize contracts run in the pinned utility qualification lane")
     def test_resize_points_uses_resize_function_then_shared_setter(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
@@ -122,10 +129,9 @@ class PathEditingTests(unittest.TestCase):
             resolve.assert_not_called()
         query.points.assert_not_called()
 
+    @unittest.skipIf(numpy is None, "NumPy resize contracts run in the pinned utility qualification lane")
     def test_resize_points_gives_custom_functions_the_manim_three_column_array(self):
         # patch.dict restores sys.modules wholesale, so load the extension first.
-        import numpy
-
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
         query = Mock()

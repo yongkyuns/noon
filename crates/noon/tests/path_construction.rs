@@ -41,13 +41,21 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
         Line,
         Quadratic,
         Cubic,
+        Smooth,
+        SmoothWithHandle,
     }
 
     for point_count in [5, 7] {
         let initial = (0..point_count)
             .map(|index| Vec2::new(index as f32, (index % 2) as f32))
             .collect::<Vec<_>>();
-        for edit in [Edit::Line, Edit::Quadratic, Edit::Cubic] {
+        for edit in [
+            Edit::Line,
+            Edit::Quadratic,
+            Edit::Cubic,
+            Edit::Smooth,
+            Edit::SmoothWithHandle,
+        ] {
             for live in [false, true] {
                 let mut scene = Scene::new();
                 let mut object = scene
@@ -78,6 +86,32 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                         )
                     }
                     Edit::Cubic => (Vec2::new(7., 1.), Vec2::new(9., 2.), Vec2::new(11., 0.)),
+                    Edit::Smooth | Edit::SmoothWithHandle => {
+                        let anchor = Vec2::new(11., -1.);
+                        if point_count % 4 == 1 {
+                            let direction = anchor - start;
+                            (
+                                start + direction / 3.0,
+                                start + direction * (2.0 / 3.0),
+                                anchor,
+                            )
+                        } else {
+                            let last_handle2 = initial[initial.len() - 2];
+                            let last_anchor = initial[initial.len() - 1];
+                            let tangent = last_anchor - last_handle2;
+                            let control2 = if matches!(edit, Edit::SmoothWithHandle) {
+                                Vec2::new(7., 2.)
+                            } else {
+                                let direction = anchor - last_anchor;
+                                let reflected = direction.normalized().map_or(tangent, |axis| {
+                                    axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y))
+                                        - tangent
+                                });
+                                anchor - reflected
+                            };
+                            (last_anchor + tangent, control2, anchor)
+                        }
+                    }
                 };
 
                 let mut expected = initial.clone();
@@ -104,6 +138,18 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                             control2,
                             anchor,
                         },
+                        Edit::Smooth => noon::integration::BorrowedPathEdit::SmoothCurve {
+                            object: &object,
+                            handle2: None,
+                            anchor,
+                        },
+                        Edit::SmoothWithHandle => {
+                            noon::integration::BorrowedPathEdit::SmoothCurve {
+                                object: &object,
+                                handle2: Some(Vec2::new(7., 2.)),
+                                anchor,
+                            }
+                        }
                     };
                     noon::integration::publish_borrowed_path_edit(
                         scene.integration_store(),
@@ -129,6 +175,10 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                             .unwrap(),
                         Edit::Cubic => object
                             .add_cubic_bezier_curve_to(control1, control2, anchor)
+                            .unwrap(),
+                        Edit::Smooth => object.add_smooth_curve_to(None, anchor).unwrap(),
+                        Edit::SmoothWithHandle => object
+                            .add_smooth_curve_to(Some(Vec2::new(7., 2.)), anchor)
                             .unwrap(),
                     }
                     let actual = object.path_query().unwrap().points().unwrap();

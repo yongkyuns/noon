@@ -584,48 +584,6 @@ fn append_vectorized_path(destination: VectorPath, source: &VectorPath) -> Vecto
     morph_target.map_or(path.clone(), |target| path.with_morph_target(target))
 }
 
-fn last_cubic_second_control(path: &VectorPath) -> Option<Vec2> {
-    let mut current = None;
-    let mut subpath_start = None;
-    let mut control2 = None;
-    for command in path.commands() {
-        match *command {
-            noon_core::PathCommand::MoveTo { to } => {
-                current = Some(to);
-                subpath_start = Some(to);
-                control2 = None;
-            }
-            noon_core::PathCommand::LineTo { to } => {
-                if let Some(from) = current {
-                    control2 = Some(from + (to - from) * (2.0 / 3.0));
-                }
-                current = Some(to);
-            }
-            noon_core::PathCommand::QuadraticTo { control, to } => {
-                control2 = Some(control * (2.0 / 3.0) + to * (1.0 / 3.0));
-                current = Some(to);
-            }
-            noon_core::PathCommand::CubicTo {
-                control2: next_control2,
-                to,
-                ..
-            } => {
-                control2 = Some(next_control2);
-                current = Some(to);
-            }
-            noon_core::PathCommand::Close => {
-                if let (Some(from), Some(start)) = (current, subpath_start) {
-                    if from != start {
-                        control2 = Some(from + (start - from) * (2.0 / 3.0));
-                    }
-                    current = Some(start);
-                }
-            }
-        }
-    }
-    control2
-}
-
 pub(crate) fn path_replacement_state(
     mut state: SemanticObjectState,
 ) -> Result<SemanticObjectState, AuthoringError> {
@@ -812,24 +770,22 @@ impl PathEdit<'_> {
             {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
-            let mut path = world_path(store, state)?;
-            if path.endpoints().is_none() {
+            let path = world_path(store, state)?;
+            let points = manim_points_for_path(&path)?;
+            if points.is_empty() {
                 return Err(AuthoringError::PathQuery(
                     noon_geometry::PathProportionError::EmptyPath,
                 ));
             }
-            if matches!(
-                path.commands().last(),
-                Some(noon_core::PathCommand::MoveTo { .. })
-            ) {
+            let path = if points.len() % 4 == 1 {
                 // Manim treats a pending one-point subpath as a straight line,
                 // even when the optional second control point was supplied.
-                path = path.line_to(anchor);
+                let start = *points.last().expect("the path was checked above");
+                let (control1, control2) = cubic_line_controls(start, anchor);
+                append_manim_cubic_to_path(points, control1, control2, anchor)?
             } else {
-                let (_, last) = path.endpoints().expect("the path was checked above");
-                let last_handle2 = last_cubic_second_control(&path).ok_or(
-                    AuthoringError::PathQuery(noon_geometry::PathProportionError::EmptyPath),
-                )?;
+                let last_handle2 = points[points.len() - 2];
+                let last = points[points.len() - 1];
                 let tangent = last - last_handle2;
                 let handle1 = last + tangent;
                 let handle2 = handle2.unwrap_or_else(|| {
@@ -843,11 +799,8 @@ impl PathEdit<'_> {
                     });
                     anchor - reflected
                 });
-                path = path.open_last_subpath().cubic_to(handle1, handle2, anchor);
-            }
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
+                append_manim_cubic_to_path(points, handle1, handle2, anchor)?
+            };
             return Ok(Some(path));
         }
         if let Self::Corners(points) = self {
@@ -936,8 +889,7 @@ impl PathEdit<'_> {
             let start = points.last().copied().ok_or(AuthoringError::PathQuery(
                 noon_geometry::PathProportionError::EmptyPath,
             ))?;
-            let control1 = start + (to - start) / 3.0;
-            let control2 = start + (to - start) * (2.0 / 3.0);
+            let (control1, control2) = cubic_line_controls(start, to);
             path = append_manim_cubic_to_path(points, control1, control2, to)?;
         } else if let Self::Quadratic(control, to) = self {
             if [control, to]
@@ -1033,6 +985,11 @@ fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError>
             .map(|(x, y)| Vec2::new(x as f32, y as f32))
             .collect(),
     )
+}
+
+fn cubic_line_controls(start: Vec2, end: Vec2) -> (Vec2, Vec2) {
+    let direction = end - start;
+    (start + direction / 3.0, start + direction * (2.0 / 3.0))
 }
 
 fn append_manim_cubic_to_path(
