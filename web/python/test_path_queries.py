@@ -1031,6 +1031,13 @@ class PathQueryTests(unittest.TestCase):
             ):
                 value.get_pieces(-2)
 
+    def test_vectorized_point_is_exported_from_the_compatibility_layer(self):
+        import noon
+
+        self.assertIn("VectorizedPoint", noon.__all__)
+        self.assertIs(noon.VectorizedPoint, compat.VectorizedPoint)
+        self.assertTrue(issubclass(noon.VectorizedPoint, compat.VMobject))
+
     def test_point_from_proportion_follows_mutable_stride_in_rust(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2

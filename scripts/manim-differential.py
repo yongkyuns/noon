@@ -1846,6 +1846,42 @@ def _path_pieces(api):
     }
 
 
+def _point_mobject_probe(api):
+    source = api.VMobject(
+        color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+    source.set_points_as_corners([(0, 0, 0), (2, 0, 0), (2, 2, 0)])
+    point = source.get_point_mobject((3, -1, 0))
+    center_point = source.get_point_mobject()
+    default = api.VectorizedPoint()
+    default.set_location((4, 5, 0))
+
+    def observe(value):
+        return {
+            "type": type(value).__name__,
+            "point_count": value.get_num_points(),
+            "location": _point_observation(value.get_location()),
+            "size": [float(value.width), float(value.height)],
+            "paint": [
+                _paint_rgb(value.get_fill_color()),
+                _paint_rgb(value.get_stroke_color()),
+                float(value.get_fill_opacity()),
+                float(value.get_stroke_opacity()),
+                float(value.get_stroke_width()),
+            ],
+        }
+
+    return {
+        "styled": observe(point),
+        "center": observe(center_point),
+        "direct": observe(default),
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -2241,6 +2277,7 @@ FIXTURES = [
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
     Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
+    Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),

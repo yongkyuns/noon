@@ -114,6 +114,11 @@ class VMobject(Mobject):
         from _manim_path_queries import boundary_points
         return boundary_points(self)
 
+    def get_point_mobject(self, center=None):
+        point = VectorizedPoint(self.get_center() if center is None else center)
+        point.match_style(self)
+        return point
+
     def __init__(self, *, color=_base.WHITE, **kwargs):
         # These Python-facing VMobject query settings are part of Manim's
         # constructor contract. Keep them on the wrapper because the shared
@@ -472,6 +477,45 @@ class VMobject(Mobject):
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
         return arc_length(self, sample_points_per_curve)
+
+
+class VectorizedPoint(VMobject):
+    """Invisible one-point VMobject with Manim's artificial layout extent."""
+
+    def __init__(
+        self,
+        location=_base.ORIGIN,
+        color=_base.BLACK,
+        fill_opacity=0,
+        stroke_width=0,
+        artificial_width=0.01,
+        artificial_height=0.01,
+        **kwargs,
+    ) -> None:
+        self.artificial_width = artificial_width
+        self.artificial_height = artificial_height
+        super().__init__(
+            color=color,
+            fill_opacity=fill_opacity,
+            stroke_width=stroke_width,
+            **kwargs,
+        )
+        self.set_points([location])
+
+    @VMobject.width.getter
+    def width(self) -> float:
+        return self.artificial_width
+
+    @VMobject.height.getter
+    def height(self) -> float:
+        return self.artificial_height
+
+    def get_location(self):
+        return self.get_start()
+
+    def set_location(self, new_loc):
+        self.set_points([new_loc])
+        return self
 
 
 class Circle(VMobject):

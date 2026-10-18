@@ -249,6 +249,40 @@ path_pieces = {
     "live": path_pieces_contract(piece_source),
     "authored": path_pieces_contract(authored_piece_source),
 }
+point_owner = VMobject(
+    color=noon.GREEN,
+    fill_opacity=0.35,
+    stroke_color=noon.RED,
+    stroke_opacity=0.6,
+    stroke_width=4,
+)
+point_owner.set_points_as_corners([(0, 0), (2, 0), (2, 2)])
+live_scene.add(point_owner)
+styled_point = point_owner.get_point_mobject((3, -1))
+center_point = point_owner.get_point_mobject()
+direct_point = noon.VectorizedPoint()
+direct_point.set_location((4, 5))
+def point_mobject_contract(value):
+    fill = value.get_fill_color()
+    stroke = value.get_stroke_color()
+    return {
+        "type": type(value).__name__,
+        "point_count": value.get_num_points(),
+        "location": [float(x) for x in value.get_location()],
+        "size": [float(value.width), float(value.height)],
+        "paint": [
+            [float(fill.red), float(fill.green), float(fill.blue)],
+            [float(stroke.red), float(stroke.green), float(stroke.blue)],
+            float(value.get_fill_opacity()),
+            float(value.get_stroke_opacity()),
+            float(value.get_stroke_width()),
+        ],
+    }
+point_mobject = {
+    "styled": point_mobject_contract(styled_point),
+    "center": point_mobject_contract(center_point),
+    "direct": point_mobject_contract(direct_point),
+}
 custom_stride_authored_queries = {
     "boundary_points": [
         [float(coordinate) for coordinate in point]
@@ -367,6 +401,7 @@ json.dumps({
     "custom_stride_live_queries": custom_stride_live_queries,
     "custom_stride_authored_queries": custom_stride_authored_queries,
     "path_pieces": path_pieces,
+    "point_mobject": point_mobject,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -397,6 +432,43 @@ json.dumps({
   };
   assert.deepEqual(product.path_pieces.live, expectedPathPieces);
   assert.deepEqual(product.path_pieces.authored, expectedPathPieces);
+  const styledPoint = product.point_mobject.styled;
+  assert.deepEqual({
+    type: styledPoint.type,
+    point_count: styledPoint.point_count,
+    location: styledPoint.location,
+    size: styledPoint.size,
+  }, {
+    type: "VectorizedPoint",
+    point_count: 1,
+    location: [3, -1],
+    size: [0.01, 0.01],
+  });
+  for (const [actual, expected] of [
+    [styledPoint.paint[0], [131 / 255, 193 / 255, 103 / 255]],
+    [styledPoint.paint[1], [252 / 255, 98 / 255, 85 / 255]],
+  ]) {
+    assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
+  }
+  assert.deepEqual(styledPoint.paint.slice(2), [0.35, 0.6, 4]);
+  assert.deepEqual({
+    type: product.point_mobject.center.type,
+    point_count: product.point_mobject.center.point_count,
+    location: product.point_mobject.center.location,
+    size: product.point_mobject.center.size,
+  }, {
+    type: "VectorizedPoint",
+    point_count: 1,
+    location: [1, 1],
+    size: [0.01, 0.01],
+  });
+  assert.deepEqual(product.point_mobject.direct, {
+    type: "VectorizedPoint",
+    point_count: 1,
+    location: [4, 5],
+    size: [0.01, 0.01],
+    paint: [[0, 0, 0], [0, 0, 0], 0, 1, 0],
+  });
   const {
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,
