@@ -306,6 +306,41 @@ fn new_path_started_tracks_the_unfinished_cubic_anchor() {
 }
 
 #[test]
+fn closed_path_query_uses_first_and_last_stored_points_and_custom_tolerance() {
+    let mut scene = Scene::new();
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    assert!(empty
+        .path_query()
+        .unwrap()
+        .is_closed_with_tolerance(1e-6)
+        .is_err());
+
+    let pending = scene
+        .path(
+            VectorPath::new().move_to(Vec2::new(1., 2.)),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(pending
+        .path_query()
+        .unwrap()
+        .is_closed_with_tolerance(1e-6)
+        .unwrap());
+
+    let almost_closed = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1e-5, 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = almost_closed.path_query().unwrap();
+    assert!(!query.is_closed_with_tolerance(1e-6).unwrap());
+    assert!(query.is_closed_with_tolerance(2e-5).unwrap());
+}
+
+#[test]
 fn curve_length_piece_queries_match_sample_count_and_world_scale() {
     let mut scene = Scene::new();
     let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(

@@ -623,7 +623,10 @@ def subpaths(value):
 def is_closed(value):
     query = _query(value)
     try:
-        return bool(engine_call(query.isClosed))
+        if int(query.pointCount) == 0:
+            raise IndexError("index 0 is out of bounds for axis 0 with size 0")
+        tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+        return bool(engine_call(query.isClosed, tolerance))
     finally:
         query.free()
 

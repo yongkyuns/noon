@@ -222,9 +222,30 @@ impl PathQuery {
             .collect())
     }
 
-    /// Whether first and last anchors coincide in this snapshot's coordinates.
+    /// Whether the first and last stored Manim points are close using the
+    /// object's configured point-equality tolerance.
     pub fn is_closed(&self) -> Result<bool, AuthoringError> {
-        Ok(points_coincide(self.start()?, self.end()?))
+        self.is_closed_with_tolerance(1e-6)
+    }
+
+    pub fn is_closed_with_tolerance(&self, tolerance: f64) -> Result<bool, AuthoringError> {
+        let first = self
+            .manim_points
+            .first()
+            .copied()
+            .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
+        let last = self
+            .manim_points
+            .last()
+            .copied()
+            .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
+        let first = self.transform_point(first.0, first.1);
+        let last = self.transform_point(last.0, last.1);
+        Ok(manim_points_allclose(
+            &[first.0, first.1, 0.0],
+            &[last.0, last.1, 0.0],
+            tolerance,
+        ))
     }
 
     /// Cubic point runs separated by noncoincident anchors, matching Manim's

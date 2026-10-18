@@ -1167,6 +1167,11 @@ def _path_subcurves(api):
     path.start_new_path(point(6, 0)).add_line_to(point(8, 0))
     path.start_new_path(point(8, 0))
     result.append(observe(path))
+    pending = api.VMobject().start_new_path(point(1, 1))
+    result.append([pending.is_closed()])
+    custom_tolerance = api.VMobject(tolerance_for_point_equality=2e-5)
+    custom_tolerance.start_new_path(point(0, 0)).add_line_to(point(1e-5, 0))
+    result.append([custom_tolerance.is_closed()])
     return result
 
 

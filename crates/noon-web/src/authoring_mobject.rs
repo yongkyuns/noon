@@ -1666,8 +1666,10 @@ mod wasm {
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = isClosed)]
-        pub fn is_closed(&self) -> Result<bool, JsValue> {
-            self.value.is_closed().map_err(js_error)
+        pub fn is_closed(&self, tolerance: f64) -> Result<bool, JsValue> {
+            self.value
+                .is_closed_with_tolerance(tolerance)
+                .map_err(js_error)
         }
         pub fn subpaths(&self) -> js_sys::Array {
             point_groups(self.value.subpaths())

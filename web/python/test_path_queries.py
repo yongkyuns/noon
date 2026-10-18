@@ -1033,14 +1033,34 @@ class SubpathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.subpaths.return_value = [[0., 0., 1., 0., 2., 0., 3., 0.], [5., 1., 6., 1., 7., 1., 8., 1.]]
+        query.pointCount = 8
         query.isClosed.return_value = False
         with patch.object(queries, '_typed_manim_observation', return_value=query):
             self.assertEqual(value.get_subpaths(), [[(0., 0.), (1., 0.), (2., 0.), (3., 0.)], [(5., 1.), (6., 1.), (7., 1.), (8., 1.)]])
             self.assertFalse(value.is_closed())
+            query.isClosed.assert_called_once_with(1e-6)
             self.assertEqual(query.free.call_count, 2)
             query.subpaths.side_effect = ValueError('bad content')
             with self.assertRaises(ValueError): value.get_subpaths()
             self.assertEqual(query.free.call_count, 3)
+            query.pointCount = 0
+            with self.assertRaisesRegex(
+                IndexError, "index 0 is out of bounds for axis 0 with size 0"
+            ):
+                value.is_closed()
+            self.assertEqual(query.isClosed.call_count, 1)
+            self.assertEqual(query.free.call_count, 4)
+
+    def test_is_closed_passes_mutable_tolerance_to_the_shared_path_query(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.tolerance_for_point_equality = 2e-5
+        query = Mock()
+        query.pointCount = 4
+        query.isClosed.return_value = True
+        with patch.object(queries, '_typed_manim_observation', return_value=query):
+            self.assertTrue(value.is_closed())
+        query.isClosed.assert_called_once_with(2e-5)
+        query.free.assert_called_once_with()
 
     def test_subcurve_dispatch_preserves_wrapper_type_and_python_metadata(self):
         import _manim_semantic_handles as handles
