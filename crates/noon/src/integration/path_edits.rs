@@ -52,6 +52,11 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         point: Vec2,
     },
+    StartWithStride {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+    },
     Quadratic {
         object: &'a Mobject,
         control: Vec2,
@@ -138,7 +143,12 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
         BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
-        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start(point)),
+        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start { point, stride: 4 }),
+        BorrowedPathEdit::StartWithStride {
+            object,
+            point,
+            stride,
+        } => (object, PathEdit::Start { point, stride }),
         BorrowedPathEdit::Quadratic {
             object,
             control,

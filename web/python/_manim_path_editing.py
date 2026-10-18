@@ -20,6 +20,26 @@ def append_points(value, points):
     return edit_points(value, "appendPoints", "liveAppendPoints", points, array=True)
 
 
+def start_new_path(value, point):
+    import operator
+
+    stride = operator.index(getattr(value, "n_points_per_curve", 4))
+    if stride == 0:
+        # Pinned Manim evaluates len(points) % n_points_per_curve first.
+        raise ZeroDivisionError("integer modulo by zero")
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_curve exceeds the supported path stride")
+    if stride == 4:
+        return edit_points(value, "startNewPath", "liveStartNewPath", (point,))
+    return edit_points(
+        value,
+        "startNewPathWithStride",
+        "liveStartNewPathWithStride",
+        (point,),
+        suffix=(stride,),
+    )
+
+
 def resize_points(value, new_length, resize_func=None):
     import operator
     from _manim_updaters import canonical_callback_phase_active
@@ -175,7 +195,7 @@ def _looks_like_point(value):
     return size in (2, 3) and all(not hasattr(component, "__len__") for component in value)
 
 
-def edit_points(value, method, live_method, points, *, array=False):
+def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
@@ -189,9 +209,20 @@ def edit_points(value, method, live_method, points, *, array=False):
         raise RuntimeError("path editing requires a shared semantic handle")
     context = _live_mutation_context(value) or _live_constructor_context("path")
     if context is None:
-        engine_call(getattr(handle, method), *values, operation="VMobject." + method)
+        engine_call(
+            getattr(handle, method),
+            *values,
+            *suffix,
+            operation="VMobject." + method,
+        )
     else:
-        engine_call(getattr(context, live_method), handle, *values, operation="VMobject." + method)
+        engine_call(
+            getattr(context, live_method),
+            handle,
+            *values,
+            *suffix,
+            operation="VMobject." + method,
+        )
     return value
 
 

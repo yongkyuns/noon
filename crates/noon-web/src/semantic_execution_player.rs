@@ -834,6 +834,20 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_start_new_path_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::StartWithStride {
+            object: source,
+            point,
+            stride,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_add_line_to(
         &mut self,
         source: &noon::Mobject,

@@ -311,7 +311,30 @@ impl crate::Scene {
 
     pub fn start_new_path(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Start(point))
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Start { point, stride: 4 },
+            )
+        })
+    }
+
+    pub fn start_new_path_with_stride(
+        &mut self,
+        object: &Mobject,
+        point: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Start { point, stride },
+            )
         })
     }
 
@@ -641,7 +664,10 @@ pub(crate) enum PathEdit<'a> {
     Corners(&'a [Vec2]),
     SmoothCorners(&'a [Vec2]),
     AnchorMode(bool),
-    Start(Vec2),
+    Start {
+        point: Vec2,
+        stride: i32,
+    },
     Line(Vec2),
     AppendCorners(&'a [Vec2]),
     Quadratic(Vec2, Vec2),
@@ -870,13 +896,49 @@ impl PathEdit<'_> {
         if let Self::Reverse = self {
             return Ok(Some(noon_geometry::reverse_path(&path)));
         }
-        if let Self::Start(point) = self {
-            if let Some(noon_core::PathCommand::MoveTo { to }) = path.commands().last().copied() {
-                // Complete an unfinished anchor as one degenerate curve before
-                // beginning another subpath, matching Manim's point semantics.
-                path = path.line_to(to);
+        if let Self::Start { point, stride } = self {
+            if !point.x.is_finite() || !point.y.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
             }
-            path = path.move_to(point);
+            if stride == 0 {
+                return Err(AuthoringError::NonPositiveNumber {
+                    name: "n_points_per_cubic_curve".to_owned(),
+                    value: 0.0,
+                });
+            }
+
+            // Manim's start_new_path is a raw point-array append. Preserve an
+            // existing raw array (including a partial tail), or derive the
+            // point array once from the current shared path when it was built
+            // from compact path commands.
+            let mut points = if let Some(points) = path.manim_points() {
+                points.to_vec()
+            } else {
+                crate::path_queries::PathQuery::prepare(
+                    &path,
+                    noon_core::SemanticTransform2_5D::default(),
+                )?
+                .points()?
+                .into_iter()
+                .map(|(x, y)| Vec2::new(x as f32, y as f32))
+                .collect()
+            };
+
+            // For positive strides, pad a partial final curve by repeating
+            // its last start anchor until the next curve boundary. A negative
+            // Python slice stride makes Manim's computed repeat count
+            // non-positive, so it appends only the new point.
+            if stride > 0 {
+                let stride = stride as usize;
+                let remainder = points.len() % stride;
+                if remainder != 0 {
+                    let anchor_index = ((points.len() - 1) / stride) * stride;
+                    let anchor = points[anchor_index];
+                    points.extend(std::iter::repeat(anchor).take(stride - remainder));
+                }
+            }
+            points.push(point);
+            path = VectorPath::from_manim_points(points);
         } else {
             let (first, last) = path.endpoints().ok_or(AuthoringError::PathQuery(
                 noon_geometry::PathProportionError::EmptyPath,
@@ -915,7 +977,7 @@ impl PathEdit<'_> {
                 | Self::RawPoints(_)
                 | Self::AppendRawPoints(_)
                 | Self::AnchorMode(_)
-                | Self::Start(_)
+                | Self::Start { .. }
                 | Self::Reverse
                 | Self::Subdivide(_)
                 | Self::ScaleHandles(_)
@@ -1252,7 +1314,15 @@ impl Mobject {
     }
     /// Begin a new world-space subpath without connecting it to the previous one.
     pub fn start_new_path(&mut self, point: Vec2) -> Result<(), AuthoringError> {
-        self.edit_path(PathEdit::Start(point))
+        self.edit_path(PathEdit::Start { point, stride: 4 })
+    }
+    /// Begin a new subpath using Manim's current mutable point-array stride.
+    pub fn start_new_path_with_stride(
+        &mut self,
+        point: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Start { point, stride })
     }
     pub fn add_line_to(&mut self, point: Vec2) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Line(point))

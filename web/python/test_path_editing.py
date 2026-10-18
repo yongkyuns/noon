@@ -71,6 +71,32 @@ class PathEditingTests(unittest.TestCase):
         handle.setPoints.assert_called_once_with([0., 1., 2., 3., 4., 5.])
         handle.appendPoints.assert_called_once_with([6., 7.])
 
+    def test_start_new_path_routes_the_mutable_stride_to_shared_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        for context in (None, Mock()):
+            with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+                 patch.object(editing, '_handle_for', return_value=handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(value.start_new_path((1, 2, 0)), value)
+            if context is None:
+                handle.startNewPathWithStride.assert_called_once_with(1., 2., 5)
+            else:
+                context.liveStartNewPathWithStride.assert_called_once_with(
+                    handle, 1., 2., 5
+                )
+            handle.reset_mock()
+
+    def test_start_new_path_zero_stride_matches_python_modulo_error(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 0
+        with self.assertRaisesRegex(ZeroDivisionError, "integer modulo by zero"):
+            value.start_new_path((1, 2, 0))
+
     def test_resize_points_uses_resize_function_then_shared_setter(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

@@ -168,6 +168,75 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
 }
 
 #[test]
+fn start_new_path_preserves_raw_points_and_pads_by_the_configured_stride() {
+    for live_mode in [false, true] {
+        for stride in [4, 5, -4] {
+            let mut scene = Scene::new();
+            let mut object = scene.square(1.).unwrap();
+            let initial = (0..7)
+                .map(|index| Vec2::new(index as f32, (index * 2) as f32))
+                .collect::<Vec<_>>();
+            object.set_points(&initial).unwrap();
+            let mut execution = scene.execution_session().unwrap();
+            let new_point = Vec2::new(9., 9.);
+
+            if live_mode {
+                noon::integration::publish_borrowed_path_edit(
+                    scene.integration_store(),
+                    scene.root(),
+                    &mut execution,
+                    noon::integration::BorrowedPathEdit::StartWithStride {
+                        object: &object,
+                        point: new_point,
+                        stride,
+                    },
+                )
+                .unwrap();
+            } else {
+                object
+                    .start_new_path_with_stride(new_point, stride)
+                    .unwrap();
+            }
+
+            let points = object.path_query().unwrap().points().unwrap();
+            match stride {
+                4 => {
+                    assert_eq!(points.len(), 9);
+                    assert_eq!(
+                        points[..7],
+                        (0..7)
+                            .map(|i| (i as f64, (i * 2) as f64))
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(points[7..], [(4., 8.), (9., 9.)]);
+                }
+                5 => {
+                    assert_eq!(points.len(), 11);
+                    assert_eq!(
+                        points[..7],
+                        (0..7)
+                            .map(|i| (i as f64, (i * 2) as f64))
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(points[7..], [(5., 10.), (5., 10.), (5., 10.), (9., 9.)]);
+                }
+                -4 => {
+                    assert_eq!(points.len(), 8);
+                    assert_eq!(
+                        points[..7],
+                        (0..7)
+                            .map(|i| (i as f64, (i * 2) as f64))
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(points[7], (9., 9.));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
 fn clear_points_uses_shared_authored_and_live_transactions() {
     for live_mode in [false, true] {
         let mut scene = Scene::new();

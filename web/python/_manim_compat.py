@@ -192,8 +192,8 @@ class VMobject(Mobject):
         return change_anchor_mode(self, mode)
 
     def start_new_path(self, point):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "startNewPath", "liveStartNewPath", (point,))
+        from _manim_path_editing import start_new_path
+        return start_new_path(self, point)
 
     def add_line_to(self, point):
         from _manim_path_editing import edit_points

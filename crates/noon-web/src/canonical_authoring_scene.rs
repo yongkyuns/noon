@@ -8097,6 +8097,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveStartNewPathWithStride)]
+        pub fn live_start_new_path_with_stride(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_start_new_path_with_stride(source.semantic_mobject(), point, stride)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAddLineTo)]
         pub fn live_add_line_to(
             &mut self,

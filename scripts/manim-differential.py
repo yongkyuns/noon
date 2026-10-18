@@ -838,6 +838,12 @@ def _raw_point_mutations(api):
 
     set_path = api.VMobject().set_points(initial.copy())
     append_path = api.VMobject().set_points(initial.copy()).append_points(appended)
+    started_path = api.VMobject().set_points(initial.copy())
+    started_path.start_new_path((9.0, 9.0, 0.0))
+    custom_stride_started_path = api.VMobject()
+    custom_stride_started_path.n_points_per_cubic_curve = 5
+    custom_stride_started_path.set_points(initial.copy())
+    custom_stride_started_path.start_new_path((9.0, 9.0, 0.0))
     custom_stride_path = api.VMobject()
     custom_stride_path.n_points_per_cubic_curve = 5
     custom_stride_path.set_points(initial.copy()).append_points(appended)
@@ -852,6 +858,8 @@ def _raw_point_mutations(api):
     return {
         "set": snapshot(set_path),
         "append": snapshot(append_path),
+        "start_new_path": snapshot(started_path),
+        "custom_stride_start_new_path": snapshot(custom_stride_started_path),
         "custom_stride_append": snapshot(custom_stride_path),
         "resize_up": snapshot(resized_up),
         "resize_down": snapshot(resized_down),

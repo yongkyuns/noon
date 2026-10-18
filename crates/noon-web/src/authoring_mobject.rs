@@ -2305,6 +2305,19 @@ mod wasm {
             self.handle.start_new_path(point).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = startNewPathWithStride)]
+        pub fn start_new_path_with_stride(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.handle
+                .start_new_path_with_stride(point, stride)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = addLineTo)]
         pub fn add_line_to(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;
