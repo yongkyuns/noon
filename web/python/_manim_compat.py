@@ -114,6 +114,37 @@ class VMobject(Mobject):
         return boundary_points(self)
 
     def __init__(self, *, color=_base.WHITE, **kwargs):
+        # These Python-facing VMobject query settings are part of Manim's
+        # constructor contract. Keep them on the wrapper because the shared
+        # Rust path remains the authority for geometry and query results.
+        tolerance = kwargs.pop(
+            "tolerance_for_point_equality", self.tolerance_for_point_equality
+        )
+        stride = kwargs.pop(
+            "n_points_per_cubic_curve", self.n_points_per_cubic_curve
+        )
+        self.tolerance_for_point_equality = tolerance
+        self.n_points_per_cubic_curve = stride
+        try:
+            import numpy as np
+        except ImportError:
+            import operator
+
+            sample_count = operator.index(stride)
+            if sample_count < 0:
+                raise ValueError(
+                    f"Number of samples, {sample_count}, must be non-negative."
+                )
+            if sample_count == 0:
+                self._bezier_t_values = []
+            elif sample_count == 1:
+                self._bezier_t_values = [0.0]
+            else:
+                self._bezier_t_values = [
+                    index / (sample_count - 1) for index in range(sample_count)
+                ]
+        else:
+            self._bezier_t_values = np.linspace(0, 1, stride)
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 

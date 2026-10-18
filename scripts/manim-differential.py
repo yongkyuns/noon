@@ -456,6 +456,15 @@ def _path_point_counts(api):
     counts.append(path.get_num_points())
     path.rotate(0.3).shift(api.RIGHT)
     counts.append(path.get_num_points())
+    configured = api.VMobject(
+        n_points_per_cubic_curve=3,
+        tolerance_for_point_equality=2e-5,
+    )
+    counts.extend((
+        configured.n_points_per_cubic_curve,
+        configured.n_points_per_curve,
+        configured.tolerance_for_point_equality,
+    ))
     return counts
 
 

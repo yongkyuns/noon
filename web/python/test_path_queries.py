@@ -48,6 +48,42 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(value.n_points_per_cubic_curve, 4)
         self.assertEqual(compat.VMobject.n_points_per_cubic_curve, 4)
 
+    def test_vmobject_constructor_accepts_query_stride_and_tolerance(self):
+        import numpy as np
+
+        with patch.object(semantic_handles, "_empty_path_init") as initialize:
+            value = compat.VMobject(
+                n_points_per_cubic_curve=3,
+                tolerance_for_point_equality=2e-5,
+                marker="forwarded",
+            )
+
+        self.assertEqual(value.n_points_per_cubic_curve, 3)
+        self.assertEqual(value.n_points_per_curve, 3)
+        self.assertEqual(value.tolerance_for_point_equality, 2e-5)
+        np.testing.assert_array_equal(value._bezier_t_values, [0., .5, 1.])
+        initialize.assert_called_once_with(
+            value, color=compat._base.WHITE, kind="VMobject", marker="forwarded"
+        )
+
+    def test_vmobject_constructor_bezier_samples_without_numpy(self):
+        with patch.object(semantic_handles, "_empty_path_init"), patch.dict(
+            "sys.modules", {"numpy": None}
+        ):
+            value = compat.VMobject(n_points_per_cubic_curve=3)
+            singleton = compat.VMobject(n_points_per_cubic_curve=1)
+            empty = compat.VMobject(n_points_per_cubic_curve=0)
+        self.assertEqual(value._bezier_t_values, [0., .5, 1.])
+        self.assertEqual(singleton._bezier_t_values, [0.0])
+        self.assertEqual(empty._bezier_t_values, [])
+
+    def test_vmobject_constructor_bezier_stride_matches_numpy_validation(self):
+        with patch.object(semantic_handles, "_empty_path_init"):
+            with self.assertRaisesRegex(TypeError, "cannot be interpreted as an integer"):
+                compat.VMobject(n_points_per_cubic_curve=3.5)
+            with self.assertRaisesRegex(ValueError, "Number of samples, -1"):
+                compat.VMobject(n_points_per_cubic_curve=-1)
+
     def test_subpath_split_query_uses_rust_and_returns_numpy_index_ranges(self):
         try:
             import numpy as np
