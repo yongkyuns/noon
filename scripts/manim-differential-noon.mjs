@@ -108,6 +108,10 @@ custom_stride_live_queries = {
         float(value)
         for value in live_custom_stride.get_boundary_point((1, 0, 0))
     ],
+    "boundary_points": [
+        [float(coordinate) for coordinate in point]
+        for point in live_custom_stride.get_points_defining_boundary()
+    ],
     "point_from_proportion": [
         round(float(value), 7)
         for value in live_custom_stride.point_from_proportion(0.5)
@@ -122,6 +126,10 @@ authored_custom_stride.set_points([
 ])
 authored_custom_stride.n_points_per_cubic_curve = 2
 custom_stride_authored_queries = {
+    "boundary_points": [
+        [float(coordinate) for coordinate in point]
+        for point in authored_custom_stride.get_points_defining_boundary()
+    ],
     "point_from_proportion": [
         round(float(value), 7)
         for value in authored_custom_stride.point_from_proportion(0.5)
@@ -159,6 +167,7 @@ json.dumps({
   assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
+    boundary_points: [[0, 0], [30, 0], [1, 0], [2, 0]],
     point_from_proportion: [15.5, 0],
   });
   assert.ok(
@@ -167,6 +176,7 @@ json.dumps({
   );
   assert.deepEqual(
     {
+      boundary_points: product.custom_stride_live_queries.boundary_points,
       point_from_proportion: product.custom_stride_live_queries.point_from_proportion,
       proportion_from_point: product.custom_stride_live_queries.proportion_from_point,
     },
