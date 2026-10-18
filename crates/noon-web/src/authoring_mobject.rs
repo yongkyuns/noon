@@ -2349,6 +2349,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addLineToWithSamples)]
+        pub fn add_line_to_with_samples(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
+                JsValue::from_str("add_line_to requires four constructor interpolation samples")
+            })?;
+            self.handle
+                .add_line_to_with_stride_and_samples(point, stride, &bezier_t_values)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
         pub fn add_quadratic_bezier_curve_to(
             &mut self,

@@ -52,6 +52,12 @@ pub enum BorrowedPathEdit<'a> {
         point: Vec2,
         stride: i32,
     },
+    LineWithSamples {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+        bezier_t_values: &'a [f64; 4],
+    },
     Close {
         object: &'a Mobject,
     },
@@ -203,6 +209,19 @@ pub fn publish_borrowed_path_edit(
             point,
             stride,
         } => (object, PathEdit::LineWithStride(point, stride)),
+        BorrowedPathEdit::LineWithSamples {
+            object,
+            point,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::LineWithSamples {
+                point,
+                stride,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
         BorrowedPathEdit::CloseWithStride {
             object,

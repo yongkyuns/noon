@@ -876,6 +876,22 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_line_to_with_samples(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+        stride: i32,
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithSamples {
+            object: source,
+            point,
+            stride,
+            bezier_t_values,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_add_quadratic_bezier_curve_to(
         &mut self,
         source: &noon::Mobject,

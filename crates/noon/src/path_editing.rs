@@ -380,6 +380,28 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_line_to_with_stride_and_samples(
+        &mut self,
+        object: &Mobject,
+        point: Vec2,
+        stride: i32,
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::LineWithSamples {
+                    point,
+                    stride,
+                    bezier_t_values,
+                },
+            )
+        })
+    }
+
     pub fn add_quadratic_bezier_curve_to(
         &mut self,
         object: &Mobject,
@@ -735,6 +757,11 @@ pub(crate) enum PathEdit<'a> {
     },
     Line(Vec2),
     LineWithStride(Vec2, i32),
+    LineWithSamples {
+        point: Vec2,
+        stride: i32,
+        bezier_t_values: &'a [f64; 4],
+    },
     AppendCorners(&'a [Vec2]),
     Quadratic(Vec2, Vec2),
     QuadraticWithStride(Vec2, Vec2, i32),
@@ -795,6 +822,20 @@ impl PathEdit<'_> {
         {
             let path = world_path(store, state)?;
             return close_path_with_stride(path, stride, tolerance, bezier_t_values);
+        }
+        if let Self::LineWithSamples {
+            point,
+            stride,
+            bezier_t_values,
+        } = self
+        {
+            return append_manim_line_to_path_with_samples(
+                world_path(store, state)?,
+                point,
+                stride,
+                bezier_t_values,
+            )
+            .map(Some);
         }
         if let Self::RawPoints(points) = self {
             if points
@@ -1095,6 +1136,7 @@ impl PathEdit<'_> {
             path = match self {
                 Self::Line(to) => path.open_last_subpath().line_to(to),
                 Self::LineWithStride(to, _) => path.open_last_subpath().line_to(to),
+                Self::LineWithSamples { point, .. } => path.open_last_subpath().line_to(point),
                 Self::Quadratic(control, to) => path.open_last_subpath().quadratic_to(control, to),
                 Self::QuadraticWithStride(control, to, _) => {
                     path.open_last_subpath().quadratic_to(control, to)
@@ -1321,6 +1363,46 @@ fn append_manim_cubic_to_path_with_stride(
         return Err(AuthoringError::NonFiniteGeometry);
     }
     Ok(path)
+}
+
+fn append_manim_line_to_path_with_samples(
+    path: VectorPath,
+    point: Vec2,
+    stride: i32,
+    bezier_t_values: &[f64; 4],
+) -> Result<VectorPath, AuthoringError> {
+    if !point.x.is_finite()
+        || !point.y.is_finite()
+        || bezier_t_values.iter().any(|value| !value.is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+
+    let morph_target = path.morph_target().cloned();
+    let mut points = manim_points_for_path(&path)?;
+    let start = points.last().copied().ok_or(AuthoringError::PathQuery(
+        noon_geometry::PathProportionError::EmptyPath,
+    ))?;
+    if !manim_remainder_is_one(points.len(), stride) {
+        points.push(start);
+    }
+    points.extend(
+        bezier_t_values
+            .iter()
+            .skip(1)
+            .map(|t| start + (point - start) * (*t as f32)),
+    );
+
+    let mut result = VectorPath::from_manim_points(points);
+    if let Some(target) = morph_target {
+        let target =
+            append_manim_line_to_path_with_samples(target, point, stride, bezier_t_values)?;
+        result = result.with_morph_target(target);
+    }
+    if !result.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(result)
 }
 
 fn append_corners_with_stride(
@@ -1727,6 +1809,18 @@ impl Mobject {
         stride: i32,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::LineWithStride(point, stride))
+    }
+    pub fn add_line_to_with_stride_and_samples(
+        &mut self,
+        point: Vec2,
+        stride: i32,
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::LineWithSamples {
+            point,
+            stride,
+            bezier_t_values,
+        })
     }
     pub fn add_quadratic_bezier_curve_to(
         &mut self,

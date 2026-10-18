@@ -180,6 +180,19 @@ def add_smooth_curve_to(value, *points):
 def add_line_to(value, point):
     _validate_line_append_arity(value)
     stride = _curve_append_stride(value, empty_checks_first=True)
+    sample_values = list(
+        getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0))
+    )
+    if sample_values != [0.0, 1 / 3, 2 / 3, 1.0]:
+        from pyodide.ffi import to_js
+
+        return edit_points(
+            value,
+            "addLineToWithSamples",
+            "liveAddLineToWithSamples",
+            (point,),
+            suffix=(stride, to_js(sample_values)),
+        )
     return edit_points(
         value,
         "addLineTo",

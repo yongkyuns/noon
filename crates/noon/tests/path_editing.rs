@@ -1160,6 +1160,72 @@ fn handle_distance_scaling_matches_cubic_controls_in_authored_and_live_paths() {
 }
 
 #[test]
+fn line_append_uses_custom_constructor_samples_authored_and_live() {
+    let samples = [0.0, 0.25, 0.75, 1.0];
+    for live_mode in [false, true] {
+        for point_count in [1, 4] {
+            let mut scene = Scene::new();
+            let points = (0..point_count)
+                .map(|index| Vec2::new(index as f32, (index % 2) as f32))
+                .collect::<Vec<_>>();
+            let mut object = scene
+                .geometry(
+                    ManimGeometryOptions::path(VectorPath::from_manim_points(points)).unwrap(),
+                )
+                .unwrap();
+            if live_mode {
+                scene.add(&object).unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            if live_mode {
+                noon::integration::publish_borrowed_path_edit(
+                    scene.integration_store(),
+                    scene.root(),
+                    &mut session,
+                    noon::integration::BorrowedPathEdit::LineWithSamples {
+                        object: &object,
+                        point: Vec2::new(9.0, -1.0),
+                        stride: 4,
+                        bezier_t_values: &samples,
+                    },
+                )
+                .unwrap();
+            } else {
+                object
+                    .add_line_to_with_stride_and_samples(Vec2::new(9.0, -1.0), 4, &samples)
+                    .unwrap();
+            }
+
+            let query = if live_mode {
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &object,
+                )
+                .unwrap()
+            } else {
+                object.path_query().unwrap()
+            };
+            let curve_index = if point_count == 4 { 1 } else { 0 };
+            let expected = if point_count == 1 {
+                [(0.0, 0.0), (2.25, -0.25), (6.75, -0.75), (9.0, -1.0)]
+            } else {
+                [(3.0, 1.0), (4.5, 0.5), (7.5, -0.5), (9.0, -1.0)]
+            };
+            for (actual, expected) in query
+                .curve_points(curve_index)
+                .unwrap()
+                .into_iter()
+                .zip(expected)
+            {
+                assert!((actual.0 - expected.0).abs() < 1e-5);
+                assert!((actual.1 - expected.1).abs() < 1e-5);
+            }
+        }
+    }
+}
+
+#[test]
 fn handle_distance_scaling_promotes_lines_and_quadratics_exactly() {
     let mut scene = Scene::new();
     let mut line = scene

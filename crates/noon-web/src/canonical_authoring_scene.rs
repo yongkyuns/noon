@@ -8153,6 +8153,31 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAddLineToWithSamples)]
+        pub fn live_add_line_to_with_samples(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
+                JsValue::from_str("add_line_to requires four constructor interpolation samples")
+            })?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_line_to_with_samples(
+                    source.semantic_mobject(),
+                    point,
+                    stride,
+                    &bezier_t_values,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAddQuadraticBezierCurveTo)]
         pub fn live_add_quadratic_bezier_curve_to(
             &mut self,

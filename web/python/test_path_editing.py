@@ -198,6 +198,28 @@ class PathEditingTests(unittest.TestCase):
                         getattr(context, live_method).assert_called_once_with(handle, *expected)
                     handle.reset_mock()
 
+    def test_line_append_forwards_custom_constructor_samples_to_authored_and_live_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value._bezier_t_values = [0.0, 0.25, 0.75, 1.0]
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        for context in (None, Mock()):
+            with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+                 patch.object(editing, '_handle_for', return_value=handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(value.add_line_to((9, -1, 0)), value)
+            if context is None:
+                handle.addLineToWithSamples.assert_called_once_with(
+                    9.0, -1.0, 4, [0.0, 0.25, 0.75, 1.0]
+                )
+            else:
+                context.liveAddLineToWithSamples.assert_called_once_with(
+                    handle, 9.0, -1.0, 4, [0.0, 0.25, 0.75, 1.0]
+                )
+            handle.reset_mock()
+
     def test_line_append_preserves_constructor_sample_arity_errors(self):
         cases = [
             ([0., .5, 1.], "VMobject.add_cubic_bezier_curve_to() missing 1 required positional argument: 'anchor'"),

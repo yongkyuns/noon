@@ -892,6 +892,27 @@ def _raw_point_curve_appends(api):
     return result
 
 
+def _raw_point_line_custom_samples(api):
+    import numpy as np
+
+    result = {}
+    samples = np.array([0.0, 0.25, 0.75, 1.0])
+    for point_count in (1, 4):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        value = api.VMobject().set_points(initial.copy())
+        value._bezier_t_values = samples.copy()
+        pending_before = value.has_new_path_started()
+        value.add_line_to((9.0, -1.0, 0.0))
+        result[str(point_count)] = {
+            "pending_before": pending_before,
+            "count": value.get_num_points(),
+            "points": [_point_observation(point) for point in value.get_all_points()],
+        }
+    return result
+
+
 def _raw_point_smooth_curve_appends(api):
     import numpy as np
 
@@ -2115,6 +2136,7 @@ FIXTURES = [
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
     Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
     Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),
+    Fixture("raw_point_line_custom_samples", lambda: _raw_point_line_custom_samples(noon), lambda: _raw_point_line_custom_samples(manim), 1e-5),
     Fixture("raw_point_smooth_curve_appends", lambda: _raw_point_smooth_curve_appends(noon), lambda: _raw_point_smooth_curve_appends(manim), 1e-5),
     Fixture("raw_point_custom_stride_curve_appends", lambda: _raw_point_custom_stride_curve_appends(noon), lambda: _raw_point_custom_stride_curve_appends(manim), 1e-5),
     Fixture("raw_point_custom_stride_corners", lambda: _raw_point_custom_stride_corners(noon), lambda: _raw_point_custom_stride_corners(manim), 1e-5),
