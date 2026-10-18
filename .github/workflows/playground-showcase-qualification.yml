@@ -106,3 +106,83 @@ jobs:
           path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
           if-no-files-found: warn
           retention-days: 3
+
+  # PR #2203 only: publish genuine source-bound WebGL captures using a pinned
+  # checkout. This staging job must be removed before review/merge.
+  # It never changes the baseline border renderer or independent CUDA poster.
+  code-pygments-poster-publication:
+    name: Pygments source-bound WebGL poster publication
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'yongkyuns/noon' && github.event.pull_request.head.ref == 'fix/code-pygments-2193' }}
+    needs: capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: webgl
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Verify independent pinned Pygments 2.19.2 oracle
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
+          python3 scripts/test_code_pygments_parity.py
+      - name: Build exact head source browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'false'
+      - name: Install pinned renderer tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Select original 24 scenes without replacing independently qualified CUDA
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("web/python/examples/noon_showcase_manifest.json")
+          manifest = json.loads(path.read_text())
+          assert len(manifest["entries"]) == 25
+          assert manifest["entries"][-1]["id"] == "showcase-cuda-transpose"
+          manifest["entries"].pop()
+          assert len(manifest["entries"]) == 24
+          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - name: Capture real 24-scene WebGL frames and evidence from exact head
+        run: node scripts/showcase-capture.mjs
+      - name: Restore full gallery and enforce strict poster provenance
+        run: |
+          git restore -- web/python/examples/noon_showcase_manifest.json
+          test -s web/thumbnails/showcase/showcase-code-blocks.png
+          node --test scripts/showcase-posters.test.mjs
+      - name: Commit only validated renderer posters and source-bound evidence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/thumbnails/showcase
+          git diff --cached --check
+          test -z "$(git status --porcelain -- web/python/examples/noon_showcase_manifest.json)"
+          if git diff --cached --quiet; then
+            echo "Expected real source-bound image/evidence changes were absent" >&2
+            exit 1
+          fi
+          git commit -m "Recapture Python Code word operators in genuine 24-scene WebGL gallery"
+          git push origin HEAD:fix/code-pygments-2193
+      - name: Retain authentic recapture diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pygments-operator-gallery-evidence
+          path: |
+            browser-smoke-artifacts/showcase/webgl/report.json
+            browser-smoke-artifacts/showcase/webgl/contact-sheet.png
+            browser-smoke-artifacts/showcase/webgl/showcase-code-blocks.png
+          if-no-files-found: warn
+          retention-days: 3
