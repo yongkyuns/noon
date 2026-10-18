@@ -503,6 +503,51 @@ class PathEditingTests(unittest.TestCase):
                     value.append_vectorized_mobject(identity_only_wrapper(compat.VMobject))
             resolve.assert_not_called()
 
+    def test_close_path_forwards_stride_tolerance_and_samples_to_authored_or_live_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        value.tolerance_for_point_equality = 2e-5
+        value._bezier_t_values = [0.0, 1 / 3, 2 / 3, 1.0]
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch('_manim_path_queries.is_closed', return_value=False):
+            self.assertIs(value.close_path(), value)
+        authored_args = handle.closePathWithStride.call_args.args
+        self.assertEqual(authored_args[:2], (5, 2e-5))
+        self.assertEqual(len(authored_args[2]), 4)
+
+        context = Mock()
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=context), \
+             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch('_manim_path_queries.is_closed', return_value=False):
+            self.assertIs(value.close_path(), value)
+        live_args = context.liveClosePathWithStride.call_args.args
+        self.assertEqual(live_args[:3], (handle, 5, 2e-5))
+        self.assertEqual(len(live_args[3]), 4)
+
+    def test_close_path_returns_unchanged_for_closed_points_before_resolving_handle(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch('_manim_path_queries.is_closed', return_value=True), \
+             patch.object(editing, '_handle_for') as resolve:
+            self.assertIs(value.close_path(), value)
+            resolve.assert_not_called()
+
+    def test_close_path_rejects_constructor_sample_counts_that_make_manims_call_invalid(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value._bezier_t_values = [0.0, 0.25, 0.5, 0.75, 1.0]
+        with patch('_manim_path_queries.is_closed', return_value=False), \
+             patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaisesRegex(TypeError, "three constructor interpolation samples"):
+                value.close_path()
+            resolve.assert_not_called()
+
     def test_callback_resource_edits_reject_before_crossing_the_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch('_manim_updaters.canonical_callback_phase_active', return_value=True), \
@@ -533,9 +578,13 @@ class PathEditingTests(unittest.TestCase):
     def test_scalar_point_commands_dispatch_to_shared_operations(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
-        with patch.object(editing, '_handle_for', return_value=handle), \
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
              patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch('_manim_path_queries.is_closed', return_value=False):
             self.assertIs(value.start_new_path((1, 2, 0)), value)
             value.add_line_to((3, 4))
             value.add_quadratic_bezier_curve_to((5, 6), (7, 8))
@@ -547,7 +596,9 @@ class PathEditingTests(unittest.TestCase):
         handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 7., 8.)
         handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 3., 4., 5., 6.)
         handle.addCubicBezierCurve.assert_called_once_with(0., 1., 2., 3., 4., 5., 6., 7.)
-        handle.closePath.assert_called_once_with()
+        close_args = handle.closePathWithStride.call_args.args
+        self.assertEqual(close_args[:2], (4, 1e-6))
+        self.assertEqual(len(close_args[2]), 4)
 
     def test_partial_and_direction_use_shared_operands_in_authored_and_live_modes(self):
         value = identity_only_wrapper(compat.VMobject)

@@ -50,6 +50,12 @@ pub enum BorrowedPathEdit<'a> {
     Close {
         object: &'a Mobject,
     },
+    CloseWithStride {
+        object: &'a Mobject,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &'a [f64],
+    },
     Reverse {
         object: &'a Mobject,
     },
@@ -182,6 +188,19 @@ pub fn publish_borrowed_path_edit(
             stride,
         } => (object, PathEdit::LineWithStride(point, stride)),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
+        BorrowedPathEdit::CloseWithStride {
+            object,
+            stride,
+            tolerance,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::CloseWithStride {
+                stride,
+                tolerance,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
         BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start { point, stride: 4 }),
         BorrowedPathEdit::StartWithStride {

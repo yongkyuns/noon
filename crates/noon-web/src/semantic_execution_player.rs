@@ -1130,6 +1130,22 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_close_path_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CloseWithStride {
+            object: source,
+            stride,
+            tolerance,
+            bezier_t_values,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_points(
         &mut self,
         source: &noon::Mobject,

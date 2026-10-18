@@ -356,8 +356,8 @@ class VMobject(Mobject):
         return pointwise_become_partial(self, vmobject, a, b)
 
     def close_path(self):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "closePath", "liveClosePath", ())
+        from _manim_path_editing import close_path
+        return close_path(self)
 
     def set_color_by_gradient(self, *colors):
         from _manim_semantic_handles import _set_color_by_gradient

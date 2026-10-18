@@ -2530,6 +2530,18 @@ mod wasm {
             self.handle.close_path().map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = closePathWithStride)]
+        pub fn close_path_with_stride(
+            &mut self,
+            stride: i32,
+            tolerance: f64,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .close_path_with_stride(stride, tolerance, &bezier_t_values)
+                .map_err(js_error)
+        }
+
         /// Share another vector object’s geometry and transform while preserving
         /// the source identity, paint, and painter priority.
         #[wasm_bindgen(js_name = matchPoints)]

@@ -8471,6 +8471,26 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveClosePathWithStride)]
+        pub fn live_close_path_with_stride(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            stride: i32,
+            tolerance: f64,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_close_path_with_stride(
+                    source.semantic_mobject(),
+                    stride,
+                    tolerance,
+                    &bezier_t_values,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchPoints)]
         pub fn live_match_points(
             &mut self,

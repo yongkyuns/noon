@@ -875,6 +875,68 @@ fn append_vectorized_mobject_uses_mutable_destination_stride_and_preserves_raw_p
 }
 
 #[test]
+fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_live() {
+    let samples = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
+    for point_count in [10, 11] {
+        for live_mode in [false, true] {
+            let initial = (0..point_count)
+                .map(|index| Vec2::new(index as f32, -(index as f32)))
+                .collect::<Vec<_>>();
+            let target = initial[5];
+            let last = *initial.last().unwrap();
+            let mut expected = initial.clone();
+            if point_count % 5 != 1 {
+                expected.push(last);
+            }
+            expected.extend(
+                samples
+                    .iter()
+                    .skip(1)
+                    .map(|t| last + (target - last) * *t as f32),
+            );
+
+            let mut scene = Scene::new();
+            let mut object = scene
+                .geometry(
+                    ManimGeometryOptions::path(VectorPath::from_manim_points(initial)).unwrap(),
+                )
+                .unwrap();
+            scene.add(&object).unwrap();
+            let query = if live_mode {
+                let mut execution = scene.execution_session().unwrap();
+                let store = std::rc::Rc::clone(scene.integration_store());
+                noon::integration::publish_borrowed_path_edit(
+                    &store,
+                    scene.root(),
+                    &mut execution,
+                    noon::integration::BorrowedPathEdit::CloseWithStride {
+                        object: &object,
+                        stride: 5,
+                        tolerance: 1e-6,
+                        bezier_t_values: &samples,
+                    },
+                )
+                .unwrap();
+                noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+            } else {
+                object.close_path_with_stride(5, 1e-6, &samples).unwrap();
+                object.path_query().unwrap()
+            };
+
+            let points = query.points().unwrap();
+            let expected = expected
+                .into_iter()
+                .map(|point| (f64::from(point.x), f64::from(point.y)))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                points, expected,
+                "point_count={point_count}, live={live_mode}"
+            );
+        }
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

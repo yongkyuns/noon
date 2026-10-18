@@ -521,6 +521,28 @@ impl crate::Scene {
         })
     }
 
+    pub fn close_path_with_stride(
+        &mut self,
+        object: &Mobject,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CloseWithStride {
+                    stride,
+                    tolerance,
+                    bezier_t_values,
+                },
+            )
+        })
+    }
+
     pub fn insert_n_curves(
         &mut self,
         object: &Mobject,
@@ -683,6 +705,11 @@ pub(crate) enum PathEdit<'a> {
         stride: i32,
     },
     Close,
+    CloseWithStride {
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &'a [f64],
+    },
     Reverse,
     AppendCornersWithStride {
         points: &'a [Vec2],
@@ -706,6 +733,15 @@ impl PathEdit<'_> {
     ) -> Result<Option<VectorPath>, AuthoringError> {
         if matches!(self, Self::Clear) {
             return Ok(Some(VectorPath::new()));
+        }
+        if let Self::CloseWithStride {
+            stride,
+            tolerance,
+            bezier_t_values,
+        } = self
+        {
+            let path = world_path(store, state)?;
+            return close_path_with_stride(path, stride, tolerance, bezier_t_values);
         }
         if let Self::RawPoints(points) = self {
             if points
@@ -1050,6 +1086,7 @@ impl PathEdit<'_> {
                 | Self::AppendCornersWithStride { .. }
                 | Self::AppendVectorized(_)
                 | Self::AppendVectorizedWithStride { .. }
+                | Self::CloseWithStride { .. }
                 | Self::Partial { .. } => {
                     unreachable!()
                 }
@@ -1073,6 +1110,71 @@ fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError>
             .map(|(x, y)| Vec2::new(x as f32, y as f32))
             .collect(),
     )
+}
+
+fn close_path_with_stride(
+    path: VectorPath,
+    stride: i32,
+    tolerance: f64,
+    bezier_t_values: &[f64],
+) -> Result<Option<VectorPath>, AuthoringError> {
+    let morph_target = path.morph_target().cloned();
+    let mut points = manim_points_for_path(&path)?;
+    let Some(first) = points.first().copied() else {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::EmptyPath,
+        ));
+    };
+    let last = *points.last().expect("non-empty point array was checked");
+    if crate::path_queries::manim_points_2d_close(
+        [f64::from(first.x), f64::from(first.y)],
+        [f64::from(last.x), f64::from(last.y)],
+        tolerance,
+    ) {
+        return Ok(None);
+    }
+
+    let coordinates = points
+        .iter()
+        .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
+        .collect::<Vec<_>>();
+    let ranges = crate::path_queries::manim_subpath_ranges(
+        &coordinates,
+        points.len(),
+        2,
+        2,
+        f64::from(stride),
+        tolerance,
+        true,
+    )?;
+    let Some(start_index) = ranges.get(ranges.len().saturating_sub(2)).copied() else {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::EmptyPath,
+        ));
+    };
+    let target = points[start_index];
+    let start = last;
+    let line_points = bezier_t_values
+        .iter()
+        .skip(1)
+        .map(|t| start + (target - start) * (*t as f32))
+        .collect::<Vec<_>>();
+
+    if !crate::path_queries::point_array_has_new_path_started(points.len(), stride) {
+        points.push(last);
+    }
+    points.extend(line_points);
+    let mut result = VectorPath::from_manim_points(points);
+    if let Some(target) = morph_target {
+        let closed_target =
+            close_path_with_stride(target.clone(), stride, tolerance, bezier_t_values)?
+                .unwrap_or(target);
+        result = result.with_morph_target(closed_target);
+    }
+    if !result.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(Some(result))
 }
 
 fn cubic_line_controls(start: Vec2, end: Vec2) -> (Vec2, Vec2) {
@@ -1660,6 +1762,18 @@ impl Mobject {
     }
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)
+    }
+    pub fn close_path_with_stride(
+        &mut self,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CloseWithStride {
+            stride,
+            tolerance,
+            bezier_t_values,
+        })
     }
     /// Add curves through deterministic subdivision, preserving the shape.
     pub fn insert_n_curves(&mut self, additional: usize) -> Result<(), AuthoringError> {

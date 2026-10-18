@@ -344,6 +344,27 @@ def append_vectorized_mobject(value, source):
     return value
 
 
+def close_path(value):
+    from _manim_path_queries import is_closed
+
+    if is_closed(value):
+        return value
+    stride = _curve_append_stride(value, empty_checks_first=False)
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    sample_values = list(getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0)))
+    if len(sample_values) != 4:
+        raise TypeError("close_path requires three constructor interpolation samples")
+    from pyodide.ffi import to_js
+
+    return edit_points(
+        value,
+        "closePathWithStride",
+        "liveClosePathWithStride",
+        (),
+        suffix=(stride, tolerance, to_js(sample_values)),
+    )
+
+
 def _looks_like_point(value):
     if isinstance(value, _base.Vec2):
         return True
