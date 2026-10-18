@@ -1305,7 +1305,23 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
     inner = _compat._as_color("inner gradient color", inner_color)
     outer = _compat._as_color("outer gradient color", outer_color)
     radius = _compat._ir._finite_number("radius", radius)
-    center = self.get_center() if center is None else _base._as_vec2(center)
+    if center is None:
+        center = (*self.get_center(), 0.0)
+    elif isinstance(center, _base.Vec2):
+        center = (center.x, center.y, 0.0)
+    else:
+        try:
+            dimensions = len(center)
+        except (TypeError, AttributeError):
+            dimensions = None
+        if dimensions not in (2, 3):
+            raise TypeError("expected a two- or three-component vector")
+        try:
+            center = tuple(float(center[index]) for index in range(dimensions))
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("expected a two- or three-component numeric vector") from error
+        if dimensions == 2:
+            center = (*center, 0.0)
     target, context, suffix = _style_target(self)
     if target is None:
         raise RuntimeError("radial gradients require the shared Rust authoring host")
@@ -1313,8 +1329,7 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
     if context is None:
         engine_call(
             target.setRadialColorGradient,
-            center.x,
-            center.y,
+            *center,
             radius,
             arguments,
         )
@@ -1322,8 +1337,7 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
         engine_call(
             getattr(context, f"liveSet{suffix}ColorRadialGradient"),
             target,
-            center.x,
-            center.y,
+            *center,
             radius,
             arguments,
         )

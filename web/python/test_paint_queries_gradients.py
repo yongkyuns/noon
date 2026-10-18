@@ -114,7 +114,8 @@ class PaintQueriesGradientsTests(unittest.TestCase):
                  patch.object(handles, '_gradient_components', return_value=argument) as components:
                 self.assertIs(
                     family.set_colors_by_radial_gradient(
-                        center=(1, -2), radius=3, inner_color='#FF0000', outer_color='#0000FF'
+                        center=(1, -2, 0.5), radius=3,
+                        inner_color='#FF0000', outer_color='#0000FF'
                     ),
                     family,
                 )
@@ -123,7 +124,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
                 if context is not None
                 else handle.setRadialColorGradient
             )
-            expected = ((handle,) if context is not None else ()) + (1.0, -2.0, 3.0, argument)
+            expected = ((handle,) if context is not None else ()) + (1.0, -2.0, 0.5, 3.0, argument)
             method.assert_called_once_with(*expected)
             self.assertEqual(len(components.call_args.args[0]), 2)
             self.assertEqual(components.call_args.args[0][0].red, 1.0)

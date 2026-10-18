@@ -40,13 +40,14 @@ fn gradient_color(colors: &[Color], index: usize, count: usize) -> Color {
 }
 
 pub(crate) fn validate_radial_gradient_inputs(
-    center: (f64, f64),
+    center: (f64, f64, f64),
     radius: f64,
     inner: Color,
     outer: Color,
 ) -> Result<(), AuthoringError> {
     authoring_render_f64("center.x", center.0)?;
     authoring_render_f64("center.y", center.1)?;
+    authoring_render_f64("center.z", center.2)?;
     authoring_render_f64("radius", radius)?;
     if radius <= 0.0 {
         return Err(AuthoringError::NonPositiveNumber {
@@ -75,8 +76,10 @@ pub(crate) fn radial_gradient_color(
     )
 }
 
-pub(crate) fn radial_distance(member_center: (f64, f64), center: (f64, f64)) -> f64 {
-    (member_center.0 - center.0).hypot(member_center.1 - center.1)
+pub(crate) fn radial_distance(member_center: (f64, f64), center: (f64, f64, f64)) -> f64 {
+    (member_center.0 - center.0)
+        .hypot(member_center.1 - center.1)
+        .hypot(center.2)
 }
 
 fn bounds_center(bounds: Bounds2D64) -> (f64, f64) {
@@ -114,7 +117,7 @@ impl Mobject {
     /// `family_members_with_points()` in ManimCE.
     pub fn set_color_by_radial_gradient(
         &mut self,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: Color,
         outer: Color,
@@ -175,7 +178,7 @@ impl MobjectFamily {
     /// last-occurrence family order. Existing content and opacity are preserved.
     pub(crate) fn radial_gradient_transaction(
         &self,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: Color,
         outer: Color,
@@ -218,7 +221,7 @@ impl MobjectFamily {
     /// Recolor point-bearing members by their distance from a shared center.
     pub fn set_color_by_radial_gradient(
         &self,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: Color,
         outer: Color,
@@ -275,7 +278,7 @@ mod tests {
             .unwrap();
         family
             .set_color_by_radial_gradient(
-                (0.0, 0.0),
+                (0.0, 0.0, 0.0),
                 2.0,
                 Color::rgb(1.0, 0.0, 0.0),
                 Color::rgb(0.0, 0.0, 1.0),
@@ -297,7 +300,7 @@ mod tests {
         let before = fill_color(&square);
         assert!(square
             .set_color_by_radial_gradient(
-                (0.0, 0.0),
+                (0.0, 0.0, 0.0),
                 0.0,
                 Color::rgb(1.0, 0.0, 0.0),
                 Color::rgb(0.0, 0.0, 1.0),
@@ -318,13 +321,37 @@ mod tests {
         empty
             .clone()
             .set_color_by_radial_gradient(
-                (0.0, 0.0),
+                (0.0, 0.0, 0.0),
                 1.0,
                 Color::rgb(1.0, 0.0, 0.0),
                 Color::rgb(0.0, 0.0, 1.0),
             )
             .unwrap();
         assert_eq!(fill_color(&empty), before);
+    }
+
+    #[test]
+    fn radial_gradient_measures_planar_members_from_three_dimensional_centers() {
+        let mut scene = Scene::new();
+        let mut square = scene.square(1.0).unwrap();
+        square
+            .set_color_by_radial_gradient(
+                (0.0, 0.0, 1.0),
+                2.0,
+                Color::rgb(1.0, 0.0, 0.0),
+                Color::rgb(0.0, 0.0, 1.0),
+            )
+            .unwrap();
+
+        assert_rgb(fill_color(&square), 0.5, 0.0, 0.5);
+        assert_eq!(radial_distance((0.0, 0.0), (0.0, 0.0, 1.0)), 1.0);
+        assert!(validate_radial_gradient_inputs(
+            (0.0, 0.0, f64::NAN),
+            2.0,
+            Color::WHITE,
+            Color::BLACK,
+        )
+        .is_err());
     }
 
     #[test]
@@ -350,7 +377,7 @@ mod tests {
         live.shift(&center, 1.0, 0.0).unwrap();
         live.set_family_color_by_radial_gradient(
             &family,
-            (0.0, 0.0),
+            (0.0, 0.0, 0.0),
             2.0,
             Color::rgb(1.0, 0.0, 0.0),
             Color::rgb(0.0, 0.0, 1.0),

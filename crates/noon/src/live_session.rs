@@ -3017,7 +3017,7 @@ impl<'a> LiveSession<'a> {
     pub fn set_family_color_by_radial_gradient(
         &mut self,
         family: &MobjectFamily,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: Color,
         outer: Color,
@@ -3065,7 +3065,7 @@ impl<'a> LiveSession<'a> {
     pub fn set_color_by_radial_gradient(
         &mut self,
         object: &Mobject,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: Color,
         outer: Color,

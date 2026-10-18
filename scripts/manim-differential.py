@@ -434,11 +434,20 @@ def _radial_family_gradient_probe(api) -> Any:
     )
     default_center = api.Square(color=api.GREEN)
     default_result = default_center.set_colors_by_radial_gradient()
+    z_offset_center = api.Square(color=api.GREEN)
+    z_offset_result = z_offset_center.set_colors_by_radial_gradient(
+        center=(0, 0, 1), radius=2, inner_color=api.RED, outer_color=api.BLUE
+    )
     return {
-        "returns_self": result is family and default_result is default_center,
+        "returns_self": (
+            result is family
+            and default_result is default_center
+            and z_offset_result is z_offset_center
+        ),
         "colors": [_paint_rgb(member.get_color()) for member in (near, point_free, center, far)],
         "opacity": [float(near.get_fill_opacity()), float(near.get_stroke_opacity())],
         "default_center_color": _paint_rgb(default_center.get_color()),
+        "z_offset_color": _paint_rgb(z_offset_center.get_color()),
     }
 
 
@@ -2773,7 +2782,7 @@ FIXTURES = [
 # are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
     "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
-    "radial_gradient_edges": "Common-success qualification covers planar families with finite positive radii. Noon rejects zero/negative radii, nonzero-z centers, staged callback use, and Text/Image/resource/spatial family parity remain unqualified; ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
+    "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",

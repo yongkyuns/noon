@@ -7750,6 +7750,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             center_x: f64,
             center_y: f64,
+            center_z: f64,
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
@@ -7760,7 +7761,7 @@ mod wasm {
                 .map_err(typed_js_error)?
                 .live_set_color_radial_gradient(
                     &target.semantic_mobject(),
-                    (center_x, center_y),
+                    (center_x, center_y, center_z),
                     radius,
                     inner,
                     outer,
@@ -7773,6 +7774,7 @@ mod wasm {
             target: &crate::WasmAuthoringFamilyHandle,
             center_x: f64,
             center_y: f64,
+            center_z: f64,
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
@@ -7783,7 +7785,7 @@ mod wasm {
                 .map_err(typed_js_error)?
                 .live_set_family_color_radial_gradient(
                     &target.semantic_family()?,
-                    (center_x, center_y),
+                    (center_x, center_y, center_z),
                     radius,
                     inner,
                     outer,

@@ -1347,7 +1347,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_color_radial_gradient(
         &mut self,
         target: &noon::Mobject,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: noon::Color,
         outer: noon::Color,
@@ -1361,7 +1361,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_family_color_radial_gradient(
         &mut self,
         target: &noon::MobjectFamily,
-        center: (f64, f64),
+        center: (f64, f64, f64),
         radius: f64,
         inner: noon::Color,
         outer: noon::Color,

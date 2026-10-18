@@ -1269,12 +1269,13 @@ mod wasm {
             &self,
             center_x: f64,
             center_y: f64,
+            center_z: f64,
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.semantic_family()?
-                .set_color_by_radial_gradient((center_x, center_y), radius, inner, outer)
+                .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
         }
 
@@ -2174,12 +2175,13 @@ mod wasm {
             &mut self,
             center_x: f64,
             center_y: f64,
+            center_z: f64,
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.handle
-                .set_color_by_radial_gradient((center_x, center_y), radius, inner, outer)
+                .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
         }
 
