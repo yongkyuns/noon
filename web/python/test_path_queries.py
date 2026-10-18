@@ -93,9 +93,72 @@ class PathQueryTests(unittest.TestCase):
                 value.get_subpath_split_indices_from_points([0, 1, 2, 3])
         handle.assert_not_called()
 
-    def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
+    def test_cubic_tuple_helpers_use_rust_stride_ranges_and_keep_generator_views(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy tuple grouping behavior")
+        value = identity_only_wrapper(compat.VMobject)
+        points = np.arange(30, dtype=np.float64).reshape((10, 3))
+        handle = Mock()
+
+        def ranges(point_count, stride):
+            stride = int(stride)
+            complete = point_count // stride * stride if stride > 0 else 0
+            return [index for start in range(0, complete, stride)
+                    for index in (start, start + stride)]
+
+        handle.cubicBezierPointRanges.side_effect = ranges
+        with patch.object(queries, "_handle_for", return_value=handle):
+            generated = value.gen_cubic_bezier_tuples_from_points(points)
+            self.assertIsInstance(generated, tuple)
+            self.assertEqual(len(generated), 2)
+            np.testing.assert_array_equal(generated[0], points[:4])
+            self.assertTrue(np.shares_memory(generated[0], points))
+
+            grouped = value.get_cubic_bezier_tuples_from_points(points)
+            self.assertIsInstance(grouped, np.ndarray)
+            self.assertEqual(grouped.shape, (2, 4, 3))
+            np.testing.assert_array_equal(grouped, points[:8].reshape((2, 4, 3)))
+            self.assertFalse(np.shares_memory(grouped, points))
+
+            value.n_points_per_cubic_curve = 3
+            custom = value.get_cubic_bezier_tuples_from_points(points)
+            self.assertEqual(custom.shape, (3, 3, 3))
+            np.testing.assert_array_equal(custom, points[:9].reshape((3, 3, 3)))
+        self.assertEqual(handle.cubicBezierPointRanges.call_args_list[0].args, (10, 4.0))
+        self.assertEqual(handle.cubicBezierPointRanges.call_args_list[-1].args, (10, 3.0))
+
+    def test_cubic_tuple_helpers_preserve_negative_and_zero_stride_behavior(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = []
+        with patch.object(queries, "_handle_for", return_value=handle):
+            value.n_points_per_cubic_curve = -4
+            self.assertEqual(value.gen_cubic_bezier_tuples_from_points([[0], [1]]), ())
+            value.n_points_per_cubic_curve = 0
+            with self.assertRaises(ZeroDivisionError):
+                value.gen_cubic_bezier_tuples_from_points([[0], [1]])
+        handle.cubicBezierPointRanges.assert_called_once_with(2, -4.0)
+
+    def test_cubic_tuple_getter_without_numpy_returns_nested_lists(self):
+        value = identity_only_wrapper(compat.VMobject)
+        points = [[index, index + 1] for index in range(10)]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 4, 4, 8]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            self.assertEqual(
+                value.get_cubic_bezier_tuples_from_points(points),
+                [points[:4], points[4:8]],
+            )
+
+    def test_n_points_per_curve_tracks_the_mutable_cubic_stride(self):
         value = identity_only_wrapper(compat.VMobject)
         self.assertEqual(value.n_points_per_curve, 4)
+        value.n_points_per_cubic_curve = 3
+        self.assertEqual(value.n_points_per_curve, 3)
 
     def test_all_points_returns_a_two_column_array_and_boundary_aliases_it(self):
         try:

@@ -309,8 +309,8 @@ pub use noon_runtime::{
 #[cfg(feature = "latex")]
 pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
 pub use path_queries::{
-    manim_points_2d_close, manim_points_allclose, manim_subpath_split_indices,
-    reduce_point_extremum, PathQuery,
+    manim_cubic_bezier_point_ranges, manim_points_2d_close, manim_points_allclose,
+    manim_subpath_split_indices, reduce_point_extremum, PathQuery,
 };
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;

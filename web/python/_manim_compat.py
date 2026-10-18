@@ -99,8 +99,8 @@ class VMobject(Mobject):
 
     @property
     def n_points_per_curve(self) -> int:
-        """The fixed cubic stride used by Noon path queries."""
-        return 4
+        """The current cubic stride, matching Manim's mutable instance value."""
+        return self.n_points_per_cubic_curve
 
     def get_group_class(self):
         return VGroup
@@ -215,6 +215,14 @@ class VMobject(Mobject):
     def get_subpath_split_indices_from_points(self, points, n_dims=3):
         from _manim_path_queries import subpath_split_indices
         return subpath_split_indices(self, points, n_dims)
+
+    def gen_cubic_bezier_tuples_from_points(self, points):
+        from _manim_path_queries import gen_cubic_bezier_tuples_from_points
+        return gen_cubic_bezier_tuples_from_points(self, points)
+
+    def get_cubic_bezier_tuples_from_points(self, points):
+        from _manim_path_queries import cubic_bezier_tuples_from_points
+        return cubic_bezier_tuples_from_points(self, points)
 
     def is_closed(self):
         from _manim_path_queries import is_closed

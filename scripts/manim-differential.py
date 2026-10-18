@@ -1277,6 +1277,32 @@ def _path_editing(api):
             overflow_query.get_subpath_split_indices_from_points(overflow_split_points)
         ),
     }
+    cubic_tuple_points = [
+        [float(index), float(index + 1), float(index + 2)] for index in range(10)
+    ]
+    if manim_reference:
+        cubic_tuple_points = np.asarray(cubic_tuple_points)
+    cubic_tuple_query = api.VMobject()
+    custom_stride_query = api.VMobject()
+    custom_stride_query.n_points_per_cubic_curve = 3
+
+    def as_nested_list(value):
+        return value.tolist() if hasattr(value, "tolist") else value
+
+    cubic_tuple_groups = {
+        "generated": [
+            as_nested_list(group)
+            for group in cubic_tuple_query.gen_cubic_bezier_tuples_from_points(
+                cubic_tuple_points
+            )
+        ],
+        "array": as_nested_list(
+            cubic_tuple_query.get_cubic_bezier_tuples_from_points(cubic_tuple_points)
+        ),
+        "custom_stride": as_nested_list(
+            custom_stride_query.get_cubic_bezier_tuples_from_points(cubic_tuple_points)
+        ),
+    }
 
     return {
         "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
@@ -1297,6 +1323,7 @@ def _path_editing(api):
         "negative_handle_scale": observe(reversed_handles),
         "point_equality": point_equality,
         "subpath_split_indices": subpath_splits,
+        "cubic_bezier_tuple_groups": cubic_tuple_groups,
     }
 
 

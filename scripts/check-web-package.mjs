@@ -67,6 +67,7 @@ const expectedJavascriptSurface = [
   "liveNextLayoutTo(",
   "liveNextLayoutToPoint(",
   "export class WasmAuthoringMobjectHandle",
+  "cubicBezierPointRanges(",
   "subpathSplitIndices(",
   "export class SemanticExecutionPlayer",
   "seekDirect(",
@@ -300,6 +301,7 @@ const expectedTypeSurface = [
   "queryMobjectFillOpacity(handle: WasmAuthoringMobjectHandle): number",
   "queryMobjectStrokeOpacity(handle: WasmAuthoringMobjectHandle): number",
   "subpathSplitIndices(",
+  "cubicBezierPointRanges(",
 
   "resumeExecutionPlayer(): SemanticExecutionPlayer",
   "export class WasmMobjectLayoutObservation",

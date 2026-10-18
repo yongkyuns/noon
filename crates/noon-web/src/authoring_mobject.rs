@@ -1832,6 +1832,21 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = cubicBezierPointRanges)]
+        pub fn cubic_bezier_point_ranges(
+            &self,
+            point_count: u32,
+            points_per_curve: f64,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            Ok(
+                noon::manim_cubic_bezier_point_ranges(point_count as usize, points_per_curve)
+                    .into_iter()
+                    .map(|index| index as u32)
+                    .collect(),
+            )
+        }
+
         #[wasm_bindgen(js_name = subpathSplitIndices)]
         pub fn subpath_split_indices(
             &self,

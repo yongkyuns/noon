@@ -180,6 +180,44 @@ def subpath_split_indices(value, points, n_dims=3):
     return np.asarray(indices, dtype=np.int_).reshape((-1, 2))
 
 
+def gen_cubic_bezier_tuples_from_points(value, points):
+    """Group complete point strides using Rust-computed slice boundaries."""
+    points_per_curve = operator.index(
+        getattr(value, "n_points_per_cubic_curve", 4)
+    )
+    point_count = len(points)
+    if point_count > 0xFFFFFFFF:
+        raise ValueError("points exceed the supported array size")
+    if points_per_curve == 0:
+        # Preserve the source helper's native integer modulo error.
+        point_count % points_per_curve
+    try:
+        stride_number = float(points_per_curve)
+    except OverflowError:
+        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("cubic tuple queries require a shared Rust Mobject handle")
+    ranges = engine_call(handle.cubicBezierPointRanges, point_count, stride_number)
+    indices = [int(index) for index in ranges]
+    if len(indices) % 2:
+        raise RuntimeError("Rust cubic tuple query returned an incomplete range")
+    return tuple(
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    )
+
+
+def cubic_bezier_tuples_from_points(value, points):
+    """Return the NumPy array built from ManimCE's complete cubic point groups."""
+    groups = gen_cubic_bezier_tuples_from_points(value, points)
+    try:
+        import numpy as np
+    except ImportError:
+        return [list(group) for group in groups]
+    return np.array(groups)
+
+
 def _format_points(coordinates):
     try:
         import numpy as np

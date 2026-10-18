@@ -725,6 +725,27 @@ pub fn manim_points_allclose(left: &[f64], right: &[f64], absolute_tolerance: f6
             .all(|(&a, &b)| manim_numpy_isclose(a, b, absolute_tolerance))
 }
 
+/// Return the complete point ranges used by ManimCE's cubic tuple helpers.
+///
+/// The helpers discard any trailing points that do not complete a group. A
+/// non-positive stride produces no groups for negative values; Python raises
+/// its native modulo-by-zero error before calling this function for zero.
+pub fn manim_cubic_bezier_point_ranges(point_count: usize, points_per_curve: f64) -> Vec<usize> {
+    if !points_per_curve.is_finite()
+        || points_per_curve <= 0.0
+        || points_per_curve.fract() != 0.0
+        || points_per_curve > point_count as f64
+    {
+        return Vec::new();
+    }
+    let stride = points_per_curve as usize;
+    let complete_point_count = point_count / stride * stride;
+    (0..complete_point_count)
+        .step_by(stride)
+        .flat_map(|start| [start, start + stride])
+        .collect()
+}
+
 /// Return ManimCE's point-index ranges for contiguous groups of cubic curves.
 ///
 /// A new range starts at each four-point boundary whose preceding endpoint is
@@ -1005,6 +1026,15 @@ mod point_equality_tests {
             manim_subpath_split_indices(&points, 16, 3, 2, 1.0e-6).unwrap(),
             [0, 16]
         );
+    }
+
+    #[test]
+    fn cubic_bezier_tuple_ranges_group_complete_strides_and_drop_remainders() {
+        assert_eq!(manim_cubic_bezier_point_ranges(10, 4.0), [0, 4, 4, 8]);
+        assert_eq!(manim_cubic_bezier_point_ranges(10, 3.0), [0, 3, 3, 6, 6, 9]);
+        assert!(manim_cubic_bezier_point_ranges(3, 4.0).is_empty());
+        assert!(manim_cubic_bezier_point_ranges(10, -4.0).is_empty());
+        assert!(manim_cubic_bezier_point_ranges(10, 0.0).is_empty());
     }
 
     #[test]
