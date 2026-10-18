@@ -109,12 +109,7 @@ impl PathQuery {
     ) -> Result<Vec<f64>, AuthoringError> {
         let controls = self.curve_points(index)?;
         let sample_points = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
-        if sample_points == 0 {
-            return Err(AuthoringError::PathQuery(
-                PathProportionError::InvalidSampleCount,
-            ));
-        }
-        if sample_points == 1 {
+        if sample_points < 2 {
             return Ok(Vec::new());
         }
         let mut pieces = Vec::with_capacity(sample_points - 1);
@@ -333,11 +328,6 @@ impl PathQuery {
         &self,
         sample_points_per_curve: Option<usize>,
     ) -> Result<f64, AuthoringError> {
-        if sample_points_per_curve.is_some_and(|count| count < 2) {
-            return Err(AuthoringError::PathQuery(
-                PathProportionError::InvalidSampleCount,
-            ));
-        }
         self.plan.as_ref().map_or(Ok(0.0), |plan| {
             plan.arc_length(sample_points_per_curve)
                 .map_err(AuthoringError::PathQuery)

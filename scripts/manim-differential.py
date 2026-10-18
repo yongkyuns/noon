@@ -537,8 +537,15 @@ def _curve_function_queries(api):
                 float(value)
                 for value in path.get_nth_curve_length_pieces(0, sample_points=1)
             ],
+            "zero_point_pieces": [
+                float(value)
+                for value in path.get_nth_curve_length_pieces(0, sample_points=0)
+            ],
+            "zero_sample_length": float(path.get_nth_curve_length(0, sample_points=0)),
             "default_length": float(path.get_nth_curve_length(1)),
             "six_point_length": float(path.get_nth_curve_length(1, sample_points=6)),
+            "zero_sample_arc_length": float(path.get_arc_length(0)),
+            "single_sample_arc_length": float(path.get_arc_length(1)),
         },
         "individual": sample(individual),
         "individual_with_length": {
@@ -553,6 +560,10 @@ def _curve_function_queries(api):
             )
         ],
         "empty_functions": list(api.VMobject().get_curve_functions()),
+        "empty_arc_lengths": [
+            api.VMobject().get_arc_length(sample_points)
+            for sample_points in (0, 1, -1, 2.5)
+        ],
     }
 
 

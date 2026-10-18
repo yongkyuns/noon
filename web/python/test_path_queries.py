@@ -683,6 +683,7 @@ class PathQueryTests(unittest.TestCase):
     def test_shared_observation_dispatch_and_result_conversion(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
+        query.curveCount = 1
         query.pointCount = 4
         query.pointFromProportion.return_value = [2.5, -1.0]
         query.arcLength.return_value = 7.25
@@ -848,14 +849,32 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(query.hasNewPathStarted.call_count, 2)
         self.assertEqual(query.free.call_count, 2)
 
-    def test_input_errors_precede_query_allocation_and_failed_reads_free_snapshot(self):
+    def test_curve_sample_validation_matches_curve_iteration_and_frees_snapshots(self):
         value = identity_only_wrapper(compat.VMobject)
-        with patch.object(queries, '_typed_manim_observation') as observe:
-            for samples in (0, 1, -1, 2**32):
-                with self.assertRaises(ValueError):
+        query = Mock()
+        query.curveCount = 2
+        query.arcLength.return_value = 0.0
+        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
+            self.assertEqual(value.get_arc_length(0), 0.0)
+            self.assertEqual(value.get_arc_length(1), 0.0)
+            query.arcLength.assert_any_call(0)
+            query.arcLength.assert_any_call(1)
+            for samples, error in ((-1, ValueError), (2**32, ValueError), (2.5, TypeError)):
+                with self.subTest(samples=samples), self.assertRaises(error):
                     value.get_arc_length(samples)
-            with self.assertRaises(TypeError):
-                value.get_arc_length(2.5)
+            self.assertEqual(query.arcLength.call_count, 2)
+            self.assertEqual(query.free.call_count, 5)
+        self.assertEqual(observe.call_count, 5)
+
+        empty_query = Mock()
+        empty_query.curveCount = 0
+        with patch.object(queries, '_typed_manim_observation', return_value=empty_query):
+            for samples in (-1, 2.5, 2**32, object()):
+                self.assertEqual(value.get_arc_length(samples), 0.0)
+        self.assertEqual(empty_query.arcLength.call_count, 0)
+        self.assertEqual(empty_query.free.call_count, 4)
+
+        with patch.object(queries, '_typed_manim_observation') as observe:
             with self.assertRaises(ValueError):
                 value.point_from_proportion(float('nan'))
             observe.assert_not_called()
@@ -901,23 +920,27 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
-        query.curveLengthPieces.return_value = [0.25, 0.5, 0.75]
+        query.curveLengthPieces.side_effect = lambda index, samples: (
+            [] if samples == 0 else [0.25, 0.5, 0.75]
+        )
         query.curveLength.return_value = 1.5
         with patch.object(queries, '_typed_manim_observation', return_value=query):
             pieces = value.get_nth_curve_length_pieces(0)
             np.testing.assert_array_equal(pieces, [0.25, 0.5, 0.75])
             self.assertEqual(pieces.dtype, np.float64)
             query.curveLengthPieces.assert_called_once_with(0, None)
+            np.testing.assert_array_equal(value.get_nth_curve_length_pieces(0, sample_points=0), [])
+            query.curveLengthPieces.assert_called_with(0, 0)
             np.testing.assert_array_equal(value.get_nth_curve_length_pieces(1, sample_points=4), [0.25, 0.5, 0.75])
             query.curveLengthPieces.assert_called_with(1, 4)
             length = value.get_nth_curve_length(0)
             self.assertEqual(length, np.float64(1.5))
             self.assertIsInstance(length, np.float64)
             query.curveLength.assert_called_once_with(0, None)
-            self.assertEqual(query.free.call_count, 3)
+            self.assertEqual(query.free.call_count, 4)
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_length_pieces(2)
-            self.assertEqual(query.free.call_count, 4)
+            self.assertEqual(query.free.call_count, 5)
 
         with patch.object(queries, '_typed_manim_observation') as observe:
             for samples in (-1, 2**32):

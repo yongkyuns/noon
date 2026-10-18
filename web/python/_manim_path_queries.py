@@ -58,11 +58,22 @@ def proportion_from_point(value, point):
 
 
 def arc_length(value, sample_points_per_curve):
-    samples = None if sample_points_per_curve is None else operator.index(sample_points_per_curve)
-    if samples is not None and not 2 <= samples <= 0xFFFFFFFF:
-        raise ValueError("sample_points_per_curve must be between 2 and 4294967295")
     query = _query(value)
     try:
+        # Manim only reaches np.linspace while iterating actual curves. Empty
+        # paths therefore return zero without validating this otherwise-unused
+        # argument.
+        if int(query.curveCount) == 0:
+            return 0.0
+        samples = (
+            None
+            if sample_points_per_curve is None
+            else operator.index(sample_points_per_curve)
+        )
+        if samples is not None and samples < 0:
+            raise ValueError(f"Number of samples, {samples}, must be non-negative.")
+        if samples is not None and samples > 0xFFFFFFFF:
+            raise ValueError("sample_points_per_curve must be between 0 and 4294967295")
         return float(engine_call(query.arcLength, samples))
     finally:
         query.free()

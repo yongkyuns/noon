@@ -334,8 +334,13 @@ fn curve_length_piece_queries_match_sample_count_and_world_scale() {
         Vec::<f64>::new()
     );
     assert_eq!(query.curve_length(0, Some(1)).unwrap(), 0.0);
-    assert!(query.curve_length_pieces(0, Some(0)).is_err());
-    assert!(query.curve_length(0, Some(0)).is_err());
+    assert_eq!(
+        query.curve_length_pieces(0, Some(0)).unwrap(),
+        Vec::<f64>::new()
+    );
+    assert_eq!(query.curve_length(0, Some(0)).unwrap(), 0.0);
+    assert_eq!(query.arc_length(Some(0)).unwrap(), 0.0);
+    assert_eq!(query.arc_length(Some(1)).unwrap(), 0.0);
     assert!(query.curve_length_pieces(1, None).is_err());
 }
 
@@ -410,7 +415,7 @@ fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observation
     assert!((local.arc_length(Some(25)).unwrap() - 2.).abs() < 1e-6);
     assert!(world.point_from_proportion(f64::NAN).is_err());
     assert!(world.point_from_proportion(1.1).is_err());
-    assert!(world.arc_length(Some(1)).is_err());
+    assert_eq!(world.arc_length(Some(1)).unwrap(), 0.0);
     assert_eq!(scene.revision(), revision);
     assert_eq!(object.state().unwrap().content, content);
     object.shift(1., 0.).unwrap();
