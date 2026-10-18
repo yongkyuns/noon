@@ -2274,6 +2274,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Replace raw world-space points through the shared semantic transaction.
+        #[wasm_bindgen(js_name = setPoints)]
+        pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.set_points(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendPoints)]
+        pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.append_points(&points).map_err(js_error)
+        }
+
         /// Replace world-space corners through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPointsAsCorners)]
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {

@@ -36,11 +36,23 @@ impl PathQuery {
                 Err(PathProportionError::EmptyPath) => None,
                 Err(error) => return Err(AuthoringError::PathQuery(error)),
             };
+        let raw_points = path.manim_points();
+        let manim_points = match raw_points {
+            Some(points) => points
+                .iter()
+                .map(|point| (f64::from(point.x), f64::from(point.y)))
+                .collect(),
+            None => manim_points(path, plan.as_ref())?,
+        };
+        let endpoints = raw_points
+            .and_then(|points| points.first().zip(points.last()))
+            .map(|(first, last)| (*first, *last))
+            .or_else(|| path.endpoints());
         Ok(Self {
-            manim_points: manim_points(path, plan.as_ref())?,
+            manim_points,
             plan,
             transform,
-            endpoints: path.endpoints(),
+            endpoints,
             unfinished_anchor: match path.commands().last() {
                 Some(noon_core::PathCommand::MoveTo { to }) => Some(*to),
                 _ => None,

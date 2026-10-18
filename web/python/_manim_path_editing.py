@@ -12,6 +12,40 @@ def clear_points(value):
     return edit_points(value, "clearPoints", "liveClearPoints", ())
 
 
+def set_points(value, points):
+    return edit_points(value, "setPoints", "liveSetPoints", points, array=True)
+
+
+def append_points(value, points):
+    return edit_points(value, "appendPoints", "liveAppendPoints", points, array=True)
+
+
+def resize_points(value, new_length, resize_func=None):
+    import operator
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+
+    length = operator.index(new_length)
+    from _manim_path_queries import _query
+    from _noon_errors import engine_call
+    query = _query(value)
+    try:
+        point_count = int(query.pointCount)
+        if point_count == length:
+            return value
+        coordinates = engine_call(query.points)
+    finally:
+        query.free()
+
+    import numpy as np
+    xy_points = np.asarray(coordinates, dtype=float).reshape((-1, 2))
+    # Manim's point array has three columns. Noon stores planar XY internally,
+    # so present an equivalent zero-Z array to caller-supplied resize functions.
+    points = np.column_stack((xy_points, np.zeros(len(xy_points))))
+    return set_points(value, resize_func(points, length))
+
+
 def add_cubic_bezier_curves(value, curves):
     curves = list(curves)
     if curves and _looks_like_point(curves[0]):

@@ -524,6 +524,11 @@ impl Default for Style {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VectorPath {
     commands: Vec<PathCommand>,
+    /// Manim-style raw point storage when the path was authored from a raw
+    /// point array. Commands remain the drawable cubic prefix; this preserves
+    /// incomplete trailing points that Manim retains for point-array queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manim_points: Option<Vec<Vec2>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     morph_target: Option<Box<VectorPath>>,
 }
@@ -596,6 +601,12 @@ impl VectorPath {
         if let Some(target) = self.morph_target() {
             result = result.with_morph_target(target.transformed(transform));
         }
+        result.manim_points = self.manim_points().map(|points| {
+            points
+                .iter()
+                .map(|point| transform.transform_point(*point))
+                .collect()
+        });
         result
     }
 
@@ -613,7 +624,10 @@ impl VectorPath {
                 to,
             } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
             PathCommand::Close => true,
-        }) && self.morph_target().is_none_or(VectorPath::is_finite)
+        }) && self
+            .manim_points()
+            .is_none_or(|points| points.iter().copied().all(vec2_is_finite))
+            && self.morph_target().is_none_or(VectorPath::is_finite)
     }
 
     /// Whether every anchor and curve control remains finite after the supplied affine
@@ -637,33 +651,70 @@ impl VectorPath {
             } => finite_output(control1) && finite_output(control2) && finite_output(to),
             PathCommand::Close => true,
         }) && self
-            .morph_target()
-            .is_none_or(|target| target.has_finite_transformed_output(transform, offset))
+            .manim_points()
+            .is_none_or(|points| points.iter().copied().all(finite_output))
+            && self
+                .morph_target()
+                .is_none_or(|target| target.has_finite_transformed_output(transform, offset))
     }
 
     pub const fn new() -> Self {
         Self {
             commands: Vec::new(),
+            manim_points: None,
             morph_target: None,
         }
     }
 
+    /// Build drawable cubic commands from complete groups of four while
+    /// retaining the input point sequence, including an incomplete tail.
+    pub fn from_manim_points(points: Vec<Vec2>) -> Self {
+        if points.is_empty() {
+            return Self::new();
+        }
+        let mut path = Self::new();
+        let mut previous_end = None;
+        for curve in points.chunks_exact(4) {
+            let [start, control1, control2, end] = [curve[0], curve[1], curve[2], curve[3]];
+            if previous_end != Some(start) {
+                path = path.move_to(start);
+            }
+            path = path.cubic_to(control1, control2, end);
+            previous_end = Some(end);
+        }
+        let remainder_start = points.len() / 4 * 4;
+        if let Some(start) = points.get(remainder_start).copied() {
+            path = path.move_to(start);
+        }
+        path.manim_points = Some(points);
+        path
+    }
+
+    /// Raw point storage when this path originated from a Manim array.
+    pub fn manim_points(&self) -> Option<&[Vec2]> {
+        self.manim_points.as_deref()
+    }
+
     pub fn move_to(mut self, to: Vec2) -> Self {
+        self.manim_points = None;
         self.commands.push(PathCommand::MoveTo { to });
         self
     }
 
     pub fn line_to(mut self, to: Vec2) -> Self {
+        self.manim_points = None;
         self.commands.push(PathCommand::LineTo { to });
         self
     }
 
     pub fn quadratic_to(mut self, control: Vec2, to: Vec2) -> Self {
+        self.manim_points = None;
         self.commands.push(PathCommand::QuadraticTo { control, to });
         self
     }
 
     pub fn cubic_to(mut self, control1: Vec2, control2: Vec2, to: Vec2) -> Self {
+        self.manim_points = None;
         self.commands.push(PathCommand::CubicTo {
             control1,
             control2,
@@ -673,6 +724,7 @@ impl VectorPath {
     }
 
     pub fn close(mut self) -> Self {
+        self.manim_points = None;
         self.commands.push(PathCommand::Close);
         self
     }
@@ -713,6 +765,7 @@ impl VectorPath {
                 _ => None,
             });
         self.commands.pop();
+        self.manim_points = None;
         if let (Some(start), Some((_, last))) = (start, self.endpoints()) {
             if last != start {
                 self.commands.push(PathCommand::LineTo { to: start });
@@ -769,6 +822,11 @@ impl VectorPath {
                     include(to);
                 }
                 PathCommand::Close => {}
+            }
+        }
+        if let Some(points) = self.manim_points() {
+            for point in points.iter().copied() {
+                include(point);
             }
         }
         bounds
@@ -918,6 +976,29 @@ mod tests {
             GeometryRef::path(path.clone()),
             GeometryRef::VectorPath(path)
         );
+    }
+
+    #[test]
+    fn raw_manim_points_keep_incomplete_tail_through_path_transforms() {
+        let points = (0..7)
+            .map(|index| Vec2::new(index as f32, (index * 2) as f32))
+            .collect::<Vec<_>>();
+        let path = VectorPath::from_manim_points(points.clone());
+
+        assert_eq!(path.manim_points(), Some(points.as_slice()));
+        assert_eq!(
+            path.commands().len(),
+            3,
+            "one complete cubic and one pending subpath are retained"
+        );
+        assert_eq!(path.conservative_bounds().unwrap().max, points[6]);
+
+        let transformed = path.transformed(Transform2D {
+            translation: Vec2::new(5.0, -3.0),
+            ..Transform2D::IDENTITY
+        });
+        assert_eq!(transformed.manim_points().unwrap()[6], Vec2::new(11.0, 9.0));
+        assert!(transformed.is_finite());
     }
 
     #[test]

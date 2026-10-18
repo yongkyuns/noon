@@ -815,6 +815,46 @@ def _curve_function_queries(api):
     }
 
 
+def _raw_point_mutations(api):
+    import numpy as np
+
+    initial = np.array(
+        [(float(index), float(index * 2), 0.0) for index in range(7)]
+    )
+    appended = np.array([(7.0, 14.0, 0.0), (8.0, 16.0, 0.0)])
+
+    def snapshot(value):
+        return {
+            "count": value.get_num_points(),
+            "points": [
+                _point_observation(point) for point in value.get_all_points()
+            ],
+            "start_anchors": [
+                _point_observation(point) for point in value.get_start_anchors()
+            ],
+            "start": _point_observation(value.get_start()),
+            "end": _point_observation(value.get_end()),
+        }
+
+    set_path = api.VMobject().set_points(initial.copy())
+    append_path = api.VMobject().set_points(initial.copy()).append_points(appended)
+    resized_up = api.VMobject().set_points(initial.copy()).resize_points(10)
+    resized_down = api.VMobject().set_points(initial.copy()).resize_points(3)
+    resized_custom = api.VMobject().set_points(initial.copy()).resize_points(
+        5,
+        resize_func=lambda points, length: np.resize(
+            points[::-1], (length, *points.shape[1:])
+        ),
+    )
+    return {
+        "set": snapshot(set_path),
+        "append": snapshot(append_path),
+        "resize_up": snapshot(resized_up),
+        "resize_down": snapshot(resized_down),
+        "resize_custom": snapshot(resized_custom),
+    }
+
+
 def _sample_negative_curve_with_length(path, sample):
     function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
     return {"curve": sample(function), "length": float(length)}
@@ -1902,6 +1942,7 @@ FIXTURES = [
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
+    Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
     Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 

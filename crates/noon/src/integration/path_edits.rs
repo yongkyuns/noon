@@ -18,6 +18,14 @@ pub enum BorrowedPathEdit<'a> {
     Clear {
         object: &'a Mobject,
     },
+    RawPoints {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
+    AppendRawPoints {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
     SmoothCorners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -118,6 +126,10 @@ pub fn publish_borrowed_path_edit(
     // capture requirements, but still publish through the same Rust authority.
     let (object, operation) = match edit {
         BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
+        BorrowedPathEdit::RawPoints { object, points } => (object, PathEdit::RawPoints(points)),
+        BorrowedPathEdit::AppendRawPoints { object, points } => {
+            (object, PathEdit::AppendRawPoints(points))
+        }
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
         }

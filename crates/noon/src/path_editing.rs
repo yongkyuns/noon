@@ -217,6 +217,28 @@ impl crate::Scene {
         })
     }
 
+    pub fn set_points(&mut self, object: &Mobject, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::RawPoints(points))
+        })
+    }
+
+    pub fn append_points(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::AppendRawPoints(points),
+            )
+        })
+    }
+
     pub fn set_points_smoothly(
         &mut self,
         object: &Mobject,
@@ -614,6 +636,8 @@ pub(crate) fn path_is_unchanged(
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
     Clear,
+    RawPoints(&'a [Vec2]),
+    AppendRawPoints(&'a [Vec2]),
     Corners(&'a [Vec2]),
     SmoothCorners(&'a [Vec2]),
     AnchorMode(bool),
@@ -649,6 +673,37 @@ impl PathEdit<'_> {
     ) -> Result<Option<VectorPath>, AuthoringError> {
         if matches!(self, Self::Clear) {
             return Ok(Some(VectorPath::new()));
+        }
+        if let Self::RawPoints(points) = self {
+            if points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            return Ok(Some(VectorPath::from_manim_points(points.to_vec())));
+        }
+        if let Self::AppendRawPoints(points) = self {
+            if points.is_empty() {
+                return Ok(None);
+            }
+            if points
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let path = world_path(store, state)?;
+            let mut raw_points = crate::path_queries::PathQuery::prepare(
+                &path,
+                noon_core::SemanticTransform2_5D::default(),
+            )?
+            .points()?
+            .into_iter()
+            .map(|(x, y)| Vec2::new(x as f32, y as f32))
+            .collect::<Vec<_>>();
+            raw_points.extend_from_slice(points);
+            return Ok(Some(VectorPath::from_manim_points(raw_points)));
         }
         if matches!(&self, Self::ScaleHandles(factor) if *factor == 1.0) {
             return Ok(None);
@@ -857,6 +912,8 @@ impl PathEdit<'_> {
                 Self::Corners(_)
                 | Self::SmoothCorners(_)
                 | Self::Clear
+                | Self::RawPoints(_)
+                | Self::AppendRawPoints(_)
                 | Self::AnchorMode(_)
                 | Self::Start(_)
                 | Self::Reverse
@@ -1151,6 +1208,16 @@ impl Mobject {
         let id = created_subcurve_id(&result);
         drop(store);
         Self::from_node(std::rc::Rc::clone(self.integration_store()), id)
+    }
+
+    /// Replace this path with the exact Manim-style world-space point array.
+    pub fn set_points(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::RawPoints(points))
+    }
+
+    /// Append to the exact Manim-style world-space point array.
+    pub fn append_points(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AppendRawPoints(points))
     }
 
     /// Replace world-space corners with one smooth retained cubic spline.

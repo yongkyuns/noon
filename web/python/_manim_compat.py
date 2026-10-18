@@ -11,6 +11,7 @@ import math
 from typing import Any, Callable, Iterator
 
 import noon as _base
+from _manim_iterables import resize_array as _resize_array
 
 from noon import Mobject, Scene
 _ir = _base._ir
@@ -159,6 +160,18 @@ class VMobject(Mobject):
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
+
+    def set_points(self, points):
+        from _manim_path_editing import set_points
+        return set_points(self, points)
+
+    def append_points(self, points):
+        from _manim_path_editing import append_points
+        return append_points(self, points)
+
+    def resize_points(self, new_length, resize_func=_resize_array):
+        from _manim_path_editing import resize_points
+        return resize_points(self, new_length, resize_func=resize_func)
 
     def clear_points(self):
         from _manim_path_editing import clear_points

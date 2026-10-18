@@ -101,6 +101,73 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
 }
 
 #[test]
+fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene.square(1.).unwrap();
+        object.shift(3., 4.).unwrap();
+        let identity = object.node_id();
+        let initial = (0..7)
+            .map(|index| Vec2::new(index as f32, (index * 2) as f32))
+            .collect::<Vec<_>>();
+        let mut execution = scene.execution_session().unwrap();
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut execution,
+                noon::integration::BorrowedPathEdit::RawPoints {
+                    object: &object,
+                    points: &initial,
+                },
+            )
+            .unwrap();
+        } else {
+            object.set_points(&initial).unwrap();
+        }
+
+        let query = object.path_query().unwrap();
+        assert_eq!(query.point_count(), 7);
+        assert_eq!(query.curve_count(), 1);
+        assert_eq!(
+            query.points().unwrap(),
+            (0..7)
+                .map(|index| (index as f64, (index * 2) as f64))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(query.start_anchors(), [(0., 0.), (4., 8.)]);
+        assert_eq!(query.start().unwrap(), (0., 0.));
+        assert_eq!(query.end().unwrap(), (6., 12.));
+        assert_eq!(query.point_from_proportion(1.).unwrap(), (6., 12.));
+
+        let appended = [Vec2::new(7., 14.), Vec2::new(8., 16.)];
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut execution,
+                noon::integration::BorrowedPathEdit::AppendRawPoints {
+                    object: &object,
+                    points: &appended,
+                },
+            )
+            .unwrap();
+        } else {
+            object.append_points(&appended).unwrap();
+        }
+
+        let query = object.path_query().unwrap();
+        assert_eq!(object.node_id(), identity);
+        assert_eq!(query.point_count(), 9);
+        assert_eq!(query.curve_count(), 2);
+        assert_eq!(query.start_anchors(), [(0., 0.), (4., 8.), (8., 16.)]);
+        assert_eq!(query.end().unwrap(), (8., 16.));
+        assert_eq!(query.points().unwrap().last(), Some(&(8., 16.)));
+    }
+}
+
+#[test]
 fn clear_points_uses_shared_authored_and_live_transactions() {
     for live_mode in [false, true] {
         let mut scene = Scene::new();
