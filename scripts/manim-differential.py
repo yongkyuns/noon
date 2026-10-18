@@ -384,6 +384,19 @@ def _mobject_update_probe(api) -> Any:
     }
 
 
+def _to_original_color_probe(api) -> Any:
+    family = api.Group(
+        api.Dot(color=api.BLUE),
+        api.Dot(color=api.GREEN),
+    )
+    family.set_color(api.RED, family=False)
+    result = family.to_original_color()
+    return {
+        "returns_self": result is family,
+        "colors": [_paint_rgb(member.get_color()) for member in family.get_family()],
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2664,6 +2677,8 @@ FIXTURES = [
             lambda: _match_updaters_probe(manim)),
     Fixture("mobject_update", lambda: _mobject_update_probe(noon),
             lambda: _mobject_update_probe(manim)),
+    Fixture("to_original_color", lambda: _to_original_color_probe(noon),
+            lambda: _to_original_color_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

@@ -460,6 +460,11 @@ class Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
 
+    def to_original_color(self) -> Mobject:
+        """Apply this object's current color to its shared family."""
+        color = self.color if hasattr(self, "color") else self.get_color()
+        return self.set_color(color)
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
