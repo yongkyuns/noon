@@ -1017,7 +1017,7 @@ impl PathEdit<'_> {
                 if remainder != 0 {
                     let anchor_index = ((points.len() - 1) / stride) * stride;
                     let anchor = points[anchor_index];
-                    points.extend(std::iter::repeat(anchor).take(stride - remainder));
+                    points.extend(std::iter::repeat_n(anchor, stride - remainder));
                 }
             }
             points.push(point);

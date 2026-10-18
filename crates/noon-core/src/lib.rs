@@ -674,7 +674,7 @@ impl VectorPath {
         }
         let mut path = Self::new();
         let mut previous_end = None;
-        for curve in points.chunks_exact(4) {
+        for curve in points.as_chunks::<4>().0 {
             let [start, control1, control2, end] = [curve[0], curve[1], curve[2], curve[3]];
             if previous_end != Some(start) {
                 path = path.move_to(start);
