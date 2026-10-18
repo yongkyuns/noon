@@ -232,6 +232,23 @@ authored_custom_stride.set_points([
     (0, 0), (30, 0), (1, 0), (2, 0),
 ])
 authored_custom_stride.n_points_per_cubic_curve = 2
+piece_source = VMobject()
+piece_source.set_points_as_corners([(0, 0), (2, 0), (2, 2)])
+live_scene.add(piece_source)
+authored_piece_source = VMobject()
+authored_piece_source.set_points_as_corners([(0, 0), (2, 0), (2, 2)])
+def path_pieces_contract(value):
+    group = value.get_pieces(2)
+    return {
+        "group_type": type(group).__name__,
+        "point_counts": [member.get_num_points() for member in group.submobjects],
+        "starts": [[float(x) for x in member.get_start()] for member in group.submobjects],
+        "ends": [[float(x) for x in member.get_end()] for member in group.submobjects],
+    }
+path_pieces = {
+    "live": path_pieces_contract(piece_source),
+    "authored": path_pieces_contract(authored_piece_source),
+}
 custom_stride_authored_queries = {
     "boundary_points": [
         [float(coordinate) for coordinate in point]
@@ -349,6 +366,7 @@ json.dumps({
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
     "custom_stride_live_queries": custom_stride_live_queries,
     "custom_stride_authored_queries": custom_stride_authored_queries,
+    "path_pieces": path_pieces,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -371,6 +389,14 @@ json.dumps({
   assert.equal(product.custom_stride_negative_direction_live, "CCW");
   assert.equal(product.custom_stride_negative_direction_authored, "CCW");
   assert.equal(product.default_stride_direction, "CCW");
+  const expectedPathPieces = {
+    group_type: "Group",
+    point_counts: [8, 4],
+    starts: [[0, 0], [2, 0]],
+    ends: [[2, 0], [2, 2]],
+  };
+  assert.deepEqual(product.path_pieces.live, expectedPathPieces);
+  assert.deepEqual(product.path_pieces.authored, expectedPathPieces);
   const {
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,

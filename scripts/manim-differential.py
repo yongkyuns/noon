@@ -1825,6 +1825,27 @@ def _path_selection(api):
     return result
 
 
+def _path_pieces(api):
+    source = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (2, 0, 0), (2, 2, 0)]
+    )
+    group = source.get_pieces(2)
+    return {
+        "type": type(group).__name__,
+        "pieces": [
+            {
+                "count": piece.get_num_points(),
+                "start": _point_observation(piece.get_start()),
+                "end": _point_observation(piece.get_end()),
+                "length": float(piece.get_arc_length()),
+            }
+            for piece in group.submobjects
+        ],
+        "zero_pieces": len(source.get_pieces(0).submobjects),
+        "negative_one_pieces": len(source.get_pieces(-1).submobjects),
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -2219,6 +2240,7 @@ FIXTURES = [
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
+    Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),

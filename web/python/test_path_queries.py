@@ -990,6 +990,47 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(value.get_end(), noon.Vec2(3.75, 4.5))
         self.assertEqual(query.free.call_count, 4)
 
+    def test_get_pieces_builds_independent_equal_proportion_path_copies(self):
+        value = identity_only_wrapper(compat.VMobject)
+        template = Mock()
+        pieces = [Mock(), Mock()]
+        template.copy.side_effect = pieces
+        value.copy = Mock(return_value=template)
+        result = object()
+
+        with patch.object(compat, "Group", return_value=result) as group_type:
+            self.assertIs(value.get_pieces(2), result)
+
+        value.copy.assert_called_once_with()
+        self.assertEqual(template.submobjects, [])
+        self.assertEqual(template.copy.call_count, 2)
+        group_type.assert_called_once_with(*(
+            piece.pointwise_become_partial.return_value for piece in pieces
+        ))
+        pieces[0].pointwise_become_partial.assert_called_once_with(
+            value, 0.0, 0.5
+        )
+        pieces[1].pointwise_become_partial.assert_called_once_with(
+            value, 0.5, 1.0
+        )
+
+    def test_get_pieces_keeps_no_numpy_and_empty_piece_fallbacks(self):
+        value = identity_only_wrapper(compat.VMobject)
+        template = Mock()
+        value.copy = Mock(return_value=template)
+        result = object()
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            compat, "Group", return_value=result
+        ) as group_type:
+            self.assertIs(value.get_pieces(-1), result)
+        group_type.assert_called_once_with()
+        template.copy.assert_not_called()
+        with patch.dict("sys.modules", {"numpy": None}):
+            with self.assertRaisesRegex(
+                ValueError, "Number of samples, -1, must be non-negative"
+            ):
+                value.get_pieces(-2)
+
     def test_point_from_proportion_follows_mutable_stride_in_rust(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2
