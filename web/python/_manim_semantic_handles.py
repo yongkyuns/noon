@@ -1468,6 +1468,20 @@ def _rotate_sheen_direction(self, angle, axis, family=True):
     return self
 
 
+def _get_gradient_start_and_end_points(self):
+    direction = [float(value) for value in self.get_sheen_direction()]
+    if direction[2] != 0.0:
+        raise NotImplementedError("3D sheen gradients require spatial geometry")
+    center = self.get_center()
+    right = self.get_edge_center(_base.RIGHT) - center
+    up = self.get_edge_center(_base.UP) - center
+    offset = right * direction[0] + up * direction[1]
+    return (
+        _compat._manim_point3(center - offset),
+        _compat._manim_point3(center + offset),
+    )
+
+
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")

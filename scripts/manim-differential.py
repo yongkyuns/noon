@@ -1991,6 +1991,15 @@ def _style_query_probe(api):
     }
 
 
+def _gradient_start_end_probe(api):
+    value = api.Rectangle(width=2, height=1).shift(0.4 * api.RIGHT + 0.2 * api.UP)
+    start, end = value.get_gradient_start_and_end_points()
+    return {
+        "start": [_round_float(component) for component in start],
+        "end": [_round_float(component) for component in end],
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -2389,6 +2398,8 @@ FIXTURES = [
     Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
     Fixture("paint_arrays", lambda: _paint_array_probe(noon), lambda: _paint_array_probe(manim), 1e-5),
     Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
+    Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
+            lambda: _gradient_start_end_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),

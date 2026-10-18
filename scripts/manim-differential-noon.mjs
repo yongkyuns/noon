@@ -383,6 +383,12 @@ style_queries = {
     "source": style_query_contract(point_owner),
     "round_trip": style_query_contract(round_trip_style),
 }
+gradient_path = noon.Rectangle(width=2, height=1).shift(0.4 * noon.RIGHT + 0.2 * noon.UP)
+gradient_start, gradient_end = gradient_path.get_gradient_start_and_end_points()
+gradient_start_end = {
+    "start": [float(component) for component in gradient_start],
+    "end": [float(component) for component in gradient_end],
+}
 custom_stride_authored_queries = {
     "boundary_points": [
         [float(coordinate) for coordinate in point]
@@ -504,6 +510,7 @@ json.dumps({
     "point_mobject": point_mobject,
     "paint_arrays": paint_arrays,
     "style_queries": style_queries,
+    "gradient_start_end": gradient_start_end,
     "style_mutator_returns_self": style_mutator_returns_self,
     "style_mutator_rejections": style_mutator_rejections,
     "custom_stride_direction_live": live_direction.get_direction(),

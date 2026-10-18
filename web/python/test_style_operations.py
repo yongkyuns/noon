@@ -28,7 +28,12 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(compat.VMobject.rotate_sheen_direction).parameters), [
             "self", "angle", "axis", "family",
         ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.get_gradient_start_and_end_points).parameters), [
+            "self",
+        ])
         self.assertIs(compat.VGroup.rotate_sheen_direction, compat.VMobject.rotate_sheen_direction)
+        self.assertIs(compat.VGroup.get_gradient_start_and_end_points,
+                      compat.VMobject.get_gradient_start_and_end_points)
 
         obj = identity_only_wrapper(compat.Circle)
         self.assertIs(obj.set_stroke(background=True), obj)
@@ -38,6 +43,24 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertIs(obj.rotate_sheen_direction(0.0), obj)
         group = identity_only_wrapper(compat.VGroup)
         self.assertIs(group.rotate_sheen_direction(0.0), group)
+
+    def test_gradient_endpoint_query_combines_rust_backed_center_and_edge_queries(self):
+        obj = identity_only_wrapper(compat.VMobject)
+        center = compat._base.Vec2(1.0, 2.0)
+        right = compat._base.Vec2(4.0, 2.0)
+        up = compat._base.Vec2(1.0, 5.0)
+        with patch.object(compat._base.Mobject, "get_center", return_value=center), \
+             patch.object(compat._base.Mobject, "get_edge_center",
+                          side_effect=[right, up]) as edge_center:
+            start, end = obj.get_gradient_start_and_end_points()
+
+        as_list = lambda value: value.tolist() if hasattr(value, "tolist") else value
+        self.assertEqual(as_list(start), [4.0, -1.0, 0.0])
+        self.assertEqual(as_list(end), [-2.0, 5.0, 0.0])
+        self.assertEqual(
+            [call.args[0] for call in edge_center.call_args_list],
+            [compat._base.RIGHT, compat._base.UP],
+        )
 
         unsupported = (
             lambda: obj.set_stroke(color=compat._base.RED, width=2, background=True),

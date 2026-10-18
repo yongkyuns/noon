@@ -127,6 +127,15 @@ def _manim_opacities_from_rgbas(rgbas):
     return np.asarray(opacities, dtype=np.float64)
 
 
+def _manim_point3(point):
+    values = (float(point.x), float(point.y), 0.0)
+    try:
+        import numpy as np
+    except ImportError:
+        return list(values)
+    return np.asarray(values, dtype=np.float64)
+
+
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
@@ -475,6 +484,10 @@ class VMobject(Mobject):
         except ImportError:
             return list(default_direction)
         return np.asarray(default_direction, dtype=np.float64)
+
+    def get_gradient_start_and_end_points(self):
+        from _manim_semantic_handles import _get_gradient_start_and_end_points
+        return _get_gradient_start_and_end_points(self)
 
     def get_background_image(self):
         return None
@@ -1021,6 +1034,7 @@ class VGroup(Group):
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary
+    get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
     set_background_stroke = VMobject.set_background_stroke
     set_sheen_direction = VMobject.set_sheen_direction
     rotate_sheen_direction = VMobject.rotate_sheen_direction
