@@ -2186,6 +2186,14 @@ def _vgroup_root_style_play_probe(api, scene=None):
     if scene is None:
         scene = api.Scene()
     scene.add(family)
+    target = family.copy().set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.7,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.8,
+        family=False,
+    )
     animation = family.animate.set_style(
         fill_color=api.GREEN,
         fill_opacity=0.7,
@@ -2194,7 +2202,6 @@ def _vgroup_root_style_play_probe(api, scene=None):
         stroke_opacity=0.8,
         family=False,
     )
-    target = animation.target
 
     def profile(value):
         style = value.get_style(simple=True)
