@@ -463,6 +463,35 @@ def _radial_family_gradient_probe(api) -> Any:
     }
 
 
+def _family_fade_to_probe(api) -> Any:
+    first = api.Square(
+        color=api.RED,
+        fill_opacity=0.35,
+        stroke_color=api.GREEN,
+        stroke_opacity=0.65,
+    )
+    second = api.Circle(
+        color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_opacity=0.25,
+    )
+    nested = api.VGroup(first, second)
+    family = api.VGroup(first, nested)
+    result = family.fade_to(api.YELLOW, 0.25)
+    after_recursive = [_paint_rgb(member.get_color()) for member in (first, second)]
+    opacity_after_recursive = [
+        [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+        for member in (first, second)
+    ]
+    nonrecursive_result = family.fade_to(api.GREEN, 0.5, family=False)
+    return {
+        "returns_self": result is family and nonrecursive_result is family,
+        "colors": after_recursive,
+        "opacity": opacity_after_recursive,
+        "nonrecursive_colors": [_paint_rgb(member.get_color()) for member in (first, second)],
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2751,6 +2780,8 @@ FIXTURES = [
             lambda: _base_mobject_set_color_probe(manim)),
     Fixture("radial_family_gradient", lambda: _radial_family_gradient_probe(noon),
             lambda: _radial_family_gradient_probe(manim)),
+    Fixture("family_fade_to", lambda: _family_fade_to_probe(noon),
+            lambda: _family_fade_to_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
