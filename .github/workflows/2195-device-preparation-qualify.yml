@@ -18,11 +18,11 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_BUILD_JOBS: "4"
       EXPECTED_BASE: 26168e25b39c294921640cc8a40378eec0c13c78
-      PROOF_DIR: ${{ runner.temp }}/2195-device-proof
+      PROOF_DIR: /tmp/noon-2195-device-proof
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 1
           persist-credentials: false
       - name: Select the exact PR source and preserve the proposed patch
         shell: bash
@@ -31,6 +31,7 @@ jobs:
           mkdir -p "$PROOF_DIR"
           cp experiments/2195/device-aware-preparation.patch "$PROOF_DIR/input.patch"
           echo 'c941f8486f24416b17c1b55338eb9d2755a7445c578077dd5026cc12c742d184  '"$PROOF_DIR/input.patch" | sha256sum --check
+          git fetch --depth=1 origin "$EXPECTED_BASE"
           git checkout --detach "$EXPECTED_BASE"
           test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
           test -z "$(git status --porcelain)"
