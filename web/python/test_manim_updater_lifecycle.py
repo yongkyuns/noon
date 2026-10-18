@@ -102,6 +102,74 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.assertTrue(updaters.has_time_based_updater(self.mobject))
         self.assertFalse(updaters.has_time_based_updater(SimpleNamespace()))
 
+    def test_match_updaters_clears_receiver_family_then_copies_donor_root(self):
+        events = []
+
+        class Mobject:
+            def __init__(self, name, callbacks=()):
+                self.name = name
+                self._noon_updaters = list(callbacks)
+                self.family = [self]
+
+            def get_family(self):
+                return self.family
+
+            @property
+            def callbacks(self):
+                return self._noon_updaters
+
+            def get_updaters(self):
+                events.append(("get", self.name))
+                return list(self._noon_updaters)
+
+        old_root = lambda mobject: None
+        old_child = lambda mobject: None
+        donor_root = lambda mobject: None
+        donor_child = lambda mobject: None
+        root = Mobject("root", [old_root])
+        child = Mobject("child", [old_child])
+        root.family.append(child)
+        donor = Mobject("donor", [donor_root])
+        donor_child_object = Mobject("donor-child", [donor_child])
+        donor.family.append(donor_child_object)
+        tracked_ids = {id(root), id(child), id(donor), id(donor_child_object)}
+        self.addCleanup(
+            lambda: updaters._TRACKED_MOBJECTS.__setitem__(
+                slice(None),
+                [
+                    item
+                    for item in updaters._TRACKED_MOBJECTS
+                    if id(item) not in tracked_ids
+                ],
+            )
+        )
+
+        clear = updaters.clear_updaters
+        add = updaters.add_updater
+
+        def record_clear(mobject, recursive=True):
+            events.append(("clear", mobject.name, recursive))
+            return clear(mobject, recursive)
+
+        def record_add(mobject, updater, *args, **kwargs):
+            events.append(("add", mobject.name, updater))
+            return add(mobject, updater, *args, **kwargs)
+
+        with patch.object(updaters, "clear_updaters", side_effect=record_clear):
+            with patch.object(updaters, "add_updater", side_effect=record_add):
+                result = updaters.match_updaters(root, donor)
+
+        self.assertIs(result, root)
+        self.assertEqual(root.callbacks, [donor_root])
+        self.assertEqual(child.callbacks, [])
+        self.assertEqual(donor.callbacks, [donor_root])
+        self.assertEqual(donor_child_object.callbacks, [donor_child])
+        self.assertEqual(
+            events[:2], [("clear", "root", False), ("clear", "child", False)]
+        )
+        self.assertEqual(events[2], ("get", "donor"))
+        self.assertIs(events[3][2], donor_root)
+
     def test_failed_shared_registration_does_not_commit_callable_identity(self):
         self.bind()
         callback = lambda mobject: None

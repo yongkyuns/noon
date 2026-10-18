@@ -396,6 +396,14 @@ def has_time_based_updater(self: _base.Mobject) -> bool:
     )
 
 
+def match_updaters(self: _base.Mobject, mobject: _base.Mobject) -> _base.Mobject:
+    for member in self.get_family():
+        clear_updaters(member, recursive=False)
+    for updater in mobject.get_updaters():
+        add_updater(self, updater)
+    return self
+
+
 def has_updaters(self: _base.Mobject) -> bool:
     return bool(_updaters(self))
 

@@ -325,6 +325,37 @@ def _time_based_updaters_probe(api) -> Any:
     }
 
 
+def _match_updaters_probe(api) -> Any:
+    target = api.Group(api.Dot(), api.Dot())
+    source = api.Group(api.Dot())
+
+    def old_root(mobject):
+        return mobject
+
+    def old_child(mobject):
+        return mobject
+
+    def donor_root(mobject):
+        return mobject
+
+    def donor_child(mobject):
+        return mobject
+
+    target.add_updater(old_root)
+    target[0].add_updater(old_child)
+    source.add_updater(donor_root)
+    source[0].add_updater(donor_child)
+    result = target.match_updaters(source)
+    return {
+        "returns_self": result is target,
+        "target_root": [updater.__name__ for updater in target.get_updaters()],
+        "target_family": [
+            updater.__name__ for updater in target.get_family_updaters()
+        ],
+        "source_root": [updater.__name__ for updater in source.get_updaters()],
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2601,6 +2632,8 @@ FIXTURES = [
             lambda: _family_updaters_probe(manim)),
     Fixture("time_based_updaters", lambda: _time_based_updaters_probe(noon),
             lambda: _time_based_updaters_probe(manim)),
+    Fixture("match_updaters", lambda: _match_updaters_probe(noon),
+            lambda: _match_updaters_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

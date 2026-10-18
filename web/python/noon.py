@@ -734,6 +734,10 @@ class Mobject:
     def has_time_based_updater(self) -> bool:
         return _callback_operations().has_time_based_updater(self)
 
+    def match_updaters(self, mobject: Mobject) -> Mobject:
+        """Clear this family, then copy only the donor root's callbacks."""
+        return _callback_operations().match_updaters(self, mobject)
+
     def has_updaters(self) -> bool:
         return _callback_operations().has_updaters(self)
 
