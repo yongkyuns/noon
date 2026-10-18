@@ -112,6 +112,11 @@ custom_stride_live_queries = {
         [float(coordinate) for coordinate in point]
         for point in live_custom_stride.get_points_defining_boundary()
     ],
+    "critical_point": [
+        float(value)
+        for value in live_custom_stride.get_critical_point((1, 0, 0))
+    ],
+    "center": [float(value) for value in live_custom_stride.get_center()],
     "point_from_proportion": [
         round(float(value), 7)
         for value in live_custom_stride.point_from_proportion(0.5)
@@ -130,6 +135,11 @@ custom_stride_authored_queries = {
         [float(coordinate) for coordinate in point]
         for point in authored_custom_stride.get_points_defining_boundary()
     ],
+    "critical_point": [
+        float(value)
+        for value in authored_custom_stride.get_critical_point((1, 0, 0))
+    ],
+    "center": [float(value) for value in authored_custom_stride.get_center()],
     "point_from_proportion": [
         round(float(value), 7)
         for value in authored_custom_stride.point_from_proportion(0.5)
@@ -168,6 +178,8 @@ json.dumps({
     x_max: 30,
     boundary_point: [30, 0],
     boundary_points: [[0, 0], [30, 0], [1, 0], [2, 0]],
+    critical_point: [30, 0],
+    center: [15, 0],
     point_from_proportion: [15.5, 0],
   });
   assert.ok(
@@ -177,6 +189,8 @@ json.dumps({
   assert.deepEqual(
     {
       boundary_points: product.custom_stride_live_queries.boundary_points,
+      critical_point: product.custom_stride_live_queries.critical_point,
+      center: product.custom_stride_live_queries.center,
       point_from_proportion: product.custom_stride_live_queries.point_from_proportion,
       proportion_from_point: product.custom_stride_live_queries.proportion_from_point,
     },
