@@ -170,6 +170,63 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.assertEqual(events[2], ("get", "donor"))
         self.assertIs(events[3][2], donor_root)
 
+    def test_update_runs_dt_and_plain_callbacks_recursively_unless_suspended(self):
+        events = []
+
+        class Mobject:
+            def __init__(self, name, callbacks=(), children=()):
+                self.name = name
+                self._noon_updaters = list(callbacks)
+                self.submobjects = list(children)
+                self._scene = None
+                self.updating_suspended = False
+
+            def get_family(self):
+                members = [self]
+                for child in self.submobjects:
+                    members.extend(child.get_family())
+                return members
+
+        def root_updater(mobject, dt):
+            events.append((mobject.name, dt))
+
+        def child_updater(mobject):
+            events.append((mobject.name, None))
+
+        def suspended_updater(mobject):
+            events.append((mobject.name, None))
+
+        leaf = Mobject("leaf", [suspended_updater])
+        suspended = Mobject("suspended", [child_updater], [leaf])
+        suspended.updating_suspended = True
+        child = Mobject("child", [child_updater])
+        root = Mobject("root", [root_updater], [child, suspended])
+
+        result = updaters.update(root, dt=0.5)
+
+        self.assertIs(result, root)
+        self.assertEqual(events, [("root", 0.5), ("child", None)])
+        events.clear()
+        updaters.update(root, dt=0.25, recursive=False)
+        self.assertEqual(events, [("root", 0.25)])
+
+    def test_update_rejects_scene_bound_targets_before_invoking_callbacks(self):
+        calls = []
+
+        class Mobject:
+            _scene = object()
+
+            def get_family(self):
+                return [self]
+
+        target = Mobject()
+        updaters._updaters(target).append(lambda mobject: calls.append(mobject))
+        with self.assertRaisesRegex(
+            NotImplementedError, "canonical Rust callback phase"
+        ):
+            updaters.update(target)
+        self.assertEqual(calls, [])
+
     def test_failed_shared_registration_does_not_commit_callable_identity(self):
         self.bind()
         callback = lambda mobject: None

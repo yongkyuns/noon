@@ -404,6 +404,37 @@ def match_updaters(self: _base.Mobject, mobject: _base.Mobject) -> _base.Mobject
     return self
 
 
+def update(
+    self: _base.Mobject, dt: float = 0, recursive: bool = True
+) -> _base.Mobject:
+    if getattr(self, "_scene", None) is not None:
+        raise NotImplementedError(
+            "Mobject.update on Scene-bound objects must enter the canonical Rust "
+            "callback phase"
+        )
+    family = self.get_family() if recursive else [self]
+    if any(getattr(member, "_scene", None) is not None for member in family):
+        raise NotImplementedError(
+            "Mobject.update on Scene-bound objects must enter the canonical Rust "
+            "callback phase"
+        )
+
+    def update_member(member: _base.Mobject) -> None:
+        if getattr(member, "updating_suspended", False):
+            return
+        for updater in _updaters(member):
+            if "dt" in inspect.signature(updater).parameters:
+                updater(member, dt)
+            else:
+                updater(member)
+        if recursive:
+            for child in getattr(member, "submobjects", ()):
+                update_member(child)
+
+    update_member(self)
+    return self
+
+
 def has_updaters(self: _base.Mobject) -> bool:
     return bool(_updaters(self))
 

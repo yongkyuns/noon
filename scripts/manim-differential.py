@@ -356,6 +356,34 @@ def _match_updaters_probe(api) -> Any:
     }
 
 
+def _mobject_update_probe(api) -> Any:
+    target = api.Group(api.Dot(), api.Dot())
+    events = []
+
+    def root_updater(mobject, dt):
+        events.append(("root", dt))
+
+    def child_updater(mobject):
+        events.append(("child", None))
+
+    def suspended_updater(mobject):
+        events.append(("suspended", None))
+
+    target.add_updater(root_updater)
+    target[0].add_updater(child_updater)
+    target[1].add_updater(suspended_updater)
+    target[1].updating_suspended = True
+    result = target.update(dt=0.5)
+    recursive = list(events)
+    events.clear()
+    target.update(dt=0.25, recursive=False)
+    return {
+        "returns_self": result is target,
+        "recursive": recursive,
+        "non_recursive": events,
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2634,6 +2662,8 @@ FIXTURES = [
             lambda: _time_based_updaters_probe(manim)),
     Fixture("match_updaters", lambda: _match_updaters_probe(noon),
             lambda: _match_updaters_probe(manim)),
+    Fixture("mobject_update", lambda: _mobject_update_probe(noon),
+            lambda: _mobject_update_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

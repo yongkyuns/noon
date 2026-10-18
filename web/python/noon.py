@@ -738,6 +738,10 @@ class Mobject:
         """Clear this family, then copy only the donor root's callbacks."""
         return _callback_operations().match_updaters(self, mobject)
 
+    def update(self, dt: float = 0, recursive: bool = True) -> Mobject:
+        """Invoke detached-object updaters; live updates belong to Rust phases."""
+        return _callback_operations().update(self, dt, recursive)
+
     def has_updaters(self) -> bool:
         return _callback_operations().has_updaters(self)
 
