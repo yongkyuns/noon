@@ -4,7 +4,6 @@ These tests do NOT qualify rendering/playback. Small authoring helpers use
 unittest.mock call spies to inspect arguments; no Noon runtime is emulated.
 """
 import ast
-import json
 import re
 import unittest
 from types import SimpleNamespace
@@ -15,13 +14,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENE_PATH = ROOT / "web/python/examples/cuda_transpose_banks.py"
 SOURCE = SCENE_PATH.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
-PURE = {"reference_trace", "get_trace", "service_batches", "tile_point",
+PURE = {"reference_trace", "service_batches", "tile_point",
         "queue_point", "bank_center", "bank_point", "register_point",
         "output_point", "syntax_spans", "code_entries"}
 CONSTANTS = {"TILE_LEFT", "TILE_TOP", "CELL", "QUEUE_W", "QUEUE_H",
              "REGISTER_SCALE", "REGISTER_CELL_W", "REGISTER_CELL_H",
              "ROUND_IN", "ROUND_OUT", "SOURCE_STEPS", "CODE_TOP", "CODE_STEP", "CODE_LINE_H"}
-NS = {"GPU_TRACE": None, "COLUMN": 3, "re": re}
+NS = {"re": re}
 nodes = []
 for n in TREE.body:
     if isinstance(n, ast.FunctionDef) and n.name in PURE:
@@ -31,7 +30,7 @@ for n in TREE.body:
         if ids and ids <= CONSTANTS:
             nodes.append(n)
 exec(compile(ast.Module(body=nodes, type_ignores=[]), "<pure authored inputs>", "exec"), NS)
-reference, service, get_trace = (NS[n] for n in ("reference_trace", "service_batches", "get_trace"))
+reference, service = (NS[n] for n in ("reference_trace", "service_batches"))
 
 
 def separated(a, b, w, h):
@@ -52,9 +51,6 @@ def assert_inside(case, points, w, h, bounds):
         case.assertLessEqual(p[0] + w / 2, xmax + 1e-9)
         case.assertLessEqual(p[1] + h / 2, ymax + 1e-9)
 class TraceTests(unittest.TestCase):
-    def setUp(self):
-        NS.update(GPU_TRACE=None, COLUMN=3)
-
     def test_all_columns_both_layouts_and_base_offsets(self):
         for base in (0, 1, 31, 32, 128):
             for column in range(32):
@@ -80,7 +76,7 @@ class TraceTests(unittest.TestCase):
                 self.assertEqual(oi, col * 32 + lane)
 
     def test_default_column_values_and_global_writes(self):
-        trace = get_trace(32)
+        trace = reference(32, 3)
         self.assertEqual([r[4] for r in trace['reads'][:8]], [3, 35, 67, 99, 131, 163, 195, 227])
         self.assertEqual([r[3] for r in trace['reads']], list(range(96, 128)))
         self.assertEqual({r[2] % 32 for r in trace['reads']}, {3})
@@ -91,40 +87,26 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(service(reads), [[0, 1], [2, 3]])
         self.assertEqual(service([]), [])
 
-    def test_generated_payload_format_round_trip_not_gpu_execution(self):
-        data = {'column': 3, 'runs': [reference(32, 3, 32), reference(33, 3, 96)]}
-        assignment = 'GPU_TRACE = ' + json.dumps(data)
-        local = {}
-        exec(assignment, local)
-        NS['GPU_TRACE'] = local['GPU_TRACE']
-        self.assertEqual(get_trace(32), data['runs'][0])
-        self.assertEqual(get_trace(33), data['runs'][1])
+    def test_model_is_deterministic_and_each_result_is_independent(self):
+        first = reference(33, 3)
+        second = reference(33, 3)
+        self.assertEqual(first, second)
+        first["reads"][9][4] = -1
+        self.assertEqual(second["reads"][9][4], 291)
+        self.assertEqual(reference(33, 3), second)
 
-    def test_corrupt_trace_rejected(self):
-        def fresh():
-            return {'column': 3, 'runs': [reference(32, 3), reference(33, 3)]}
-        for bad in ([], {}, {'column': 4, 'runs': []}, {'column': 3, 'runs': []}):
-            NS['GPU_TRACE'] = bad
-            with self.assertRaises(ValueError):
-                get_trace(32)
-        for key in ('stride', 'base_word', 'loads', 'reads', 'verified_output_words'):
-            NS['GPU_TRACE'] = fresh()
-            del NS['GPU_TRACE']['runs'][0][key]
-            with self.assertRaises(ValueError):
-                get_trace(32)
-        NS['GPU_TRACE'] = fresh()
-        NS['GPU_TRACE']['runs'][0]['reads'][7][4] += 1
-        with self.assertRaises(ValueError):
-            get_trace(32)
+    def test_demo_has_no_capture_input_or_mode_labels(self):
+        for obsolete in ("GPU_TRACE", "get_trace", "GPU-recorded", "CPU reference replay"):
+            self.assertNotIn(obsolete, SOURCE)
+        self.assertIn("Educational visualization of CUDA shared-memory accesses", ast.get_docstring(TREE))
+        self.assertIn("illustrative, not measured GPU execution time", ast.get_docstring(TREE))
 
-    def test_unsupported_configuration_and_duplicate_run_rejected(self):
-        NS['GPU_TRACE'] = {'column': 3, 'runs': [reference(32, 3)] * 2}
-        with self.assertRaises(ValueError):
-            get_trace(32)
-        NS['GPU_TRACE'] = {'column': 3, 'runs': [reference(32, 3)]}
-        NS['GPU_TRACE']['runs'][0]['base_word'] = 1.5
-        with self.assertRaises(ValueError):
-            get_trace(32)
+    def test_construct_uses_the_model_directly(self):
+        scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
+        method = next(n for n in scene.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "construct")
+        traces = next(n.value for n in method.body if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "traces" for t in n.targets))
+        self.assertEqual(ast.unparse(traces), "[reference_trace(s, COLUMN) for s in (32, 33)]")
 
 
 class LayoutTests(unittest.TestCase):
@@ -297,7 +279,7 @@ class SourceContracts(unittest.TestCase):
         self.assertEqual(SOURCE.count("seconds=ROUND_IN"), 1)
         self.assertEqual(SOURCE.count("seconds=ROUND_OUT"), 1)
         self.assertIn("same value", SOURCE.lower())
-        self.assertIn("GPU-recorded selected read addresses + values", SOURCE)
+        self.assertIn("CUDA shared-memory transpose", SOURCE)
         self.assertIn("not GPU cycles or a benchmark", SOURCE)
 
 

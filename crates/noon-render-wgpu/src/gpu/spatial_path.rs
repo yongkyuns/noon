@@ -1212,7 +1212,10 @@ fn collect_text_paths<'a>(
                     .checked_mul(2)
                     .ok_or(SpatialPathError::BufferLimit)?;
                 let base_style = Style {
-                    fill: Some(run.fill.or(object_style.fill).unwrap_or(Color::WHITE)),
+                    fill: Some(
+                        crate::text::resolve_text_paint(run.fill, object_style.fill)
+                            .unwrap_or(Color::WHITE),
+                    ),
                     stroke: None,
                     stroke_width: 0.0,
                     stroke_width_mode: StrokeWidthMode::ScaleWithObject,
@@ -1231,7 +1234,10 @@ fn collect_text_paths<'a>(
                 let needs_fill =
                     base_style.fill.is_some() && !path_is_resident(&fill_source, base_style);
                 let stroke_style = run.stroke.as_ref().map(|stroke| Style {
-                    fill: Some(stroke.paint.or(object_style.fill).unwrap_or(Color::WHITE)),
+                    fill: Some(
+                        crate::text::resolve_text_paint(stroke.paint, object_style.fill)
+                            .unwrap_or(Color::WHITE),
+                    ),
                     ..base_style
                 });
                 let stroke_source = SourceKey::TextGlyphRun(

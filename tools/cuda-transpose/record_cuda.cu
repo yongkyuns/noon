@@ -4,8 +4,9 @@
 // Original: https://github.com/ourarash/cuda-algorithm-lab/tree/main/matrix_transpose
 //
 // nvcc -std=c++17 -O2 record_cuda.cu -o record_cuda
-// ./record_cuda 3 > gpu_trace.py
-// Replace GPU_TRACE=None in the Noon source with the printed assignment.
+// ./record_cuda 3 > cuda-accesses.json
+// Validation evidence only; the Noon demo does not load captured traces.
+// Use capture_cuda.py to add source fingerprints and sanitizer qualification.
 //
 // This runs CUDA. It records source-level addresses and data, NOT an instruction
 // timeline, bank-service order, or benchmark. Instrumentation changes execution.
@@ -144,25 +145,21 @@ void print_values(const std::vector<float> &values) {
     std::cout << (i ? "," : "") << static_cast<int>(values[i]);
   std::cout << ']';
 }
-void print_run(const Result &r, bool full) {
+void print_run(const Result &r) {
   std::cout << "{\"stride\":" << r.stride << ",\"base_word\":" << r.base_word << ",\"loads\":[";
   for (int i = 0; i < 4; ++i) std::cout << (i ? "," : "") << r.counts[i];
   std::cout << "],\"verified_output_words\":1024,\"reads\":";
   print_accesses(r.selected);
-  if (full) {
-    std::cout << ",\"load_accesses\":"; print_accesses(r.all_loads);
-    std::cout << ",\"read_accesses\":"; print_accesses(r.all_reads);
-    std::cout << ",\"output\":"; print_values(r.output);
-    std::cout << ",\"original_output\":"; print_values(r.original_output);
-  }
+  std::cout << ",\"load_accesses\":"; print_accesses(r.all_loads);
+  std::cout << ",\"read_accesses\":"; print_accesses(r.all_reads);
+  std::cout << ",\"output\":"; print_values(r.output);
+  std::cout << ",\"original_output\":"; print_values(r.original_output);
   std::cout << '}';
 }
 
 int main(int argc, char **argv) {
   try {
-    if (argc > 3) throw std::runtime_error("Usage: record_cuda [column:0..31] [--json]");
-    const bool full = argc == 3 && std::string(argv[2]) == "--json";
-    if (argc == 3 && !full) throw std::runtime_error("Unknown output option");
+    if (argc > 2) throw std::runtime_error("Usage: record_cuda [column:0..31]");
     int column = 3;
     if (argc >= 2) {
       std::size_t end = 0;
@@ -179,24 +176,20 @@ int main(int argc, char **argv) {
     if (unpadded.output != padded.output) throw std::runtime_error("Padded/unpadded outputs differ");
     std::cerr << device.name << ": validated both 1024-word outputs and all recorded accesses.\n"
               << "Addresses/values only; no timing or bank-service-order measurement.\n";
-    // Print only after BOTH runs validate; stdout is directly pasteable Python.
-    if (full) {
-      int runtime_version = 0, driver_version = 0;
-      check(cudaRuntimeGetVersion(&runtime_version), "runtime version");
-      check(cudaDriverGetVersion(&driver_version), "driver version");
-      std::cout << "{\"device\":" << std::quoted(std::string(device.name))
-                << ",\"compute_capability\":[" << device.major << ',' << device.minor << ']'
-                << ",\"runtime_version\":" << runtime_version
-                << ",\"driver_version\":" << driver_version
-                << ",\"nvcc_version\":[" << __CUDACC_VER_MAJOR__ << ',' << __CUDACC_VER_MINOR__ << ',' << __CUDACC_VER_BUILD__ << ']'
-                << ",\"column\":" << column;
-    } else {
-      std::cout << "GPU_TRACE = {\"column\":" << column;
-    }
+    // Full JSON evidence is printed only after BOTH runs validate.
+    int runtime_version = 0, driver_version = 0;
+    check(cudaRuntimeGetVersion(&runtime_version), "runtime version");
+    check(cudaDriverGetVersion(&driver_version), "driver version");
+    std::cout << "{\"device\":" << std::quoted(std::string(device.name))
+              << ",\"compute_capability\":[" << device.major << ',' << device.minor << ']'
+              << ",\"runtime_version\":" << runtime_version
+              << ",\"driver_version\":" << driver_version
+              << ",\"nvcc_version\":[" << __CUDACC_VER_MAJOR__ << ',' << __CUDACC_VER_MINOR__ << ',' << __CUDACC_VER_BUILD__ << ']'
+              << ",\"column\":" << column;
     std::cout << ",\"runs\":[\n";
-    print_run(unpadded, full);
+    print_run(unpadded);
     std::cout << ",\n";
-    print_run(padded, full);
+    print_run(padded);
     std::cout << "\n]}\n";
     return 0;
   } catch (const std::exception &e) {

@@ -217,6 +217,7 @@ pub struct Text {
     font_face: Option<NativeFontFace>,
     font_size: f32,
     line_spacing: f32,
+    disable_ligatures: bool,
     source_fills: Vec<TextSourceFill>,
     text2color: Vec<(Arc<str>, Color)>,
     presentation: TextPresentation,
@@ -232,6 +233,7 @@ impl Text {
             font_face: None,
             font_size: DEFAULT_NATIVE_TEXT_FONT_SIZE,
             line_spacing: -1.0,
+            disable_ligatures: false,
             source_fills: Vec::new(),
             text2color: Vec::new(),
             presentation: TextPresentation::default(),
@@ -252,6 +254,10 @@ impl Text {
 
     pub const fn line_spacing(&self) -> f32 {
         self.line_spacing
+    }
+
+    pub const fn disable_ligatures(&self) -> bool {
+        self.disable_ligatures
     }
 
     pub fn with_font(mut self, family: impl Into<Arc<str>>) -> Self {
@@ -275,6 +281,13 @@ impl Text {
 
     pub fn with_line_spacing(mut self, line_spacing: f32) -> Self {
         self.line_spacing = line_spacing;
+        self
+    }
+
+    /// Disable optional standard/contextual ligatures while retaining required
+    /// shaping, including combining marks. Code display enables this by default.
+    pub fn with_disable_ligatures(mut self, disable_ligatures: bool) -> Self {
+        self.disable_ligatures = disable_ligatures;
         self
     }
 

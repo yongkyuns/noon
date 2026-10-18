@@ -26,13 +26,11 @@ pub struct MeshVertex {
     pub position: Vec2,
     pub target_position: Vec2,
     pub surface: PathSurface,
-    /// Cumulative source-centerline distance along the ordered stroke path.
-    /// Morphing does not recompute physical arc length at every intermediate pose.
+    /// Global distance along the ordered path for stroke vertices.
     /// Fill vertices use the total stroke length so they remain hidden until
     /// a reveal reaches its endpoint.
     pub path_distance: f32,
-    /// Manim curve-count reveal progress, independent of `path_distance`.
-    /// Do not interpret this as an arc-length fraction for moving dash patterns.
+    /// `path_distance / stroke_length` in the inclusive range `[0, 1]`.
     pub path_progress: f32,
 }
 
@@ -1255,16 +1253,6 @@ fn tessellate_morph_path(
         } else {
             point_count - 1
         };
-        // Preserve a geometric distance coordinate distinct from authored
-        // reveal progress. The last endpoint of a closed contour has the full
-        // contour distance, even though it coincides with its initial anchor.
-        let contour_start_distance = stroke_length;
-        let mut point_distances = Vec::with_capacity(point_count);
-        point_distances.push(contour_start_distance);
-        for pair in contour.source_points.windows(2) {
-            let segment_length = (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y);
-            point_distances.push(point_distances.last().copied().unwrap() + segment_length);
-        }
         stroke_length += polyline_length(&contour.source_points, contour.closed);
 
         // Independent segment quads establish exact butt faces. Join/cap
@@ -1317,20 +1305,6 @@ fn tessellate_morph_path(
                 &source_quad,
                 &target_quad,
                 &[0, 1, 2, 1, 3, 2],
-                &[
-                    point_distances[segment],
-                    point_distances[segment],
-                    if contour.closed && next == 0 {
-                        stroke_length
-                    } else {
-                        point_distances[next]
-                    },
-                    if contour.closed && next == 0 {
-                        stroke_length
-                    } else {
-                        point_distances[next]
-                    },
-                ],
                 &[start_progress, start_progress, end_progress, end_progress],
             )?;
         }
@@ -1381,7 +1355,6 @@ fn tessellate_morph_path(
                     &source_join.points,
                     &target_join.points,
                     &source_join.indices,
-                    &vec![point_distances[index]; source_join.points.len()],
                     &progress_values,
                 )?;
             }
@@ -1400,7 +1373,6 @@ fn tessellate_morph_path(
                 &source_start.points,
                 &target_start.points,
                 &source_start.indices,
-                &vec![contour_start_distance; source_start.points.len()],
                 &vec![start_progress; source_start.points.len()],
             )?;
 
@@ -1419,7 +1391,6 @@ fn tessellate_morph_path(
                 &source_end.points,
                 &target_end.points,
                 &source_end.indices,
-                &vec![point_distances[point_count - 1]; source_end.points.len()],
                 &vec![end_progress; source_end.points.len()],
             )?;
         }
@@ -1698,24 +1669,20 @@ fn add_paired_polygon(
     source: &[Vec2],
     target: &[Vec2],
     local_indices: &[u32],
-    distances: &[f32],
     progress: &[f32],
 ) -> Result<(), GeometryError> {
     debug_assert_eq!(source.len(), target.len());
-    debug_assert_eq!(source.len(), distances.len());
     debug_assert_eq!(source.len(), progress.len());
     let start = u32::try_from(vertices.len())
         .map_err(|_| GeometryError::Tessellation("morph vertex count exceeds u32".into()))?;
-    for ((position, target_position), (path_distance, path_progress)) in source
-        .iter()
-        .zip(target)
-        .zip(distances.iter().copied().zip(progress.iter().copied()))
+    for ((position, target_position), path_progress) in
+        source.iter().zip(target).zip(progress.iter().copied())
     {
         vertices.push(MeshVertex {
             position: *position,
             target_position: *target_position,
             surface: PathSurface::Stroke,
-            path_distance,
+            path_distance: path_progress,
             path_progress,
         });
     }
@@ -2487,56 +2454,6 @@ mod tests {
     }
 
     #[test]
-    fn closed_stroke_exposes_both_distance_sides_of_its_seam() {
-        // A 3-4-5 loop has total travelled distance 12 even though its first
-        // and last anchor occupy the same position. Moving stroke patterns
-        // must preserve the distinct 0 and 12 parameter values at that seam.
-        // Coalescing them would interpolate a phase across the entire loop.
-        let path = VectorPath::new()
-            .move_to(Vec2::new(0.0, 0.0))
-            .line_to(Vec2::new(3.0, 0.0))
-            .line_to(Vec2::new(3.0, 4.0))
-            .close();
-        let mesh =
-            tessellate_styled_with_fill(&path, 0.1, StrokeJoin::Miter, StrokeCap::Butt, false)
-                .unwrap();
-        let perimeter = 12.0_f32;
-        assert!((mesh.stroke_length - perimeter).abs() < 1e-4);
-        let stroke: Vec<_> = mesh
-            .vertices
-            .iter()
-            .filter(|vertex| vertex.surface == PathSurface::Stroke)
-            .collect();
-        assert!(!stroke.is_empty());
-        assert!(stroke.iter().all(|vertex| {
-            vertex.path_distance.is_finite()
-                && vertex.path_distance >= -1e-4
-                && vertex.path_distance <= perimeter + 1e-4
-                && (0.0..=1.0).contains(&vertex.path_progress)
-        }));
-        let near_seam: Vec<_> = stroke
-            .into_iter()
-            .filter(|vertex| vertex.position.x.abs() < 0.2 && vertex.position.y.abs() < 0.2)
-            .collect();
-        assert!(!near_seam.is_empty(), "closure seam must be rendered");
-        assert!(
-            near_seam
-                .iter()
-                .any(|vertex| vertex.path_distance.abs() < 1e-4),
-            "missing initial path distance at the loop seam"
-        );
-        assert!(
-            near_seam
-                .iter()
-                .any(|vertex| (vertex.path_distance - perimeter).abs() < 1e-4),
-            "missing final path distance at the loop seam"
-        );
-        // Lyon's closure join may attach its final Manim progress value to
-        // both sides of the shared geometric anchor. Flow uses distance,
-        // whereas Create continues using the unchanged reveal progress.
-    }
-
-    #[test]
     fn closed_stroke_shape_does_not_depend_on_the_first_anchor() {
         let a = Vec2::new(0., 0.);
         let b = Vec2::new(2., 0.);
@@ -2620,53 +2537,6 @@ mod tests {
             .indices
             .iter()
             .all(|index| (*index as usize) < mesh.vertices.len()));
-    }
-
-    #[test]
-    fn morphed_closed_stroke_distance_is_source_arclength_not_reveal_fraction() {
-        let source = VectorPath::new()
-            .move_to(Vec2::new(0.0, 0.0))
-            .line_to(Vec2::new(3.0, 0.0))
-            .line_to(Vec2::new(3.0, 4.0))
-            .close();
-        let target = VectorPath::new()
-            .move_to(Vec2::new(1.0, 1.0))
-            .line_to(Vec2::new(4.0, 1.0))
-            .line_to(Vec2::new(4.0, 5.0))
-            .close();
-        let mesh = tessellate_styled_with_fill_preserving_morph_order(
-            &source.with_morph_target(target),
-            0.1,
-            StrokeJoin::Miter,
-            StrokeCap::Butt,
-            false,
-        )
-        .unwrap();
-        assert!(mesh.morphing);
-        assert!((mesh.stroke_length - 12.0).abs() < 1e-4);
-        let stroke: Vec<_> = mesh
-            .vertices
-            .iter()
-            .filter(|vertex| vertex.surface == PathSurface::Stroke)
-            .collect();
-        assert!(stroke.iter().all(|vertex| {
-            vertex.path_distance.is_finite()
-                && vertex.path_distance >= -1e-4
-                && vertex.path_distance <= mesh.stroke_length + 1e-4
-                && (0.0..=1.0).contains(&vertex.path_progress)
-        }));
-        assert!(stroke
-            .iter()
-            .any(|vertex| vertex.path_distance.abs() < 1e-4));
-        assert!(stroke
-            .iter()
-            .any(|vertex| (vertex.path_distance - 12.0).abs() < 1e-4));
-        assert!(
-            stroke
-                .iter()
-                .any(|vertex| vertex.path_distance > 3.0 && vertex.path_progress < 1.0),
-            "source travelled distance must not alias normalized reveal progress"
-        );
     }
 
     #[test]

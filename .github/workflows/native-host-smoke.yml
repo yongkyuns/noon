@@ -116,6 +116,13 @@ jobs:
           cargo test -p noon --all-features --test selection_overlay_raster \
             -- --include-ignored --nocapture
 
+      - name: Qualify native highlighted Code pixels and retained family edits
+        env:
+          NOON_CODE_PROOF_DIR: ${{ github.workspace }}/code-proof
+        run: |
+          cargo test -p noon --all-features --test code_block_raster \
+            -- --ignored --nocapture --test-threads=1
+
       - name: Present inspection zoom and view recovery without advancing native time
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \
@@ -140,6 +147,14 @@ jobs:
         with:
           name: native-selection-pixels
           path: selection-proof/
+          retention-days: 3
+
+      - name: Retain native Code pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-code-pixels
+          path: code-proof/
           retention-days: 3
 
   headless-capture:

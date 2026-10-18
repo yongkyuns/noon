@@ -22,6 +22,9 @@ import initNoonWeb, {
   WasmMatrixOptions,
   WasmCompositeRows,
   WasmTableOptions,
+  WasmCodeOptions,
+  noonCodeStylesList,
+  noonCodeLanguagesList,
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
   resolveCreateAnimationOptions,
@@ -362,6 +365,13 @@ async function initializePyodide() {
     return entries;
   };
   self.noonTableOptions = (...args) => new WasmTableOptions(...args);
+  self.noonCodeOptions = (...args) => new WasmCodeOptions(...args);
+  self.noonCodeFromFamily = (family) => family.asCode();
+  self.noonCodeStylesList = () => noonCodeStylesList();
+  self.noonCodeLanguagesList = () => noonCodeLanguagesList();
+  self.noonCreateAuthoringCodeHandle = (source, options, context) =>
+    context == null ? authoringStore.createCode(source, options)
+      : context.liveCreateCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
     context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);

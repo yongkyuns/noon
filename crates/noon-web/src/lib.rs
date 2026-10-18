@@ -20,6 +20,8 @@ mod authoring_bar_chart;
 #[cfg(target_arch = "wasm32")]
 mod authoring_brace;
 #[cfg(target_arch = "wasm32")]
+mod authoring_code;
+#[cfg(target_arch = "wasm32")]
 mod authoring_composite;
 #[cfg(target_arch = "wasm32")]
 mod authoring_coordinates;
@@ -155,6 +157,8 @@ mod text_parts;
 
 #[cfg(target_arch = "wasm32")]
 pub use authoring_arrow::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_code::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_coordinates::*;
 pub use authoring_error::AuthoringFailure;

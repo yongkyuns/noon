@@ -10,6 +10,8 @@ pub mod automatic_wait_text;
 pub mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
+#[cfg(all(feature = "code", feature = "bundled-fonts"))]
+pub mod code_block;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;
