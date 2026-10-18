@@ -273,6 +273,22 @@ fn point_extremum_reducer_matches_manim_key_selection() {
 }
 
 #[test]
+fn point_boundary_reducer_selects_directional_extremum_from_custom_anchors() {
+    let coordinates = [0., 0., 30., 0., 1., 0., 2., 0.];
+    assert_eq!(
+        noon::reduce_point_boundary(&coordinates, 2, 1., 0.).unwrap(),
+        (30., 0.)
+    );
+    assert_eq!(
+        noon::reduce_point_boundary(&coordinates, 2, -1., 0.).unwrap(),
+        (0., 0.)
+    );
+    assert!(noon::reduce_point_boundary(&[], 2, 1., 0.).is_err());
+    assert!(noon::reduce_point_boundary(&[1.], 2, 1., 0.).is_err());
+    assert!(noon::reduce_point_boundary(&[1., 2., 3.], 1, 1., 0.).is_err());
+}
+
+#[test]
 fn new_path_started_tracks_the_unfinished_cubic_anchor() {
     let mut scene = Scene::new();
     let empty = scene.path(VectorPath::new(), Default::default()).unwrap();

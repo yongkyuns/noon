@@ -2004,6 +2004,33 @@ def _boundary_point_observation(
     direction_y: float,
 ):
     if isinstance(value, _compat.VMobject):
+        try:
+            stride = operator.index(
+                getattr(value, "n_points_per_cubic_curve", 4)
+            )
+        except TypeError:
+            stride = None
+        if stride != 4:
+            from _manim_updaters import canonical_callback_phase_active
+
+            if _is_bound(value) or canonical_callback_phase_active():
+                raise NotImplementedError(
+                    "custom-stride VMobject boundary points require an authored point snapshot"
+                )
+            anchors = value.get_anchors()
+            coordinates = [
+                float(coordinate)
+                for point in anchors
+                for coordinate in (point[0], point[1])
+            ]
+            result = _boundary_point_from_points_observation(
+                value, coordinates, 2, direction_x, direction_y
+            )
+            if result is None:
+                raise NotImplementedError(
+                    "custom-stride VMobject boundary points require a shared Rust handle"
+                )
+            return result
         return _point_query_observation(
             value,
             "PathBoundaryPoint",
@@ -2063,6 +2090,27 @@ def _extremum_from_points_observation(
         point_dimensions,
         dim,
         key,
+    )
+
+
+def _boundary_point_from_points_observation(
+    value: _base.Mobject,
+    coordinates: list[float],
+    point_dimensions: int,
+    direction_x: float,
+    direction_y: float,
+):
+    if _is_shared_family(value):
+        return None
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    return engine_call(
+        handle.boundaryPointFromPoints,
+        coordinates,
+        point_dimensions,
+        direction_x,
+        direction_y,
     )
 
 

@@ -954,6 +954,29 @@ pub fn reduce_point_extremum(
     })
 }
 
+/// Select the point with the greatest directional projection from flattened
+/// caller-supplied point rows, using the shared Rust boundary reducer.
+pub fn reduce_point_boundary(
+    coordinates: &[f64],
+    point_dimensions: usize,
+    direction_x: f64,
+    direction_y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    if point_dimensions < 2 {
+        return Err(AuthoringError::InvalidPointDimension(
+            point_dimensions as u32,
+        ));
+    }
+    if !coordinates.len().is_multiple_of(point_dimensions) {
+        return Err(AuthoringError::InvalidPointCoordinates(coordinates.len()));
+    }
+    let points = coordinates
+        .chunks_exact(point_dimensions)
+        .map(|row| (row[0], row[1]))
+        .collect::<Vec<_>>();
+    boundary_point_for_xy_points(&points, direction_x, direction_y)
+}
+
 /// Compare equal-length numeric arrays using NumPy's default `allclose`
 /// tolerances used by ManimCE's VMobject point-equality helper.
 pub fn manim_points_allclose(left: &[f64], right: &[f64], absolute_tolerance: f64) -> bool {

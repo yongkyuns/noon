@@ -1605,6 +1605,22 @@ mod wasm {
             .map_err(js_error)
     }
 
+    fn reduce_point_boundary_from_values(
+        coordinates: Vec<f64>,
+        point_dimensions: u32,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<Vec<f64>, JsValue> {
+        noon::reduce_point_boundary(
+            &coordinates,
+            point_dimensions as usize,
+            direction_x,
+            direction_y,
+        )
+        .map(|(x, y)| vec![x, y])
+        .map_err(js_error)
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -2034,6 +2050,22 @@ mod wasm {
                 .boundary_point(direction_x, direction_y)
                 .map(|(x, y)| vec![x, y])
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPointFromPoints)]
+        pub fn boundary_point_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            reduce_point_boundary_from_values(
+                coordinates,
+                point_dimensions,
+                direction_x,
+                direction_y,
+            )
         }
 
         #[wasm_bindgen(js_name = pathBoundaryPoint)]

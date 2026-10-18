@@ -690,6 +690,9 @@ def _curve_function_queries(api):
             "z_max": float(
                 custom_stride_boundary_path.get_extremum_along_dim(dim=2, key=1)
             ),
+            "boundary_point": _point_observation(
+                custom_stride_boundary_path.get_boundary_point(api.RIGHT)
+            ),
         },
         "functions_with_unknown_length_keyword": capture(
             lambda: list(path.get_curve_functions_with_lengths(unsupported=True))

@@ -554,7 +554,6 @@ class PathQueryTests(unittest.TestCase):
         handle.centerOfMass.assert_called_once_with()
         handle.pathBoundaryPoint.assert_called_once_with(0.0, 1.0)
         handle.lengthOverDim.assert_called_once_with(0)
-
         context = Mock()
         context.queryMobjectCenterOfMass.return_value = [5.0, 6.0]
         context.queryMobjectPathBoundaryPoint.return_value = [7.0, 8.0]
@@ -584,6 +583,30 @@ class PathQueryTests(unittest.TestCase):
         context.queryMobjectPathBoundaryExtremumAlongDim.assert_called_once_with(handle, 1, 1.0)
         context.queryMobjectPathBoundaryPoints.assert_called_once_with(handle)
         context.queryMobjectLengthOverDim.assert_called_once_with(handle, 2)
+
+    def test_custom_stride_boundary_point_uses_rust_anchor_reducer(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.get_anchors = Mock(return_value=[
+            noon.Vec2(0.0, 0.0),
+            noon.Vec2(30.0, 0.0),
+            noon.Vec2(1.0, 0.0),
+            noon.Vec2(2.0, 0.0),
+        ])
+        handle = Mock()
+        handle.boundaryPointFromPoints.return_value = [30.0, 0.0]
+        value._semantic_handle = handle
+        value._semantic_handle_fresh = True
+
+        self.assertEqual(value.get_boundary_point(noon.RIGHT), noon.Vec2(30.0, 0.0))
+        handle.boundaryPointFromPoints.assert_called_once_with(
+            [0.0, 0.0, 30.0, 0.0, 1.0, 0.0, 2.0, 0.0],
+            2,
+            1.0,
+            0.0,
+        )
 
     def test_length_over_dim_uses_rust_and_accepts_negative_dimensions(self):
         value = identity_only_wrapper(compat.VMobject)
