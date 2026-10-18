@@ -129,6 +129,15 @@ def curve_points_array_contract(value):
         "shape": list(points.shape),
         "dtype": str(points.dtype),
     }
+def subpath_array_contracts(value):
+    return [
+        {
+            "type": type(points).__name__,
+            "shape": list(points.shape),
+            "dtype": str(points.dtype),
+        }
+        for points in value.get_subpaths()
+    ]
 custom_stride_live_queries = {
     "x_max": float(live_custom_stride.get_extremum_along_dim(dim=0, key=1)),
     "boundary_point": [
@@ -170,6 +179,7 @@ custom_stride_live_queries = {
         [[float(coordinate) for coordinate in point] for point in subpath]
         for subpath in live_custom_stride.get_subpaths()
     ],
+    "subpath_arrays": subpath_array_contracts(live_custom_stride),
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
         for function in live_custom_stride.get_curve_functions()
@@ -238,6 +248,7 @@ custom_stride_authored_queries = {
         [[float(coordinate) for coordinate in point] for point in subpath]
         for subpath in authored_custom_stride.get_subpaths()
     ],
+    "subpath_arrays": subpath_array_contracts(authored_custom_stride),
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
         for function in authored_custom_stride.get_curve_functions()
@@ -342,15 +353,25 @@ json.dumps({
   const {
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,
+    subpath_arrays: liveSubpathArrays,
     ...liveQueryValues
   } = product.custom_stride_live_queries;
-  const authoredCurvePointsArray = product.custom_stride_authored_queries.nth_curve_points_array;
+  const authoredCurvePointsArray =
+    product.custom_stride_authored_queries.nth_curve_points_array;
+  const authoredSubpathArrays =
+    product.custom_stride_authored_queries.subpath_arrays;
   assert.deepEqual(liveCurvePointsArray, {
     type: "ndarray",
     shape: [2, 2],
     dtype: "float64",
   });
   assert.deepEqual(authoredCurvePointsArray, liveCurvePointsArray);
+  const expectedSubpathArrays = [
+    { type: "ndarray", shape: [2, 2], dtype: "float64" },
+    { type: "ndarray", shape: [2, 2], dtype: "float64" },
+  ];
+  assert.deepEqual(liveSubpathArrays, expectedSubpathArrays);
+  assert.deepEqual(authoredSubpathArrays, liveSubpathArrays);
   assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
@@ -388,6 +409,7 @@ json.dumps({
       anchors: product.custom_stride_live_queries.anchors,
       anchors_and_handles: product.custom_stride_live_queries.anchors_and_handles,
       subpaths: product.custom_stride_live_queries.subpaths,
+      subpath_arrays: product.custom_stride_live_queries.subpath_arrays,
       curve_function_midpoints: product.custom_stride_live_queries.curve_function_midpoints,
       curve_function_lengths: product.custom_stride_live_queries.curve_function_lengths,
       nth_curve_function_midpoint: product.custom_stride_live_queries.nth_curve_function_midpoint,

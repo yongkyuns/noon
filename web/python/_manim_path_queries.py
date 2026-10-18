@@ -212,6 +212,16 @@ def _points(coordinates):
     return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
 
 
+def _points_array(points):
+    """Match Manim's NumPy point containers when NumPy is available."""
+    try:
+        import numpy as np
+    except ImportError:
+        return points
+    rows = [[float(point[0]), float(point[1])] for point in points]
+    return np.asarray(rows, dtype=np.float64).reshape((-1, 2))
+
+
 def _cubic_bezier_point_ranges(value, point_count):
     points_per_curve = operator.index(
         getattr(value, "n_points_per_cubic_curve", 4)
@@ -605,11 +615,7 @@ def curve_points(value, n):
     try:
         points = _points(engine_call(query.points))
         selected = points[stride * n : stride * (n + 1)]
-        try:
-            import numpy as np
-        except ImportError:
-            return selected
-        return np.asarray(selected, dtype=np.float64).reshape((-1, 2))
+        return _points_array(selected)
     finally:
         query.free()
 
@@ -977,12 +983,18 @@ def subpaths(value):
         query = _query(value)
         try:
             points = _points(engine_call(query.points))
-            return subpaths_from_points(value, points)
+            return [
+                _points_array(points)
+                for points in subpaths_from_points(value, points)
+            ]
         finally:
             query.free()
     query = _query(value)
     try:
-        return [_points(points) for points in engine_call(query.subpaths)]
+        return [
+            _points_array(_points(points))
+            for points in engine_call(query.subpaths)
+        ]
     finally:
         query.free()
 

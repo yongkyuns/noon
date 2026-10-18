@@ -1767,6 +1767,11 @@ class PathQueryTests(unittest.TestCase):
 
 class SubpathQueryTests(unittest.TestCase):
     def test_object_subpaths_follow_mutable_stride_over_rust_snapshot(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2
         query = Mock()
@@ -1777,10 +1782,16 @@ class SubpathQueryTests(unittest.TestCase):
         with patch.object(
             queries, "_typed_manim_observation", return_value=query
         ), patch.object(queries, "_handle_for", return_value=handle):
-            self.assertEqual(
-                value.get_subpaths(),
-                [[(0., 0.), (1., 0.)], [(2., 0.), (3., 0.)]],
-            )
+            subpaths = value.get_subpaths()
+            if np is None:
+                self.assertEqual(
+                    subpaths,
+                    [[(0., 0.), (1., 0.)], [(2., 0.), (3., 0.)]],
+                )
+            else:
+                self.assertTrue(all(isinstance(path, np.ndarray) for path in subpaths))
+                np.testing.assert_array_equal(subpaths[0], [[0., 0.], [1., 0.]])
+                np.testing.assert_array_equal(subpaths[1], [[2., 0.], [3., 0.]])
 
         query.free.assert_called_once_with()
         handle.subpathRanges.assert_called_once_with(
@@ -1794,13 +1805,36 @@ class SubpathQueryTests(unittest.TestCase):
         )
 
     def test_subpaths_and_closure_free_the_snapshot_on_success_and_error(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.subpaths.return_value = [[0., 0., 1., 0., 2., 0., 3., 0.], [5., 1., 6., 1., 7., 1., 8., 1.]]
         query.pointCount = 8
         query.isClosed.return_value = False
         with patch.object(queries, '_typed_manim_observation', return_value=query):
-            self.assertEqual(value.get_subpaths(), [[(0., 0.), (1., 0.), (2., 0.), (3., 0.)], [(5., 1.), (6., 1.), (7., 1.), (8., 1.)]])
+            subpaths = value.get_subpaths()
+            if np is None:
+                self.assertEqual(
+                    subpaths,
+                    [
+                        [(0., 0.), (1., 0.), (2., 0.), (3., 0.)],
+                        [(5., 1.), (6., 1.), (7., 1.), (8., 1.)],
+                    ],
+                )
+            else:
+                self.assertTrue(
+                    all(isinstance(path, np.ndarray) for path in subpaths)
+                )
+                np.testing.assert_array_equal(
+                    subpaths[0], [[0., 0.], [1., 0.], [2., 0.], [3., 0.]]
+                )
+                np.testing.assert_array_equal(
+                    subpaths[1], [[5., 1.], [6., 1.], [7., 1.], [8., 1.]]
+                )
             self.assertFalse(value.is_closed())
             query.isClosed.assert_called_once_with(1e-6)
             self.assertEqual(query.free.call_count, 2)
@@ -1814,6 +1848,18 @@ class SubpathQueryTests(unittest.TestCase):
                 value.is_closed()
             self.assertEqual(query.isClosed.call_count, 1)
             self.assertEqual(query.free.call_count, 4)
+
+    def test_object_subpaths_fall_back_to_point_lists_without_numpy(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.subpaths.return_value = [[0., 0., 1., 0., 2., 0., 3., 0.]]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ):
+            self.assertEqual(
+                value.get_subpaths(),
+                [[(0., 0.), (1., 0.), (2., 0.), (3., 0.)]],
+            )
 
     def test_is_closed_passes_mutable_tolerance_to_the_shared_path_query(self):
         value = identity_only_wrapper(compat.VMobject)
