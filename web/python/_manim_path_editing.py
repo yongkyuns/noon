@@ -468,8 +468,7 @@ def insert_n_curves(value, n):
 def change_anchor_mode(value, mode):
     from _manim_compat import Group
     from _manim_updaters import canonical_callback_phase_active
-    if mode not in ("smooth", "jagged"):
-        raise ValueError("mode must be 'smooth' or 'jagged'")
+    assert mode in ["jagged", "smooth"], 'mode must be either "jagged" or "smooth"'
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
     family = isinstance(value, Group)

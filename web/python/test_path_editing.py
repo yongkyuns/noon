@@ -702,7 +702,11 @@ class SmoothingDispatchTests(unittest.TestCase):
                     self.assertEqual(method.call_args_list[0].args, (handle, True))
                     self.assertEqual(method.call_args_list[1].args, (handle, False))
         with patch.object(editing, '_handle_for') as resolve:
-            with self.assertRaises(ValueError): value.change_anchor_mode('unknown')
+            with self.assertRaisesRegex(
+                AssertionError,
+                r'^mode must be either "jagged" or "smooth"$',
+            ):
+                value.change_anchor_mode('unknown')
             resolve.assert_not_called()
 
 class AlignmentDispatchTests(unittest.TestCase):
