@@ -536,6 +536,12 @@ def _curve_function_queries(api):
         [(0, 0, 0), (1, 0, 0)]
     )
     custom_stride_path.n_points_per_cubic_curve = 2
+    direction_points = [(0, 1, 0), (1, 1, 0), (1, 2, 0), (2, 0, 0)]
+    positive_stride_direction = api.VMobject().set_points(direction_points)
+    positive_stride_direction.n_points_per_cubic_curve = 2
+    negative_stride_direction = api.VMobject().set_points(direction_points)
+    negative_stride_direction.n_points_per_cubic_curve = -2
+    default_stride_direction = api.VMobject().set_points(direction_points)
     custom_stride_boundary_path = api.VMobject().add_subpath([
         (0, 0, 0), (30, 0, 0), (1, 0, 0), (2, 0, 0),
     ])
@@ -638,6 +644,11 @@ def _curve_function_queries(api):
         ],
         "mutable_custom_stride": {
             "count": custom_stride_path.get_num_curves(),
+            "direction": {
+                "positive_stride": positive_stride_direction.get_direction(),
+                "negative_stride": negative_stride_direction.get_direction(),
+                "default_stride": default_stride_direction.get_direction(),
+            },
             "arc_length": float(
                 custom_stride_path.get_arc_length(sample_points_per_curve=2)
             ),

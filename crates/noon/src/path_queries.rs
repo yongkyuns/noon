@@ -251,16 +251,32 @@ impl PathQuery {
     /// This intentionally mirrors `numpy.trapezoid(y, x)` without adding a
     /// closing edge: Manim applies that operation to the anchor array as-is.
     pub fn direction(&self) -> &'static str {
-        let anchors = self.start_anchors();
-        let integral = anchors
-            .windows(2)
-            .map(|pair| (pair[1].0 - pair[0].0) * (pair[0].1 + pair[1].1) * 0.5)
-            .sum::<f64>();
-        if integral > 0.0 {
-            "CW"
-        } else {
-            "CCW"
+        shoelace_direction(&self.start_anchors())
+    }
+
+    /// Return direction for the raw Manim point array at its mutable stride.
+    /// Positive and negative strides follow Python's `points[::stride]` order.
+    pub fn direction_with_stride(&self, stride: i32) -> Option<&'static str> {
+        if stride == 0 {
+            return None;
         }
+        let step = stride.unsigned_abs() as usize;
+        let transform = |point: &(f64, f64)| self.transform_point(point.0, point.1);
+        let anchors = if stride > 0 {
+            self.manim_points
+                .iter()
+                .step_by(step)
+                .map(transform)
+                .collect::<Vec<_>>()
+        } else {
+            self.manim_points
+                .iter()
+                .rev()
+                .step_by(step)
+                .map(transform)
+                .collect::<Vec<_>>()
+        };
+        Some(shoelace_direction(&anchors))
     }
 
     /// Manim Polygram vertex runs end whenever a curve returns to their first
@@ -448,6 +464,18 @@ impl PathQuery {
             plan.arc_length(sample_points_per_curve)
                 .map_err(AuthoringError::PathQuery)
         })
+    }
+}
+
+fn shoelace_direction(anchors: &[(f64, f64)]) -> &'static str {
+    let integral = anchors
+        .windows(2)
+        .map(|pair| (pair[1].0 - pair[0].0) * (pair[0].1 + pair[1].1) * 0.5)
+        .sum::<f64>();
+    if integral > 0.0 {
+        "CW"
+    } else {
+        "CCW"
     }
 }
 

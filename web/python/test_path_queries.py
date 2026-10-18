@@ -1701,6 +1701,25 @@ class PathQueryTests(unittest.TestCase):
                 value.force_direction("cw")
             self.assertEqual(query.free.call_count, 3)
 
+    def test_direction_uses_current_point_stride_through_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.directionWithStride.return_value = "CW"
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.get_direction(), "CW")
+        query.directionWithStride.assert_called_once_with(2)
+        query.direction.assert_not_called()
+        query.free.assert_called_once_with()
+
+    def test_direction_rejects_zero_stride_before_reading_path(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 0
+        with patch.object(queries, "_typed_manim_observation") as observe:
+            with self.assertRaisesRegex(ValueError, "slice step cannot be zero"):
+                value.get_direction()
+        observe.assert_not_called()
+
 
 class SubpathQueryTests(unittest.TestCase):
     def test_object_subpaths_follow_mutable_stride_over_rust_snapshot(self):

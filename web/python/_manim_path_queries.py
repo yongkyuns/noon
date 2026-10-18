@@ -845,9 +845,27 @@ def curve_functions_with_lengths(value, **kwargs):
 
 
 def path_direction(value):
+    stride_value = getattr(value, "n_points_per_cubic_curve", 4)
+    if stride_value is None:
+        stride = 1
+    else:
+        try:
+            stride = operator.index(stride_value)
+        except TypeError:
+            # Preserve the exact Python slice validation used by
+            # get_start_anchors(), including its native TypeError message.
+            slice(None, None, stride_value).indices(0)
+            raise AssertionError("invalid slice step unexpectedly succeeded")
+    if stride == 0:
+        # NumPy raises before Manim reaches the shoelace reduction.
+        slice(None, None, stride).indices(0)
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_cubic_curve exceeds the supported path stride")
     query = _query(value)
     try:
-        return str(engine_call(query.direction))
+        if stride == 4:
+            return str(engine_call(query.direction))
+        return str(engine_call(query.directionWithStride, stride))
     finally:
         query.free()
 

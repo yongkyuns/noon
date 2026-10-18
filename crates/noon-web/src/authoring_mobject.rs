@@ -1648,6 +1648,13 @@ mod wasm {
         pub fn direction(&self) -> String {
             self.value.direction().to_owned()
         }
+        #[wasm_bindgen(js_name = directionWithStride)]
+        pub fn direction_with_stride(&self, stride: i32) -> Result<String, JsValue> {
+            self.value
+                .direction_with_stride(stride)
+                .map(str::to_owned)
+                .ok_or_else(|| JsValue::from_str("slice step cannot be zero"))
+        }
         #[wasm_bindgen(js_name = curvePoints)]
         pub fn curve_points(&self, index: u32) -> Result<Vec<f64>, JsValue> {
             self.value

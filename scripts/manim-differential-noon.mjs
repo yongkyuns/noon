@@ -102,6 +102,23 @@ live_custom_stride.set_points([
 ])
 live_custom_stride.n_points_per_cubic_curve = 2
 live_scene.add(live_custom_stride)
+direction_points = [(0, 1), (1, 1), (1, 2), (2, 0)]
+live_direction = VMobject()
+live_direction.set_points(direction_points)
+live_direction.n_points_per_cubic_curve = 2
+live_scene.add(live_direction)
+authored_direction = VMobject()
+authored_direction.set_points(direction_points)
+authored_direction.n_points_per_cubic_curve = 2
+live_direction_negative = VMobject()
+live_direction_negative.set_points(direction_points)
+live_direction_negative.n_points_per_cubic_curve = -2
+live_scene.add(live_direction_negative)
+authored_direction_negative = VMobject()
+authored_direction_negative.set_points(direction_points)
+authored_direction_negative.n_points_per_cubic_curve = -2
+default_stride_direction = VMobject()
+default_stride_direction.set_points(direction_points)
 custom_stride_live_queries = {
     "x_max": float(live_custom_stride.get_extremum_along_dim(dim=0, key=1)),
     "boundary_point": [
@@ -249,6 +266,11 @@ json.dumps({
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
     "custom_stride_live_queries": custom_stride_live_queries,
     "custom_stride_authored_queries": custom_stride_authored_queries,
+    "custom_stride_direction_live": live_direction.get_direction(),
+    "custom_stride_direction_authored": authored_direction.get_direction(),
+    "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
+    "custom_stride_negative_direction_authored": authored_direction_negative.get_direction(),
+    "default_stride_direction": default_stride_direction.get_direction(),
     "cubic_batch_extension": cubic_batch_extension,
 }, allow_nan=False)
 `));
@@ -261,6 +283,11 @@ json.dumps({
     error_type: "NotImplementedError",
     error_message: "scale_handle_to_anchor_distances requires the supported four-point cubic stride",
   });
+  assert.equal(product.custom_stride_direction_live, "CW");
+  assert.equal(product.custom_stride_direction_authored, "CW");
+  assert.equal(product.custom_stride_negative_direction_live, "CCW");
+  assert.equal(product.custom_stride_negative_direction_authored, "CCW");
+  assert.equal(product.default_stride_direction, "CCW");
   const { proportion_from_point, ...liveQueryValues } = product.custom_stride_live_queries;
   assert.deepEqual(liveQueryValues, {
     x_max: 30,

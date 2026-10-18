@@ -543,6 +543,26 @@ fn path_direction_matches_manim_anchor_trapezoid_and_snapshot_transform() {
 }
 
 #[test]
+fn path_direction_uses_mutable_positive_and_negative_point_strides() {
+    let mut scene = Scene::new();
+    let points = VectorPath::from_manim_points(vec![
+        Vec2::new(0.0, 1.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(1.0, 2.0),
+        Vec2::new(2.0, 0.0),
+    ]);
+    let object = scene.path(points, Default::default()).unwrap();
+    let query = object.path_query().unwrap();
+
+    // Default stride sees only the first anchor. Stride two uses the second
+    // configured anchor and follows NumPy/Python slicing for negative strides.
+    assert_eq!(query.direction(), "CCW");
+    assert_eq!(query.direction_with_stride(2), Some("CW"));
+    assert_eq!(query.direction_with_stride(-2), Some("CCW"));
+    assert_eq!(query.direction_with_stride(0), None);
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()
