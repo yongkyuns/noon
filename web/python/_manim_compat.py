@@ -492,6 +492,14 @@ class VMobject(Mobject):
     def get_background_image(self):
         return None
 
+    def color_using_background_image(self, background_image):
+        from _manim_semantic_handles import _color_using_background_image
+        return _color_using_background_image(self, background_image)
+
+    def match_background_image(self, vmobject):
+        from _manim_semantic_handles import _match_background_image
+        return _match_background_image(self, vmobject)
+
     def get_style(self, simple=False):
         style = {
             "stroke_opacity": self.get_stroke_opacity(),
@@ -1039,8 +1047,11 @@ class VGroup(Group):
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary
     get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
+    get_background_image = VMobject.get_background_image
     set_background_stroke = VMobject.set_background_stroke
     set_cap_style = VMobject.set_cap_style
+    color_using_background_image = VMobject.color_using_background_image
+    match_background_image = VMobject.match_background_image
     set_sheen_direction = VMobject.set_sheen_direction
     rotate_sheen_direction = VMobject.rotate_sheen_direction
     set_sheen = VMobject.set_sheen

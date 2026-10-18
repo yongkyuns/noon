@@ -2001,6 +2001,36 @@ def _gradient_start_end_probe(api):
     }
 
 
+def _background_image_default_probe(api):
+    donor = api.VMobject()
+    value = api.VMobject(fill_color=api.RED, stroke_color=api.BLUE)
+    match_returns_self = value.match_background_image(donor) is value
+    match_paint = [
+        _paint_rgb(value.get_fill_color()),
+        _paint_rgb(value.get_stroke_color()),
+    ]
+    color_returns_self = value.color_using_background_image(None) is value
+    color_paint = [
+        _paint_rgb(value.get_fill_color()),
+        _paint_rgb(value.get_stroke_color()),
+    ]
+    family = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    family_returns_self = family.color_using_background_image(None) is family
+    family_paint = [
+        _paint_rgb(member.get_fill_color()) for member in family.submobjects
+    ]
+    return {
+        "match_returns_self": match_returns_self,
+        "match_paint": match_paint,
+        "color_returns_self": color_returns_self,
+        "color_paint": color_paint,
+        "family_returns_self": family_returns_self,
+        "family_paint": family_paint,
+        "background_images_none": [value.get_background_image() is None,
+                                    family.get_background_image() is None],
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -2401,6 +2431,8 @@ FIXTURES = [
     Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
     Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
             lambda: _gradient_start_end_probe(manim), 1e-5),
+    Fixture("background_image_default", lambda: _background_image_default_probe(noon),
+            lambda: _background_image_default_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
@@ -2533,6 +2565,7 @@ UNSUPPORTED = {
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
     "background_stroke_and_sheen": "default background-stroke and zero-sheen mutators are supported; non-default background paint and sheen gradients still require shared style/renderer channels",
+    "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "set_cap_style": "the default AUTO cap style is a supported no-op; other cap styles require shared renderer cap semantics",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "vgroup_root_style": "VGroup root style getters remain unqualified because Noon family wrappers do not model Manim's separate VMobject-owned root paint profile",

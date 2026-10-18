@@ -1488,6 +1488,20 @@ def _get_gradient_start_and_end_points(self):
     )
 
 
+def _color_using_background_image(self, background_image):
+    if background_image is not None:
+        raise NotImplementedError("background images require shared image paint")
+    self.set_color(_base.WHITE)
+    return self
+
+
+def _match_background_image(self, vmobject):
+    background_image = vmobject.get_background_image()
+    if background_image is not None:
+        raise NotImplementedError("background images require shared image paint")
+    return self.color_using_background_image(None)
+
+
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")

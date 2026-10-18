@@ -31,11 +31,21 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(compat.VMobject.set_cap_style).parameters), [
             "self", "cap_style",
         ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.color_using_background_image).parameters), [
+            "self", "background_image",
+        ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.match_background_image).parameters), [
+            "self", "vmobject",
+        ])
         self.assertEqual(list(inspect.signature(compat.VMobject.get_gradient_start_and_end_points).parameters), [
             "self",
         ])
         self.assertIs(compat.VGroup.rotate_sheen_direction, compat.VMobject.rotate_sheen_direction)
         self.assertIs(compat.VGroup.set_cap_style, compat.VMobject.set_cap_style)
+        self.assertIs(compat.VGroup.color_using_background_image,
+                      compat.VMobject.color_using_background_image)
+        self.assertIs(compat.VGroup.match_background_image, compat.VMobject.match_background_image)
+        self.assertIs(compat.VGroup.get_background_image, compat.VMobject.get_background_image)
         self.assertIs(compat.VGroup.get_gradient_start_and_end_points,
                       compat.VMobject.get_gradient_start_and_end_points)
 
@@ -49,6 +59,24 @@ class StyleOperationsTests(unittest.TestCase):
         group = identity_only_wrapper(compat.VGroup)
         self.assertIs(group.rotate_sheen_direction(0.0), group)
         self.assertIs(group.set_cap_style(compat._base.CapStyleType.AUTO), group)
+        self.assertIsNone(group.get_background_image())
+
+    def test_none_background_image_helpers_restore_white_through_shared_color(self):
+        obj = identity_only_wrapper(compat.VMobject)
+        donor = identity_only_wrapper(compat.VMobject)
+        with patch.object(compat.VMobject, "set_color", return_value=obj) as set_color:
+            self.assertIs(obj.color_using_background_image(None), obj)
+            self.assertIs(obj.match_background_image(donor), obj)
+        self.assertEqual(set_color.call_count, 2)
+        set_color.assert_called_with(compat._base.WHITE)
+
+        with patch.object(compat.VMobject, "set_color") as set_color:
+            with self.assertRaises(NotImplementedError):
+                obj.color_using_background_image("background.png")
+            with patch.object(compat.VMobject, "get_background_image", return_value="background.png"):
+                with self.assertRaises(NotImplementedError):
+                    obj.match_background_image(donor)
+        set_color.assert_not_called()
 
     def test_gradient_endpoint_query_combines_rust_backed_center_and_edge_queries(self):
         obj = identity_only_wrapper(compat.VMobject)
