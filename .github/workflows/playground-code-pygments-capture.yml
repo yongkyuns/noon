@@ -1,0 +1,85 @@
+# Temporary branch-only renderer capture; delete before review and merge.
+# The CUDA transpose lesson has independent source/capture evidence and its
+# verified original PNG is preserved; this re-renders the other 24 lessons
+# through the existing strict capture harness with no synthetic frames.
+name: Code Pygments gallery capture
+on:
+  push:
+    branches:
+      - fix/code-pygments-2193
+    paths:
+      - '.github/workflows/playground-code-pygments-capture.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    if: github.repository == 'yongkyuns/noon' && github.ref == 'refs/heads/fix/code-pygments-2193'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: webgl
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - name: Verify exact pinned Pygments oracle
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
+          python3 scripts/test_code_pygments_parity.py
+      - name: Build exact source browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'false'
+      - name: Install pinned browser renderer
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Select the original 24 shared-capture lessons
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("web/python/examples/noon_showcase_manifest.json")
+          manifest = json.loads(path.read_text())
+          assert len(manifest["entries"]) == 25, "unexpected curated gallery size"
+          cuda = manifest["entries"][-1]
+          assert cuda["id"] == "showcase-cuda-transpose", "do not silently exclude other scenes"
+          manifest["entries"].pop()
+          assert len(manifest["entries"]) == 24
+          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - name: Capture original 24 exact scenes and true renderer PNG evidence
+        run: node scripts/showcase-capture.mjs
+      - name: Restore full manifest and require both original and CUDA evidence
+        run: |
+          git restore -- web/python/examples/noon_showcase_manifest.json
+          test -s web/thumbnails/showcase/showcase-code-blocks.png
+          node --test scripts/showcase-posters.test.mjs
+      - name: Stage only renderer-produced posters and evidence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/thumbnails/showcase
+          git diff --cached --check
+          test -z "$(git status --porcelain -- web/python/examples/noon_showcase_manifest.json)"
+          if git diff --cached --quiet; then
+            echo "No capture changes detected; verify the source revision and poster hashes"
+            exit 1
+          fi
+          git commit -m "Recapture native Code colors in real 24-scene WebGL gallery"
+          git push origin HEAD:fix/code-pygments-2193
+      - name: Retain capture diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pygments-code-gallery-evidence
+          path: |
+            browser-smoke-artifacts/showcase/webgl/report.json
+            browser-smoke-artifacts/showcase/webgl/contact-sheet.png
+            browser-smoke-artifacts/showcase/webgl/showcase-code-blocks.png
+          if-no-files-found: warn
+          retention-days: 3
