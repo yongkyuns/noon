@@ -169,3 +169,19 @@ test("loader and facade use the showcase catalog without fetching legacy manifes
   assert.deepEqual(requested, [SHOWCASE_MANIFEST, SHOWCASE_MANIFEST]);
   await assert.rejects(loadShowcaseGallery(async () => ({ ok: false, status: 503 })), /503/);
 });
+
+test("CUDA lesson reuses canonical source with a genuine retained showcase poster", async () => {
+  const entry = normalizeShowcaseManifest(manifest).examples.find(item => item.id === "showcase-cuda-transpose");
+  assert.ok(entry, "CUDA lesson is missing from the public curated catalog");
+  assert.equal(entry.path, "./python/examples/cuda_transpose_banks.py");
+  assert.equal(entry.thumbnail, "./thumbnails/showcase/showcase-cuda-transpose.png");
+  assert.equal(entry.playbackCapability, "deterministic-retained-replay");
+  assert.equal(entry.primaryFeature, undefined); // normalized gallery does not duplicate editor metadata
+  const source = await readFile(new URL("./python/examples/cuda_transpose_banks.py", import.meta.url), "utf8");
+  assert.match(source, /class CudaTransposeBanks\(Scene\):/);
+  assert.doesNotMatch(source, /GPU_TRACE/);
+  const malformed = copy();
+  const row = malformed.entries.find(item => item.id === "showcase-cuda-transpose");
+  row.path = "python/examples/synthetic_capture.py";
+  assert.throws(() => normalizeShowcaseManifest(malformed), /unique local showcase source/);
+});

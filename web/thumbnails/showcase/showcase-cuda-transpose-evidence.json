@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "publication": "rendered-cuda-fidelity-frame",
+  "id": "showcase-cuda-transpose",
+  "sourcePath": "python/examples/cuda_transpose_banks.py",
+  "sourceSha256": "a23e6193d0609ce1c3f9528e8d8e6d8cf28d97fb443f7deba015c3d1cdd4d73a",
+  "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "pngSha256": "953fc09105f15568affb041ae3170203f6d02a4a1e88fda292cbcfceec34089e"
+  },
+  "sample": {
+    "requestedTime": 64.0499998399999,
+    "publishedTime": 64.0499998399999,
+    "operation": "bank",
+    "stride": 33,
+    "column": 3
+  },
+  "capture": {
+    "repository": "yongkyuns/noon",
+    "workflowRunId": 39055762669,
+    "artifactId": 12110234543,
+    "testedPrHead": "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d",
+    "reportStatus": "passed",
+    "authoredDurationSeconds": 76.13999999999993,
+    "positiveCases": 3,
+    "negativeControls": 6,
+    "oracle": "independent-cpu-closed-form",
+    "cudaValidated": false,
+    "rendererBackend": "WebGPU",
+    "runtimeBuildIdentity": {
+      "schema": 1,
+      "sourceRevision": "d33f97e353c3f36b8cdfaaa44423b7d82e16af25",
+      "buildId": "6de31be0b8a57702c1f20893ff113b4e8a2829ffd3b62045df9f44549686b91a"
+    }
+  }
+}
