@@ -1509,6 +1509,61 @@ def _paint_queries_gradients(api):
     return observations
 
 
+def _family_own_paint_probe(api):
+    def rgb(mobject):
+        return _paint_rgb(mobject.get_color())
+
+    plain_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    plain = api.Group(*plain_children)
+    constructor_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    explicit = api.Group(*constructor_children, color=api.GREEN)
+
+    root_only_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    root_only = api.Group(*root_only_children)
+    root_only.set_color(api.GREEN, family=False)
+    late_child = api.Triangle(color=api.RED)
+    root_only.add(late_child)
+
+    empty = api.Group()
+    empty.set_color(api.YELLOW, family=False)
+
+    gradient = api.VGroup(*(api.Square() for _ in range(3)))
+    gradient.set_color_by_gradient(api.RED, api.BLUE)
+
+    shared = api.Circle(color=api.GREEN)
+    nested = api.Group(shared, api.Square(color=api.YELLOW))
+    aliased = api.Group(nested, shared)
+    aliased.set_color(api.BLUE, family=False)
+    nested.set_color(api.RED, family=False)
+
+    restorable = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    restorable.save_state()
+    restorable.set_color(api.GREEN)
+    restorable.restore()
+
+    return {
+        "plain_default": [rgb(plain), [rgb(member) for member in plain.submobjects]],
+        "explicit_constructor_color": [
+            rgb(explicit), [rgb(member) for member in constructor_children]
+        ],
+        "root_only_and_late_add": [
+            rgb(root_only), [rgb(member) for member in root_only.submobjects]
+        ],
+        "empty_root_only": [rgb(empty), len(empty.submobjects)],
+        "gradient_root_and_leaves": [
+            rgb(gradient), [rgb(member) for member in gradient.submobjects]
+        ],
+        "nested_shared_root_only": [
+            rgb(aliased), rgb(nested), rgb(shared), rgb(nested.submobjects[1]),
+            aliased.submobjects[1] is shared,
+            aliased.submobjects[0].submobjects[0] is shared,
+        ],
+        "vgroup_save_restore": [
+            rgb(restorable), [rgb(member) for member in restorable.submobjects]
+        ],
+    }
+
+
 def _arc_geometry(api):
     arc = api.Arc(
         radius=1.25,
@@ -2147,6 +2202,7 @@ FIXTURES = [
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
+    Fixture("family_own_paint", lambda: _family_own_paint_probe(noon), lambda: _family_own_paint_probe(manim), 1e-5),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),

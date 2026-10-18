@@ -59,7 +59,9 @@ try {
     globalThis.noonTextColorBatch = () => new wasm.WasmTextColorBatch();
     globalThis.noonCreateAuthoringTextHandle = (...args) => store.createManimText(...args);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
-    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex) => store.createFamily(batch, zIndex);
+    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
+      ? store.createFamilyWithColor(batch, zIndex, ...color)
+      : store.createFamily(batch, zIndex);
     // Manim's curve-function APIs return NumPy arrays. Provision that optional
     // package in this comparison worker to match the pinned reference runtime.
     await pyodide.loadPackage("numpy");
@@ -69,6 +71,7 @@ try {
 import sys, json
 sys.path.insert(0, "/tmp")
 from noon_differential import noon_observations
+import noon
 from _manim_compat import VMobject
 import numpy as np
 value = VMobject()
@@ -260,8 +263,38 @@ curves = np.array([
 ], dtype=float)
 batch.add_cubic_bezier_curves(curves)
 cubic_batch_extension = batch.get_all_points().tolist()
+observations = noon_observations()
+family_paint = observations["family_own_paint"]
+def color_components(color):
+    return (color.red, color.green, color.blue)
+def assert_color(actual, expected):
+    assert all(abs(float(left) - float(right)) <= 1e-6
+               for left, right in zip(actual, color_components(expected)))
+assert_color(family_paint["plain_default"][0], noon.WHITE)
+assert_color(family_paint["plain_default"][1][0], noon.RED)
+assert_color(family_paint["plain_default"][1][1], noon.BLUE)
+assert_color(family_paint["explicit_constructor_color"][0], noon.GREEN)
+assert_color(family_paint["explicit_constructor_color"][1][0], noon.RED)
+assert_color(family_paint["explicit_constructor_color"][1][1], noon.BLUE)
+assert_color(family_paint["root_only_and_late_add"][0], noon.GREEN)
+assert_color(family_paint["root_only_and_late_add"][1][0], noon.RED)
+assert_color(family_paint["root_only_and_late_add"][1][1], noon.BLUE)
+assert_color(family_paint["root_only_and_late_add"][1][2], noon.RED)
+assert_color(family_paint["empty_root_only"][0], noon.YELLOW)
+assert family_paint["empty_root_only"][1] == 0
+assert_color(family_paint["gradient_root_and_leaves"][0], noon.WHITE)
+assert_color(family_paint["gradient_root_and_leaves"][1][0], noon.RED)
+assert_color(family_paint["gradient_root_and_leaves"][1][-1], noon.BLUE)
+assert_color(family_paint["nested_shared_root_only"][0], noon.BLUE)
+assert_color(family_paint["nested_shared_root_only"][1], noon.RED)
+assert_color(family_paint["nested_shared_root_only"][2], noon.GREEN)
+assert_color(family_paint["nested_shared_root_only"][3], noon.YELLOW)
+assert family_paint["nested_shared_root_only"][4:] == [True, True]
+assert_color(family_paint["vgroup_save_restore"][0], noon.WHITE)
+assert_color(family_paint["vgroup_save_restore"][1][0], noon.RED)
+assert_color(family_paint["vgroup_save_restore"][1][1], noon.BLUE)
 json.dumps({
-    "observations": noon_observations(),
+    "observations": observations,
     "custom_stride_anchor_gate": custom_stride_gate,
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
     "custom_stride_live_queries": custom_stride_live_queries,
