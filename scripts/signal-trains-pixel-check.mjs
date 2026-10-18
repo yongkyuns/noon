@@ -5,6 +5,28 @@ import assert from "node:assert/strict";
 export const signalTrainTimes = Object.freeze([0, 0.65, 0.9, 1.5, 2, 3.55, 4.15, 4.2]);
 const expectedSignals = [0, 1, 2, 5, 8, 1, 0, 0];
 
+export function inspectSignalSample(sample, snapshot, index, backend) {
+  assert.ok(Number.isInteger(index) && index >= 0 && index < signalTrainTimes.length);
+  const time = signalTrainTimes[index];
+  assert.equal(sample?.type, "sample_to_authored_time");
+  assert.equal(sample.time, time, "acknowledged authored sample time");
+  assert.equal(sample.sourceCompleted, index === signalTrainTimes.length - 1, "source completion boundary");
+  assert.equal(snapshot.executionMode, "semantic");
+  const metrics = snapshot.metrics;
+  assert.equal(metrics?.ready, true);
+  assert.equal(metrics.retained, true);
+  assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
+  assert.ok(metrics.presentedFrames > 0, "sample must have a presented publication");
+  const renderTime = Number(metrics.time);
+  assert.ok(Number.isFinite(renderTime) && renderTime >= 0 && renderTime <= time,
+    "presented time cannot be invalid or newer than the acknowledged sample");
+  // The sample response awaits the required publication, including the last
+  // one when no new delta exists. Static holds need no redundant GPU redraw.
+  // Active pulses still require a freshly presented frame at the exact time.
+  if (expectedSignals[index] > 0) assert.equal(renderTime, time, "active pulse presentation time");
+  return { time, renderTime, sourceCompleted: sample.sourceCompleted };
+}
+
 export function inspectSignalTrain(image, index) {
   assert.ok(Number.isInteger(index) && index >= 0 && index < signalTrainTimes.length);
   assert.equal(image.width, 640);

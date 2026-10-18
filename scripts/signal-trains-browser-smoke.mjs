@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { inspectSignalTrain as inspect, signalTrainTimes as times } from "./signal-trains-pixel-check.mjs";
+import { inspectSignalTrain as inspect, inspectSignalSample, signalTrainTimes as times } from "./signal-trains-pixel-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifacts = path.resolve(root, "browser-smoke-artifacts/signal-trains");
@@ -140,19 +140,20 @@ try {
         const observed = await bounded(page.evaluate(async (time) => {
           const state = window.signalTrainsProof;
           if (state.error) throw new Error(state.error);
-          await state.execution.sampleToAuthoredTime(time);
-          for (let attempt = 0; attempt < 100; attempt += 1) {
-            if (state.error) throw new Error(state.error);
-            const m = await state.execution.metrics();
-            if (Math.abs(Number(m.metrics.time) - time) < 1e-6 && m.metrics.ready && m.metrics.retained && m.metrics.presentedFrames > 0) {
-              return { backend: m.metrics.backend, time: Number(m.metrics.time), mode: m.executionMode };
-            }
-            await new Promise((resolve) => setTimeout(resolve, 20));
-          }
-          throw new Error(`Python renderer did not reach ${time}`);
+          // This acknowledgement already awaits the required presentation.
+          // A clean static hold may reuse the earlier rendered publication.
+          const sample = await state.execution.sampleToAuthoredTime(time);
+          const metrics = await state.execution.metrics();
+          if (state.error) throw new Error(state.error);
+          return { sample, snapshot: {
+            executionMode: metrics.executionMode,
+            metrics: { ready: metrics.metrics.ready, retained: metrics.metrics.retained,
+              backend: metrics.metrics.backend, time: metrics.metrics.time,
+              presentedFrames: metrics.metrics.presentedFrames },
+          } };
         }, times[i]), `${backend} Python sample ${times[i]}`);
-        assert.equal(observed.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
-        assert.equal(observed.mode, "semantic");
+        run.lastPythonObservation = { requestedTime: times[i], ...observed };
+        const timing = inspectSignalSample(observed.sample, observed.snapshot, i, backend);
         const image = pngjs.PNG.sync.read(await canvas.screenshot({ path: path.join(artifacts, `${backend}-python-${i}.png`) }));
         inspect(image, i);
         // Rail paint is 0.25 in Rust and #404040 in Python: allow only that
@@ -160,7 +161,7 @@ try {
         let maxDifference = 0;
         for (let j = 0; j < image.data.length; j += 1) maxDifference = Math.max(maxDifference, Math.abs(image.data[j] - direct[i][j]));
         assert.ok(maxDifference <= 1, `Rust/Python pixels differ by ${maxDifference} at ${times[i]}`);
-        run.pythonSamples.push({ time: times[i], maxDifference });
+        run.pythonSamples.push({ ...timing, maxDifference });
       }
       const duration = await bounded(page.evaluate(async () => {
         const state = window.signalTrainsProof;

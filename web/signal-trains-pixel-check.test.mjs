@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inspectSignalTrain } from "../scripts/signal-trains-pixel-check.mjs";
+import { inspectSignalTrain, inspectSignalSample } from "../scripts/signal-trains-pixel-check.mjs";
 
 function image({ rails = true, pulses = false } = {}) {
   const data = new Uint8Array(640 * 360 * 4);
@@ -50,4 +50,40 @@ test("rejects transparent, truncated or wrong-sized frames and unknown samples",
   assert.throws(() => inspectSignalTrain(truncated, 0));
   assert.throws(() => inspectSignalTrain({ ...image(), width: 320 }, 0));
   assert.throws(() => inspectSignalTrain(image(), 8));
+});
+
+function acknowledged(time, renderTime = time, sourceCompleted = false) {
+  return [
+    { type: "sample_to_authored_time", time, sourceCompleted },
+    { executionMode: "semantic", metrics: {
+      ready: true, retained: true, backend: "WebGPU", presentedFrames: 1, time: renderTime,
+    } },
+  ];
+}
+test("accepts exact active samples and an unchanged final hold", () => {
+  assert.equal(inspectSignalSample(...acknowledged(2), 4, "webgpu").renderTime, 2);
+  assert.equal(inspectSignalSample(...acknowledged(4.15, 3.7), 6, "webgpu").time, 4.15);
+  assert.equal(inspectSignalSample(...acknowledged(4.2, 3.7, true), 7, "webgpu").sourceCompleted, true);
+});
+test("a stale authored acknowledgement cannot pass as a static hold", () => {
+  assert.throws(() => inspectSignalSample(...acknowledged(3.7), 6, "webgpu"), /authored sample/);
+});
+test("a stale active presentation cannot pass using a current acknowledgement", () => {
+  assert.throws(() => inspectSignalSample(...acknowledged(2, 1.5), 4, "webgpu"), /active pulse/);
+});
+test("rejects invalid or future GPU timestamps", () => {
+  for (const time of [NaN, Infinity, -1, 4.2]) {
+    assert.throws(() => inspectSignalSample(...acknowledged(4.15, time), 6, "webgpu"), /presented time/);
+  }
+});
+test("requires the exact source completion boundary", () => {
+  assert.throws(() => inspectSignalSample(...acknowledged(4.2), 7, "webgpu"), /completion boundary/);
+  assert.throws(() => inspectSignalSample(...acknowledged(4.15, 3.7, true), 6, "webgpu"), /completion boundary/);
+});
+test("requires the shared backend and an actual ready presentation", () => {
+  const [sample, snapshot] = acknowledged(2);
+  assert.throws(() => inspectSignalSample(sample, snapshot, 4, "webgl"));
+  for (const patch of [{ ready: false }, { retained: false }, { presentedFrames: 0 }]) {
+    assert.throws(() => inspectSignalSample(sample, { ...snapshot, metrics: { ...snapshot.metrics, ...patch } }, 4, "webgpu"));
+  }
 });
