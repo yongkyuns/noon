@@ -397,6 +397,28 @@ def _to_original_color_probe(api) -> Any:
     }
 
 
+def _base_mobject_color_gradient_probe(api) -> Any:
+    mobject = api.Mobject()
+    before = _paint_rgb(mobject.get_color())
+    multi = mobject.set_color_by_gradient(api.RED, api.BLUE)
+    after_multi = _paint_rgb(mobject.get_color())
+    single = mobject.set_submobject_colors_by_gradient(api.GREEN)
+    after_single = _paint_rgb(mobject.get_color())
+    try:
+        mobject.set_color_by_gradient()
+    except ValueError as error:
+        empty_error = str(error)
+    else:
+        empty_error = None
+    return {
+        "returns_self": multi is mobject and single is mobject,
+        "before": before,
+        "after_multi": after_multi,
+        "after_single": after_single,
+        "empty_error": empty_error,
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2679,6 +2701,8 @@ FIXTURES = [
             lambda: _mobject_update_probe(manim)),
     Fixture("to_original_color", lambda: _to_original_color_probe(noon),
             lambda: _to_original_color_probe(manim)),
+    Fixture("base_mobject_color_gradient", lambda: _base_mobject_color_gradient_probe(noon),
+            lambda: _base_mobject_color_gradient_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

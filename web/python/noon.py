@@ -465,6 +465,21 @@ class Mobject:
         color = self.color if hasattr(self, "color") else self.get_color()
         return self.set_color(color)
 
+    def set_color_by_gradient(self, *colors: object) -> Mobject:
+        return self.set_submobject_colors_by_gradient(*colors)
+
+    def set_submobject_colors_by_gradient(self, *colors: object) -> Mobject:
+        from _manim_compat import _as_color
+        if not colors:
+            raise ValueError("Need at least one color")
+        parsed = [_as_color("gradient color", color) for color in colors]
+        if len(parsed) == 1:
+            return self.set_color(parsed[0])
+        if not self.family_members_with_points():
+            return self
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *parsed)
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
