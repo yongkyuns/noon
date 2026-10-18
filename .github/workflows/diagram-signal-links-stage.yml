@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 -m py_compile web/python/examples/showcase_data_links.py
           node --check scripts/showcase-capture.mjs
-          node --test scripts/showcase-capture-checks.test.mjs
+          node --test scripts/showcase-replay-checks.test.mjs
       - name: Build existing Noon browser runtime
         uses: ./.github/actions/dev-wasm-build
         with:
