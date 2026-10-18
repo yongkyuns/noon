@@ -473,6 +473,26 @@ class PathEditingTests(unittest.TestCase):
             self.assertIs(value.append_vectorized_mobject(source), value)
         context.liveAppendVectorizedMobject.assert_called_once_with(handle, source_handle)
 
+    def test_append_vectorized_mobject_forwards_mutable_stride_in_authored_or_live_mode(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        source = identity_only_wrapper(compat.VMobject)
+        handle, source_handle = Mock(), Mock()
+        with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.append_vectorized_mobject(source), value)
+        handle.appendVectorizedMobjectWithStride.assert_called_once_with(source_handle, 5)
+
+        context = Mock()
+        with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
+             patch.object(editing, '_live_mutation_context', side_effect=lambda obj: context if obj is source else None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.append_vectorized_mobject(source), value)
+        context.liveAppendVectorizedMobjectWithStride.assert_called_once_with(
+            handle, source_handle, 5
+        )
+
     def test_append_vectorized_mobject_rejects_nonvector_source_and_callback_before_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(editing, '_handle_for') as resolve:

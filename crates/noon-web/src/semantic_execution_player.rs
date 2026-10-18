@@ -1010,6 +1010,22 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_append_vectorized_mobject_with_stride(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+        stride: i32,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
+                object,
+                source,
+                stride,
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_points_smoothly(
         &mut self,
         object: &noon::Mobject,

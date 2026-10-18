@@ -2466,6 +2466,17 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = appendVectorizedMobjectWithStride)]
+        pub fn append_vectorized_mobject_with_stride(
+            &mut self,
+            source: &WasmAuthoringMobjectHandle,
+            stride: i32,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .append_vectorized_mobject_with_stride(source.semantic_mobject(), stride)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setPointsSmoothly)]
         pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
             self.handle

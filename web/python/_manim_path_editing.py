@@ -307,6 +307,7 @@ def append_vectorized_mobject(value, source):
         raise TypeError("append_vectorized_mobject requires a VMobject")
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
+    stride = _curve_append_stride(value, empty_checks_first=False)
     handle, source_handle = _handle_for(value), _handle_for(source)
     if handle is None or source_handle is None:
         raise RuntimeError("path editing requires shared semantic handles")
@@ -316,16 +317,28 @@ def append_vectorized_mobject(value, source):
         or _live_constructor_context("path")
     )
     if context is None:
+        method = (
+            handle.appendVectorizedMobject
+            if stride == 4
+            else handle.appendVectorizedMobjectWithStride
+        )
         engine_call(
-            handle.appendVectorizedMobject,
+            method,
             source_handle,
+            *(() if stride == 4 else (stride,)),
             operation="VMobject.append_vectorized_mobject",
         )
     else:
+        method = (
+            context.liveAppendVectorizedMobject
+            if stride == 4
+            else context.liveAppendVectorizedMobjectWithStride
+        )
         engine_call(
-            context.liveAppendVectorizedMobject,
+            method,
             handle,
             source_handle,
+            *(() if stride == 4 else (stride,)),
             operation="VMobject.append_vectorized_mobject",
         )
     return value

@@ -116,6 +116,11 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         source: &'a Mobject,
     },
+    AppendVectorizedWithStride {
+        object: &'a Mobject,
+        source: &'a Mobject,
+        stride: i32,
+    },
     AppendCorners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -265,6 +270,15 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::AppendVectorized { object, source } => {
             return path_editing::publish_running_append_vectorized_mobject(
                 store, root, execution, object, source,
+            );
+        }
+        BorrowedPathEdit::AppendVectorizedWithStride {
+            object,
+            source,
+            stride,
+        } => {
+            return path_editing::publish_running_append_vectorized_mobject_with_stride(
+                store, root, execution, object, source, stride,
             );
         }
         BorrowedPathEdit::Subdivide { object, additional } => {

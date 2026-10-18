@@ -808,6 +808,73 @@ fn append_vectorized_mobject_appends_source_and_drops_pending_destination_anchor
 }
 
 #[test]
+fn append_vectorized_mobject_uses_mutable_destination_stride_and_preserves_raw_points() {
+    let source_points = [Vec2::new(20., 1.), Vec2::new(21., 2.), Vec2::new(22., 3.)];
+    for point_count in [5, 6] {
+        for live_mode in [false, true] {
+            let destination_points = (0..point_count)
+                .map(|index| Vec2::new(index as f32, -(index as f32)))
+                .collect::<Vec<_>>();
+            let mut expected = destination_points.clone();
+            if point_count % 5 == 1 {
+                expected.pop();
+            }
+            expected.extend(source_points);
+
+            let mut scene = Scene::new();
+            let mut destination = scene
+                .geometry(
+                    ManimGeometryOptions::path(VectorPath::from_manim_points(destination_points))
+                        .unwrap(),
+                )
+                .unwrap();
+            let source = scene
+                .geometry(
+                    ManimGeometryOptions::path(VectorPath::from_manim_points(
+                        source_points.to_vec(),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            scene.add(&destination).unwrap();
+            scene.add(&source).unwrap();
+
+            let query = if live_mode {
+                let mut execution = scene.execution_session().unwrap();
+                let store = std::rc::Rc::clone(scene.integration_store());
+                noon::integration::publish_borrowed_path_edit(
+                    &store,
+                    scene.root(),
+                    &mut execution,
+                    noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
+                        object: &destination,
+                        source: &source,
+                        stride: 5,
+                    },
+                )
+                .unwrap();
+                noon::integration::effective_path_query(&store, &execution, &destination).unwrap()
+            } else {
+                destination
+                    .append_vectorized_mobject_with_stride(&source, 5)
+                    .unwrap();
+                destination.path_query().unwrap()
+            };
+
+            let points = query.points().unwrap();
+            let expected = expected
+                .into_iter()
+                .map(|point| (f64::from(point.x), f64::from(point.y)))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                points, expected,
+                "point_count={point_count}, live={live_mode}"
+            );
+        }
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

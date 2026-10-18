@@ -968,6 +968,28 @@ def _raw_point_custom_stride_corners(api):
     return result
 
 
+def _raw_point_custom_stride_vectorized_append(api):
+    import numpy as np
+
+    source_points = np.array([(20.0, 1.0, 0.0), (21.0, 2.0, 0.0), (22.0, 3.0, 0.0)])
+    source = api.VMobject().set_points(source_points.copy())
+    result = {}
+    for point_count in (5, 6):
+        initial = np.array(
+            [(float(index), float(-index), 0.0) for index in range(point_count)]
+        )
+        destination = api.VMobject().set_points(initial.copy())
+        destination.n_points_per_cubic_curve = 5
+        pending_before = destination.has_new_path_started()
+        destination.append_vectorized_mobject(source)
+        result[str(point_count)] = {
+            "pending_before": pending_before,
+            "count": destination.get_num_points(),
+            "points": [_point_observation(point) for point in destination.get_all_points()],
+        }
+    return result
+
+
 def _sample_negative_curve_with_length(path, sample):
     function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
     return {"curve": sample(function), "length": float(length)}
@@ -2060,6 +2082,7 @@ FIXTURES = [
     Fixture("raw_point_smooth_curve_appends", lambda: _raw_point_smooth_curve_appends(noon), lambda: _raw_point_smooth_curve_appends(manim), 1e-5),
     Fixture("raw_point_custom_stride_curve_appends", lambda: _raw_point_custom_stride_curve_appends(noon), lambda: _raw_point_custom_stride_curve_appends(manim), 1e-5),
     Fixture("raw_point_custom_stride_corners", lambda: _raw_point_custom_stride_corners(noon), lambda: _raw_point_custom_stride_corners(manim), 1e-5),
+    Fixture("raw_point_custom_stride_vectorized_append", lambda: _raw_point_custom_stride_vectorized_append(noon), lambda: _raw_point_custom_stride_vectorized_append(manim), 1e-5),
     Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
