@@ -298,6 +298,16 @@ def scale_handle_to_anchor_distances(value, factor):
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
+    import operator
+
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if stride != 4:
+        members = value.family_members_with_points()
+        if any(member.get_num_points() >= stride for member in members):
+            raise NotImplementedError(
+                "scale_handle_to_anchor_distances requires the supported four-point cubic stride"
+            )
+        return value
     factor = float(factor)
     handle = _handle_for(value)
     if handle is None:

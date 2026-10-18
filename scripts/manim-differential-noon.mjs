@@ -81,9 +81,22 @@ except Exception as error:
     }
 else:
     custom_stride_gate = {"unexpected_success": True}
+scaling = VMobject()
+scaling.set_points([(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)])
+scaling.n_points_per_cubic_curve = 5
+try:
+    scaling.scale_handle_to_anchor_distances(0.5)
+except Exception as error:
+    custom_stride_scaling_gate = {
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+    }
+else:
+    custom_stride_scaling_gate = {"unexpected_success": True}
 json.dumps({
     "observations": noon_observations(),
     "custom_stride_anchor_gate": custom_stride_gate,
+    "custom_stride_scaling_gate": custom_stride_scaling_gate,
 }, allow_nan=False)
 `));
   }, { modules, probes, pyodideUrl });
@@ -91,11 +104,15 @@ json.dumps({
     error_type: "NotImplementedError",
     error_message: "set_anchors_and_handles requires the supported four-point cubic stride",
   });
+  assert.deepEqual(product.custom_stride_scaling_gate, {
+    error_type: "NotImplementedError",
+    error_message: "scale_handle_to_anchor_distances requires the supported four-point cubic stride",
+  });
   const observations = product.observations;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(observations, null, 2)}\n`);
   console.log(`Observed ${Object.keys(observations).length} shared Rust/Python semantic fixtures`);
-  console.log("Observed the custom-stride set_anchors_and_handles unsupported disposition in product Pyodide");
+  console.log("Observed the custom-stride set_anchors_and_handles and handle-scaling unsupported dispositions in product Pyodide");
 } finally {
   await browser?.close();
   await server.close();

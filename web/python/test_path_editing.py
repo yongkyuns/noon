@@ -438,6 +438,23 @@ class PathEditingTests(unittest.TestCase):
                 value.scale_handle_to_anchor_distances(0.5)
             resolve.assert_not_called()
 
+    def test_handle_scaling_custom_stride_gate_tracks_manim_threshold(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        value.family_members_with_points = Mock(return_value=[value])
+        value.get_num_points = Mock(return_value=4)
+        with patch.object(editing, '_handle_for') as resolve:
+            self.assertIs(value.scale_handle_to_anchor_distances(0.5), value)
+            resolve.assert_not_called()
+
+        value.get_num_points.return_value = 5
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaisesRegex(
+                NotImplementedError, 'supported four-point cubic stride'
+            ):
+                value.scale_handle_to_anchor_distances(0.5)
+            resolve.assert_not_called()
+
     def test_cubic_curve_batches_flatten_to_one_authored_or_live_edit(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
