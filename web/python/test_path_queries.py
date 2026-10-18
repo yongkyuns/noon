@@ -797,6 +797,39 @@ class PathQueryTests(unittest.TestCase):
             query.curveLength.assert_called_with(0, 20)
         self.assertEqual(query.free.call_count, 6)
 
+    def test_point_from_proportion_follows_mutable_stride_in_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.pointCount = 4
+        query.bezierLengthPiecesRange.side_effect = ([2.0], [6.0])
+        query.bezierPointsAtRange.return_value = [2.5, -1.0, 0.0]
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.point_from_proportion(0.5), (2.5, -1.0))
+
+        self.assertEqual(
+            [call.args for call in query.bezierLengthPiecesRange.call_args_list],
+            [(0, 2, None), (2, 4, None)],
+        )
+        query.bezierPointsAtRange.assert_called_once_with(2, 4, [1.0 / 3.0])
+        query.pointFromProportion.assert_not_called()
+        query.free.assert_called_once()
+
+    def test_mutable_stride_proportion_one_returns_the_last_stored_point(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.pointCount = 4
+        query.points.return_value = [0.0, 0.0, 1.0, 0.0, 2.0, 3.0, 4.0, 5.0]
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.point_from_proportion(1), (4.0, 5.0))
+
+        query.points.assert_called_once_with()
+        query.bezierLengthPiecesRange.assert_not_called()
+        query.free.assert_called_once()
+
     def test_anchor_groups_follow_mutable_stride_over_rust_point_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2

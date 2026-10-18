@@ -28,10 +28,66 @@ def point_from_proportion(value, alpha):
     alpha = _ir._finite_number("alpha", alpha)
     query = _query(value)
     try:
+        stride = getattr(value, "n_points_per_cubic_curve", 4)
+        try:
+            integer_stride = operator.index(stride)
+        except TypeError:
+            integer_stride = None
+        if integer_stride != 4:
+            return _custom_stride_point_from_proportion(
+                value, alpha, query, stride
+            )
+
         coordinates = engine_call(query.pointFromProportion, alpha)
         return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
     finally:
         query.free()
+
+
+def _custom_stride_point_from_proportion(value, alpha, query, stride):
+    if alpha < 0 or alpha > 1:
+        raise ValueError(f"Alpha {alpha} not between 0 and 1.")
+    point_count = int(query.pointCount)
+    if point_count == 0:
+        raise Exception(
+            "Cannot call Mobject.point_from_proportion for a Mobject with no points"
+        )
+    if alpha == 1:
+        points = engine_call(query.points)
+        return _base.Vec2(float(points[-2]), float(points[-1]))
+
+    count = point_count // stride
+    selections = []
+    lengths = []
+    for index in range(count):
+        selection = _nth_curve_selection(value, index, query)
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        length = _curve_length_from_selection(query, selection, None)
+        selections.append(selection)
+        lengths.append(length)
+
+    target_length = alpha * sum(lengths)
+    current_length = 0.0
+    for selection, length in zip(selections, lengths):
+        if current_length + length >= target_length:
+            residue = (
+                (target_length - current_length) / length
+                if length != 0
+                else 0.0
+            )
+            coordinates = engine_call(
+                query.bezierPointsAtRange,
+                selection[1],
+                selection[2],
+                [residue],
+            )
+            return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+        current_length += length
+    raise Exception(
+        "Not sure how you reached here, please file a bug report at "
+        "https://github.com/ManimCommunity/manim/issues/new/choose"
+    )
 
 
 def proportion_from_point(value, point):

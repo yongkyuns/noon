@@ -629,6 +629,10 @@ def _curve_function_queries(api):
                 _point_observation(point)
                 for point in custom_stride_path.get_points_defining_boundary()
             ],
+            "points_from_proportion": [
+                _point_observation(custom_stride_path.point_from_proportion(alpha))
+                for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
+            ],
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()
