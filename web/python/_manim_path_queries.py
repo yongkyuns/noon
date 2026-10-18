@@ -74,6 +74,8 @@ def arc_length(value, sample_points_per_curve):
             raise ValueError(f"Number of samples, {samples}, must be non-negative.")
         if samples is not None and samples > 0xFFFFFFFF:
             raise ValueError("sample_points_per_curve must be between 0 and 4294967295")
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
         return float(engine_call(query.arcLength, samples))
     finally:
         query.free()
@@ -446,6 +448,16 @@ def _curve_sample_count(sample_points):
     return samples
 
 
+def _raise_zero_sample_length_axis_error():
+    """Match NumPy's empty one-dimensional norm failure in Manim's sampler."""
+    import numpy as np
+
+    axis_error = getattr(np, "AxisError", None)
+    if axis_error is None:
+        axis_error = np.exceptions.AxisError
+    raise axis_error(1, ndim=1)
+
+
 def _assert_curve_index(query, index):
     if index < 0:
         raise IndexError("curve index must be non-negative")
@@ -495,11 +507,13 @@ def _curve_callable(snapshot, index):
 def _curve_functions(value, with_lengths, sample_points=None):
     import numpy as np
 
-    samples = _curve_sample_count(sample_points) if with_lengths else None
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
         count = int(query.curveCount)
+        samples = _curve_sample_count(sample_points) if with_lengths and count else None
+        if with_lengths and count and samples == 0:
+            _raise_zero_sample_length_axis_error()
         for index in range(count):
             function = _curve_callable(snapshot, index)
             if with_lengths:
@@ -528,11 +542,13 @@ def curve_function_with_length(value, n, sample_points=None):
     import numpy as np
 
     index = operator.index(n)
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
         _assert_curve_index(query, index)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
         function = _curve_callable(snapshot, index)
         length = np.float64(engine_call(query.curveLength, index, samples))
         return function, length
@@ -569,10 +585,12 @@ def curve_length_pieces(value, n, sample_points):
     index = operator.index(n)
     if index < 0:
         raise IndexError("curve index must be between 0 and 4294967295")
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     try:
         _assert_curve_index(query, index)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
         return np.asarray(
             engine_call(query.curveLengthPieces, index, samples), dtype=np.float64
         )
@@ -586,10 +604,12 @@ def curve_length(value, n, sample_points):
     index = operator.index(n)
     if index < 0:
         raise IndexError("curve index must be between 0 and 4294967295")
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     try:
         _assert_curve_index(query, index)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
         return np.float64(engine_call(query.curveLength, index, samples))
     finally:
         query.free()

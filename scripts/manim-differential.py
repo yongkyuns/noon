@@ -520,6 +520,21 @@ def _curve_function_queries(api):
             ],
         }
 
+    def capture(call):
+        try:
+            return {"value": call()}
+        except Exception as error:
+            return {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+
+    def zero_sample_function_with_length():
+        function, length = path.get_nth_curve_function_with_length(
+            0, sample_points=0
+        )
+        return {"curve": sample(function), "length": float(length)}
+
     individual = path.get_nth_curve_function(1)
     with_length, length = path.get_nth_curve_function_with_length(
         0, sample_points=6
@@ -537,14 +552,21 @@ def _curve_function_queries(api):
                 float(value)
                 for value in path.get_nth_curve_length_pieces(0, sample_points=1)
             ],
-            "zero_point_pieces": [
-                float(value)
-                for value in path.get_nth_curve_length_pieces(0, sample_points=0)
-            ],
-            "zero_sample_length": float(path.get_nth_curve_length(0, sample_points=0)),
+            "zero_point_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(0, sample_points=0)
+                ]
+            ),
+            "zero_sample_length": capture(
+                lambda: float(path.get_nth_curve_length(0, sample_points=0))
+            ),
+            "zero_sample_function_with_length": capture(
+                zero_sample_function_with_length
+            ),
             "default_length": float(path.get_nth_curve_length(1)),
             "six_point_length": float(path.get_nth_curve_length(1, sample_points=6)),
-            "zero_sample_arc_length": float(path.get_arc_length(0)),
+            "zero_sample_arc_length": capture(lambda: float(path.get_arc_length(0))),
             "single_sample_arc_length": float(path.get_arc_length(1)),
         },
         "individual": sample(individual),
@@ -560,6 +582,14 @@ def _curve_function_queries(api):
             )
         ],
         "empty_functions": list(api.VMobject().get_curve_functions()),
+        "empty_functions_with_invalid_length_samples": [
+            list(
+                api.VMobject().get_curve_functions_with_lengths(
+                    sample_points=sample_points
+                )
+            )
+            for sample_points in (-1, 2.5)
+        ],
         "empty_arc_lengths": [
             api.VMobject().get_arc_length(sample_points)
             for sample_points in (0, 1, -1, 2.5)

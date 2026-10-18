@@ -850,19 +850,25 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(query.free.call_count, 2)
 
     def test_curve_sample_validation_matches_curve_iteration_and_frees_snapshots(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy error contract")
+
+        axis_error = getattr(np, "AxisError", None) or np.exceptions.AxisError
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
         query.arcLength.return_value = 0.0
         with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
-            self.assertEqual(value.get_arc_length(0), 0.0)
+            with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
+                value.get_arc_length(0)
             self.assertEqual(value.get_arc_length(1), 0.0)
-            query.arcLength.assert_any_call(0)
             query.arcLength.assert_any_call(1)
             for samples, error in ((-1, ValueError), (2**32, ValueError), (2.5, TypeError)):
                 with self.subTest(samples=samples), self.assertRaises(error):
                     value.get_arc_length(samples)
-            self.assertEqual(query.arcLength.call_count, 2)
+            self.assertEqual(query.arcLength.call_count, 1)
             self.assertEqual(query.free.call_count, 5)
         self.assertEqual(observe.call_count, 5)
 
@@ -929,18 +935,26 @@ class PathQueryTests(unittest.TestCase):
             np.testing.assert_array_equal(pieces, [0.25, 0.5, 0.75])
             self.assertEqual(pieces.dtype, np.float64)
             query.curveLengthPieces.assert_called_once_with(0, None)
-            np.testing.assert_array_equal(value.get_nth_curve_length_pieces(0, sample_points=0), [])
-            query.curveLengthPieces.assert_called_with(0, 0)
+            axis_error = getattr(np, "AxisError", None) or np.exceptions.AxisError
+            with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
+                value.get_nth_curve_length_pieces(0, sample_points=0)
+            query.curveLengthPieces.assert_called_once_with(0, None)
             np.testing.assert_array_equal(value.get_nth_curve_length_pieces(1, sample_points=4), [0.25, 0.5, 0.75])
             query.curveLengthPieces.assert_called_with(1, 4)
             length = value.get_nth_curve_length(0)
             self.assertEqual(length, np.float64(1.5))
             self.assertIsInstance(length, np.float64)
             query.curveLength.assert_called_once_with(0, None)
-            self.assertEqual(query.free.call_count, 4)
+            with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
+                value.get_nth_curve_length(0, sample_points=0)
+            query.curveLength.assert_called_once_with(0, None)
+            with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
+                value.get_arc_length(0)
+            query.arcLength.assert_not_called()
+            self.assertEqual(query.free.call_count, 6)
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_length_pieces(2)
-            self.assertEqual(query.free.call_count, 5)
+            self.assertEqual(query.free.call_count, 7)
 
         with patch.object(queries, '_typed_manim_observation') as observe:
             for samples in (-1, 2**32):
@@ -950,7 +964,7 @@ class PathQueryTests(unittest.TestCase):
                 value.get_nth_curve_length_pieces(0, sample_points=2.5)
             with self.assertRaises(IndexError):
                 value.get_nth_curve_length(-1)
-            observe.assert_not_called()
+            self.assertEqual(observe.call_count, 3)
 
     def test_curve_functions_keep_snapshot_and_vectorize_numpy_parameters(self):
         try:
@@ -1008,6 +1022,32 @@ class PathQueryTests(unittest.TestCase):
                 next(value.get_curve_functions_with_lengths(unsupported=True))
             with self.assertRaises(IndexError):
                 value.get_nth_curve_function(-1)
+
+    def test_zero_sample_length_matches_numpy_axis_error_only_for_existing_curves(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy error contract")
+
+        axis_error = getattr(np, "AxisError", None) or np.exceptions.AxisError
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.curveCount = 2
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            for probe in (
+                lambda: value.get_nth_curve_function_with_length(0, sample_points=0),
+                lambda: list(value.get_curve_functions_with_lengths(sample_points=0)),
+                lambda: value.get_arc_length(0),
+            ):
+                with self.assertRaisesRegex(axis_error, "axis 1 is out of bounds"):
+                    probe()
+            self.assertEqual(query.free.call_count, 3)
+
+            query.curveCount = 0
+            self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=-1)), [])
+            self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=2.5)), [])
+            self.assertEqual(value.get_arc_length(2.5), 0.0)
+            self.assertEqual(query.free.call_count, 6)
 
     def test_force_direction_uses_shared_query_and_preserves_manim_errors(self):
         value = identity_only_wrapper(compat.VMobject)
