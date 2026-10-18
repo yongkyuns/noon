@@ -70,7 +70,7 @@ try {
     return JSON.parse(await pyodide.runPythonAsync(`
 import sys, json
 sys.path.insert(0, "/tmp")
-from noon_differential import noon_observations
+from noon_differential import _compare, noon_observations
 import noon
 from _manim_compat import VMobject
 import numpy as np
@@ -478,6 +478,9 @@ expectedFamilyPointCounts = {
 }
 assert observations["family_point_counts"] == expectedFamilyPointCounts
 assert observations["family_point_counts_live"] == expectedFamilyPointCounts
+assert not _compare(
+    observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5
+), _compare(observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5)
 family_paint = observations["family_own_paint"]
 assert observations["family_own_paint_live"] == family_paint
 family_paint_play = observations["family_own_paint_play_live"]

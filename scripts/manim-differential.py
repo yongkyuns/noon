@@ -662,7 +662,7 @@ def _path_queries_probe(api):
     return result
 
 
-def _cubic_bezier_probe(api):
+def _cubic_bezier_probe(api, scene=None):
     cases = [
         [(-2, 0, 0), (-1, 2, 0), (1, -2, 0), (2, 0, 0)],
         [(0, 0, 0)] * 4,
@@ -672,6 +672,8 @@ def _cubic_bezier_probe(api):
     for index, points in enumerate(cases):
         options = {} if index < 2 else {"color": api.GREEN, "stroke_width": 6, "fill_opacity": 0.4}
         curve = api.CubicBezier(*points, **options)
+        if scene is not None:
+            scene.add(curve)
         if index == 2:
             curve.scale(0.75).rotate(0.3).shift(api.RIGHT * 0.375 + api.DOWN * 0.5)
         result.append({
@@ -3023,6 +3025,9 @@ FIXTURES = [
         1e-5,
     ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
+    Fixture("cubic_bezier_live",
+            lambda: _noon_live_scene_probe(lambda scene: _cubic_bezier_probe(noon, scene)),
+            lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("family_point_counts", lambda: _family_point_count_probe(noon),
             lambda: _family_point_count_probe(manim)),
