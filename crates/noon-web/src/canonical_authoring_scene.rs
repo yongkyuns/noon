@@ -8070,6 +8070,30 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetPointsAsCornersWithSamples)]
+        pub fn live_set_points_as_corners_with_samples(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+            sample_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
+                JsValue::from(js_sys::TypeError::new(
+                    "set_points_as_corners requires four samples",
+                ))
+            })?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_points_as_corners_with_samples(
+                    source.semantic_mobject(),
+                    &points,
+                    &sample_values,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveClearPoints)]
         pub fn live_clear_points(
             &mut self,

@@ -796,6 +796,20 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points_as_corners_with_samples(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CornersWithSamples {
+            object: source,
+            points,
+            bezier_t_values,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_clear_points(
         &mut self,
         source: &noon::Mobject,

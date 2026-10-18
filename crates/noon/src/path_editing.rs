@@ -309,6 +309,26 @@ impl crate::Scene {
         })
     }
 
+    pub fn set_points_as_corners_with_samples(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CornersWithSamples {
+                    points,
+                    bezier_t_values,
+                },
+            )
+        })
+    }
+
     pub fn set_cubic_bezier_curves(
         &mut self,
         object: &Mobject,
@@ -608,6 +628,35 @@ pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError
     Ok(path)
 }
 
+fn corners_path_with_samples(
+    points: &[Vec2],
+    bezier_t_values: &[f64; 4],
+) -> Result<VectorPath, AuthoringError> {
+    if points
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        || bezier_t_values.iter().any(|t| !t.is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    if points.len() < 2 {
+        return Ok(VectorPath::new());
+    }
+    let mut raw_points = Vec::with_capacity((points.len() - 1) * bezier_t_values.len());
+    for pair in points.windows(2) {
+        let start = pair[0];
+        let delta = pair[1] - start;
+        raw_points.extend(bezier_t_values.iter().map(|t| start + delta * (*t as f32)));
+    }
+    if raw_points
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(VectorPath::from_manim_points(raw_points))
+}
+
 fn append_cubic_curve(path: VectorPath, curve: [Vec2; 4]) -> VectorPath {
     let [anchor1, handle1, handle2, anchor2] = curve;
     if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
@@ -674,6 +723,10 @@ pub(crate) enum PathEdit<'a> {
     RawPoints(&'a [Vec2]),
     AppendRawPoints(&'a [Vec2]),
     Corners(&'a [Vec2]),
+    CornersWithSamples {
+        points: &'a [Vec2],
+        bezier_t_values: &'a [f64; 4],
+    },
     SmoothCorners(&'a [Vec2]),
     AnchorMode(bool),
     Start {
@@ -887,6 +940,13 @@ impl PathEdit<'_> {
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
         }
+        if let Self::CornersWithSamples {
+            points,
+            bezier_t_values,
+        } = self
+        {
+            return corners_path_with_samples(points, bezier_t_values).map(Some);
+        }
         if let Self::SmoothCorners(points) = self {
             return noon_geometry::change_path_anchor_mode(&corners_path(points)?, true)
                 .map(Some)
@@ -1068,6 +1128,7 @@ impl PathEdit<'_> {
                     }
                 }
                 Self::Corners(_)
+                | Self::CornersWithSamples { .. }
                 | Self::SmoothCorners(_)
                 | Self::Clear
                 | Self::RawPoints(_)
@@ -1626,6 +1687,16 @@ impl Mobject {
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Corners(points))
+    }
+    pub fn set_points_as_corners_with_samples(
+        &mut self,
+        points: &[Vec2],
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CornersWithSamples {
+            points,
+            bezier_t_values,
+        })
     }
     /// Replace the path with cubic curves defined by four points each.
     pub fn set_cubic_bezier_curves(&mut self, curves: &[[Vec2; 4]]) -> Result<(), AuthoringError> {

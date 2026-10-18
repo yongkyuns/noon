@@ -1964,6 +1964,21 @@ def _path_editing(api):
     }
 
 
+def _set_points_as_corners_custom_constructor_samples(api):
+    import numpy as np
+
+    value = api.VMobject()
+    value._bezier_t_values = np.array([0.0, 0.25, 0.75, 1.0])
+    value.set_points_as_corners([(0, 0, 0), (2, 0, 0), (2, 2, 0)])
+    return {
+        "points": [_point_observation(point) for point in value.get_all_points()],
+        "subpaths": [
+            [_point_observation(point) for point in subpath]
+            for subpath in value.get_subpaths()
+        ],
+    }
+
+
 def _point_matching(api):
     source = api.Square(side_length=1, color="#58c4dd", fill_opacity=0.3, z_index=3.5)
     target = api.Arc(radius=1.4, start_angle=-0.4, angle=4.7, num_components=9).rotate(0.2)
@@ -2085,6 +2100,7 @@ FIXTURES = [
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
+    Fixture("set_points_as_corners_custom_constructor_samples", lambda: _set_points_as_corners_custom_constructor_samples(noon), lambda: _set_points_as_corners_custom_constructor_samples(manim), 1e-5),
     Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
     Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),
     Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),

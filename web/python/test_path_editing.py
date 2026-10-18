@@ -61,6 +61,31 @@ class PathEditingTests(unittest.TestCase):
                 value.set_points_as_corners([(0, 0), (1, 0)])
             resolve.assert_not_called()
 
+    def test_set_points_as_corners_forwards_mutated_four_samples_to_authored_or_live_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value._bezier_t_values = [0.0, 0.25, 0.75, 1.0]
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
+        handle.setPointsAsCornersWithSamples.assert_called_once_with(
+            [0.0, 0.0, 2.0, 0.0], [0.0, 0.25, 0.75, 1.0]
+        )
+
+        context = Mock()
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=context), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
+        context.liveSetPointsAsCornersWithSamples.assert_called_once_with(
+            handle, [0.0, 0.0, 2.0, 0.0], [0.0, 0.25, 0.75, 1.0]
+        )
+
     def test_raw_point_set_and_append_use_authored_or_live_rust_publication(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

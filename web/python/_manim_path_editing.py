@@ -5,14 +5,27 @@ from _manim_semantic_handles import _handle_for, _live_mutation_context, _live_c
 
 
 def set_points_as_corners(value, points):
-    sample_values = getattr(value, "_bezier_t_values", None)
-    if sample_values is not None and len(sample_values) != 4:
+    sample_values = list(
+        getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0))
+    )
+    if len(sample_values) != 4:
         raise TypeError(
             "set_points_as_corners requires four constructor interpolation samples"
         )
     if value.n_points_per_cubic_curve != 4:
         raise NotImplementedError(
             "set_points_as_corners requires the supported four-point cubic stride"
+        )
+    if sample_values != [0.0, 1 / 3, 2 / 3, 1.0]:
+        from pyodide.ffi import to_js
+
+        return edit_points(
+            value,
+            "setPointsAsCornersWithSamples",
+            "liveSetPointsAsCornersWithSamples",
+            points,
+            array=True,
+            suffix=(to_js(sample_values),),
         )
     return edit_points(value, "setPointsAsCorners", "liveSetPointsAsCorners", points, array=True)
 

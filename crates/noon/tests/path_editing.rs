@@ -937,6 +937,52 @@ fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_
 }
 
 #[test]
+fn set_points_as_corners_preserves_custom_constructor_samples_authored_and_live() {
+    let samples = [0.0, 0.25, 0.75, 1.0];
+    let corners = [Vec2::new(0., 0.), Vec2::new(2., 0.), Vec2::new(2., 2.)];
+    let expected = [
+        (0., 0.),
+        (0.5, 0.),
+        (1.5, 0.),
+        (2., 0.),
+        (2., 0.),
+        (2., 0.5),
+        (2., 1.5),
+        (2., 2.),
+    ];
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut object = scene
+            .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+            .unwrap();
+        scene.add(&object).unwrap();
+        let query = if live_mode {
+            let mut execution = scene.execution_session().unwrap();
+            let store = std::rc::Rc::clone(scene.integration_store());
+            noon::integration::publish_borrowed_path_edit(
+                &store,
+                scene.root(),
+                &mut execution,
+                noon::integration::BorrowedPathEdit::CornersWithSamples {
+                    object: &object,
+                    points: &corners,
+                    bezier_t_values: &samples,
+                },
+            )
+            .unwrap();
+            noon::integration::effective_path_query(&store, &execution, &object).unwrap()
+        } else {
+            object
+                .set_points_as_corners_with_samples(&corners, &samples)
+                .unwrap();
+            object.path_query().unwrap()
+        };
+        let points = query.points().unwrap();
+        assert_eq!(points, expected, "live={live_mode}");
+    }
+}
+
+#[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
     let mut scene = Scene::new();
     let mut object = scene

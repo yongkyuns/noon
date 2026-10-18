@@ -38,6 +38,11 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         points: &'a [Vec2],
     },
+    CornersWithSamples {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+        bezier_t_values: &'a [f64; 4],
+    },
     Line {
         object: &'a Mobject,
         point: Vec2,
@@ -181,6 +186,17 @@ pub fn publish_borrowed_path_edit(
         }
         BorrowedPathEdit::AnchorMode { object, smooth } => (object, PathEdit::AnchorMode(smooth)),
         BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
+        BorrowedPathEdit::CornersWithSamples {
+            object,
+            points,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::CornersWithSamples {
+                points,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
         BorrowedPathEdit::LineWithStride {
             object,
