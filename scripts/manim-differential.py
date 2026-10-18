@@ -2480,6 +2480,21 @@ def _point_mobject_probe(api):
     }
 
 
+def _paint_array_observation(value):
+    fill_rgbas = value.get_fill_rgbas()
+    stroke_rgbas = value.get_stroke_rgbas()
+    return {
+        "fill_rgbas": fill_rgbas.tolist(),
+        "fill_dtype": str(fill_rgbas.dtype),
+        "fill_colors": [_paint_rgb(color) for color in value.get_fill_colors()],
+        "fill_opacities": value.get_fill_opacities().tolist(),
+        "stroke_rgbas": stroke_rgbas.tolist(),
+        "stroke_dtype": str(stroke_rgbas.dtype),
+        "stroke_colors": [_paint_rgb(color) for color in value.get_stroke_colors()],
+        "stroke_opacities": value.get_stroke_opacities().tolist(),
+    }
+
+
 def _paint_array_probe(api):
     styled = api.VMobject(
         fill_color=api.GREEN,
@@ -2489,24 +2504,34 @@ def _paint_array_probe(api):
         stroke_width=4,
     )
     transparent_black = api.VectorizedPoint()
-
-    def observe(value):
-        fill_rgbas = value.get_fill_rgbas()
-        stroke_rgbas = value.get_stroke_rgbas()
-        return {
-            "fill_rgbas": fill_rgbas.tolist(),
-            "fill_dtype": str(fill_rgbas.dtype),
-            "fill_colors": [_paint_rgb(color) for color in value.get_fill_colors()],
-            "fill_opacities": value.get_fill_opacities().tolist(),
-            "stroke_rgbas": stroke_rgbas.tolist(),
-            "stroke_dtype": str(stroke_rgbas.dtype),
-            "stroke_colors": [_paint_rgb(color) for color in value.get_stroke_colors()],
-            "stroke_opacities": value.get_stroke_opacities().tolist(),
-        }
-
     return {
-        "styled": observe(styled),
-        "transparent_black": observe(transparent_black),
+        "styled": _paint_array_observation(styled),
+        "transparent_black": _paint_array_observation(transparent_black),
+    }
+
+
+def _vgroup_root_paint_array_probe(api, scene=None):
+    child = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.RED,
+        stroke_opacity=0.5,
+        stroke_width=2,
+    ).start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        family=False,
+    )
+    if scene is not None:
+        scene.add(family)
+    return {
+        "root": _paint_array_observation(family),
+        "child": _paint_array_observation(child),
     }
 
 
@@ -3035,6 +3060,14 @@ FIXTURES = [
     Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
     Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
     Fixture("paint_arrays", lambda: _paint_array_probe(noon), lambda: _paint_array_probe(manim), 1e-5),
+    Fixture("vgroup_root_paint_arrays",
+            lambda: _vgroup_root_paint_array_probe(noon),
+            lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
+    Fixture("vgroup_root_paint_arrays_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_root_paint_array_probe(noon, scene)
+            ),
+            lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
     Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
     Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
             lambda: _gradient_start_end_probe(manim), 1e-5),
@@ -3223,7 +3256,7 @@ UNSUPPORTED = {
     "set_cap_style": "the default AUTO cap style is a supported no-op; other cap styles require shared renderer cap semantics",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
-    "vgroup_root_style": "VGroup root style getters remain unqualified because Noon family wrappers do not model Manim's separate VMobject-owned root paint profile",
+    "vgroup_root_style": "The common-success profile now covers VGroup's one-row float64 root solid-paint arrays/getters and simple/full get_style in authored/live fixtures; non-default background stroke, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
 }
 
 

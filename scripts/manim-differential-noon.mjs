@@ -490,6 +490,15 @@ assert not _compare(
     observations["vgroup_root_style_copy_target_live"],
     1e-5,
 )
+assert not _compare(
+    observations["vgroup_root_paint_arrays"],
+    observations["vgroup_root_paint_arrays_live"],
+    1e-5,
+), _compare(
+    observations["vgroup_root_paint_arrays"],
+    observations["vgroup_root_paint_arrays_live"],
+    1e-5,
+)
 family_paint = observations["family_own_paint"]
 assert observations["family_own_paint_live"] == family_paint
 family_paint_play = observations["family_own_paint_play_live"]
@@ -500,6 +509,8 @@ def assert_color(actual, expected):
                for left, right in zip(actual, color_components(expected))), (
                    actual, color_components(expected)
                )
+def rgba(color, opacity):
+    return [*color_components(color), opacity]
 assert_color(family_paint["plain_default"][0], noon.WHITE)
 assert_color(family_paint["plain_default"][1][0], noon.RED)
 assert_color(family_paint["plain_default"][1][1], noon.BLUE)
@@ -537,6 +548,17 @@ for value in copy_target_style.values():
 assert abs(copy_target_style["source"]["stroke_width"] - 4) <= 1e-6
 assert abs(copy_target_style["copy"]["stroke_width"] - 4) <= 1e-6
 assert abs(copy_target_style["target"]["stroke_width"] - 7) <= 1e-6
+root_paint_arrays = observations["vgroup_root_paint_arrays"]["root"]
+child_paint_arrays = observations["vgroup_root_paint_arrays"]["child"]
+for value in (root_paint_arrays, child_paint_arrays):
+    assert value["fill_dtype"] == "float64"
+    assert value["stroke_dtype"] == "float64"
+assert _compare(root_paint_arrays["fill_rgbas"], [rgba(noon.GREEN, 0.35)], 1e-6) == []
+assert _compare(root_paint_arrays["stroke_rgbas"], [rgba(noon.BLUE, 0.45)], 1e-6) == []
+assert _compare(child_paint_arrays["fill_rgbas"], [rgba(noon.RED, 0.25)], 1e-6) == []
+assert _compare(child_paint_arrays["stroke_rgbas"], [rgba(noon.RED, 0.5)], 1e-6) == []
+assert root_paint_arrays["fill_opacities"] == [0.35]
+assert root_paint_arrays["stroke_opacities"] == [0.45]
 assert_color(family_paint["vgroup_save_restore"][0], noon.WHITE)
 assert_color(family_paint["vgroup_save_restore"][1][0], noon.RED)
 assert_color(family_paint["vgroup_save_restore"][1][1], noon.BLUE)
