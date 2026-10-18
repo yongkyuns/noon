@@ -790,6 +790,7 @@ class VGroup(Group):
     # The family wrapper reuses vector-class queries without duplicating them.
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+    get_points_defining_boundary = VMobject.get_points_defining_boundary
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:

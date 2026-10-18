@@ -429,6 +429,61 @@ class PathQueryTests(unittest.TestCase):
         value.get_family.assert_called_once_with()
         self.assertEqual(query.free.call_count, 1)
 
+    def test_vgroup_boundary_points_aggregate_family_anchors_in_order(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only array shape check")
+        import noon
+
+        group = identity_only_wrapper(compat.VGroup)
+        group._semantic_family_handle = object()
+        first = identity_only_wrapper(compat.VMobject)
+        second = identity_only_wrapper(compat.VMobject)
+        first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
+        second.get_anchors = Mock(return_value=[noon.Vec2(3, 1), noon.Vec2(6, 1)])
+        group.get_family = Mock(return_value=[group, first, second])
+
+        boundary = group.get_points_defining_boundary()
+
+        np.testing.assert_array_equal(
+            boundary,
+            [[0, 0], [2, 0], [3, 1], [6, 1]],
+        )
+        group.get_family.assert_called_once_with()
+        first.get_anchors.assert_called_once_with()
+        second.get_anchors.assert_called_once_with()
+
+    def test_empty_vgroup_boundary_points_keep_pinned_numpy_shape(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy-only empty array shape check")
+
+        group = identity_only_wrapper(compat.VGroup)
+        group._semantic_family_handle = object()
+        group.get_family = Mock(return_value=[group])
+
+        boundary = group.get_points_defining_boundary()
+
+        self.assertIsInstance(boundary, np.ndarray)
+        self.assertEqual(boundary.shape, (0,))
+        group.get_family.assert_called_once_with()
+
+    def test_vgroup_boundary_points_without_numpy_keep_vec2_values(self):
+        import noon
+
+        group = identity_only_wrapper(compat.VGroup)
+        group._semantic_family_handle = object()
+        member = identity_only_wrapper(compat.VMobject)
+        member.get_anchors = Mock(return_value=[noon.Vec2(1, 2), noon.Vec2(3, 4)])
+        group.get_family = Mock(return_value=[group, member])
+
+        with patch.dict("sys.modules", {"numpy": None}):
+            boundary = group.get_points_defining_boundary()
+
+        self.assertEqual(boundary, [noon.Vec2(1, 2), noon.Vec2(3, 4)])
+
     def test_vector_boundary_points_without_numpy_keep_vec2_values(self):
         import noon
 

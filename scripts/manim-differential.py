@@ -508,6 +508,14 @@ def _curve_function_queries(api):
     path = api.VMobject().start_new_path((0, 0, 0))
     path.add_cubic_bezier_curve_to((1, 0, 0), (1, 1, 0), (2, 1, 0))
     path.add_cubic_bezier_curve_to((3, 1, 0), (3, 2, 0), (4, 2, 0))
+    family_first = api.VMobject().add_cubic_bezier_curve(
+        (0, 0, 0), (40, 20, 0), (40, -20, 0), (2, 0, 0)
+    )
+    family_second = api.VMobject().add_cubic_bezier_curve(
+        (3, 1, 0), (3, 40, 0), (5, 40, 0), (6, 1, 0)
+    )
+    vector_family = api.VGroup(family_first, family_second)
+    empty_vector_family = api.VGroup()
     custom_stride_path = api.VMobject().set_points_as_corners(
         [(0, 0, 0), (1, 0, 0)]
     )
@@ -597,6 +605,13 @@ def _curve_function_queries(api):
                 sample_points=6
             )
         ],
+        "vector_family_boundary": [
+            _point_observation(point)
+            for point in vector_family.get_points_defining_boundary()
+        ],
+        "empty_vector_family_boundary_shape": list(
+            empty_vector_family.get_points_defining_boundary().shape
+        ),
         "mutable_custom_stride": {
             "count": custom_stride_path.get_num_curves(),
             "arc_length": float(

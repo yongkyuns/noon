@@ -269,21 +269,34 @@ def boundary_points(value):
         )
     except TypeError:
         integer_stride = None
-    if integer_stride != 4:
+    # Manim's VGroup inherits VMobject.get_points_defining_boundary, which
+    # concatenates anchors across the full family. A retained Noon family has
+    # no point array of its own, so resolve its Rust-ordered family wrappers
+    # and ask each vector leaf for its Rust-backed anchor snapshot.
+    has_family_handle = getattr(value, "_semantic_family_handle", None) is not None
+    if integer_stride != 4 or has_family_handle:
         family = value.get_family()
+
+        def member_anchors(member):
+            get_anchors = getattr(member, "get_anchors", None)
+            return () if get_anchors is None else get_anchors()
+
         anchors = [
             point
             for member in family
-            for point in member.get_anchors()
+            for point in member_anchors(member)
         ]
         try:
             import numpy as np
         except ImportError:
             return anchors
-        return np.asarray(
+        result = np.asarray(
             [[float(point[0]), float(point[1])] for point in anchors],
             dtype=np.float64,
-        ).reshape((-1, 2))
+        )
+        # The pinned VMobject implementation calls np.array(tuple(...))
+        # without forcing a second dimension, so an empty VGroup returns (0,).
+        return result if has_family_handle else result.reshape((-1, 2))
     coordinates = _path_boundary_points_observation(value)
     if coordinates is None:
         raise NotImplementedError(
