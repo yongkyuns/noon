@@ -31,12 +31,21 @@ A second independently checked-out copy of the *same original baseline release* 
 
 The workflow archives the original ZIP bytes, independent manifest checks, original plan, physical admission report, every product journal event, all raw product/host results and any partial failure. Finally it invokes the already merged `scripts/perf-aa-precision-audit.mjs`, which **exits nonzero** unless all the original A/A product and host strict statuses pass. Its JSON always contains `qualification:false`, `performanceAcceptance:false`, `mergeApproval:false`; a positive A/A is not an A/B result.
 
-### To run when an eligible physical runner is actually available
+### Original dispatch is consumed
 
-Open **GitHub → Actions → Physical A/A original precision acquisition → Run workflow**, select `master`, type exactly `RUN_PHYSICAL_AA_ONCE`, and submit **only one** attempt. No automatic retry, score selection, or repeated dispatch to obtain a favorable result. The source-pinned archive intake checks the GitHub workflow-run registry and fails closed unless exactly **one** manual dispatch exists, and its run ID, branch and attempt match the current run. A second manual dispatch is rejected even if its separate run attempt is numbered one. When it finishes, retain the entire `physical-aa-1933-<run>-1` artifact and independently verify the registered ZIP hashes, environment, journal and scorer integrity. A failed or inconclusive physical A/A means **do not run** a candidate-versus-baseline acceptance test.
+The one registered dispatch, [run 39145683127](https://github.com/yongkyuns/noon/actions/runs/39145683127)
+attempt 1 on October 18, passed the frozen protocol tests and real physical GPU
+readiness. Archive download then failed with HTTP 401 after its signed redirect;
+no product or Python-host pair started. The original logs and partial
+`physical-aa-1933-39145683127-1` artifact retain the failure, plan and readiness.
+The archive client now authenticates the API request without forwarding that
+credential to redirected storage. This transport correction does not rearm the
+study or provide performance evidence.
+
+That dispatch used **GitHub → Actions → Physical A/A original precision acquisition → Run workflow**, default `master`, and the exact acknowledgement `RUN_PHYSICAL_AA_ONCE`. No automatic retry, score selection, or repeated dispatch is allowed. The source-pinned archive intake checks the GitHub workflow-run registry and fails closed unless exactly **one** manual dispatch exists, and its run ID, branch and attempt match the current run. A second manual dispatch is rejected even if its separate run attempt is numbered one. Any future acquisition requires a separate preregistration that retains this failed original; this fix leaves the original one-shot registry unchanged. A failed or inconclusive physical A/A means **do not run** a candidate-versus-baseline acceptance test.
 
 ## Limits and follow-up
 
 This is a one-shot source-pinned protocol for the **specific original #1956 release pair**, not a general CLI for arbitrary artifacts. The setup cannot supply a physical machine; its manual runner remains a prerequisite. Physical-looking renderer strings are necessary checks, not proof of exclusive bare-metal hardware. Shell timing and OS load can still be unstable. The same-code controls must empirically demonstrate the original 7+3, 1.03/1.05 cost and FPS lower-95% precision with all observations retained.
 
-Only after an independently credible identical-source study passes should a **separately preregistered, exact-new-head candidate-vs-baseline** comparison be attempted under the unchanged production Product Gate. [PR #1956](https://github.com/yongkyuns/noon/pull/1956) stays draft/unmerged until then. The original strict performance acceptance constraints remain unchanged.
+Only after an independently credible identical-source study passes should a **separately preregistered, exact-new-head candidate-vs-baseline** comparison be attempted under the unchanged production Product Gate. [PR #1956](https://github.com/yongkyuns/noon/pull/1956) is closed and unmerged; this diagnostic does not reopen or approve it. The original strict performance acceptance constraints remain unchanged.

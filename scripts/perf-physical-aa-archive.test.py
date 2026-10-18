@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 import zipfile
 
@@ -37,6 +38,25 @@ def fixture(source=SOURCE, extra=None, omit=None):
 
 
 class ArchiveIntegrity(unittest.TestCase):
+    def test_archive_redirect_keeps_api_authentication_off_signed_storage(self):
+        payload = fixture()
+        signed_url = "https://storage.example/original.zip?signature=fixture"
+
+        def download(req, timeout):
+            self.assertEqual(req.full_url,
+                             "https://api.github.com/repos/yongkyuns/noon/actions/artifacts/123/zip")
+            self.assertEqual(req.get_header("Authorization"), "Bearer fixture-token")
+            redirected = ARCHIVE.urllib.request.HTTPRedirectHandler().redirect_request(
+                req, None, 302, "Found", {}, signed_url)
+            self.assertEqual(redirected.full_url, signed_url)
+            self.assertIsNone(redirected.get_header("Authorization"))
+            self.assertEqual(timeout, 180)
+            return BytesIO(payload)
+
+        with mock.patch.object(ARCHIVE.urllib.request, "urlopen", side_effect=download):
+            actual = ARCHIVE.github_zip("actions/artifacts/123/zip", "fixture-token")
+        self.assertEqual(actual, payload)
+
     def test_only_one_manual_dispatch_is_registered_for_this_study(self):
         initial = {"total_count": 1, "workflow_runs": [
             {"id": 123, "run_attempt": 1, "event": "workflow_dispatch",
