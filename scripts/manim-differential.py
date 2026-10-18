@@ -717,6 +717,37 @@ def _path_point_counts(api):
     return counts
 
 
+def _family_point_count_probe(api, scene=None):
+    """Observe Manim's own-point count separately from descendant geometry."""
+    group_leaf = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    vector_leaf = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    group = api.Group(group_leaf)
+    vector_group = api.VGroup(vector_leaf)
+    if scene is not None:
+        scene.add(group, vector_group)
+
+    def observe(family, leaf):
+        before = {
+            "root": family.get_num_points(),
+            "has_points": family.has_points(),
+            "has_no_points": family.has_no_points(),
+            "leaf": leaf.get_num_points(),
+        }
+        leaf.clear_points()
+        after = {
+            "root": family.get_num_points(),
+            "has_points": family.has_points(),
+            "has_no_points": family.has_no_points(),
+            "leaf": leaf.get_num_points(),
+        }
+        return {"before": before, "after": after}
+
+    return {
+        "group": observe(group, group_leaf),
+        "vgroup": observe(vector_group, vector_leaf),
+    }
+
+
 def _cubic_tuple_groups(api):
     path = api.VMobject().add_subpath([
         (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0),
@@ -2993,6 +3024,11 @@ FIXTURES = [
     ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
+    Fixture("family_point_counts", lambda: _family_point_count_probe(noon),
+            lambda: _family_point_count_probe(manim)),
+    Fixture("family_point_counts_live",
+            lambda: _noon_live_scene_probe(lambda scene: _family_point_count_probe(noon, scene)),
+            lambda: _family_point_count_probe(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),

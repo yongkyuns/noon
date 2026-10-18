@@ -466,6 +466,18 @@ curves = np.array([
 batch.add_cubic_bezier_curves(curves)
 cubic_batch_extension = batch.get_all_points().tolist()
 observations = noon_observations()
+expectedFamilyPointCounts = {
+    "group": {
+        "before": {"root": 0, "has_points": False, "has_no_points": True, "leaf": 4},
+        "after": {"root": 0, "has_points": False, "has_no_points": True, "leaf": 0},
+    },
+    "vgroup": {
+        "before": {"root": 0, "has_points": False, "has_no_points": True, "leaf": 4},
+        "after": {"root": 0, "has_points": False, "has_no_points": True, "leaf": 0},
+    },
+}
+assert observations["family_point_counts"] == expectedFamilyPointCounts
+assert observations["family_point_counts_live"] == expectedFamilyPointCounts
 family_paint = observations["family_own_paint"]
 assert observations["family_own_paint_live"] == family_paint
 family_paint_play = observations["family_own_paint_play_live"]
