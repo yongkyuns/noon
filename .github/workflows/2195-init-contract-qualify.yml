@@ -1,34 +1,164 @@
+# Research only: never merge this workflow. Source-only candidate publication
+# does not advance any branch ref. Remove research branch after evidence retention.
 name: 2195 initialization contract qualification
 on:
   push:
     branches: [codex/2195-init-contract-qualify]
-  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: 2195-init-contract-qualify
   cancel-in-progress: false
 jobs:
-  inspect:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      EXPECTED_BASE: 5f48dbe981554bbd5c9a0964385ae09292c22072
+      PROOF_DIR: /tmp/noon-init-proof
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 5f48dbe981554bbd5c9a0964385ae09292c22072
-      - name: Preserve exact source and constructor inventory
+          persist-credentials: false
+      - name: Verify reviewed transformation and exact source base
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/noon-init-proof
-          git rev-parse HEAD > /tmp/noon-init-proof/base.txt
-          test "$(cat /tmp/noon-init-proof/base.txt)" = 5f48dbe981554bbd5c9a0964385ae09292c22072
-          git grep -n -E '(FramePreparer|for_mixed_retained_path_draws|set_packed_path_buffer_limit|prepare_for_device|prepare_incremental_for_device)' -- '*.rs' > /tmp/noon-init-proof/call-sites.txt
-          git ls-files -z -- '*.rs' '*.toml' '*.sh' '*.py' '*.md' '*.yml' '*.yaml' Cargo.lock | tar --null -T - -czf /tmp/noon-init-proof/source.tar.gz
-          sha256sum /tmp/noon-init-proof/source.tar.gz > /tmp/noon-init-proof/source.sha256
-      - uses: actions/upload-artifact@v6
+          mkdir -p "$PROOF_DIR"
+          cp experiments/2195/apply-initialization.py.gz.b64 "$PROOF_DIR/staged-input.b64"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          encoded = (proof / 'staged-input.b64').read_bytes().strip()
+          # Normalize the single transcription surplus in the staged transport.
+          # Both decoded program and its produced source diff are authenticated.
+          encoded = encoded.replace(b'JOCzZMbl9Vkz', b'JOCzZMblVkz')
+          data = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(data).hexdigest() == '67f530f9a9495de040f49426ecb6fe8e2abe5f2fdeba48dc2e5f8d71afb3b990'
+          (proof / 'apply_init.py').write_bytes(data)
+          PY
+          git fetch --depth=1 origin "$EXPECTED_BASE"
+          git checkout --detach "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD > "$PROOF_DIR/base.txt"
+          python3 "$PROOF_DIR/apply_init.py"
+          git diff --binary --unified=0 > "$PROOF_DIR/reviewed.patch"
+          echo '81b5a32e3bcb1707531658a25ae2cc91b6e4979d412a9950d478a1a5220ed7e4  '"$PROOF_DIR/reviewed.patch" | sha256sum --check
+      - name: Install pinned toolchain and native prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustc --version --verbose | tee "$PROOF_DIR/toolchain.txt"
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libvulkan1 mesa-vulkan-drivers
+      - uses: actions/cache@v6
         with:
-          name: 2195-init-contract-source
-          path: /tmp/noon-init-proof
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-2195-init-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-2195-device-sources-
+            ${{ runner.os }}-capture-cargo-sources-
+      - name: Format and audit the exact constructor migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          changed = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
+          assert len(changed) == 55, changed
+          assert all(p.startswith('crates/') and p.endswith('.rs') for p in changed)
+          lib = Path('crates/noon-render-wgpu/src/lib.rs').read_text()
+          retained = Path('crates/noon-render-wgpu/src/gpu/retained_text.rs').read_text()
+          assert 'prepare_for_device' not in lib and 'prepare_incremental_for_device' not in lib
+          assert '#[derive(Debug, Default)]\npub struct FramePreparer' not in lib
+          assert 'impl Default for RetainedFramePreparer' not in retained
+          assert 'packed_path_buffer_limit: Option' not in lib
+          assert 'set_packed_path_buffer_limit(' not in retained
+          assert 'packed_path_test_limit' not in retained
+          (proof / 'changed-files.json').write_text(json.dumps(changed, indent=2))
+          (proof / 'applied.patch').write_bytes(subprocess.check_output(['git','diff','--binary']))
+          PY
+      - name: Test constrained initialization and zero-upload clean frames
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --lib high_address_preload_falls_back_on_real_limited_device -- --nocapture 2>&1 | tee "$PROOF_DIR/fallback.log"
+          cargo test -p noon-render-wgpu --all-features --lib publication_reset_preserves_initialization_capabilities -- --nocapture 2>&1 | tee "$PROOF_DIR/reset.log"
+      - name: Validate public constructors and rejected default construction
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --doc 2>&1 | tee "$PROOF_DIR/doctests.log"
+      - name: Run repository fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee "$PROOF_DIR/fast-gate.log"
+      - name: Check the browser-specific initialization and device recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF_DIR/wasm-check.log"
+      - name: Verify mixed fallback against exact native pixels and all MSAA samples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::tests::mixed_mega_native_exact_pixels_against_individual_paths -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$PROOF_DIR/native-msaa.log"
+      - name: Store the tested source candidate without changing refs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, urllib.request
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          base = os.environ['EXPECTED_BASE']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip() == base
+          applied = subprocess.check_output(['git','diff','--binary'])
+          assert applied == (proof/'applied.patch').read_bytes(), 'Tests changed source'
+          paths = json.loads((proof/'changed-files.json').read_text())
+          assert paths == subprocess.check_output(['git','diff','--name-only'],text=True).splitlines()
+          def api(method, suffix, payload=None):
+              request = urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/'+suffix,
+                  data=None if payload is None else json.dumps(payload).encode(), method=method,
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          tree_entries, hashes = [], {}
+          for path in paths:
+              content = Path(path).read_bytes()
+              hashes[path] = hashlib.sha256(content).hexdigest()
+              blob = api('POST','git/blobs',{'content':content.decode(),'encoding':'utf-8'})
+              tree_entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
+          original = api('GET','git/commits/'+base)
+          tree = api('POST','git/trees',{'base_tree':original['tree']['sha'],'tree':tree_entries})
+          commit = api('POST','git/commits',{'message':'refactor(renderer): require capabilities at initialization and remove per-frame device APIs','tree':tree['sha'],'parents':[base]})
+          result={'base':base,'commit':commit['sha'],'tree':tree['sha'],'source_sha256':hashes,'patch_sha256':hashlib.sha256(applied).hexdigest(),'workflow_run':os.environ['GITHUB_RUN_ID'],'ref_updated':False}
+          (proof/'publication.json').write_text(json.dumps(result,indent=2)+'\n')
+          print('TESTED_COMMIT='+commit['sha'])
+          PY
+      - name: Preserve qualification evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: 2195-init-contract-proof
+          path: ${{ env.PROOF_DIR }}
           retention-days: 3
           if-no-files-found: error
