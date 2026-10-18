@@ -30,6 +30,11 @@ def set_points_as_corners(value, points):
     return edit_points(value, "setPointsAsCorners", "liveSetPointsAsCorners", points, array=True)
 
 
+def set_points_smoothly(value, points):
+    value.set_points_as_corners(points)
+    return value.make_smooth()
+
+
 def clear_points(value):
     return edit_points(value, "clearPoints", "liveClearPoints", ())
 

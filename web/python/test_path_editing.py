@@ -86,6 +86,38 @@ class PathEditingTests(unittest.TestCase):
             handle, [0.0, 0.0, 2.0, 0.0], [0.0, 0.25, 0.75, 1.0]
         )
 
+    def test_set_points_smoothly_uses_corner_set_then_rust_anchor_rewrite(self):
+        value = identity_only_wrapper(compat.VMobject)
+        points = [(0, 0), (1, 1), (2, 0)]
+        set_corners = Mock(return_value=value)
+        make_smooth = Mock(return_value=value)
+        value.set_points_as_corners = set_corners
+        value.make_smooth = make_smooth
+
+        self.assertIs(value.set_points_smoothly(points), value)
+
+        set_corners.assert_called_once_with(points)
+        make_smooth.assert_called_once_with()
+
+    def test_set_points_smoothly_preserves_corner_constructor_guards(self):
+        for setup, expected_error in (
+            (
+                lambda value: setattr(value, "n_points_per_cubic_curve", 5),
+                NotImplementedError,
+            ),
+            (
+                lambda value: setattr(value, "_bezier_t_values", [0.0, 0.5, 1.0]),
+                TypeError,
+            ),
+        ):
+            value = identity_only_wrapper(compat.VMobject)
+            setup(value)
+            make_smooth = Mock()
+            value.make_smooth = make_smooth
+            with self.assertRaises(expected_error):
+                value.set_points_smoothly([(0, 0), (1, 1)])
+            make_smooth.assert_not_called()
+
     def test_raw_point_set_and_append_use_authored_or_live_rust_publication(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()

@@ -1654,14 +1654,20 @@ def _boolean_geometry(api):
 
 
 def _path_smoothing(api):
+    import numpy as np
+
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.VMobject().set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
+    custom = api.VMobject()
+    custom._bezier_t_values = np.array([0.0, 0.25, 0.75, 1.0])
+    custom.set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
     closed = api.Square(side_length=2).shift(api.RIGHT * 2 + api.UP * 2)
     family = api.VGroup(source, closed)
     def observe():
         return [[[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()]
                 for value in (source, closed)]
-    result = [observe()]
+    result = [observe(), [[list(p)[:2] for p in column]
+                          for column in custom.get_anchors_and_handles()]]
     family.make_smooth()
     result.append(observe())
     family.make_jagged()

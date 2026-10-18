@@ -178,8 +178,8 @@ class VMobject(Mobject):
         return clear_points(self)
 
     def set_points_smoothly(self, points):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "setPointsSmoothly", "liveSetPointsSmoothly", points, array=True)
+        from _manim_path_editing import set_points_smoothly
+        return set_points_smoothly(self, points)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")
