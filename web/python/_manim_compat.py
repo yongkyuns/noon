@@ -531,6 +531,10 @@ class VMobject(Mobject):
         from _manim_semantic_handles import _set_sheen_direction
         return _set_sheen_direction(self, direction, family)
 
+    def rotate_sheen_direction(self, angle, axis=_base.OUT, family=True):
+        from _manim_semantic_handles import _rotate_sheen_direction
+        return _rotate_sheen_direction(self, angle, axis, family)
+
     def set_sheen(self, factor, direction=None, family=True):
         from _manim_semantic_handles import _set_sheen
         return _set_sheen(self, factor, direction, family)
@@ -1019,6 +1023,7 @@ class VGroup(Group):
     get_points_defining_boundary = VMobject.get_points_defining_boundary
     set_background_stroke = VMobject.set_background_stroke
     set_sheen_direction = VMobject.set_sheen_direction
+    rotate_sheen_direction = VMobject.rotate_sheen_direction
     set_sheen = VMobject.set_sheen
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:

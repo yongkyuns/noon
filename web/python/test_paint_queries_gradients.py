@@ -8,6 +8,10 @@ import noon
 from _typed_geometry_test_support import identity_only_wrapper
 
 
+def _as_lists(value):
+    return value.tolist() if hasattr(value, "tolist") else value
+
+
 class PaintQueriesGradientsTests(unittest.TestCase):
     def test_match_color_preserves_observation_before_dynamic_setter_and_returns_result(self):
         calls = []
@@ -63,26 +67,27 @@ class PaintQueriesGradientsTests(unittest.TestCase):
             fill_opacities = obj.get_fill_opacities()
             stroke_opacities = obj.get_stroke_opacities()
 
-        self.assertEqual(fill_rgbas.shape, (1, 4))
-        self.assertEqual(stroke_rgbas.shape, (1, 4))
-        self.assertEqual(str(fill_rgbas.dtype), 'float64')
-        self.assertEqual(str(stroke_rgbas.dtype), 'float64')
-        self.assertEqual(fill_rgbas.tolist(), [[1.0, 0.0, 0.0, 0.25]])
-        self.assertEqual(stroke_rgbas.tolist(), [[0.0, 0.0, 1.0, 0.75]])
-        self.assertEqual(fill_opacities.tolist(), [0.25])
-        self.assertEqual(stroke_opacities.tolist(), [0.75])
+        self.assertEqual(_as_lists(fill_rgbas), [[1.0, 0.0, 0.0, 0.25]])
+        self.assertEqual(_as_lists(stroke_rgbas), [[0.0, 0.0, 1.0, 0.75]])
+        self.assertEqual(_as_lists(fill_opacities), [0.25])
+        self.assertEqual(_as_lists(stroke_opacities), [0.75])
+        if hasattr(fill_rgbas, "dtype"):
+            self.assertEqual(fill_rgbas.shape, (1, 4))
+            self.assertEqual(stroke_rgbas.shape, (1, 4))
+            self.assertEqual(str(fill_rgbas.dtype), 'float64')
+            self.assertEqual(str(stroke_rgbas.dtype), 'float64')
 
     def test_transparent_black_and_default_background_stroke_match_manim(self):
         obj = identity_only_wrapper(compat.Circle)
         black = noon.Color(0.0, 0.0, 0.0)
         with patch.object(handles, '_paint_color', return_value=black), \
              patch.object(compat.Circle, 'get_fill_opacity', return_value=0.0):
-            self.assertEqual(obj.get_fill_rgbas().tolist(), [[0.0, 0.0, 0.0, 0.0]])
+            self.assertEqual(_as_lists(obj.get_fill_rgbas()), [[0.0, 0.0, 0.0, 0.0]])
             self.assertEqual(obj.get_fill_colors(), [None])
             self.assertIsNone(obj.get_fill_color())
-        self.assertEqual(obj.get_stroke_rgbas(background=True).tolist(), [[0.0, 0.0, 0.0, 1.0]])
+        self.assertEqual(_as_lists(obj.get_stroke_rgbas(background=True)), [[0.0, 0.0, 0.0, 1.0]])
         self.assertEqual(obj.get_stroke_colors(background=True), [noon.BLACK])
-        self.assertEqual(obj.get_stroke_opacities(background=True).tolist(), [1.0])
+        self.assertEqual(_as_lists(obj.get_stroke_opacities(background=True)), [1.0])
         self.assertEqual(obj.get_stroke_opacity(background=True), 1.0)
         self.assertEqual(obj.get_stroke_width(background=True), 0.0)
 

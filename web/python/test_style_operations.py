@@ -25,18 +25,26 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(compat.VMobject.set_sheen_direction).parameters), [
             "self", "direction", "family",
         ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.rotate_sheen_direction).parameters), [
+            "self", "angle", "axis", "family",
+        ])
+        self.assertIs(compat.VGroup.rotate_sheen_direction, compat.VMobject.rotate_sheen_direction)
 
         obj = identity_only_wrapper(compat.Circle)
         self.assertIs(obj.set_stroke(background=True), obj)
         self.assertIs(obj.set_background_stroke(), obj)
         self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
         self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
+        self.assertIs(obj.rotate_sheen_direction(0.0), obj)
+        group = identity_only_wrapper(compat.VGroup)
+        self.assertIs(group.rotate_sheen_direction(0.0), group)
 
         unsupported = (
             lambda: obj.set_stroke(color=compat._base.RED, width=2, background=True),
             lambda: obj.set_background_stroke(color=compat._base.RED, width=2),
             lambda: obj.set_sheen(0.5),
             lambda: obj.set_sheen_direction(compat._base.UP),
+            lambda: obj.rotate_sheen_direction(0.5),
         )
         for operation in unsupported:
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):

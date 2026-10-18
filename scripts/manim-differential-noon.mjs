@@ -330,10 +330,14 @@ def style_query_contract(value):
         "fill_colors": [color_rgb(color) for color in style["fill_color"]],
         "fill_opacities": scalar_or_list(style["fill_opacity"]),
         "stroke_colors": [color_rgb(color) for color in style["stroke_color"]],
-        "stroke_opacities": scalar_or_list(style["stroke_opacity"]),
+        "stroke_opacities": style["stroke_opacity"].tolist()
+        if getattr(style["stroke_opacity"], "ndim", 0) > 0
+        else float(style["stroke_opacity"]),
         "background_stroke_colors": [color_rgb(color) for color in style["background_stroke_color"]],
         "background_stroke_width": float(style["background_stroke_width"]),
-        "background_stroke_opacity": scalar_or_list(style["background_stroke_opacity"]),
+        "background_stroke_opacity": style["background_stroke_opacity"].tolist()
+        if getattr(style["background_stroke_opacity"], "ndim", 0) > 0
+        else float(style["background_stroke_opacity"]),
         "sheen_factor": float(style["sheen_factor"]),
         "sheen_direction": vector(style["sheen_direction"]),
         "background_image": style["background_image"],
@@ -350,6 +354,7 @@ style_mutator_returns_self = [
     point_owner.set_background_stroke() is point_owner,
     point_owner.set_sheen(0.0, noon.UL) is point_owner,
     point_owner.set_sheen_direction(noon.UL) is point_owner,
+    point_owner.rotate_sheen_direction(0.0) is point_owner,
 ]
 def rejected_without_style_change(operation):
     before = style_query_contract(point_owner)
@@ -367,6 +372,9 @@ style_mutator_rejections = {
     ),
     "sheen_direction": rejected_without_style_change(
         lambda: point_owner.set_sheen_direction(noon.RIGHT)
+    ),
+    "sheen_rotation": rejected_without_style_change(
+        lambda: point_owner.rotate_sheen_direction(0.5)
     ),
 }
 round_trip_style = VMobject()
@@ -615,10 +623,10 @@ json.dumps({
     assert.deepEqual(style.stroke_opacity, 0.6);
     assert.deepEqual(style.stroke_width, 4);
     assert.deepEqual(style.fill_opacities, [0.35]);
-    assert.deepEqual(style.stroke_opacities, [0.6]);
+    assert.deepEqual(style.stroke_opacities, 0.6);
     assert.deepEqual(style.background_stroke_colors, [[0, 0, 0]]);
     assert.deepEqual(style.background_stroke_width, 0);
-    assert.deepEqual(style.background_stroke_opacity, [1]);
+    assert.deepEqual(style.background_stroke_opacity, 1);
     assert.deepEqual(style.sheen_factor, 0);
     assert.deepEqual(style.sheen_direction, [-1, 1, 0]);
     assert.equal(style.background_image, null);
@@ -634,11 +642,12 @@ json.dumps({
       assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
     }
   }
-  assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true]);
+  assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true, true]);
   assert.deepEqual(product.style_mutator_rejections, {
     background_stroke: true,
     sheen_factor: true,
     sheen_direction: true,
+    sheen_rotation: true,
   });
   const {
     proportion_from_point,

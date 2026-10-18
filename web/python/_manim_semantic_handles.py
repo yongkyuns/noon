@@ -1460,6 +1460,14 @@ def _set_sheen(self, factor, direction=None, family=True):
     return self
 
 
+def _rotate_sheen_direction(self, angle, axis, family=True):
+    del axis, family
+    value = _ir._finite_number("sheen rotation angle", angle)
+    if value != 0.0:
+        raise NotImplementedError("nonzero sheen rotation requires shared gradient paint")
+    return self
+
+
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
