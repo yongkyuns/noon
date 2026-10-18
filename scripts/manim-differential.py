@@ -1851,6 +1851,37 @@ def _family_own_paint_probe(api):
     restorable.set_color(api.GREEN)
     restorable.restore()
 
+    restorable_style = api.VGroup(
+        api.Circle(color=api.RED), api.Square(color=api.BLUE)
+    )
+    restorable_style.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.3,
+        stroke_color=api.BLUE,
+        stroke_width=3,
+        stroke_opacity=0.5,
+        family=False,
+    )
+    restorable_style.save_state()
+    restorable_style.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.8,
+        stroke_color=api.YELLOW,
+        stroke_width=7,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    restorable_style.restore()
+    restored_root_style = restorable_style.get_style(simple=True)
+    root_style_restore_observation = [
+        _paint_rgb(restored_root_style["fill_color"]),
+        restored_root_style["fill_opacity"],
+        _paint_rgb(restored_root_style["stroke_color"]),
+        restored_root_style["stroke_width"],
+        restored_root_style["stroke_opacity"],
+        [rgb(member) for member in restorable_style.submobjects],
+    ]
+
     return {
         "plain_default": [rgb(plain), [rgb(member) for member in plain.submobjects]],
         "explicit_constructor_color": [
@@ -1875,6 +1906,7 @@ def _family_own_paint_probe(api):
         "vgroup_save_restore": [
             rgb(restorable), [rgb(member) for member in restorable.submobjects]
         ],
+        "vgroup_root_style_save_restore": root_style_restore_observation,
     }
 
 
