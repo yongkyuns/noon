@@ -867,6 +867,31 @@ def _raw_point_mutations(api):
     }
 
 
+def _raw_point_curve_appends(api):
+    import numpy as np
+
+    result = {}
+    for point_count in (5, 7):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        for operation in ("line", "quadratic", "cubic"):
+            value = api.VMobject().set_points(initial.copy())
+            if operation == "line":
+                value.add_line_to((9.0, -1.0, 0.0))
+            elif operation == "quadratic":
+                value.add_quadratic_bezier_curve_to((8.0, 3.0, 0.0), (10.0, -1.0, 0.0))
+            else:
+                value.add_cubic_bezier_curve_to(
+                    (8.0, 1.0, 0.0), (9.0, 2.0, 0.0), (11.0, 0.0, 0.0)
+                )
+            result[f"{point_count}_{operation}"] = {
+                "count": value.get_num_points(),
+                "points": [_point_observation(point) for point in value.get_all_points()],
+            }
+    return result
+
+
 def _sample_negative_curve_with_length(path, sample):
     function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
     return {"curve": sample(function), "length": float(length)}
@@ -1955,6 +1980,7 @@ FIXTURES = [
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
     Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
+    Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),
     Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 

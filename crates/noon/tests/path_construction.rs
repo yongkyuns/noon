@@ -22,14 +22,129 @@ fn unfinished_anchors_and_discontinuous_curves_have_distinct_endpoints_and_lengt
     assert_eq!(query.start().unwrap(), (-2., 0.));
     assert_eq!(query.end().unwrap(), (5., 1.));
     assert_eq!(query.point_from_proportion(1.).unwrap(), (5., 1.));
-    assert_eq!(query.point_from_proportion(0.5).unwrap(), (1., 0.));
-    assert_eq!(query.arc_length(None).unwrap(), 2.);
+    let midpoint = query.point_from_proportion(0.5).unwrap();
+    assert!((midpoint.0 - 1.).abs() < 1e-6);
+    assert!((midpoint.1).abs() < 1e-6);
+    assert!((query.arc_length(None).unwrap() - 2.).abs() < 1e-6);
     // Prepared observations remain coherent when their source is edited again.
     object
         .add_quadratic_bezier_curve_to(Vec2::new(6., 2.), Vec2::new(7., 1.))
         .unwrap();
     assert_eq!(query.end().unwrap(), (5., 1.));
     assert_eq!(object.path_query().unwrap().end().unwrap(), (7., 1.));
+}
+
+#[test]
+fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_paths() {
+    #[derive(Clone, Copy)]
+    enum Edit {
+        Line,
+        Quadratic,
+        Cubic,
+    }
+
+    for point_count in [5, 7] {
+        let initial = (0..point_count)
+            .map(|index| Vec2::new(index as f32, (index % 2) as f32))
+            .collect::<Vec<_>>();
+        for edit in [Edit::Line, Edit::Quadratic, Edit::Cubic] {
+            for live in [false, true] {
+                let mut scene = Scene::new();
+                let mut object = scene
+                    .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+                    .unwrap();
+                object.set_points(&initial).unwrap();
+                if live {
+                    scene.add(&object).unwrap();
+                }
+
+                let start = *initial.last().unwrap();
+                let (control1, control2, anchor) = match edit {
+                    Edit::Line => {
+                        let anchor = Vec2::new(9., 0.);
+                        (
+                            start + (anchor - start) / 3.0,
+                            start + (anchor - start) * (2.0 / 3.0),
+                            anchor,
+                        )
+                    }
+                    Edit::Quadratic => {
+                        let control = Vec2::new(8., 2.);
+                        let anchor = Vec2::new(10., 0.);
+                        (
+                            control * (2.0 / 3.0) + start / 3.0,
+                            control * (2.0 / 3.0) + anchor / 3.0,
+                            anchor,
+                        )
+                    }
+                    Edit::Cubic => (Vec2::new(7., 1.), Vec2::new(9., 2.), Vec2::new(11., 0.)),
+                };
+
+                let mut expected = initial.clone();
+                if point_count % 4 != 1 {
+                    expected.push(start);
+                }
+                expected.extend([control1, control2, anchor]);
+
+                if live {
+                    let mut session = scene.execution_session().unwrap();
+                    let operation = match edit {
+                        Edit::Line => noon::integration::BorrowedPathEdit::Line {
+                            object: &object,
+                            point: anchor,
+                        },
+                        Edit::Quadratic => noon::integration::BorrowedPathEdit::Quadratic {
+                            object: &object,
+                            control: Vec2::new(8., 2.),
+                            anchor,
+                        },
+                        Edit::Cubic => noon::integration::BorrowedPathEdit::Cubic {
+                            object: &object,
+                            control1,
+                            control2,
+                            anchor,
+                        },
+                    };
+                    noon::integration::publish_borrowed_path_edit(
+                        scene.integration_store(),
+                        scene.root(),
+                        &mut session,
+                        operation,
+                    )
+                    .unwrap();
+                    let actual = noon::integration::effective_path_query(
+                        scene.integration_store(),
+                        &session,
+                        &object,
+                    )
+                    .unwrap()
+                    .points()
+                    .unwrap();
+                    assert_raw_points_match(&actual, &expected);
+                } else {
+                    match edit {
+                        Edit::Line => object.add_line_to(anchor).unwrap(),
+                        Edit::Quadratic => object
+                            .add_quadratic_bezier_curve_to(Vec2::new(8., 2.), anchor)
+                            .unwrap(),
+                        Edit::Cubic => object
+                            .add_cubic_bezier_curve_to(control1, control2, anchor)
+                            .unwrap(),
+                    }
+                    let actual = object.path_query().unwrap().points().unwrap();
+                    assert_raw_points_match(&actual, &expected);
+                }
+            }
+        }
+    }
+}
+
+fn assert_raw_points_match(actual: &[(f64, f64)], expected: &[Vec2]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!((actual.0 - f64::from(expected.x)).abs() < 1e-6);
+        assert!((actual.1 - f64::from(expected.y)).abs() < 1e-6);
+    }
 }
 
 #[test]

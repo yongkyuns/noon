@@ -911,18 +911,7 @@ impl PathEdit<'_> {
             // existing raw array (including a partial tail), or derive the
             // point array once from the current shared path when it was built
             // from compact path commands.
-            let mut points = if let Some(points) = path.manim_points() {
-                points.to_vec()
-            } else {
-                crate::path_queries::PathQuery::prepare(
-                    &path,
-                    noon_core::SemanticTransform2_5D::default(),
-                )?
-                .points()?
-                .into_iter()
-                .map(|(x, y)| Vec2::new(x as f32, y as f32))
-                .collect()
-            };
+            let mut points = manim_points_for_path(&path)?;
 
             // For positive strides, pad a partial final curve by repeating
             // its last start anchor until the next curve boundary. A negative
@@ -939,6 +928,40 @@ impl PathEdit<'_> {
             }
             points.push(point);
             path = VectorPath::from_manim_points(points);
+        } else if let Self::Line(to) = self {
+            if !to.x.is_finite() || !to.y.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::EmptyPath,
+            ))?;
+            let control1 = start + (to - start) / 3.0;
+            let control2 = start + (to - start) * (2.0 / 3.0);
+            path = append_manim_cubic_to_path(points, control1, control2, to)?;
+        } else if let Self::Quadratic(control, to) = self {
+            if [control, to]
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::EmptyPath,
+            ))?;
+            let control1 = control * (2.0 / 3.0) + start / 3.0;
+            let control2 = control * (2.0 / 3.0) + to / 3.0;
+            path = append_manim_cubic_to_path(points, control1, control2, to)?;
+        } else if let Self::Cubic(control1, control2, to) = self {
+            if [control1, control2, to]
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            path = append_manim_cubic_to_path(points, control1, control2, to)?;
         } else {
             let (first, last) = path.endpoints().ok_or(AuthoringError::PathQuery(
                 noon_geometry::PathProportionError::EmptyPath,
@@ -997,6 +1020,41 @@ impl PathEdit<'_> {
         }
         Ok(Some(path))
     }
+}
+
+fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError> {
+    if let Some(points) = path.manim_points() {
+        return Ok(points.to_vec());
+    }
+    Ok(
+        crate::path_queries::PathQuery::prepare(path, noon_core::SemanticTransform2_5D::default())?
+            .points()?
+            .into_iter()
+            .map(|(x, y)| Vec2::new(x as f32, y as f32))
+            .collect(),
+    )
+}
+
+fn append_manim_cubic_to_path(
+    mut points: Vec<Vec2>,
+    control1: Vec2,
+    control2: Vec2,
+    anchor: Vec2,
+) -> Result<VectorPath, AuthoringError> {
+    let last = points.last().copied().ok_or(AuthoringError::PathQuery(
+        noon_geometry::PathProportionError::EmptyPath,
+    ))?;
+    // add_cubic_bezier_curve_to appends three points after a pending new
+    // subpath anchor, and otherwise prefixes those three with get_last_point.
+    if points.len() % 4 != 1 {
+        points.push(last);
+    }
+    points.extend([control1, control2, anchor]);
+    let path = VectorPath::from_manim_points(points);
+    if !path.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(path)
 }
 
 /// Prepare one persistent path edit against an already-selected authored or
