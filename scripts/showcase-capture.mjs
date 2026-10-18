@@ -19,7 +19,10 @@ import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 
 const { PNG } = pngjs;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+// A staged, single-scene capture may supply its own manifest. The default
+// curated manifest, playback rules, and renderer path remain unchanged.
+const manifestFile = process.env.NOON_SHOWCASE_MANIFEST_FILE ?? "web/python/examples/noon_showcase_manifest.json";
+const manifest = JSON.parse(await readFile(path.join(root, manifestFile), "utf8"));
 normalizeShowcaseManifest(manifest);
 const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
 const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "publication": "curated",
+  "policy": "Staging-only visual validation through the existing Noon renderer. Not a public catalog entry or approved poster.",
+  "entries": [
+    {
+      "id": "showcase-data-links",
+      "title": "Signals on durable connections",
+      "lesson": "Build a sensor-fusion architecture view where fixed links remain while transient messages travel in opposite directions.",
+      "primary_feature": "bidirectional-signal-messages",
+      "category": "System diagrams",
+      "path": "python/examples/showcase_data_links.py",
+      "features": [
+        "VGroup",
+        "Rectangle",
+        "Line",
+        "Text",
+        "Create",
+        "ShowPassingFlash",
+        "LaggedStart"
+      ],
+      "duration": 7.2,
+      "thumbnail_time": 3.8,
+      "thumbnail": "thumbnails/showcase/showcase-data-links.png",
+      "thumbnail_alt": "Sensor and fusion blocks joined by two persistent rails with cyan and yellow animated signals moving in opposite directions",
+      "still_intervals": [
+        [
+          5.25,
+          5.75
+        ],
+        [
+          6.35,
+          7.2
+        ]
+      ],
+      "beats": [
+        {
+          "time": 1.7,
+          "label": "Draw persistent connections"
+        },
+        {
+          "time": 3.8,
+          "label": "Send messages in both directions"
+        },
+        {
+          "time": 5.55,
+          "label": "Only the connections remain"
+        },
+        {
+          "time": 6.9,
+          "label": "Explain durable links"
+        }
+      ]
+    }
+  ]
+}

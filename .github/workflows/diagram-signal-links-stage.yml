@@ -1,0 +1,52 @@
+name: Staged diagram links renderer capture
+
+on:
+  pull_request:
+    paths:
+      - 'web/python/examples/showcase_data_links.py'
+      - 'web/python/examples/staging_data_links_manifest.json'
+      - 'scripts/showcase-capture.mjs'
+      - '.github/workflows/diagram-signal-links-stage.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Staged signals (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl]
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
+      NOON_SHOWCASE_MANIFEST_FILE: web/python/examples/staging_data_links_manifest.json
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate staged source and existing capture harness
+        run: |
+          python3 -m py_compile web/python/examples/showcase_data_links.py
+          node --check scripts/showcase-capture.mjs
+          node --test scripts/showcase-capture-checks.test.mjs
+      - name: Build existing Noon browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Install pinned browser tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Capture staged Python source using shared Rust rendering
+        run: node scripts/showcase-capture.mjs
+      - name: Retain real poster, temporal samples and provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stage-data-links-${{ matrix.backend }}
+          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
+          if-no-files-found: warn
+          retention-days: 3
