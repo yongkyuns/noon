@@ -138,6 +138,23 @@ def subpath_array_contracts(value):
         }
         for points in value.get_subpaths()
     ]
+def point_array_contract(points):
+    return {
+        "type": type(points).__name__,
+        "shape": list(points.shape),
+        "dtype": str(points.dtype),
+    }
+def anchor_array_contract(value):
+    anchors = value.get_anchors()
+    groups = value.get_anchors_and_handles()
+    return {
+        "starts": point_array_contract(value.get_start_anchors()),
+        "ends": point_array_contract(value.get_end_anchors()),
+        "anchors_type": type(anchors).__name__,
+        "anchors": [point_array_contract(point) for point in anchors],
+        "groups_type": type(groups).__name__,
+        "groups": [point_array_contract(group) for group in groups],
+    }
 custom_stride_live_queries = {
     "x_max": float(live_custom_stride.get_extremum_along_dim(dim=0, key=1)),
     "boundary_point": [
@@ -180,6 +197,7 @@ custom_stride_live_queries = {
         for subpath in live_custom_stride.get_subpaths()
     ],
     "subpath_arrays": subpath_array_contracts(live_custom_stride),
+    "anchor_arrays": anchor_array_contract(live_custom_stride),
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
         for function in live_custom_stride.get_curve_functions()
@@ -249,6 +267,7 @@ custom_stride_authored_queries = {
         for subpath in authored_custom_stride.get_subpaths()
     ],
     "subpath_arrays": subpath_array_contracts(authored_custom_stride),
+    "anchor_arrays": anchor_array_contract(authored_custom_stride),
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
         for function in authored_custom_stride.get_curve_functions()
@@ -354,12 +373,15 @@ json.dumps({
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,
     subpath_arrays: liveSubpathArrays,
+    anchor_arrays: liveAnchorArrays,
     ...liveQueryValues
   } = product.custom_stride_live_queries;
   const authoredCurvePointsArray =
     product.custom_stride_authored_queries.nth_curve_points_array;
   const authoredSubpathArrays =
     product.custom_stride_authored_queries.subpath_arrays;
+  const authoredAnchorArrays =
+    product.custom_stride_authored_queries.anchor_arrays;
   assert.deepEqual(liveCurvePointsArray, {
     type: "ndarray",
     shape: [2, 2],
@@ -372,6 +394,24 @@ json.dumps({
   ];
   assert.deepEqual(liveSubpathArrays, expectedSubpathArrays);
   assert.deepEqual(authoredSubpathArrays, liveSubpathArrays);
+  const expectedAnchorArrays = {
+    starts: { type: "ndarray", shape: [2, 2], dtype: "float64" },
+    ends: { type: "ndarray", shape: [2, 2], dtype: "float64" },
+    anchors_type: "list",
+    anchors: Array.from({ length: 4 }, () => ({
+      type: "ndarray",
+      shape: [2],
+      dtype: "float64",
+    })),
+    groups_type: "list",
+    groups: Array.from({ length: 2 }, () => ({
+      type: "ndarray",
+      shape: [2, 2],
+      dtype: "float64",
+    })),
+  };
+  assert.deepEqual(liveAnchorArrays, expectedAnchorArrays);
+  assert.deepEqual(authoredAnchorArrays, liveAnchorArrays);
   assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
@@ -410,6 +450,7 @@ json.dumps({
       anchors_and_handles: product.custom_stride_live_queries.anchors_and_handles,
       subpaths: product.custom_stride_live_queries.subpaths,
       subpath_arrays: product.custom_stride_live_queries.subpath_arrays,
+      anchor_arrays: product.custom_stride_live_queries.anchor_arrays,
       curve_function_midpoints: product.custom_stride_live_queries.curve_function_midpoints,
       curve_function_lengths: product.custom_stride_live_queries.curve_function_lengths,
       nth_curve_function_midpoint: product.custom_stride_live_queries.nth_curve_function_midpoint,

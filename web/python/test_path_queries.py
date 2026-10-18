@@ -1062,12 +1062,52 @@ class PathQueryTests(unittest.TestCase):
         query.free.assert_called_once()
 
     def test_anchor_groups_follow_mutable_stride_over_rust_point_snapshot(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
 
         with patch.object(queries, "_typed_manim_observation", return_value=query):
+            starts = value.get_start_anchors()
+            ends = value.get_end_anchors()
+            anchors = value.get_anchors()
+            handles = value.get_anchors_and_handles()
+            if np is None:
+                self.assertEqual(starts, [(0., 0.), (2., 0.)])
+                self.assertEqual(ends, [(1., 0.), (3., 0.)])
+                self.assertEqual(anchors, [(0., 0.), (1., 0.), (2., 0.), (3., 0.)])
+                self.assertEqual(
+                    handles,
+                    [[(0., 0.), (2., 0.)], [(1., 0.), (3., 0.)]],
+                )
+            else:
+                self.assertIsInstance(starts, np.ndarray)
+                self.assertIsInstance(ends, np.ndarray)
+                np.testing.assert_array_equal(starts, [[0., 0.], [2., 0.]])
+                np.testing.assert_array_equal(ends, [[1., 0.], [3., 0.]])
+                self.assertTrue(all(isinstance(point, np.ndarray) for point in anchors))
+                np.testing.assert_array_equal(
+                    anchors,
+                    [[0., 0.], [1., 0.], [2., 0.], [3., 0.]],
+                )
+                self.assertTrue(all(isinstance(group, np.ndarray) for group in handles))
+                np.testing.assert_array_equal(handles[0], [[0., 0.], [2., 0.]])
+                np.testing.assert_array_equal(handles[1], [[1., 0.], [3., 0.]])
+        self.assertEqual(query.free.call_count, 4)
+
+    def test_anchor_queries_fall_back_to_point_lists_without_numpy(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ):
             self.assertEqual(value.get_start_anchors(), [(0., 0.), (2., 0.)])
             self.assertEqual(value.get_end_anchors(), [(1., 0.), (3., 0.)])
             self.assertEqual(
@@ -1078,7 +1118,6 @@ class PathQueryTests(unittest.TestCase):
                 value.get_anchors_and_handles(),
                 [[(0., 0.), (2., 0.)], [(1., 0.), (3., 0.)]],
             )
-        self.assertEqual(query.free.call_count, 4)
 
     def test_anchor_handle_groups_keep_empty_and_fractional_stride_behavior(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -1338,11 +1377,22 @@ class PathQueryTests(unittest.TestCase):
                     selected,
                     [(0., 0.), (1., 2.), (2., 2.), (3., 0.)],
                 )
-            self.assertEqual(value.get_start_anchors(), [(0., 0.), (3., 0.)])
-            self.assertEqual(value.get_end_anchors(), [(3., 0.), (4., 0.)])
-            self.assertEqual(len(value.get_anchors()), 4)
+            starts = value.get_start_anchors()
+            ends = value.get_end_anchors()
+            anchors = value.get_anchors()
+            if np is None:
+                self.assertEqual(starts, [(0., 0.), (3., 0.)])
+                self.assertEqual(ends, [(3., 0.), (4., 0.)])
+            else:
+                np.testing.assert_array_equal(starts, [[0., 0.], [3., 0.]])
+                np.testing.assert_array_equal(ends, [[3., 0.], [4., 0.]])
+                self.assertTrue(all(isinstance(point, np.ndarray) for point in anchors))
+            self.assertEqual(len(anchors), 4)
             columns = value.get_anchors_and_handles()
-            self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
+            if np is None:
+                self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
+            else:
+                np.testing.assert_array_equal(columns[1], [[1., 2.], [3.3, 0.]])
             self.assertEqual(observe.call_count, 8)
             self.assertEqual(query.free.call_count, 8)
             with self.assertRaises(AssertionError):

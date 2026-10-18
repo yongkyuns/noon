@@ -222,6 +222,15 @@ def _points_array(points):
     return np.asarray(rows, dtype=np.float64).reshape((-1, 2))
 
 
+def _point_rows(points):
+    """Return Manim's list of NumPy point rows when NumPy is available."""
+    try:
+        import numpy as np
+    except ImportError:
+        return points
+    return list(_points_array(points))
+
+
 def _cubic_bezier_point_ranges(value, point_count):
     points_per_curve = operator.index(
         getattr(value, "n_points_per_cubic_curve", 4)
@@ -938,16 +947,19 @@ def path_points(value, method):
             points = _points(engine_call(query.points))
             starts = points[::stride]
             if method == "startAnchors":
-                return starts
+                return _points_array(starts)
             ends = points[stride - 1 :: stride]
             if method == "endAnchors":
-                return ends
-            return [point for pair in zip(starts, ends, strict=True) for point in pair]
+                return _points_array(ends)
+            return _point_rows(
+                [point for pair in zip(starts, ends, strict=True) for point in pair]
+            )
         finally:
             query.free()
     query = _query(value)
     try:
-        return _points(engine_call(getattr(query, method)))
+        points = _points(engine_call(getattr(query, method)))
+        return _point_rows(points) if method == "anchors" else _points_array(points)
     finally:
         query.free()
 
@@ -962,13 +974,18 @@ def anchors_and_handles(value):
         query = _query(value)
         try:
             points = _points(engine_call(query.points))
-            return [points[index::stride] for index in range(stride)]
+            return [
+                _points_array(points[index::stride])
+                for index in range(stride)
+            ]
         finally:
             query.free()
     query = _query(value)
     try:
-        return [_points(engine_call(getattr(query, method))) for method in
-                ("startAnchors", "firstHandles", "secondHandles", "endAnchors")]
+        return [
+            _points_array(_points(engine_call(getattr(query, method))))
+            for method in ("startAnchors", "firstHandles", "secondHandles", "endAnchors")
+        ]
     finally:
         query.free()
 
