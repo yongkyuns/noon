@@ -42,6 +42,25 @@ class PathEditingTests(unittest.TestCase):
                     context.liveSetPointsAsCorners.assert_called_once_with(handle, [1., 2., 3., 4.])
                     context.liveClearPoints.assert_called_once_with(handle)
 
+    def test_set_points_as_corners_rejects_unstable_custom_stride_before_bridge(self):
+        value = identity_only_wrapper(compat.VMobject)
+        for stride in (2, 5):
+            value.n_points_per_cubic_curve = stride
+            with patch.object(editing, '_handle_for') as resolve:
+                with self.assertRaisesRegex(
+                    NotImplementedError, 'supported four-point cubic stride'
+                ):
+                    value.set_points_as_corners([(0, 0), (1, 0)])
+                resolve.assert_not_called()
+
+    def test_set_points_as_corners_preserves_fixed_setter_arity_error_for_custom_samples(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value._bezier_t_values = [0.0, 0.25, 0.5, 0.75, 1.0]
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaisesRegex(TypeError, 'four constructor interpolation samples'):
+                value.set_points_as_corners([(0, 0), (1, 0)])
+            resolve.assert_not_called()
+
     def test_raw_point_set_and_append_use_authored_or_live_rust_publication(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
