@@ -559,13 +559,23 @@ def _empty_curve_callable():
     return curve
 
 
-def _curve_functions(value, with_lengths, sample_points=None):
+def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None):
     import numpy as np
 
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
         count = int(query.curveCount)
+        if with_lengths and count and extra_kwargs:
+            unexpected = set(extra_kwargs) - {"sample_points"}
+            if unexpected:
+                # Match Manim's lazy per-curve dispatch, including subclass
+                # overrides and Python's bound-method TypeError text.
+                for index in range(count):
+                    yield value.get_nth_curve_function_with_length(
+                        index, **extra_kwargs
+                    )
+                return
         samples = _curve_sample_count(sample_points) if with_lengths and count else None
         if with_lengths and count and samples == 0:
             _raise_zero_sample_length_axis_error()
@@ -622,12 +632,11 @@ def curve_functions(value):
 
 
 def curve_functions_with_lengths(value, **kwargs):
-    unexpected = set(kwargs) - {"sample_points"}
-    if unexpected:
-        name = sorted(unexpected)[0]
-        raise TypeError(f"unexpected keyword argument: {name!r}")
     yield from _curve_functions(
-        value, with_lengths=True, sample_points=kwargs.get("sample_points")
+        value,
+        with_lengths=True,
+        sample_points=kwargs.get("sample_points"),
+        extra_kwargs=kwargs,
     )
 
 

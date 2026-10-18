@@ -1141,7 +1141,10 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_function(1)
             query.free.assert_called_once()
-            with self.assertRaises(TypeError):
+            with self.assertRaisesRegex(
+                TypeError,
+                r"VMobject\.get_nth_curve_function_with_length\(\) got an unexpected keyword argument 'unsupported'",
+            ):
                 next(value.get_curve_functions_with_lengths(unsupported=True))
             empty = value.get_nth_curve_function(-1)
             with self.assertRaisesRegex(
@@ -1172,8 +1175,9 @@ class PathQueryTests(unittest.TestCase):
             query.curveCount = 0
             self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=-1)), [])
             self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=2.5)), [])
+            self.assertEqual(list(value.get_curve_functions_with_lengths(unsupported=True)), [])
             self.assertEqual(value.get_arc_length(2.5), 0.0)
-            self.assertEqual(query.free.call_count, 6)
+            self.assertEqual(query.free.call_count, 7)
 
     def test_force_direction_uses_shared_query_and_preserves_manim_errors(self):
         value = identity_only_wrapper(compat.VMobject)

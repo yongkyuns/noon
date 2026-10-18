@@ -581,6 +581,9 @@ def _curve_function_queries(api):
                 sample_points=6
             )
         ],
+        "functions_with_unknown_length_keyword": capture(
+            lambda: list(path.get_curve_functions_with_lengths(unsupported=True))
+        ),
         "negative_previous_curve": {
             "function": capture(
                 lambda: sample(path.get_nth_curve_function(-2))
@@ -630,6 +633,11 @@ def _curve_function_queries(api):
             )
             for sample_points in (-1, 2.5)
         ],
+        "empty_functions_with_unknown_length_keyword": capture(
+            lambda: list(
+                api.VMobject().get_curve_functions_with_lengths(unsupported=True)
+            )
+        ),
         "empty_arc_lengths": [
             api.VMobject().get_arc_length(sample_points)
             for sample_points in (0, 1, -1, 2.5)
