@@ -749,6 +749,24 @@ def curve_length(value, n, sample_points):
 
 
 def path_points(value, method):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            starts = points[::stride]
+            if method == "startAnchors":
+                return starts
+            ends = points[stride - 1 :: stride]
+            if method == "endAnchors":
+                return ends
+            return [point for pair in zip(starts, ends, strict=True) for point in pair]
+        finally:
+            query.free()
     query = _query(value)
     try:
         return _points(engine_call(getattr(query, method)))
@@ -757,6 +775,18 @@ def path_points(value, method):
 
 
 def anchors_and_handles(value):
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if stride > 0xFFFFFFFF:
+        raise ValueError("n_points_per_cubic_curve exceeds the supported array size")
+    if stride <= 0:
+        return []
+    if stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            return [points[index::stride] for index in range(stride)]
+        finally:
+            query.free()
     query = _query(value)
     try:
         return [_points(engine_call(getattr(query, method))) for method in

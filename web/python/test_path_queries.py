@@ -701,6 +701,36 @@ class PathQueryTests(unittest.TestCase):
             query.curveLength.assert_called_with(0, 20)
         self.assertEqual(query.free.call_count, 6)
 
+    def test_anchor_groups_follow_mutable_stride_over_rust_point_snapshot(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.get_start_anchors(), [(0., 0.), (2., 0.)])
+            self.assertEqual(value.get_end_anchors(), [(1., 0.), (3., 0.)])
+            self.assertEqual(
+                value.get_anchors(),
+                [(0., 0.), (1., 0.), (2., 0.), (3., 0.)],
+            )
+            self.assertEqual(
+                value.get_anchors_and_handles(),
+                [[(0., 0.), (2., 0.)], [(1., 0.), (3., 0.)]],
+            )
+        self.assertEqual(query.free.call_count, 4)
+
+    def test_anchor_handle_groups_keep_empty_and_fractional_stride_behavior(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(queries, "_typed_manim_observation") as observe:
+            for stride in (0, -2):
+                value.n_points_per_cubic_curve = stride
+                self.assertEqual(value.get_anchors_and_handles(), [])
+            value.n_points_per_cubic_curve = 2.5
+            with self.assertRaises(TypeError):
+                value.get_anchors_and_handles()
+        observe.assert_not_called()
+
     def test_start_and_end_are_base_methods_and_keep_dynamic_getter_dispatch(self):
         import noon
 

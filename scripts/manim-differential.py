@@ -601,6 +601,22 @@ def _curve_function_queries(api):
             "negative_stride_arc_length": capture(
                 lambda: float(negative_stride_path.get_arc_length(-1))
             ),
+            "start_anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_start_anchors()
+            ],
+            "end_anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_end_anchors()
+            ],
+            "anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_anchors()
+            ],
+            "anchors_and_handles": [
+                [_point_observation(point) for point in group]
+                for group in custom_stride_path.get_anchors_and_handles()
+            ],
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()
