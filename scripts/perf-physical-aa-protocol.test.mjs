@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   validatePlan, studySchedule, pairEnvironment, authoredSourceFingerprint,
   validatePhysicalProof, strictLatencyFailures, runRecorded, exclusiveDirectory,
+  transportRecoveryPlan, TRANSPORT_RECOVERY,
 } from "./perf-physical-aa-product.mjs";
 import { PHYSICAL_HARNESS, gitBlobSha, physicalPairSource } from "./perf-physical-aa-overlay.mjs";
 import { deriveAAHostDriver, STUDY_ID } from "./perf-physical-aa-host-derive.mjs";
@@ -15,6 +16,32 @@ import { deriveAAHostDriver, STUDY_ID } from "./perf-physical-aa-host-derive.mjs
 const plan=JSON.parse(await readFile(new URL("../benchmarks/perf-physical-aa-study.json",import.meta.url)));
 const clone=x=>structuredClone(x);
 const gpu="ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)";
+
+test("transport recovery preserves every original control under a distinct fixed registration", async () => {
+  const bytes = await readFile(new URL("../benchmarks/perf-physical-aa-study.json", import.meta.url));
+  const recovered = transportRecoveryPlan(bytes);
+  assert.notEqual(recovered.studyId, plan.studyId);
+  assert.equal(recovered.registration.priorRun, 39145683127);
+  assert.equal(recovered.registration.priorArtifact, 12142919221);
+  const { registration, studyId, ...controls } = recovered;
+  const { studyId: originalId, ...originalControls } = plan;
+  assert.deepEqual(controls, originalControls);
+  assert.deepEqual(studySchedule(recovered), studySchedule(plan));
+  assert.throws(() => transportRecoveryPlan(Buffer.concat([bytes, Buffer.from("\n")])));
+  for (const edit of [
+    p => p.registration.priorRun++, p => p.registration.workflow = "perf-physical-aa.yml",
+    p => p.registration.priorArtifactSha256 = "0".repeat(64),
+    p => p.studyId = originalId, p => p.cohorts[0].pairs--,
+  ]) {
+    const changed = clone(recovered); edit(changed);
+    assert.throws(() => validatePlan(changed));
+  }
+  const original = await readFile("frozen-harness/scripts/python-host-perf.mjs", "utf8");
+  const recoveryDriver = deriveAAHostDriver(original, registration.hostStudyId);
+  assert.equal(recoveryDriver.replaceAll(registration.hostStudyId, STUDY_ID),
+    deriveAAHostDriver(original), "only the host study identity may change");
+  assert.throws(() => deriveAAHostDriver(original, "unregistered"));
+});
 function readyProof(){return {pairIndex:1,exampleId:plan.workloads[0],backend:"WebGL2",
   unmaskedVendor:"Google Inc. (Apple)",unmaskedRenderer:gpu,
   browserVersion:"151.0.7922.34",platform:"darwin",arch:"arm64",
@@ -168,6 +195,16 @@ test("manual physical workflow cannot schedule an A/A from a pull request or hos
   assert.match(s,/node control\/scripts\/perf-physical-aa-product.mjs/);
   assert.match(s,/baseline-peer\/browser-smoke-artifacts\/product-gate\/host-cost\/comparison.json/);
   assert.doesNotMatch(s,/cargo build|wasm-pack build|rerun-failed-jobs|cancel-in-progress: true/);
+  assert.match(s,/workflow_call:/);
+  assert.match(s,/transportRecoveryPlan\(original\)/);
+  assert.match(s,/NOON_PHYSICAL_AA_TRANSPORT_RECOVERY === "true"/);
+  const recovery = await readFile(new URL(
+    "../.github/workflows/" + TRANSPORT_RECOVERY.workflow, import.meta.url), "utf8");
+  assert.match(recovery,/workflow_dispatch:/);
+  assert.match(recovery,/uses: \.\/\.github\/workflows\/perf-physical-aa.yml/);
+  assert.match(recovery,/transport-recovery: true/);
+  assert.doesNotMatch(recovery,/pull_request:|schedule:|runs-on:|run:/,
+    "separate registration reuses the sole acquisition implementation");
 });
 
 test("exclusive original evidence cannot be overwritten and no pair is silently retried",async t=>{

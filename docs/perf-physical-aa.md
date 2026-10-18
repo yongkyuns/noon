@@ -44,6 +44,28 @@ study or provide performance evidence.
 
 That dispatch used **GitHub → Actions → Physical A/A original precision acquisition → Run workflow**, default `master`, and the exact acknowledgement `RUN_PHYSICAL_AA_ONCE`. No automatic retry, score selection, or repeated dispatch is allowed. The source-pinned archive intake checks the GitHub workflow-run registry and fails closed unless exactly **one** manual dispatch exists, and its run ID, branch and attempt match the current run. A second manual dispatch is rejected even if its separate run attempt is numbered one. Any future acquisition requires a separate preregistration that retains this failed original; this fix leaves the original one-shot registry unchanged. A failed or inconclusive physical A/A means **do not run** a candidate-versus-baseline acceptance test.
 
+### Separately registered transport correction
+
+The [transport correction registration](../benchmarks/perf-physical-aa-transport-recovery.json)
+defines product study `1933-physical-aa-20261018-02` and host study
+`1933-physical-host-aa-20261018-02`. It binds the exact original plan digest,
+failed run and partial-artifact digest, and the tested authentication fix in
+#2207. No original product or host observations exist to reuse or select.
+The complete new study retains all 100 product commands and 63 host pairs,
+sources, packages, ordering, limits, deadlines and scorers. It inherits the
+original plan in memory; there is no second acquisition implementation.
+
+Its [manual workflow](../.github/workflows/perf-physical-aa-transport-recovery.yml)
+calls the existing physical workflow with this fixed registration. It requires
+the same default branch, consent, first attempt and physical prerequisites.
+Archive intake checks that separate workflow's registry for exactly one manual
+dispatch and authenticates and retains the original zero-sample failure ZIP
+before any acquisition. Altered, expired or sample-bearing original evidence
+blocks the new study. The old workflow's one-shot registry remains sealed.
+This registration is unacquired until dispatched; it provides no A/A, A/B or
+physical pacing pass. Any setup or trial failure consumes this new registration
+without resume, replacement or retry.
+
 ## Limits and follow-up
 
 This is a one-shot source-pinned protocol for the **specific original #1956 release pair**, not a general CLI for arbitrary artifacts. The setup cannot supply a physical machine; its manual runner remains a prerequisite. Physical-looking renderer strings are necessary checks, not proof of exclusive bare-metal hardware. Shell timing and OS load can still be unstable. The same-code controls must empirically demonstrate the original 7+3, 1.03/1.05 cost and FPS lower-95% precision with all observations retained.

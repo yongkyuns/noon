@@ -10,6 +10,7 @@ import zipfile
 
 REPOSITORY = "yongkyuns/noon"
 STUDY = "1933-physical-aa-20261010-01"
+PLAN_PATH = Path(__file__).resolve().parent.parent / "benchmarks/perf-physical-aa-study.json"
 FILES = {"pkg/noon_web_bg.wasm", "pkg/noon_web.js", "python-worker.js",
          "runtime-build-identity.json", "ci-artifact.json", "ci-Cargo.lock"}
 
@@ -107,13 +108,59 @@ def extract(z, root):
         exclusive_write(destination, z.read(entry.filename))
 
 
+def registered_workflow(plan):
+    if plan.get("studyId") == STUDY and "registration" not in plan:
+        return "perf-physical-aa.yml"
+    registration = json.loads(PLAN_PATH.with_name(
+        "perf-physical-aa-transport-recovery.json").read_bytes())
+    original_bytes = PLAN_PATH.read_bytes()
+    if sha256(original_bytes) != registration["originalPlanSha256"]:
+        raise ValueError("original preregistration bytes changed")
+    expected = {**json.loads(original_bytes), "studyId": registration["studyId"],
+                "registration": registration}
+    if plan != expected:
+        raise ValueError("unregistered physical A/A plan")
+    return registration["workflow"]
+
+
+def prior_setup_failure(plan, token):
+    registration = plan["registration"]
+    run = github_json(f"actions/runs/{registration['priorRun']}", token)
+    if (run.get("id") != registration["priorRun"] or run.get("run_attempt") != 1
+            or run.get("status") != "completed" or run.get("conclusion") != "failure"
+            or run.get("event") != "workflow_dispatch" or run.get("head_branch") != "master"):
+        raise ValueError("original failed manual acquisition identity changed")
+    artifact = registration["priorArtifact"]
+    meta = github_json(f"actions/artifacts/{artifact}", token)
+    if (meta.get("id") != artifact or meta.get("expired")
+            or meta.get("workflow_run", {}).get("id") != registration["priorRun"]
+            or meta.get("digest") != "sha256:" + registration["priorArtifactSha256"]):
+        raise ValueError("original failed acquisition artifact unavailable or changed")
+    raw = github_zip(f"actions/artifacts/{artifact}/zip", token, limit=1024 * 1024)
+    if sha256(raw) != registration["priorArtifactSha256"]:
+        raise ValueError("original failed acquisition ZIP bytes changed")
+    from io import BytesIO
+    with zipfile.ZipFile(BytesIO(raw)) as z:
+        expected = {"evidence/inputs/" + name for name in (
+            "attempt.txt", "registered-plan.json", "physical-readiness.json",
+            "single-manual-dispatch.json")}
+        if len(z.namelist()) != len(expected) or set(z.namelist()) != expected or z.testzip():
+            raise ValueError("original acquisition contains samples or invalid evidence")
+        if z.read("evidence/inputs/registered-plan.json") != PLAN_PATH.read_bytes():
+            raise ValueError("original failed acquisition used a different plan")
+        if z.read("evidence/inputs/attempt.txt").decode().strip() != f"{registration['priorRun']}/1":
+            raise ValueError("original failed acquisition attempt differs")
+    return raw
+
+
 def main(plan_file, workspace, evidence):
     plan_path = Path(plan_file).resolve()
     root = Path(workspace).resolve()
     record = Path(evidence).resolve()
     plan_bytes = plan_path.read_bytes()
     plan = json.loads(plan_bytes)
-    if plan.get("studyId") != STUDY or plan.get("retries") != 0:
+    workflow = registered_workflow(plan)
+    if plan.get("retries") != 0:
         raise ValueError("unregistered physical A/A plan")
     if os.environ.get("GITHUB_RUN_ATTEMPT") != "1" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         raise ValueError("only one manual physical A/A study attempt is allowed")
@@ -122,12 +169,14 @@ def main(plan_file, workspace, evidence):
         raise ValueError("missing read-only GitHub Actions artifact token")
     # A new distinct dispatch is not a rerun of the original registration.
     registry = github_json(
-        "actions/workflows/perf-physical-aa.yml/runs"
+        f"actions/workflows/{workflow}/runs"
         "?event=workflow_dispatch&per_page=2", token)
     admission = require_unique_manual_dispatch(registry, os.environ.get("GITHUB_RUN_ID"))
     exclusive_write(record / "registered-plan.json", plan_bytes)
     exclusive_write(record / "single-manual-dispatch.json",
                     (json.dumps(admission, indent=2) + "\n").encode())
+    if "registration" in plan:
+        exclusive_write(record / "prior-failed-acquisition.zip", prior_setup_failure(plan, token))
     completed = []
     for build in plan["builds"]:
         artifact = build["artifactId"]
@@ -155,7 +204,7 @@ def main(plan_file, workspace, evidence):
                           "sha256": sha256(raw), "source": build["source"],
                           "buildId": build["buildId"], "bytes": len(raw)})
     exclusive_write(record / "original-artifact-attestation.json",
-                    (json.dumps({"schema": 1, "studyId": STUDY,
+                    (json.dumps({"schema": 1, "studyId": plan["studyId"],
                                  "diagnosticOnly": True, "qualification": False,
                                  "performanceAcceptance": False, "mergeApproval": False,
                                  "originalArtifacts": completed}, indent=2) + "\n").encode())
