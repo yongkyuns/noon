@@ -1326,6 +1326,33 @@ class PathQueryTests(unittest.TestCase):
 
 
 class SubpathQueryTests(unittest.TestCase):
+    def test_object_subpaths_follow_mutable_stride_over_rust_snapshot(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        handle = Mock()
+        handle.subpathRanges.return_value = [0, 2, 2, 4]
+
+        with patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ), patch.object(queries, "_handle_for", return_value=handle):
+            self.assertEqual(
+                value.get_subpaths(),
+                [[(0., 0.), (1., 0.)], [(2., 0.), (3., 0.)]],
+            )
+
+        query.free.assert_called_once_with()
+        handle.subpathRanges.assert_called_once_with(
+            [0., 0., 1., 0., 2., 0., 3., 0.],
+            4,
+            2,
+            2,
+            2.0,
+            1e-6,
+            True,
+        )
+
     def test_subpaths_and_closure_free_the_snapshot_on_success_and_error(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()

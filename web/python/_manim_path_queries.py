@@ -796,6 +796,18 @@ def anchors_and_handles(value):
 
 
 def subpaths(value):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if integer_stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            return subpaths_from_points(value, points)
+        finally:
+            query.free()
     query = _query(value)
     try:
         return [_points(points) for points in engine_call(query.subpaths)]

@@ -617,6 +617,10 @@ def _curve_function_queries(api):
                 [_point_observation(point) for point in group]
                 for group in custom_stride_path.get_anchors_and_handles()
             ],
+            "subpaths": [
+                [_point_observation(point) for point in subpath]
+                for subpath in custom_stride_path.get_subpaths()
+            ],
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()
