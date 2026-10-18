@@ -419,6 +419,18 @@ def _base_mobject_color_gradient_probe(api) -> Any:
     }
 
 
+def _base_mobject_set_color_probe(api) -> Any:
+    mobject = api.Mobject()
+    default_result = mobject.set_color()
+    default_color = _paint_rgb(mobject.get_color())
+    parsed_result = mobject.set_color("#00FF00", alpha=0.25, family=False)
+    return {
+        "returns_self": default_result is mobject and parsed_result is mobject,
+        "default_color": default_color,
+        "parsed_color": _paint_rgb(mobject.get_color()),
+    }
+
+
 def _radial_family_gradient_probe(api) -> Any:
     near = api.Square(color=api.YELLOW, fill_opacity=0.3, stroke_opacity=0.6)
     near.shift(api.LEFT)
@@ -2735,6 +2747,8 @@ FIXTURES = [
             lambda: _to_original_color_probe(manim)),
     Fixture("base_mobject_color_gradient", lambda: _base_mobject_color_gradient_probe(noon),
             lambda: _base_mobject_color_gradient_probe(manim)),
+    Fixture("base_mobject_set_color", lambda: _base_mobject_set_color_probe(noon),
+            lambda: _base_mobject_set_color_probe(manim)),
     Fixture("radial_family_gradient", lambda: _radial_family_gradient_probe(noon),
             lambda: _radial_family_gradient_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),

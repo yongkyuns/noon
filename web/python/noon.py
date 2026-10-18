@@ -647,8 +647,18 @@ class Mobject:
     def rotate(self, *args: object, **kwargs: object) -> Mobject:
         return _callback_operations()._canonical_rotate(self, *args, **kwargs)
 
-    def set_color(self, color: Color) -> Mobject:
-        return _callback_operations()._canonical_set_color(self, color)
+    def set_color(
+        self,
+        color: object = Color(1.0, 1.0, 0.0),
+        alpha: Any = None,
+        family: bool = True,
+    ) -> Mobject:
+        # The pinned base method does not consume alpha. This base wrapper has no
+        # child family; Group and VMobject provide their own family paint behavior.
+        del alpha, family
+        from _manim_compat import _as_color
+        parsed = _as_color("color", color)
+        return _callback_operations()._canonical_set_color(self, parsed)
 
     def set_glow(self, *, color=None, radius=None, intensity=None, source=None, scope=None) -> Mobject:
         from _noon_effects import set_glow
