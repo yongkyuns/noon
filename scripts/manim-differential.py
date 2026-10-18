@@ -1833,6 +1833,27 @@ def _family_own_paint_probe(api):
         root_style["stroke_opacity"],
         [rgb(member) for member in vector_style_root.submobjects],
     ]
+    full_style = vector_style_root.get_style()
+    full_style_observation = [
+        [
+            [None if color is None else _paint_rgb(color) for color in full_style["fill_color"]],
+            [float(value) for value in full_style["fill_opacity"]],
+            [None if color is None else _paint_rgb(color) for color in full_style["stroke_color"]],
+            float(full_style["stroke_opacity"]),
+            full_style["stroke_width"],
+        ],
+        [
+            [
+                None if color is None else _paint_rgb(color)
+                for color in full_style["background_stroke_color"]
+            ],
+            full_style["background_stroke_width"],
+            full_style["background_stroke_opacity"],
+            full_style["sheen_factor"],
+            [float(value) for value in full_style["sheen_direction"]],
+            full_style["background_image"],
+        ],
+    ]
 
     match_source_children = [api.Circle(color=api.RED), api.Square(color=api.YELLOW)]
     match_source = api.VGroup(*match_source_children)
@@ -2051,6 +2072,7 @@ def _family_own_paint_probe(api):
             root_fill_style, root_opacity_style, root_stroke_style
         ],
         "vgroup_root_only_set_style": root_style_observation,
+        "vgroup_root_full_style": full_style_observation,
         "vgroup_root_only_match_style": root_only_match,
         "vgroup_recursive_match_style": recursive_match,
         "vgroup_empty_donor_match_style": fanout_match,

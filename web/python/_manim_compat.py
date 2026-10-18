@@ -1048,6 +1048,8 @@ class VGroup(Group):
     get_points_defining_boundary = VMobject.get_points_defining_boundary
     get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
     get_background_image = VMobject.get_background_image
+    get_sheen_factor = VMobject.get_sheen_factor
+    get_sheen_direction = VMobject.get_sheen_direction
     set_background_stroke = VMobject.set_background_stroke
     set_cap_style = VMobject.set_cap_style
     color_using_background_image = VMobject.color_using_background_image

@@ -45,6 +45,8 @@ class StyleOperationsTests(unittest.TestCase):
             "background_image", "family",
         ])
         self.assertIs(compat.VGroup.get_style, compat.VMobject.get_style)
+        self.assertIs(compat.VGroup.get_sheen_factor, compat.VMobject.get_sheen_factor)
+        self.assertIs(compat.VGroup.get_sheen_direction, compat.VMobject.get_sheen_direction)
         self.assertIs(compat.VGroup.set_style, compat.VMobject.set_style)
         self.assertEqual(list(inspect.signature(compat.VMobject.set_background_stroke).parameters), [
             "self", "kwargs",
