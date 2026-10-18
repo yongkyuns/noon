@@ -490,10 +490,16 @@ def _proportion_from_point(api):
         (-2, 0, 0), (-1.5, 0, 0), (-0.5, 0, 0), (0, 0, 0),
         (0, 0, 0), (0.5, 0, 0), (1.5, 0, 0), (2, 0, 0),
     ])
-    return [
-        float(path.proportion_from_point(point))
-        for point in ((-1, 0, 0), (0, 0, 0), (1, 0, 0))
-    ]
+    loop = api.VMobject().start_new_path((0, 0, 0)).add_cubic_bezier_curve_to(
+        (1, 0, 0), (-1, 0, 0), (0, 0, 0)
+    )
+    return {
+        "path": [
+            float(path.proportion_from_point(point))
+            for point in ((-1, 0, 0), (0, 0, 0), (1, 0, 0))
+        ],
+        "multiple_roots_choose_latest": float(loop.proportion_from_point((0, 0, 0))),
+    }
 
 
 def _z_index_probe(api):
