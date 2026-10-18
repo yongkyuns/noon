@@ -1841,7 +1841,11 @@ def _canonical_vmobject_set_opacity(
 
 
 def _canonical_fade(self, darkness=0.5, family=True):
-    from _manim_compat import _opacity, _is_shared_family
+    from _manim_compat import Group, VGroup, _opacity, _is_shared_family
+    if not family and isinstance(self, Group) and not isinstance(self, VGroup):
+        # Match base Mobject.fade: family=False skips the recursive walk, so
+        # plain Group observes no paint write (and does not inspect darkness).
+        return self
     darkness = _opacity("darkness", darkness)
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")

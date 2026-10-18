@@ -2181,6 +2181,24 @@ def _plain_group_restore_extension_probe(api):
     }
 
 
+def _plain_group_nonrecursive_fade_probe(api, scene=None):
+    child = api.VMobject(color=api.BLUE, fill_opacity=0.4, stroke_opacity=0.6)
+    family = api.Group(child)
+    if scene is not None:
+        scene.add(family)
+
+    def profile():
+        return {
+            "color": _paint_rgb(child.get_color()),
+            "fill_opacity": float(child.get_fill_opacity()),
+            "stroke_opacity": float(child.get_stroke_opacity()),
+        }
+
+    before = profile()
+    returned_self = family.fade(float("nan"), family=False) is family
+    return {"returned_self": returned_self, "before": before, "after": profile()}
+
+
 def _vgroup_root_style_play_probe(api, scene=None):
     child = api.VMobject(
         fill_color=api.RED,
@@ -3196,6 +3214,18 @@ FIXTURES = [
     Fixture("cap_style_live",
             lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),
             lambda: _cap_style_probe(manim)),
+    Fixture(
+        "plain_group_fade_family_false",
+        lambda: _plain_group_nonrecursive_fade_probe(noon),
+        lambda: _plain_group_nonrecursive_fade_probe(manim),
+    ),
+    Fixture(
+        "plain_group_fade_family_false_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _plain_group_nonrecursive_fade_probe(noon, scene)
+        ),
+        lambda: _plain_group_nonrecursive_fade_probe(manim),
+    ),
     Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
     Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
             lambda: _gradient_start_end_probe(manim), 1e-5),
@@ -3398,7 +3428,7 @@ UNSUPPORTED = {
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
-    "vgroup_root_style": "The common-success profile now covers VGroup's one-row float64 root solid-paint arrays/getters and simple/full get_style in authored/live fixtures; non-default background stroke, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
+    "vgroup_root_style": "The common-success profile now covers VGroup's one-row float64 root solid-paint arrays/getters and simple/full get_style in authored/live fixtures; VGroup.fade(family=False) still requires shared root foreground/background opacity publication. Non-default background stroke, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
 }
 
 

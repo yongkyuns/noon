@@ -883,6 +883,14 @@ json.dumps({
   ]);
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
+  for (const name of [
+    "plain_group_fade_family_false",
+    "plain_group_fade_family_false_live",
+  ]) {
+    const profile = observations[name];
+    assert.equal(profile.returned_self, true, `${name}: fade returns the same Group`);
+    assert.deepEqual(profile.after, profile.before, `${name}: family=False leaves Group children unchanged`);
+  }
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(observations, null, 2)}\n`);
   console.log(`Observed ${Object.keys(observations).length} shared Rust/Python semantic fixtures`);

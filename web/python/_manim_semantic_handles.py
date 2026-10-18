@@ -1880,6 +1880,14 @@ def _group_set_opacity(self, opacity, family=True):
 
 
 def _fade(self, darkness=0.5, family=True):
+    if (
+        not family
+        and isinstance(self, _compat.Group)
+        and not isinstance(self, _compat.VGroup)
+    ):
+        # Base Manim Mobject.fade only walks submobjects; with family=False a
+        # plain Group therefore returns unchanged without reading darkness.
+        return self
     darkness = _compat._opacity("darkness", darkness)
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")

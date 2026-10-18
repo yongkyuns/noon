@@ -263,8 +263,10 @@ class SharedFamilyPaintTests(unittest.TestCase):
             else:
                 handle.fade.assert_called_once_with(0.5)
 
-    def test_invalid_fades_and_nonrecursive_groups_fail_before_host_mutation(self):
+    def test_plain_group_nonrecursive_fade_is_a_noop_and_vector_group_stays_unsupported(self):
         leaf = identity_only_wrapper(compat.Square)
+        plain_group = identity_only_wrapper(compat.Group, submobjects=[])
+        plain_group._semantic_family_handle = Mock()
         group = identity_only_wrapper(compat.VGroup, submobjects=[])
         group._semantic_family_handle = Mock()
         with patch.object(handles, "_handle_for") as get_handle:
@@ -272,9 +274,22 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     leaf.fade(darkness)
             get_handle.assert_not_called()
+        self.assertIs(plain_group.fade(float("nan"), family=False), plain_group)
+        plain_group._semantic_family_handle.assert_not_called()
         with self.assertRaisesRegex(NotImplementedError, "non-recursive Group fade"):
             group.fade(family=False)
         group._semantic_family_handle.fade.assert_not_called()
+
+    def test_plain_group_nonrecursive_fade_is_a_noop_in_callback_phase(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            self.assertIs(group.fade(float("nan"), family=False), group)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_not_called()
 
     def test_leaf_fade_to_forwards_rgba_and_unbounded_finite_interpolation(self):
         leaf = identity_only_wrapper(compat.Square)
