@@ -121,6 +121,9 @@ jobs:
           node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/manim-raster-support.test.mjs scripts/shared-playback-raster-config.test.mjs
           python3 -m json.tool parity/manim-v0.21/manifest.json > /dev/null
           python3 -m py_compile scripts/test_manim_raster_manifest.py
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
       - name: Check independent pinned Manim Code token-color oracle
         run: |
           python3 -m pip install --disable-pip-version-check --no-deps "Pygments==2.19.2"
