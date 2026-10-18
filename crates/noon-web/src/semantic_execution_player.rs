@@ -980,6 +980,24 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_points_as_corners_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+        stride: i32,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::AppendCornersWithStride {
+                object: source,
+                points,
+                stride,
+                bezier_t_values,
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_append_vectorized_mobject(
         &mut self,
         object: &noon::Mobject,

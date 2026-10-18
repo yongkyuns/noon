@@ -353,6 +353,72 @@ fn scalar_curve_appends_classify_pending_anchors_using_mutable_stride() {
     }
 }
 
+#[test]
+fn add_points_as_corners_preserves_mutable_stride_samples_in_authored_and_live_paths() {
+    let stride = 5;
+    let samples = [0.0_f64, 1. / 3., 2. / 3., 1.];
+    let corners = [Vec2::new(7., 1.), Vec2::new(10., -1.)];
+    for point_count in [5, 6] {
+        let initial = (0..point_count)
+            .map(|index| Vec2::new(index as f32, (index % 2) as f32))
+            .collect::<Vec<_>>();
+        let mut expected = initial.clone();
+        let mut start = *initial.last().unwrap();
+        if point_count % stride == 1 {
+            expected.pop();
+        }
+        for end in corners {
+            for t in samples {
+                expected.push(start + (end - start) * t as f32);
+            }
+            // Mutating the default-constructed object's stride to five leaves
+            // the four constructor samples, and Manim initializes the fifth
+            // slot to the endpoint before applying those samples.
+            expected.push(end);
+            start = end;
+        }
+
+        for live in [false, true] {
+            let mut scene = Scene::new();
+            let mut object = scene
+                .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+                .unwrap();
+            object.set_points(&initial).unwrap();
+            if live {
+                scene.add(&object).unwrap();
+                let mut session = scene.execution_session().unwrap();
+                noon::integration::publish_borrowed_path_edit(
+                    scene.integration_store(),
+                    scene.root(),
+                    &mut session,
+                    noon::integration::BorrowedPathEdit::AppendCornersWithStride {
+                        object: &object,
+                        points: &corners,
+                        stride,
+                        bezier_t_values: &samples,
+                    },
+                )
+                .unwrap();
+                let actual = noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &object,
+                )
+                .unwrap()
+                .points()
+                .unwrap();
+                assert_raw_points_match(&actual, &expected);
+            } else {
+                object
+                    .add_points_as_corners_with_stride(&corners, stride, &samples)
+                    .unwrap();
+                let actual = object.path_query().unwrap().points().unwrap();
+                assert_raw_points_match(&actual, &expected);
+            }
+        }
+    }
+}
+
 fn assert_raw_points_match(actual: &[(f64, f64)], expected: &[Vec2]) {
     assert_eq!(actual.len(), expected.len());
     for (actual, expected) in actual.iter().zip(expected) {

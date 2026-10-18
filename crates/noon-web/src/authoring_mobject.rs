@@ -2443,6 +2443,19 @@ mod wasm {
             self.handle.add_points_as_corners(&points).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
+        pub fn add_points_as_corners_with_stride(
+            &mut self,
+            values: Vec<f64>,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle
+                .add_points_as_corners_with_stride(&points, stride, &bezier_t_values)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = appendVectorizedMobject)]
         pub fn append_vectorized_mobject(
             &mut self,

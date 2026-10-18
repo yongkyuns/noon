@@ -8295,6 +8295,27 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAddPointsAsCornersWithStride)]
+        pub fn live_add_points_as_corners_with_stride(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_points_as_corners_with_stride(
+                    source.semantic_mobject(),
+                    &points,
+                    stride,
+                    &bezier_t_values,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAppendVectorizedMobject)]
         pub fn live_append_vectorized_mobject(
             &mut self,

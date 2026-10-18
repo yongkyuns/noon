@@ -453,6 +453,28 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_points_as_corners_with_stride(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+        stride: i32,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::AppendCornersWithStride {
+                    points,
+                    stride,
+                    bezier_t_values,
+                },
+            )
+        })
+    }
+
     pub fn append_vectorized_mobject(
         &mut self,
         object: &Mobject,
@@ -648,6 +670,11 @@ pub(crate) enum PathEdit<'a> {
     AppendVectorized(&'a SemanticObjectState),
     Close,
     Reverse,
+    AppendCornersWithStride {
+        points: &'a [Vec2],
+        stride: i32,
+        bezier_t_values: &'a [f64],
+    },
     Subdivide(usize),
     ScaleHandles(f64),
     Partial {
@@ -761,6 +788,20 @@ impl PathEdit<'_> {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
             return Ok(Some(path));
+        }
+        if let Self::AppendCornersWithStride {
+            points,
+            stride,
+            bezier_t_values,
+        } = self
+        {
+            return append_corners_with_stride(
+                world_path(store, state)?,
+                points,
+                stride,
+                bezier_t_values,
+            )
+            .map(Some);
         }
         if let Self::AppendVectorized(source) = self {
             let destination = world_path(store, state)?;
@@ -983,6 +1024,7 @@ impl PathEdit<'_> {
                 | Self::CubicCurves(_)
                 | Self::SetCubicCurves(_)
                 | Self::AppendCorners(_)
+                | Self::AppendCornersWithStride { .. }
                 | Self::AppendVectorized(_)
                 | Self::Partial { .. } => {
                     unreachable!()
@@ -1087,6 +1129,66 @@ fn append_manim_cubic_to_path_with_stride(
         points.push(last);
     }
     points.extend([control1, control2, anchor]);
+    let path = VectorPath::from_manim_points(points);
+    if !path.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(path)
+}
+
+fn append_corners_with_stride(
+    path: VectorPath,
+    corners: &[Vec2],
+    stride: i32,
+    bezier_t_values: &[f64],
+) -> Result<VectorPath, AuthoringError> {
+    let Some((_, _)) = path.endpoints() else {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::EmptyPath,
+        ));
+    };
+    if corners.is_empty() {
+        return Ok(path);
+    }
+    if corners
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        || bezier_t_values.iter().any(|value| !value.is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    if stride <= 0 {
+        return Err(AuthoringError::NonPositiveNumber {
+            name: "n_points_per_cubic_curve".to_owned(),
+            value: f64::from(stride),
+        });
+    }
+    let stride = stride as usize;
+    let mut points = manim_points_for_path(&path)?;
+    let mut start = points.last().copied().ok_or(AuthoringError::PathQuery(
+        noon_geometry::PathProportionError::EmptyPath,
+    ))?;
+    if manim_remainder_is_one(points.len(), stride as i32) {
+        // Manim computes the first start corner before removing a pending
+        // anchor from the existing point array, then emits it in the new run.
+        points.pop();
+    }
+    for end in corners {
+        for index in 0..stride {
+            // Manim initializes the final slot to the endpoint, then overlays
+            // each constructor-time interpolation sample. If a mutable stride
+            // leaves an unsampled interior slot, choosing the endpoint keeps
+            // Rust's stored geometry deterministic; Python gates that unstable
+            // source profile before it reaches this helper.
+            let mut point = *end;
+            if let Some(t) = bezier_t_values.get(index) {
+                let t = *t as f32;
+                point = start + (*end - start) * t;
+            }
+            points.push(point);
+        }
+        start = *end;
+    }
     let path = VectorPath::from_manim_points(points);
     if !path.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
@@ -1499,6 +1601,19 @@ impl Mobject {
     /// Append straight segments from the current endpoint through each corner.
     pub fn add_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::AppendCorners(points))
+    }
+    /// Append line segments using the mutable Manim stride and constructor-time samples.
+    pub fn add_points_as_corners_with_stride(
+        &mut self,
+        points: &[Vec2],
+        stride: i32,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AppendCornersWithStride {
+            points,
+            stride,
+            bezier_t_values,
+        })
     }
     /// Append another vector object's current world-space path.
     pub fn append_vectorized_mobject(&mut self, source: &Mobject) -> Result<(), AuthoringError> {

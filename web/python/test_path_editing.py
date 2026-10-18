@@ -167,6 +167,53 @@ class PathEditingTests(unittest.TestCase):
                     value.add_line_to((1, 2, 0))
                 self.assertEqual(str(captured.exception), expected_error)
 
+    def test_custom_stride_corners_forward_stride_and_constructor_samples(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        value._bezier_t_values = [0., 1 / 3, 2 / 3, 1.]
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        corners = [(1, 2, 0), (3, 4, 0)]
+        expected_points = [1., 2., 3., 4.]
+        expected_samples = [0., 1 / 3, 2 / 3, 1.]
+        value.throw_error_if_no_points = Mock()
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}):
+            for context in (None, Mock()):
+                with patch.object(editing, '_handle_for', return_value=handle), \
+                     patch.object(editing, '_live_mutation_context', return_value=context), \
+                     patch.object(editing, '_live_constructor_context', return_value=None):
+                    self.assertIs(value.add_points_as_corners(corners), value)
+                if context is None:
+                    handle.addPointsAsCornersWithStride.assert_called_once_with(
+                        expected_points, 5, expected_samples
+                    )
+                else:
+                    context.liveAddPointsAsCornersWithStride.assert_called_once_with(
+                        handle, expected_points, 5, expected_samples
+                    )
+                handle.reset_mock()
+
+    def test_custom_stride_corners_reject_uninitialized_source_slots(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 6
+        value._bezier_t_values = [0., 1 / 3, 2 / 3, 1.]
+        value.throw_error_if_no_points = Mock()
+        with patch.object(editing, '_handle_for') as handle:
+            with self.assertRaisesRegex(NotImplementedError, "uninitialized points"):
+                value.add_points_as_corners([(1, 2, 0)])
+        handle.assert_not_called()
+
+    def test_custom_stride_corners_reject_samples_that_cross_stride_groups(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value._bezier_t_values = [0., 1 / 3, 2 / 3, 1.]
+        value.throw_error_if_no_points = Mock()
+        with patch.object(editing, '_handle_for') as handle:
+            with self.assertRaisesRegex(NotImplementedError, "across stride groups"):
+                value.add_points_as_corners([(1, 2, 0)])
+        handle.assert_not_called()
+
     @unittest.skipIf(numpy is None, "NumPy resize contracts run in the pinned utility qualification lane")
     def test_resize_points_uses_resize_function_then_shared_setter(self):
         value = identity_only_wrapper(compat.VMobject)

@@ -81,12 +81,51 @@ def add_cubic_bezier_curves(value, curves):
 
 
 def add_points_as_corners(value, points):
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    import operator
+
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    sample_values = [
+        float(sample)
+        for sample in getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0))
+    ]
+    default_samples = [0.0, 1 / 3, 2 / 3, 1.0]
+    if stride == 4 and sample_values == default_samples:
+        return edit_points(
+            value,
+            "addPointsAsCorners",
+            "liveAddPointsAsCorners",
+            points,
+            array=True,
+        )
+    value.throw_error_if_no_points()
+    points = list(points)
+    if not points:
+        return value
+    if stride == 0:
+        raise ZeroDivisionError("integer modulo by zero")
+    if stride < 0:
+        raise ValueError("negative dimensions are not allowed")
+    if len(sample_values) > stride:
+        raise NotImplementedError(
+            "add_points_as_corners cannot lower constructor samples across stride groups"
+        )
+    if stride > len(sample_values) + 1:
+        raise NotImplementedError(
+            "add_points_as_corners would leave uninitialized points for this stride"
+        )
+    from pyodide.ffi import to_js
+
     return edit_points(
         value,
-        "addPointsAsCorners",
-        "liveAddPointsAsCorners",
+        "addPointsAsCornersWithStride",
+        "liveAddPointsAsCornersWithStride",
         points,
         array=True,
+        suffix=(stride, to_js(sample_values)),
     )
 
 
