@@ -1868,6 +1868,76 @@ def _family_own_paint_probe(api):
         ],
     ]
 
+    recursive_source_nested = api.VGroup(api.Circle(color=api.RED))
+    recursive_source_nested.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.3,
+        stroke_color=api.YELLOW,
+        stroke_width=7,
+        stroke_opacity=0.55,
+        family=False,
+    )
+    recursive_source = api.VGroup(
+        recursive_source_nested,
+        api.Square(color=api.YELLOW),
+    )
+    recursive_source.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.35,
+        family=False,
+    )
+    recursive_receiver_nested = api.VGroup(api.Circle(color=api.BLUE))
+    recursive_receiver_nested.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.9,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    recursive_receiver = api.VGroup(
+        recursive_receiver_nested,
+        api.Square(color=api.RED),
+    )
+    recursive_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    recursive_receiver.match_style(recursive_source)
+    recursive_root_style = recursive_receiver.get_style(simple=True)
+    recursive_nested_style = recursive_receiver_nested.get_style(simple=True)
+    recursive_match = [
+        [
+            _paint_rgb(recursive_root_style["fill_color"]),
+            recursive_root_style["fill_opacity"],
+            _paint_rgb(recursive_root_style["stroke_color"]),
+            recursive_root_style["stroke_width"],
+            recursive_root_style["stroke_opacity"],
+        ],
+        [
+            _paint_rgb(recursive_nested_style["fill_color"]),
+            recursive_nested_style["fill_opacity"],
+            _paint_rgb(recursive_nested_style["stroke_color"]),
+            recursive_nested_style["stroke_width"],
+            recursive_nested_style["stroke_opacity"],
+        ],
+        [
+            [
+                _paint_rgb(member.get_fill_color()),
+                member.get_fill_opacity(),
+                member.get_stroke_width(),
+            ]
+            for member in (recursive_receiver_nested.submobjects[0], recursive_receiver.submobjects[1])
+        ],
+    ]
+
     empty = api.Group()
     empty.set_color(api.YELLOW, family=False)
 
@@ -1929,6 +1999,7 @@ def _family_own_paint_probe(api):
         ],
         "vgroup_root_only_set_style": root_style_observation,
         "vgroup_root_only_match_style": root_only_match,
+        "vgroup_recursive_match_style": recursive_match,
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]

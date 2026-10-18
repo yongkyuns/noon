@@ -178,6 +178,15 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
     use noon::StyleUpdate;
     let (mut scene, source, [a, b], _) = family();
     let target = source.copy_family().unwrap().root().clone();
+    source
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.8),
+            stroke_color: Some(Color::RED),
+            stroke_width: Some(0.03),
+            stroke_opacity: Some(0.7),
+        })
+        .unwrap();
     target
         .set_style(StyleUpdate {
             fill_color: Some(Color::BLUE),
@@ -186,11 +195,27 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
             ..Default::default()
         })
         .unwrap();
+    target
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::YELLOW),
+            fill_opacity: Some(0.4),
+            stroke_color: Some(Color::BLUE),
+            stroke_width: Some(0.2),
+            stroke_opacity: Some(0.35),
+        })
+        .unwrap();
     let a_before = a.state().unwrap();
     let b_before = b.state().unwrap();
     let revision = scene.revision();
     source.match_style(&target).unwrap();
     assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let matched_root = source.own_style().unwrap();
+    let target_root = target.own_style().unwrap();
+    assert_eq!(matched_root.fill, target_root.fill);
+    assert_eq!(matched_root.fill_opacity, target_root.fill_opacity);
+    assert_eq!(matched_root.stroke, target_root.stroke);
+    assert_eq!(matched_root.stroke_width, target_root.stroke_width);
+    assert_eq!(matched_root.stroke_opacity, target_root.stroke_opacity);
     for (leaf, before) in [(&a, a_before), (&b, b_before)] {
         let after = leaf.state().unwrap();
         assert_eq!(after.content, before.content);
@@ -214,6 +239,71 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
         .is_err());
     // Creating the intentionally incompatible family itself creates one revision.
     assert_eq!(scene.revision(), revision.checked_next().unwrap());
+
+    let empty_source = scene.family(&[]).unwrap();
+    let empty_target = scene.family(&[]).unwrap();
+    empty_target
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.25),
+            ..Default::default()
+        })
+        .unwrap();
+    empty_source.match_style(&empty_target).unwrap();
+    assert_eq!(
+        empty_source.own_style().unwrap().fill_opacity,
+        empty_target.own_style().unwrap().fill_opacity
+    );
+}
+
+#[test]
+fn recursive_style_matching_copies_nested_family_root_paint() {
+    use noon::StyleUpdate;
+    let mut scene = Scene::new();
+    let source_leaf = scene.circle(0.3).unwrap();
+    let source_nested = scene.family(&[(&source_leaf).into()]).unwrap();
+    let source_sibling = scene.square(0.4).unwrap();
+    let source = scene
+        .family(&[(&source_nested).into(), (&source_sibling).into()])
+        .unwrap();
+    let target_leaf = scene.circle(0.3).unwrap();
+    let target_nested = scene.family(&[(&target_leaf).into()]).unwrap();
+    let target_sibling = scene.square(0.4).unwrap();
+    let target = scene
+        .family(&[(&target_nested).into(), (&target_sibling).into()])
+        .unwrap();
+
+    source_nested
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::RED),
+            fill_opacity: Some(0.3),
+            stroke_width: Some(0.07),
+            ..Default::default()
+        })
+        .unwrap();
+    target_nested
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.6),
+            stroke_color: Some(Color::BLUE),
+            stroke_width: Some(0.11),
+            stroke_opacity: Some(0.45),
+        })
+        .unwrap();
+
+    source.match_style(&target).unwrap();
+    assert_eq!(
+        source_nested.own_style().unwrap(),
+        target_nested.own_style().unwrap()
+    );
+    assert_eq!(
+        source_leaf.state().unwrap().style,
+        target_leaf.state().unwrap().style
+    );
+    assert_eq!(
+        source_sibling.state().unwrap().style,
+        target_sibling.state().unwrap().style
+    );
 }
 
 #[test]
@@ -230,11 +320,27 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
     .unwrap();
     let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
     let target = scene.family(&[(&b).into(), (&a).into()]).unwrap();
+    source
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::RED),
+            fill_opacity: Some(0.8),
+            ..Default::default()
+        })
+        .unwrap();
+    target
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.3),
+            stroke_width: Some(0.07),
+            ..Default::default()
+        })
+        .unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
     let mut session = scene.execution_session().unwrap();
     let mut live = scene.live(&mut session);
     let matched = live.match_family_style(&source, &target).unwrap();
-    assert_eq!(matched.impacts().len(), 1);
+    assert_eq!(matched.impacts().len(), 2);
+    assert_eq!(source.own_style().unwrap(), target.own_style().unwrap());
     assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.25);
     assert_eq!(
         live.effective(&a).unwrap().style.fill,

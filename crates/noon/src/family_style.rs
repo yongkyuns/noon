@@ -183,7 +183,7 @@ impl MobjectFamily {
         self.edit_style(|style| update.apply(style))
     }
 
-    /// Match paint through the shared topology/alias pairing contract.
+    /// Match root and leaf paint through the shared topology/alias pairing contract.
     /// Unequal topology is rejected before any style changes are published.
     pub fn match_style(&self, target: &Self) -> Result<(), AuthoringError> {
         self.match_style_transaction(target, |object| object.state().map(|state| state.style))?
@@ -203,19 +203,42 @@ impl MobjectFamily {
         }
         self.validate()?;
         target.validate()?;
+        let root_pairs = self
+            .integration_store()
+            .borrow()
+            .ordered_family_root_pairs(self.node_id(), target.node_id())
+            .map_err(AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        {
+            let store = self.integration_store().borrow();
+            for (source, target) in root_pairs {
+                let original = store
+                    .node(source)
+                    .expect("paired family node")
+                    .family_style()
+                    .expect("family style");
+                let target_style = store
+                    .node(target)
+                    .expect("paired family node")
+                    .family_style()
+                    .expect("family style");
+                let mut matched = original.clone();
+                match_paint(&mut matched, target_style);
+                if &matched != original {
+                    transaction.set_family_style(source, matched);
+                }
+            }
+        }
         let pairs = match self
             .integration_store()
             .borrow()
             .ordered_family_leaf_pairs(self.node_id(), target.node_id())
         {
             Ok(pairs) => pairs,
-            Err(noon_core::SemanticFamilyPairingError::Empty) => {
-                return Ok(SemanticMutationTransaction::new());
-            }
+            Err(noon_core::SemanticFamilyPairingError::Empty) => return Ok(transaction),
             Err(error) => return Err(AuthoringError::from(error).into()),
         };
         let mut staged = HashMap::<noon_core::SemanticNodeId, SemanticStyle>::new();
-        let mut transaction = SemanticMutationTransaction::new();
         for (source, target) in pairs {
             let mut style = capture(&Mobject::from_node(
                 Rc::clone(self.integration_store()),
