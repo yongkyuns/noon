@@ -48,7 +48,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let first = upload(
         &mut session,
         &mut preparer,
@@ -162,7 +162,7 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("image sibling removal regression"),
         size: wgpu::Extent3d {
@@ -244,7 +244,7 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     scene.add(&object).unwrap();
     let session = scene.execution_session().unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometry = GeometryResourceArena::new();
@@ -292,7 +292,7 @@ fn skipped_image_generation_reconciles_without_reuploading_pixels() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     upload(
         &mut session,
         &mut preparer,
@@ -365,7 +365,7 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text = renderer.create_retained_text_state(&device, &queue);
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("image qualification target"),
             size: wgpu::Extent3d {
@@ -478,7 +478,7 @@ fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     upload(
         &mut session,
         &mut preparer,

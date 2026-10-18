@@ -818,7 +818,7 @@ mod tests {
         );
         let camera = 4096;
         frame.objects[camera].style.opacity = 0.0;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let cold = preparer.prepare(&frame);
         assert_eq!(cold.rectangles.len(), 8192);
         assert_eq!(
@@ -876,7 +876,7 @@ mod tests {
     fn zero_contribution_is_exact_and_preserves_stroke_and_flag_semantics() {
         use noon_core::{Color, StrokeWidthMode};
         let mut state = object(0, GeometryRef::rectangle(2.0, 2.0));
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         for (fill, stroke, opacity, expected) in [
             (None, None, 1.0, false),
             (Some(Color::rgba(1.0, 0.5, 0.3, 0.0)), None, 1.0, false),
@@ -917,7 +917,7 @@ mod tests {
     #[test]
     fn zero_contribution_appearance_restores_without_rebuilding_visibility_projection() {
         let mut frame = frame(vec![object(0, GeometryRef::rectangle(2.0, 2.0))]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         for appearance in [0.0, 0.5, 1.0, 0.0, 1.0] {
             frame.objects[0].appearance = appearance;
             let prepared = preparer
@@ -945,7 +945,7 @@ mod tests {
         );
         frame.objects[1].style.opacity = 0.0;
         frame.objects[3].style.opacity = 0.0;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.render_batches[0].instance_range, 0..5);
         assert_eq!(
@@ -971,7 +971,7 @@ mod tests {
         state.style.stroke = Some(Color::WHITE);
         state.style.stroke_width = 0.1;
         let mut frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         for (reveal, opacity) in [
             (1.0, 0.0),
             (0.25, 0.0),
@@ -983,7 +983,7 @@ mod tests {
             frame.reveals[0] = reveal;
             frame.objects[0].style.opacity = opacity;
             let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-            let mut fresh = FramePreparer::new();
+            let mut fresh = FramePreparer::new(&wgpu::Limits::default());
             let reference = fresh.prepare(&frame);
             assert_eq!(
                 prepared.observe_object(0).unwrap().primitive,
@@ -1069,7 +1069,7 @@ mod tests {
         let mut frame = frame((0..5).map(path_object).collect());
         frame.objects[1].style.opacity = 0.0;
         frame.objects[3].style.opacity = 0.0;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let cold = preparer.prepare(&frame);
         assert_eq!(cold.stats.mega_path_count, 5);
         assert_eq!(eligible_geometry_count(&cold), 3);
@@ -1157,7 +1157,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         assert_eq!(
             prepared.render_batches,
@@ -1185,7 +1185,7 @@ mod tests {
             object(1, GeometryRef::circle(0.8)),
             object(2, GeometryRef::circle(0.6)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.render_batches.len(), 1);
         assert_eq!(prepared.render_batches[0].instance_range, 0..3);
@@ -1198,7 +1198,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&frame, &[1, 0, 2]);
         let prepared = preparer.prepare(&frame);
         assert_eq!(
@@ -1219,7 +1219,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 2])
             .unwrap();
@@ -1244,7 +1244,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[1, 2])
             .unwrap();
@@ -1267,7 +1267,7 @@ mod tests {
             object(0, GeometryRef::circle(1.0)),
             object(1, GeometryRef::rectangle(2.0, 2.0)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[])
             .unwrap();
@@ -1280,7 +1280,7 @@ mod tests {
     #[test]
     fn invalid_visibility_is_rejected_before_preparation() {
         let frame = frame(vec![object(0, GeometryRef::circle(1.0))]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         assert!(matches!(
             preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[1]),
@@ -1302,7 +1302,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let visible = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0])
@@ -1324,7 +1324,7 @@ mod tests {
             object(0, GeometryRef::circle(1.0)),
             object(1, GeometryRef::rectangle(2.0, 2.0)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0])
@@ -2026,7 +2026,7 @@ mod derived_display_tests {
         assert_eq!(stateless.stats.occurrences_packed, 1);
         assert_eq!(stateless.painter_items.len(), 1);
 
-        let mut preparer = crate::FramePreparer::new();
+        let mut preparer = crate::FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         preparer.prepare(publication.frame());
         let cached =

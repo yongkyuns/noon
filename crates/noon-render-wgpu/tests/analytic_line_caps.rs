@@ -51,7 +51,7 @@ fn analytic_line_packs_all_cap_modes_without_changing_existing_flag_bits() {
             (StrokeWidthMode::ScreenSpace, 2u32),
         ] {
             let frame = line_frame(cap, width_mode);
-            let mut preparer = FramePreparer::new();
+            let mut preparer = FramePreparer::new(&wgpu::Limits::default());
             let prepared = preparer.prepare(&frame);
             let flags = prepared.lines[0].style.stroke_enabled;
             assert_eq!(flags & 1, 1, "stroke enabled bit changed");
@@ -67,7 +67,7 @@ fn rectangle_packing_does_not_carry_line_cap_bits() {
         let mut frame = line_frame(cap, StrokeWidthMode::ScreenSpace);
         frame.objects[0].content =
             noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 2.0));
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         let flags = prepared.rectangles[0].style.stroke_enabled;
         assert_eq!(

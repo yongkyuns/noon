@@ -701,7 +701,7 @@ mod tests {
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
         let mut frame = publication.frame().clone();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&frame, publication.painter_order());
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -799,7 +799,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 
@@ -949,7 +949,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 
@@ -1004,7 +1004,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 

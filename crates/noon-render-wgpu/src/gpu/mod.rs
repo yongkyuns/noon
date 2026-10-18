@@ -2757,7 +2757,7 @@ mod tests {
         assert_eq!(renderer.viewport_size(), [64, 64]);
 
         let mut frame = test_frame();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
 
         let first_upload = renderer.upload(&device, &queue, &prepared);
@@ -2873,7 +2873,7 @@ mod tests {
         assert_eq!(renderer.target_format, WEBGL_FORMAT);
 
         let frame = test_frame();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         renderer.upload(&device, &queue, &prepared);
 
@@ -2912,7 +2912,7 @@ mod tests {
         renderer.set_viewport(&device, &queue, 64, 64);
 
         let frame = test_frame_with_path();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         renderer.upload(&device, &queue, &prepared);
 
@@ -2964,7 +2964,7 @@ mod tests {
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
 
         let upload = renderer.upload(&device, &queue, &prepared);

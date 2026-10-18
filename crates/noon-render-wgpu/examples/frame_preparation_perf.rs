@@ -142,7 +142,7 @@ fn benchmark_gpu_geometry(
         FrameChanges::objects(vec![target])
     };
     let base_x = frame.objects[target].transform.translation.x;
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&device.limits());
     let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.set_viewport(device, queue, 256, 256);
     let initial_upload_bytes = {
@@ -216,7 +216,7 @@ fn benchmark_gpu_text(device: &wgpu::Device, queue: &wgpu::Queue, config: Config
     let target = if mixed { 1 } else { object_count / 2 };
     let base_x = frame.objects[target].transform.translation.x;
     let changes = FrameChanges::objects(vec![target]);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&device.limits());
     let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_state = renderer.create_retained_text_state(device, queue);
     renderer.set_viewport(device, queue, 256, 256);
@@ -444,14 +444,14 @@ fn print_command_measurements(
 fn benchmark_size(object_count: usize, config: Config) {
     let mut frame = build_frame(object_count);
 
-    let mut full_preparer = FramePreparer::new();
+    let mut full_preparer = FramePreparer::new(&wgpu::Limits::default());
     full_preparer.prepare(&frame);
     let full = measure(config, |_| {
         let prepared = full_preparer.prepare(black_box(&frame));
         black_box(prepared.stats.instances_repacked);
     });
 
-    let mut ordered_preparer = FramePreparer::new();
+    let mut ordered_preparer = FramePreparer::new(&wgpu::Limits::default());
     // A precomputed permutation models the execution plan's ordering input.
     let mut painter_order = (0..object_count as u32).collect::<Vec<_>>();
     painter_order.sort_by_key(|index| index % 7);
@@ -462,7 +462,7 @@ fn benchmark_size(object_count: usize, config: Config) {
         black_box(prepared.stats.instances_repacked);
     });
 
-    let mut static_preparer = FramePreparer::new();
+    let mut static_preparer = FramePreparer::new(&wgpu::Limits::default());
     static_preparer.prepare(&frame);
     let static_changes = FrameChanges::default();
     let unchanged = measure(config, |_| {
@@ -470,7 +470,7 @@ fn benchmark_size(object_count: usize, config: Config) {
         black_box(prepared.stats.instances_repacked);
     });
 
-    let mut dirty_preparer = FramePreparer::new();
+    let mut dirty_preparer = FramePreparer::new(&wgpu::Limits::default());
     dirty_preparer.prepare(&frame);
     let target = object_count / 2;
     let dirty_changes = FrameChanges::objects(vec![target]);

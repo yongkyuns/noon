@@ -738,7 +738,7 @@ mod tests {
             retained: &retained,
             family_animations: &states,
         };
-        let mut preparer = RetainedFramePreparer::default();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .build_scratch_frame(
                 &retained,
@@ -766,7 +766,7 @@ mod tests {
             retained: &retained,
             family_animations: &states,
         };
-        let mut preparer = RetainedFramePreparer::default();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .build_scratch_frame(
                 &retained,
@@ -793,7 +793,7 @@ mod tests {
             retained: &retained,
             family_animations: &states,
         };
-        let mut preparer = RetainedFramePreparer::default();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .build_scratch_frame(
                 &retained,

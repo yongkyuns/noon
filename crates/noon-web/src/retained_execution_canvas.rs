@@ -1401,7 +1401,7 @@ mod wasm {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<RetainedGpuState, JsValue> {
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&device.limits());
         preparer.set_scene_path_mesh_cache_budget(
             mirror
                 .resources()

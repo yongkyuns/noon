@@ -165,7 +165,7 @@ fn qualify_transient_anchor_order(packed_paths: bool, reorder: bool) {
         let derived = prepare_derived_display(&publication).unwrap();
         assert_eq!(derived.stats.painter_positions_visited, 0);
         assert_eq!(derived.stats.occurrences_packed, 11);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = if reorder {
             let original_indices = preparer

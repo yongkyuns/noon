@@ -114,7 +114,7 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
     assert!(!spatial.object_indices().contains(&anchor));
     assert!(query.object_indices().contains(&anchor));
 
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let missing = preparer
         .prepare_transient_presentations_visible(&publication, spatial.object_indices())
         .unwrap();
@@ -129,7 +129,7 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
     assert_eq!(packed.slots[0].anchor_object_index as usize, anchor);
     assert_eq!(packed.stats.painter_positions_visited, 0);
 
-    let mut geometry = FramePreparer::new();
+    let mut geometry = FramePreparer::new(&wgpu::Limits::default());
     geometry.set_painter_order(publication.frame(), publication.painter_order());
     let stable = geometry
         .prepare_incremental_visible(
@@ -173,7 +173,7 @@ fn native_viewport_admits_a_shared_anchor_only_once() {
             .count(),
         1
     );
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let packed = preparer
         .prepare_transient_presentations_visible(&publication, query.object_indices())
         .unwrap();
@@ -269,7 +269,7 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
     session.take_frame_changes();
     let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.set_viewport(&device, &queue, 400, 200);
     let mut text_state = renderer.create_retained_text_state(&device, &queue);

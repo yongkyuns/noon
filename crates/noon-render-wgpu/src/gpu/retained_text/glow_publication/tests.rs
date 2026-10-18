@@ -73,7 +73,7 @@ impl Fixture {
             device,
             queue,
             renderer,
-            preparer: RetainedFramePreparer::new(),
+            preparer: RetainedFramePreparer::new(&wgpu::Limits::default()),
             text,
         }
     }

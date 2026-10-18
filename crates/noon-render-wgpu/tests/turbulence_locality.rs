@@ -144,7 +144,7 @@ fn six_hundred_object_turbulence_remains_instance_only_for_every_measured_sample
 
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);

@@ -20,7 +20,7 @@ fn main() {
     }
     assert!(segments >= 3 && samples > 0);
     let frame = build_frame(segments);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     black_box(preparer.prepare(&frame));
     let mut timings = Vec::with_capacity(samples);
     for _ in 0..samples {

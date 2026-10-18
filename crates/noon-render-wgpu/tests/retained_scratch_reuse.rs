@@ -39,7 +39,7 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
     let mut frame = geometry_frame(GeometryRef::circle(1.0));
     preparer

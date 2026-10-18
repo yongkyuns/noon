@@ -108,7 +108,7 @@ fn animated_glow_publication_pixels() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let output = target(&device, VIEW);
         let view = output.create_view(&Default::default());
         let request = PublishedAnalyticGlowRequest {
@@ -255,7 +255,7 @@ fn live_glow_value_publication_pixels() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let output = target(&device, VIEW);
         let view = output.create_view(&Default::default());
         let request = PublishedAnalyticGlowRequest {

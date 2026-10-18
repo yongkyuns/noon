@@ -82,7 +82,7 @@ impl Raster {
             device,
             queue,
             renderer,
-            preparer: RetainedFramePreparer::new(),
+            preparer: RetainedFramePreparer::new(&wgpu::Limits::default()),
             text,
             target,
             readback,

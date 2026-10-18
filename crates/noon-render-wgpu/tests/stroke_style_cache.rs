@@ -42,7 +42,7 @@ fn path_cache_key_includes_join_and_cap_policy() {
         })
         .collect();
     let instance = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(instance.frame());
     assert_eq!(prepared.stats.geometry_cache_misses, 3);
     assert_eq!(preparer.cached_path_mesh_count(), 3);

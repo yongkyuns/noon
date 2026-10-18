@@ -42,7 +42,7 @@ fn assert_prepares_path(frame: &FrameState, expect_path: bool) {
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     preparer.set_painter_order(&[0]);
 
     let prepared = preparer
@@ -129,7 +129,7 @@ fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
     drop(source);
 
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     {
         let publication = runtime.take_renderer_publication();

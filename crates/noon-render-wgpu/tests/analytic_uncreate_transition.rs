@@ -36,7 +36,7 @@ fn rectangle_frame(reveal: f32) -> FrameState {
 #[test]
 fn descending_rectangle_reveal_switches_from_analytic_to_partial_path_once() {
     let mut frame = rectangle_frame(1.0);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     let full = preparer.prepare(&frame);
     assert_eq!(full.rectangles.len(), 1);

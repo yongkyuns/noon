@@ -52,7 +52,7 @@ fn mixed_paths_preserve_order_and_only_coalesce_matching_coverage_profiles() {
         family_animations: Vec::new(),
         family_animation_plan_indices: Vec::new(),
     };
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let indices = {
         let prepared = preparer.prepare(&frame);
         let ordered = prepared.ordered_render_batches().collect::<Vec<_>>();

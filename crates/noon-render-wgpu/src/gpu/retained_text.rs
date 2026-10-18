@@ -1056,10 +1056,6 @@ struct ImageDrawEligibilityPreparation {
 pub struct RetainedFramePreparer {
     images: RasterImageFramePreparer,
     geometry: FramePreparer,
-    // Unit tests may lower the packed-only admission limit without shrinking
-    // unrelated text, image or multisample readback buffers on the GPU device.
-    #[cfg(test)]
-    packed_path_test_limit: Option<u64>,
     text: RetainedTextQuadPreparer,
     outlines: GlyphOutlineCache,
     scratch: FrameState,
@@ -1110,13 +1106,18 @@ pub struct RetainedFramePreparer {
     resident_path_maintenance_baseline_mesh_count: usize,
 }
 
-impl Default for RetainedFramePreparer {
-    fn default() -> Self {
+impl RetainedFramePreparer {
+    /// Initialize retained preparation with the renderer's target capabilities.
+    /// Normal frame preparation cannot opt out of packed-buffer admission.
+    /// Recreate the preparer as part of the host's device-replacement lifecycle.
+    ///
+    /// ```compile_fail
+    /// let _: noon_render_wgpu::RetainedFramePreparer = Default::default();
+    /// ```
+    pub fn new(limits: &wgpu::Limits) -> Self {
         Self {
             images: RasterImageFramePreparer::default(),
-            geometry: FramePreparer::for_mixed_retained_path_draws(),
-            #[cfg(test)]
-            packed_path_test_limit: None,
+            geometry: FramePreparer::for_mixed_retained_path_draws(limits),
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
@@ -1256,10 +1257,6 @@ impl RetainedFramePreparer {
         self.rekey_image_painter_order_range(start, old_slots, new_slots);
     }
 
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Prepare and upload a replacement resident resource set, then install its
     /// CPU preparation state. Tessellation or device-limit failure leaves the
     /// previous CPU/GPU installation untouched. The host owns queue submission;
@@ -1271,8 +1268,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
-        geometry.set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws(&device.limits());
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1280,7 +1276,8 @@ impl RetainedFramePreparer {
             geometry: frame.stats,
             upload: renderer.upload_preloaded_paths(device, queue, &frame)?,
         };
-        let mut replacement = Self::with_outline_cache_limits(self.outline_cache_limits());
+        let mut replacement =
+            Self::with_outline_cache_limits(&device.limits(), self.outline_cache_limits());
         replacement.geometry = geometry;
         replacement.text_generation = self.text_generation;
         replacement.resident_path_maintenance_baseline_bytes =
@@ -1302,8 +1299,7 @@ impl RetainedFramePreparer {
         renderer: &mut GpuRenderer,
         requests: &[crate::PathMeshPreload<'_>],
     ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
-        let mut geometry = FramePreparer::for_mixed_retained_path_draws();
-        geometry.set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        let mut geometry = FramePreparer::for_mixed_retained_path_draws(&device.limits());
         geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
         geometry.preload_paths(requests)?;
         let frame = geometry.preloaded_frame();
@@ -1346,8 +1342,11 @@ impl RetainedFramePreparer {
             ));
     }
 
-    pub fn with_outline_cache_limits(limits: GlyphOutlineCacheLimits) -> Self {
-        let mut preparer = Self::default();
+    pub fn with_outline_cache_limits(
+        device_limits: &wgpu::Limits,
+        limits: GlyphOutlineCacheLimits,
+    ) -> Self {
+        let mut preparer = Self::new(device_limits);
         preparer.outlines.set_limits(limits);
         preparer
     }
@@ -1471,7 +1470,7 @@ impl RetainedFramePreparer {
     /// geometry/text caches cannot be shared across independent resource projections.
     pub fn reset_publication_context(&mut self) {
         let outline_limits = self.outlines.limits();
-        *self = Self::default();
+        *self = Self::new(&self.geometry.limits);
         self.outlines.set_limits(outline_limits);
     }
 
@@ -1768,10 +1767,6 @@ impl RetainedFramePreparer {
             && !changes.has_stable_changes())
         .then(FrameChanges::default);
         let changes = stable_changes.as_ref().unwrap_or(changes);
-        let packed_limit = device.limits().max_buffer_size;
-        #[cfg(test)]
-        let packed_limit = packed_limit.min(self.packed_path_test_limit.unwrap_or(u64::MAX));
-        self.geometry.set_packed_path_buffer_limit(packed_limit);
 
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
@@ -4446,10 +4441,10 @@ mod tests {
             frame.render_geometries = vec![None; frame.objects.len()];
             frame.render_transforms = vec![None; frame.objects.len()];
 
-            let mut old_preparer = RetainedFramePreparer::new();
+            let mut old_preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
             old_preparer.geometry = FramePreparer::for_individual_path_draws();
-            let mut packed_preparer = RetainedFramePreparer::new();
-            let mut limited_preparer = RetainedFramePreparer::new();
+            let mut packed_preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
+            let mut limited_preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
             let painter_order = (0..frame.objects.len() as u32).collect::<Vec<_>>();
             old_preparer.set_painter_order(&painter_order);
             packed_preparer.set_painter_order(&painter_order);
@@ -4791,7 +4786,13 @@ mod tests {
                         std::mem::size_of_val(packed.geometry.mega_path_vertex_instances);
                     let limited_bytes = crate::buffer_growth_capacity(full_bytes / 2);
                     assert!(limited_bytes < crate::buffer_growth_capacity(full_bytes));
-                    limited_preparer.packed_path_test_limit = Some(limited_bytes as u64);
+                    // The constrained renderer is initialized once, before
+                    // its first frame; normal preparation never mutates limits.
+                    limited_preparer = RetainedFramePreparer::new(&wgpu::Limits {
+                        max_buffer_size: limited_bytes as u64,
+                        ..device.limits()
+                    });
+                    limited_preparer.set_painter_order(&painter_order);
                 }
                 let limited = limited_preparer
                     .prepare_with_image_resources(
@@ -4911,7 +4912,7 @@ mod tests {
             ObjectContentRef::Geometry(GeometryRef::rectangle(14.222222, 8.0));
         frame.objects[0].style.opacity = 0.0;
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
@@ -5268,7 +5269,7 @@ mod tests {
         let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
         let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-        let mut retained = RetainedFramePreparer::new();
+        let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
         let active = std::collections::BTreeSet::new();
         retained.set_painter_order(&[0, 1]);
         for (step, reveal) in [1.0, 0.5, 1.0].into_iter().enumerate() {
@@ -5375,7 +5376,7 @@ mod tests {
             .with_world_origin_pixels(Vec2::new(480.0, 270.0))
             .unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut retained = RetainedFramePreparer::new();
+        let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
         retained.set_painter_order(&[0, 1, 2]);
         let mut topology_changes = 0;
         let mut previous_count = None;
@@ -5407,7 +5408,7 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            let mut fresh = RetainedFramePreparer::new();
+            let mut fresh = RetainedFramePreparer::new(&wgpu::Limits::default());
             fresh.set_painter_order(&[0, 1, 2]);
             let expected = fresh
                 .prepare_with_changes_inner(
@@ -5787,10 +5788,22 @@ mod tests {
     }
 
     #[test]
+    fn publication_reset_preserves_initialization_capabilities() {
+        let limits = wgpu::Limits {
+            max_buffer_size: 65_536,
+            ..Default::default()
+        };
+        let mut preparer = RetainedFramePreparer::new(&limits);
+        assert_eq!(preparer.geometry.limits.max_buffer_size, 65_536);
+        preparer.reset_publication_context();
+        assert_eq!(preparer.geometry.limits.max_buffer_size, 65_536);
+    }
+
+    #[test]
     fn prepare_publication_applies_current_runtime_and_rejects_stale_runtime_view() {
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
         let mut stale_instance = runtime_publication_scene();
         let stale = stale_instance.take_renderer_publication();
@@ -5831,7 +5844,7 @@ mod tests {
     fn visible_publication_keeps_resident_geometry_but_filters_submission() {
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut instance = runtime_publication_scene();
         let publication = instance.take_renderer_publication();
         let context = publication.context();
@@ -5861,7 +5874,7 @@ mod tests {
         let (frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let initial_text_generation;
 
         {
@@ -5922,7 +5935,7 @@ mod tests {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_with_changes(
                 &device,
@@ -5982,7 +5995,7 @@ mod tests {
         let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let initial_text_generation;
@@ -6076,7 +6089,7 @@ mod tests {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_with_changes(
                 &device,
@@ -6104,7 +6117,7 @@ mod tests {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer
             .prepare_with_changes(
                 &device,
@@ -6243,7 +6256,7 @@ mod tests {
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
-        let mut retained = RetainedFramePreparer::new();
+        let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
         retained.set_painter_order(&[0, 1, 2]);
         let requests = [crate::PathMeshPreload {
             geometry: &path,
@@ -6496,7 +6509,7 @@ mod tests {
         // Retained mixed preparation intentionally keeps individual path draws
         // for painter interleaving. Construct the compacted geometry state that
         // this defensive boundary protects without changing that policy.
-        let mut geometry_preparer = FramePreparer::new();
+        let mut geometry_preparer = FramePreparer::new(&wgpu::Limits::default());
         let geometry = geometry_preparer.prepare(&frame);
         let text_preparer = RetainedTextQuadPreparer::default();
         let mut applied_publication = None;
@@ -6562,7 +6575,7 @@ mod tests {
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&[0, 1]);
         {
             let prepared = preparer
@@ -6634,7 +6647,7 @@ mod tests {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let first_text_generation;
 
         {
@@ -6708,7 +6721,7 @@ mod tests {
         let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
         {
             let prepared = preparer
@@ -6789,7 +6802,7 @@ mod tests {
         let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
         preparer
             .prepare_with_changes_inner(
@@ -6861,7 +6874,7 @@ mod tests {
         let first_metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let second_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
         let first_generation = preparer
             .prepare_with_changes(
@@ -6906,7 +6919,7 @@ mod tests {
             .with_world_origin_pixels(Vec2::new(358.0, 202.0))
             .unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
 
@@ -7070,7 +7083,7 @@ mod tests {
             frame.render_geometries.push(None);
             frame.render_transforms.push(None);
         }
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&(0..frame.objects.len() as u32).collect::<Vec<_>>());
         preparer.image_draw_keys.resize(frame.objects.len(), None);
         let first = preparer.stage_image_draw_eligibility(&frame, &FrameChanges::all());
@@ -7108,7 +7121,7 @@ mod tests {
 
     #[test]
     fn compact_two_slot_reorder_rekeys_only_images_in_that_range() {
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let order = (0..4_096_u32).collect::<Vec<_>>();
         preparer.set_painter_order(&order);
         preparer.image_draw_keys.resize(4_096, None);

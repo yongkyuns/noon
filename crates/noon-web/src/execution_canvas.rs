@@ -691,7 +691,7 @@ mod wasm {
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
             self.direct_text_gpu = direct_text_gpu;
-            self.direct_preparer = RetainedFramePreparer::new();
+            self.direct_preparer = RetainedFramePreparer::new(&self.device.limits());
             self.selection_overlay = OverlayGpuState::default();
             self.timestamp_profiler =
                 profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
@@ -765,7 +765,7 @@ mod wasm {
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
             self.direct_text_gpu = direct_text_gpu;
-            self.direct_preparer = RetainedFramePreparer::new();
+            self.direct_preparer = RetainedFramePreparer::new(&self.device.limits());
             self.selection_overlay = OverlayGpuState::default();
             self.timestamp_profiler =
                 profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
@@ -1525,6 +1525,7 @@ mod wasm {
             let webgl_context_lifecycle =
                 crate::webgl_context_lifecycle::WebGlContextLifecycle::install(&canvas, backend)?;
 
+            let direct_preparer = RetainedFramePreparer::new(&device.limits());
             let mut result = Self {
                 instance,
                 surface,
@@ -1537,7 +1538,7 @@ mod wasm {
                 source,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
                 sampled_scene_target: None,
-                direct_preparer: RetainedFramePreparer::new(),
+                direct_preparer,
                 renderer,
                 direct_text_gpu,
                 timestamp_query_supported,

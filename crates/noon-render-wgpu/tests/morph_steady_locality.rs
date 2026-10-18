@@ -88,7 +88,7 @@ fn six_hundred_object_steady_morph_updates_instances_only() {
 
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     instance.seek(0.10).unwrap();
     let activation_changes = instance.take_frame_changes();
@@ -187,7 +187,7 @@ fn six_hundred_object_second_morph_steady_state_remains_instance_only() {
 
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     instance.seek(0.10).unwrap();
     let changes = instance.take_frame_changes();

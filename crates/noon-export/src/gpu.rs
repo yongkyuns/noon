@@ -176,12 +176,13 @@ impl NativeCapture {
             mapped_at_creation: false,
         });
         fault.check()?;
+        let preparer = RetainedFramePreparer::new(&device.limits());
         Ok(Self {
             _instance: instance,
             device,
             queue,
             renderer,
-            preparer: RetainedFramePreparer::new(),
+            preparer,
             text,
             overlay: OverlayGpuState::default(),
             target,

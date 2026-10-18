@@ -8,7 +8,7 @@ impl FramePreparer {
     /// Optional packing cannot consume a GPU buffer that exceeds the device
     /// limit. A rejected path still has its ordinary source draw and indices.
     fn packed_path_allocation_fits(&self, vertex_end: usize, index_count: usize) -> bool {
-        let limit = self.packed_path_buffer_limit.unwrap_or(u64::MAX);
+        let limit = self.limits.max_buffer_size;
         rounded_capacity_fits(vertex_end, std::mem::size_of::<PathInstance>(), limit)
             && rounded_capacity_fits(index_count, std::mem::size_of::<u32>(), limit)
     }
@@ -416,26 +416,27 @@ mod tests {
 
     #[test]
     fn packed_admission_checks_rounding_index_limits_and_overflow() {
-        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
-        preparer.set_packed_path_buffer_limit(65_536);
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws(&wgpu::Limits::default());
+        preparer.set_packed_path_buffer_limit_for_test(65_536);
         assert!(preparer.packed_path_allocation_fits(819, 16_384));
         assert!(!preparer.packed_path_allocation_fits(820, 1));
         assert!(!preparer.packed_path_allocation_fits(1, 16_385));
         assert!(!preparer.packed_path_allocation_fits(usize::MAX, 1));
         assert!(!preparer.packed_path_allocation_fits(1, usize::MAX));
         assert!(preparer.packed_path_allocation_fits(0, 0));
-        preparer.set_packed_path_buffer_limit(255);
+        preparer.set_packed_path_buffer_limit_for_test(255);
         assert!(!preparer.packed_path_allocation_fits(1, 1));
     }
 
     #[test]
     fn high_address_preload_falls_back_on_real_limited_device() {
         const LIMIT: usize = 65_536;
-        let (_, _, _, sample_ranges) = preloaded_prefix_fixture(1);
+        let (_, _, _, sample_ranges) = preloaded_prefix_fixture(1, &wgpu::Limits::default());
         let vertices_per_path = sample_ranges[0].end;
         let count = LIMIT / (vertices_per_path * std::mem::size_of::<crate::PathVertex>());
         assert!(count > 1);
-        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(count);
+        let (mut preparer, mut frame, rows, ranges) =
+            preloaded_prefix_fixture(count, &wgpu::Limits::default());
         let high_end = ranges[count - 1].end;
         assert_eq!(preparer.path_vertices.len(), high_end);
         assert!(
@@ -475,9 +476,10 @@ mod tests {
             "the real preparer produces a packed allocation exceeding the device"
         );
 
-        // Never upload the unbounded witness: it is a deliberate negative.
-        // The public device-aware entry point installs admission before packing.
-        let bounded = preparer.prepare_for_device(&device, &frame);
+        // Never upload this higher-limit witness on the smaller device.
+        // Initialize the GPU-bound state with its target before packing.
+        let (mut preparer, _, _, _) = preloaded_prefix_fixture(count, &device.limits());
+        let bounded = preparer.prepare(&frame);
         assert_eq!(bounded.stats.mega_path_count, 0);
         assert_eq!(bounded.stats.unsupported_count, 0);
         assert!(bounded.mega_path_indices.is_empty());
@@ -510,8 +512,8 @@ mod tests {
         queue.submit(Some(encoder.finish()));
         assert_eq!(draws.draw_calls, 1);
 
-        // Supplying the same device must not invalidate an otherwise clean frame.
-        let clean = preparer.prepare_incremental_for_device(&device, &frame, &Default::default());
+        // Normal preparation on the initialized target leaves clean frames clean.
+        let clean = preparer.prepare_incremental(&frame, &Default::default());
         assert_eq!(clean.stats.full_rebuilds, 0);
         assert!(clean.mega_path_instance_dirty_ranges.is_empty());
         assert!(clean.mega_path_index_dirty_ranges.is_empty());
@@ -519,12 +521,13 @@ mod tests {
         assert_eq!(idle_upload.bytes_uploaded, 0);
         assert_eq!(idle_upload.buffer_reallocations, 0);
 
-        // An actual larger-limit device re-admits packing even with an empty
-        // delta. No semantic edit or private setter is needed by the caller.
+        // Device replacement constructs a new preparer and renderer together.
+        // The scene is unchanged; no per-frame device API or mutable cap is used.
         let (larger_device, larger_queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         assert!(larger_device.limits().max_buffer_size > device.limits().max_buffer_size);
-        let recovered =
-            preparer.prepare_incremental_for_device(&larger_device, &frame, &Default::default());
+        let (mut larger_preparer, _, _, _) =
+            preloaded_prefix_fixture(count, &larger_device.limits());
+        let recovered = larger_preparer.prepare(&frame);
         assert_eq!(recovered.stats.mega_path_count, 1);
         let mut larger_renderer = crate::GpuRenderer::new(
             &larger_device,
@@ -534,9 +537,10 @@ mod tests {
         let recovered_upload = larger_renderer.upload(&larger_device, &larger_queue, &recovered);
         assert!(recovered_upload.bytes_uploaded > 0);
 
-        // Returning to the smaller cap must fall back before the next upload.
-        let bounded_again =
-            preparer.prepare_incremental_for_device(&device, &frame, &Default::default());
+        // The original small-target preparer remains bounded and unchanged;
+        // another renderer's initialization cannot alter its admission.
+        let bounded_again = preparer.prepare_incremental(&frame, &Default::default());
+        assert_eq!(bounded_again.stats.full_rebuilds, 0);
         assert_eq!(bounded_again.stats.mega_path_count, 0);
         assert_eq!(bounded_again.stats.unsupported_count, 0);
         assert!(bounded_again.mega_path_indices.is_empty());
@@ -549,10 +553,11 @@ mod tests {
         use noon_core::{GeometryRef, ObjectId, Vec2, VectorPath};
         use noon_runtime::FrameChanges;
 
-        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(32);
+        let (mut preparer, mut frame, rows, ranges) =
+            preloaded_prefix_fixture(32, &wgpu::Limits::default());
         let first_end = ranges[0].end;
         let limit = crate::buffer_growth_capacity(first_end * std::mem::size_of::<PathInstance>());
-        preparer.set_packed_path_buffer_limit(limit as u64);
+        preparer.set_packed_path_buffer_limit_for_test(limit as u64);
         append_fixture_row(&mut frame, rows[0].clone());
         let initial = preparer.prepare(&frame);
         assert_eq!(initial.stats.mega_path_count, 1);
@@ -587,7 +592,7 @@ mod tests {
         assert_eq!(clean.stats.full_rebuilds, 0);
         assert!(clean.mega_path_instance_dirty_ranges.is_empty());
 
-        preparer.set_packed_path_buffer_limit(u64::MAX);
+        preparer.set_packed_path_buffer_limit_for_test(u64::MAX);
         let recovered = preparer.prepare(&frame);
         assert_eq!(recovered.stats.mega_path_count, 2);
     }
@@ -689,7 +694,7 @@ mod tests {
                 transform: Transform2D::IDENTITY,
             })
             .collect::<Vec<_>>();
-        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws(&wgpu::Limits::default());
         preparer.preload_paths(&requests).unwrap();
         let (mut uploaded, batches) = {
             let initial = preparer.prepare(&frame);
@@ -752,6 +757,7 @@ mod tests {
 
     fn preloaded_prefix_fixture(
         count: usize,
+        limits: &wgpu::Limits,
     ) -> (
         FramePreparer,
         noon_runtime::FrameState,
@@ -785,7 +791,7 @@ mod tests {
                 transform: Transform2D::IDENTITY,
             })
             .collect::<Vec<_>>();
-        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws(limits);
         preparer.preload_paths(&requests).unwrap();
         let ranges = preparer
             .path_mesh_cache
@@ -841,7 +847,8 @@ mod tests {
     #[test]
     fn mixed_preloaded_suffix_stays_out_of_packed_attribute_uploads() {
         for count in [8, 1024] {
-            let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(count);
+            let (mut preparer, mut frame, rows, ranges) =
+                preloaded_prefix_fixture(count, &wgpu::Limits::default());
             let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
             let mut renderer =
                 crate::GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -888,7 +895,8 @@ mod tests {
         use noon_core::{GeometryRef, ObjectId, Vec2, VectorPath};
         use noon_runtime::FrameChanges;
 
-        let (mut preparer, mut frame, rows, ranges) = preloaded_prefix_fixture(32);
+        let (mut preparer, mut frame, rows, ranges) =
+            preloaded_prefix_fixture(32, &wgpu::Limits::default());
         let empty = preparer.prepare(&frame);
         assert!(!empty.path_vertices.is_empty());
         assert!(empty.mega_path_vertex_instances.is_empty());

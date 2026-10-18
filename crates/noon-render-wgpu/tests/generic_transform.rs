@@ -79,7 +79,7 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
     }];
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     instance.seek(0.1).unwrap();
 
     let initial_changes = instance.take_frame_changes();
@@ -139,7 +139,7 @@ fn sequential_path_pair_transition_prepares_new_geometry_once() {
     ];
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let changes = instance.take_frame_changes();
     let first = preparer.prepare_incremental(instance.frame(), &changes);
     assert_eq!(first.stats.geometry_cache_misses, 1);

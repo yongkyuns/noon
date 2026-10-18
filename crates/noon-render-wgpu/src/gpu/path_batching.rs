@@ -303,7 +303,8 @@ mod tests {
             family_animations: vec![],
             family_animation_plan_indices: vec![],
         };
-        let mut preparer = crate::FramePreparer::for_mixed_retained_path_draws();
+        let mut preparer =
+            crate::FramePreparer::for_mixed_retained_path_draws(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.path_batches.len(), 3);
         assert!(
@@ -454,7 +455,7 @@ mod tests {
             family_animations: vec![],
             family_animation_plan_indices: vec![],
         };
-        let mut preparer = crate::FramePreparer::new();
+        let mut preparer = crate::FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         let first = batch(0, 0);
         let (sin, cos) = transform.rotation.sin_cos();
@@ -532,7 +533,7 @@ mod tests {
             family_animations: vec![],
             family_animation_plan_indices: vec![],
         };
-        let mut preparer = crate::FramePreparer::new();
+        let mut preparer = crate::FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         let first = OrderedRenderBatch {
             primitive: RenderPrimitive::Circle,

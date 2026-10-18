@@ -380,7 +380,7 @@ mod operation_selection_tests {
             let geometries = GeometryResourceArena::new();
             let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
             let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-            let mut preparer = RetainedFramePreparer::new();
+            let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
             let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             let mut previous_vertices = Vec::new();
             for y in [0.0, 0.5] {
@@ -471,7 +471,7 @@ mod operation_selection_tests {
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let frame = RetainedFamilyFrame {
@@ -612,7 +612,7 @@ mod operation_selection_tests {
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&[0, 1, 2]);
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
@@ -715,7 +715,7 @@ mod operation_selection_tests {
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer.set_scene_path_mesh_cache_budget(resources.len(), 0);
         for (visit, phase) in [0, 0, 1, 1, 0, 0, 1].into_iter().enumerate() {
             retained.render_geometries = resources[phase * PER_PHASE..(phase + 1) * PER_PHASE]
@@ -772,7 +772,7 @@ mod operation_selection_tests {
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         preparer.set_scene_path_mesh_cache_budget(10, 400);
         let path = GeometryRef::path(
@@ -896,7 +896,7 @@ mod operation_selection_tests {
             ..Default::default()
         });
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .preload_path_meshes(&device, &queue, &mut renderer, &requests[..2])
             .unwrap();

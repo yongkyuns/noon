@@ -519,7 +519,7 @@ mod tests {
         use super::{FramePreparer, PathInstance, PathVertex};
         use bytemuck::Zeroable;
 
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         assert_eq!(preparer.path_cpu_buffer_bytes(), (0, 0));
         assert_eq!(preparer.packed_path_cpu_buffer_bytes(), (0, 0));
         preparer.path_vertices.resize(2, PathVertex::zeroed());
@@ -618,7 +618,7 @@ mod tests {
             family_animations: vec![],
             family_animation_plan_indices: vec![],
         };
-        let mut preparer = FramePreparer::for_mixed_retained_path_draws();
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws(&wgpu::Limits::default());
         assert_eq!(preparer.prepare(&frame).stats.mega_path_count, COUNT);
         let baseline = preparer.packed_path_cpu_buffer_bytes();
         assert!(baseline.0 > 0 && baseline.1 >= baseline.0);
@@ -642,19 +642,19 @@ mod tests {
 
         // A rejected optional packed allocation does not retroactively free
         // already retained CPU storage. Ordinary source paths remain present.
-        preparer.set_packed_path_buffer_limit(255);
+        preparer.set_packed_path_buffer_limit_for_test(255);
         let fallback = preparer.prepare(&frame);
         assert_eq!(fallback.stats.mega_path_count, 0);
         assert_eq!(fallback.paths.len(), COUNT);
         assert_eq!(preparer.packed_path_cpu_buffer_bytes(), (0, baseline.1));
-        preparer.set_packed_path_buffer_limit(u64::MAX);
+        preparer.set_packed_path_buffer_limit_for_test(u64::MAX);
         assert_eq!(preparer.prepare(&frame).stats.mega_path_count, COUNT);
         assert_eq!(preparer.packed_path_cpu_buffer_bytes(), baseline);
     }
 
     #[test]
     fn resident_upload_hides_stale_mixed_mega_draw_metadata() {
-        let mut preparer = super::FramePreparer::new();
+        let mut preparer = super::FramePreparer::new(&wgpu::Limits::default());
         preparer.mega_path_segments.push(Some(0..6));
         preparer.mega_path_detached.push(false);
         preparer.mega_path_indices.extend(0..6);

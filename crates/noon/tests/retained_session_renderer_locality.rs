@@ -15,7 +15,7 @@ fn one_typed_session_edit_stays_local_through_retained_upload() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_state = renderer.create_retained_text_state(&device, &queue);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let visible_candidates = [changed_index];
     let target = device.create_texture(&wgpu::TextureDescriptor {

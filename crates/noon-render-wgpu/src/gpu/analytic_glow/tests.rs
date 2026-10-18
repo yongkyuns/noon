@@ -83,7 +83,7 @@ fn capture_and_anchor_are_retained_and_intensity_does_not_recapture() {
         Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
     );
     let runtime = runtime();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(runtime.frame());
     renderer.upload(&device, &queue, &prepared);
     let target = CaptureImage::new(&device, wgpu::TextureFormat::Rgba8Unorm, [80, 60]);
@@ -200,7 +200,7 @@ fn budget_rejection_is_atomic_and_accounts_for_other_scopes() {
         Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
     );
     let runtime = runtime();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(runtime.frame());
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -266,7 +266,7 @@ fn transparent_paint_does_not_suppress_silhouette_and_abort_is_recoverable() {
     );
     let mut frame = runtime().frame().clone();
     frame.objects[1].style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.0));
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(&frame);
     renderer.upload(&device, &queue, &prepared);
     assert_eq!(
@@ -329,7 +329,7 @@ fn repacked_source_retires_old_slot_and_does_not_double_count_memory() {
         Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
     );
     let mut frame = runtime().frame().clone();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(&frame);
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -389,7 +389,7 @@ fn fractional_translation_reuses_warmed_capture_capacity() {
         Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
     );
     let mut frame = runtime().frame().clone();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(&frame);
     renderer.upload(&device, &queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -448,7 +448,7 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
     );
     let mut runtime = runtime_for(object());
     let publication = runtime.take_renderer_publication();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(publication.frame());
     renderer.upload(&device, &queue, &prepared);
     let request = PublishedAnalyticGlowRequest {

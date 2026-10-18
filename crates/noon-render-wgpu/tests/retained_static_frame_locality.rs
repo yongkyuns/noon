@@ -45,7 +45,7 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut frame = static_geometry_frame();
 
     {
@@ -125,7 +125,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
 
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_gpu = renderer.create_retained_text_state(&device, &queue);
@@ -225,7 +225,7 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut frame = static_geometry_frame();
 
     preparer
@@ -276,7 +276,7 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut frame = static_geometry_frame();
     frame.objects.push(FrameObjectState {
         glow: None,
@@ -393,7 +393,7 @@ fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
         frame.render_transforms.push(None);
     }
 
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_gpu = renderer.create_retained_text_state(&device, &queue);
     let cold_upload = {

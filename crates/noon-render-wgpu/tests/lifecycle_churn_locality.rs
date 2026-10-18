@@ -159,7 +159,7 @@ fn lifecycle_churn_presence_transitions_keep_morphed_paths_resident_on_the_exact
 
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);

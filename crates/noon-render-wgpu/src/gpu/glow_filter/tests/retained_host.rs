@@ -107,7 +107,7 @@ impl Host {
         Self {
             renderer,
             text,
-            preparer: RetainedFramePreparer::new(),
+            preparer: RetainedFramePreparer::new(&wgpu::Limits::default()),
             target: target(device, VIEW),
         }
     }
