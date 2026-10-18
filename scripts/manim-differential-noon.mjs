@@ -588,6 +588,14 @@ assert root_paint_arrays["stroke_opacities"] == [0.45]
 assert_color(family_paint["vgroup_save_restore"][0], noon.WHITE)
 assert_color(family_paint["vgroup_save_restore"][1][0], noon.RED)
 assert_color(family_paint["vgroup_save_restore"][1][1], noon.BLUE)
+root_style_restore = family_paint["vgroup_root_style_save_restore"]
+assert_color(root_style_restore[0], noon.GREEN)
+assert abs(root_style_restore[1] - 0.3) <= 1e-6
+assert_color(root_style_restore[2], noon.BLUE)
+assert abs(root_style_restore[3] - 3) <= 1e-6
+assert abs(root_style_restore[4] - 0.5) <= 1e-6
+assert_color(root_style_restore[5][0], noon.RED)
+assert_color(root_style_restore[5][1], noon.BLUE)
 assert_color(family_paint_play["before"], noon.GREEN)
 assert_color(family_paint_play["target"], noon.YELLOW)
 assert_color(family_paint_play["after"], noon.YELLOW)
