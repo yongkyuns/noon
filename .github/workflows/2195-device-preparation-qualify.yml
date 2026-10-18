@@ -1,0 +1,165 @@
+# Research-only qualification for #2195. Never merge this workflow into master.
+# Remove this research branch after the patch's final qualification is recorded.
+name: "2195 device preparation qualification"
+on:
+  push:
+    branches: [codex/2195-device-preparation-qualify]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
+      EXPECTED_BASE: 26168e25b39c294921640cc8a40378eec0c13c78
+      PROOF_DIR: ${{ runner.temp }}/2195-device-proof
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select the exact PR source and preserve the proposed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          cp experiments/2195/device-aware-preparation.patch "$PROOF_DIR/input.patch"
+          echo 'c941f8486f24416b17c1b55338eb9d2755a7445c578077dd5026cc12c742d184  '"$PROOF_DIR/input.patch" | sha256sum --check
+          git checkout --detach "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD > "$PROOF_DIR/base.txt"
+      - name: Install repository-pinned Rust and native build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustc --version --verbose | tee "$PROOF_DIR/toolchain.txt"
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libvulkan1 mesa-vulkan-drivers
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-2195-device-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-capture-cargo-sources-
+      - name: Apply the original patch and normalize only the three expected source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check "$PROOF_DIR/input.patch"
+          git apply "$PROOF_DIR/input.patch"
+          cargo fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          expected = {
+              'crates/noon-render-wgpu/src/lib.rs',
+              'crates/noon-render-wgpu/src/mega_mesh.rs',
+              'crates/noon-render-wgpu/src/path_residency.rs',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          proof = Path(os.environ['PROOF_DIR'])
+          (proof / 'applied.patch').write_bytes(subprocess.check_output(['git', 'diff', '--binary']))
+          (proof / 'changed-files.txt').write_text('\n'.join(sorted(actual)) + '\n')
+          # The pre-existing CPU helper's only intended change is rustfmt layout.
+          path = 'crates/noon-render-wgpu/src/path_residency.rs'
+          before = subprocess.check_output(['git', 'show', 'HEAD:' + path], text=True)
+          after = Path(path).read_text()
+          old = '    (values.len() as u64 * stride, values.capacity() as u64 * stride)'
+          new = '    (\n        values.len() as u64 * stride,\n        values.capacity() as u64 * stride,\n    )'
+          assert before.count(old) == 1
+          assert before.replace(old, new) == after, 'Unexpected CPU-accounting edit'
+          PY
+      - name: Test public device-aware fallback and clean-frame recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --lib high_address_preload_falls_back_on_real_limited_device -- --nocapture 2>&1 | tee "$PROOF_DIR/device-test.log"
+      - name: Check public API documentation examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --doc 2>&1 | tee "$PROOF_DIR/doctests.log"
+      - name: Run the repository fast validation entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee "$PROOF_DIR/fast-gate.log"
+      - name: Store tested Git objects without updating the PR branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, urllib.request
+          from pathlib import Path
+          repo = 'yongkyuns/noon'
+          base = os.environ['EXPECTED_BASE']
+          proof = Path(os.environ['PROOF_DIR'])
+          expected = {
+              'crates/noon-render-wgpu/src/lib.rs',
+              'crates/noon-render-wgpu/src/mega_mesh.rs',
+              'crates/noon-render-wgpu/src/path_residency.rs',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert actual == expected, actual
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == base
+          applied = subprocess.check_output(['git', 'diff', '--binary'])
+          assert applied == (proof / 'applied.patch').read_bytes(), 'Tests changed source'
+          def api(method, suffix, payload=None):
+              body = None if payload is None else json.dumps(payload).encode()
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + repo + '/' + suffix,
+                  data=body, method=method,
+                  headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          entries = []
+          hashes = {}
+          for path in sorted(actual):
+              content = Path(path).read_bytes()
+              hashes[path] = hashlib.sha256(content).hexdigest()
+              blob = api('POST', 'git/blobs', {'content': content.decode(), 'encoding': 'utf-8'})
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+          original = api('GET', 'git/commits/' + base)
+          tree = api('POST', 'git/trees', {'base_tree': original['tree']['sha'], 'tree': entries})
+          commit = api('POST', 'git/commits', {
+              'message': 'fix(renderer): expose device-aware preparation and qualify public fallback',
+              'tree': tree['sha'], 'parents': [base],
+          })
+          evidence = {
+              'base': base, 'commit': commit['sha'], 'tree': tree['sha'],
+              'source_sha256': hashes,
+              'applied_patch_sha256': hashlib.sha256(applied).hexdigest(),
+              'workflow_run': os.environ['GITHUB_RUN_ID'],
+              'ref_updated': False,
+          }
+          (proof / 'publication.json').write_text(json.dumps(evidence, indent=2) + '\n')
+          print('TESTED_COMMIT=' + commit['sha'])
+          print('No branch ref was changed by this workflow.')
+          PY
+      - name: Preserve qualification evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: 2195-device-preparation-proof
+          path: ${{ env.PROOF_DIR }}/
+          retention-days: 3
+          if-no-files-found: error
