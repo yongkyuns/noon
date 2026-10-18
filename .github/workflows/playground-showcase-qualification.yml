@@ -107,93 +107,84 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-  # PR #2203 only: publish genuine source-bound WebGL captures using a pinned
-  # checkout. This staging job must be removed before review/merge.
-  # It never changes the baseline border renderer or independent CUDA poster.
+  # Temporary PR #2203-only import of genuine, source-bound WebGL
+  # captures from the qualifying run. Delete this job before marking PR ready.
   code-pygments-poster-publication:
     name: Pygments source-bound WebGL poster publication
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'yongkyuns/noon' && github.event.pull_request.head.ref == 'fix/code-pygments-2193' }}
-    needs: capture
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 15
     permissions:
       contents: write
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      NOON_SHOWCASE_BACKEND: webgl
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: true
-      - uses: actions/setup-python@v7
+      # The source-aligned WebGL renderer job of PR run 39170405872 passed
+      # all 25 genuine captures. Use its original frames and true build SHA,
+      # never generate PNGs or pretend they belong to a different build.
+      - uses: actions/download-artifact@v8
         with:
-          python-version: '3.12'
-      - name: Verify independent pinned Pygments 2.19.2 oracle
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
-          python3 scripts/test_code_pygments_parity.py
-      # Unlike the ordinary PR CI jobs, this one intentionally checks out
-      # the immutable PR head, not the synthetic PR merge. Preserve the strict
-      # build identity assertion by pinning its expected SHA to that same head.
-      - name: Verify source checkout is the advertised PR head
-        env:
-          PINNED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$PINNED_HEAD_SHA"
-          echo "Source checkout $PINNED_HEAD_SHA; PR test merge $GITHUB_SHA"
-      - name: Build exact head source browser runtime
-        uses: ./.github/actions/dev-wasm-build
-        env:
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
-        with:
-          preflight: 'false'
-      - name: Install pinned renderer tools
-        run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps chromium
-      - name: Select original 24 scenes without replacing independently qualified CUDA
+          name: showcase-review-webgl
+          repository: yongkyuns/noon
+          run-id: 39170405872
+          github-token: ${{ github.token }}
+          path: browser-smoke-artifacts/showcase/webgl
+      - name: Validate original WebGL frame provenance and stage 24 posters
         run: |
           python3 - <<'PY'
+          import hashlib
           import json
+          import shutil
           from pathlib import Path
-          path = Path("web/python/examples/noon_showcase_manifest.json")
-          manifest = json.loads(path.read_text())
-          assert len(manifest["entries"]) == 25
+
+          root = Path("browser-smoke-artifacts/showcase/webgl")
+          manifest = json.loads(Path("web/python/examples/noon_showcase_manifest.json").read_text())
+          report = json.loads((root / "report.json").read_text())
+          evidence = json.loads((root / "capture-evidence.json").read_text())
+          revision = "ce5dbe43f3642c2266682d81bbe1fb9c004424b7"
+          assert report["checkoutRevision"] == revision
+          assert report["backendRequested"] == evidence["backend"] == "webgl"
+          assert report["servedBuildIdentity"] == evidence["runtimeBuildIdentity"]
+          assert evidence["captureRevision"] == evidence["runtimeBuildIdentity"]["sourceRevision"] == revision
+          assert len(manifest["entries"]) == len(report["results"]) == len(evidence["posters"]) == 25
           assert manifest["entries"][-1]["id"] == "showcase-cuda-transpose"
-          manifest["entries"].pop()
-          assert len(manifest["entries"]) == 24
-          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          assert [x["id"] for x in report["results"]] == [x["id"] for x in manifest["entries"]]
+          assert all(x["outcome"] == "pass" and not x["pageErrors"] for x in report["results"])
+          hashes = lambda data: hashlib.sha256(data).hexdigest()
+          dst = Path("web/thumbnails/showcase")
+          for entry, rec in zip(manifest["entries"][:-1], evidence["posters"][:-1]):
+              assert rec["id"] == entry["id"]
+              assert rec["captureBuildId"] == evidence["runtimeBuildIdentity"]["buildId"]
+              assert rec["thumbnailTime"] == entry["thumbnail_time"]
+              assert hashes((Path("web") / entry["path"]).read_bytes()) == rec["sourceSha256"]
+              image = (root / f"{entry['id']}.png").read_bytes()
+              assert image.startswith(b"\x89PNG\r\n\x1a\n")
+              assert hashes(image) == rec["image"]["pngSha256"]
+              assert int.from_bytes(image[16:20], "big") == rec["image"]["width"]
+              assert int.from_bytes(image[20:24], "big") == rec["image"]["height"]
+              shutil.copyfile(root / f"{entry['id']}.png", dst / f"{entry['id']}.png")
+          evidence["posters"] = evidence["posters"][:-1]
+          (dst / "capture-evidence.json").write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n")
+          print("Verified and staged 24 actual WebGL renderer posters at", revision)
           PY
-      - name: Capture real 24-scene WebGL frames and evidence from exact head
-        run: node scripts/showcase-capture.mjs
-      - name: Restore full gallery and enforce strict poster provenance
+      - name: Validate imported PNGs and independently captured CUDA poster
         run: |
-          git restore -- web/python/examples/noon_showcase_manifest.json
-          test -s web/thumbnails/showcase/showcase-code-blocks.png
           node --test scripts/showcase-posters.test.mjs
-      - name: Commit only validated renderer posters and source-bound evidence
+          git diff --check
+          test -z "$(git status --porcelain -- web/thumbnails/showcase/showcase-cuda-transpose.png web/thumbnails/showcase/showcase-cuda-transpose-evidence.json)"
+      - name: Commit genuine source-verified poster assets
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add web/thumbnails/showcase
           git diff --cached --check
-          test -z "$(git status --porcelain -- web/python/examples/noon_showcase_manifest.json)"
           if git diff --cached --quiet; then
-            echo "Expected real source-bound image/evidence changes were absent" >&2
+            echo "No source-bound gallery changes were produced" >&2
             exit 1
           fi
-          git commit -m "Recapture Python Code word operators in genuine 24-scene WebGL gallery"
+          git commit -m "Publish authentic Code Pygments WebGL gallery captures"
           git push origin HEAD:fix/code-pygments-2193
-      - name: Retain authentic recapture diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: pygments-operator-gallery-evidence
-          path: |
-            browser-smoke-artifacts/showcase/webgl/report.json
-            browser-smoke-artifacts/showcase/webgl/contact-sheet.png
-            browser-smoke-artifacts/showcase/webgl/showcase-code-blocks.png
-          if-no-files-found: warn
-          retention-days: 3
+
