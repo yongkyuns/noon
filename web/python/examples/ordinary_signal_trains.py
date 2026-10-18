@@ -1,13 +1,14 @@
 """Travelling signals using existing shared Rust animation composition.
 
-Pair: noon::example_scenes::line_passing_flash::train_session.
+Rust pair: noon::example_scenes::line_passing_flash::train_program().
+The same Rust continuation can be recorded with train_playback() for direct seek.
 The upper rail carries longer cyan pulses left-to-right; the lower rail carries
 short yellow pulses right-to-left. The dim rails remain visible throughout.
 
 Nine 1.6-second pulses staggered by 0.2 seconds make a finite 3.2-second train.
 Changing time_width changes each pulse's visible fraction of the source line.
 Changing the lag ratio changes spacing; reversing line endpoints changes flow
- direction. This is not the general looping dotted/curved-stroke API in #2188.
+direction. This is not the general looping dotted/curved-stroke API in #2188.
 There are no updaters or per-frame Python geometry calculations.
 """
 

@@ -120,9 +120,10 @@ pub const TRAIN_DURATION: f64 = 4.2;
 /// Compose two finite signal trains using the ordinary live Rust scheduler.
 ///
 /// Each rail stays present while its detached signal lines enter and leave at
-/// their authored times. The continuation is essential: pre-completing the
-/// flashes and rewinding a static session cannot replay their transient
-/// membership. No separate clock, runtime model, or frontend updater is used.
+/// their authored times. Live playback drives this continuation directly.
+/// Recorded playback retains and seals the existing execution history before
+/// seeking; merely rewinding an unrecorded session loses retired membership.
+/// No separate clock, runtime model, or frontend updater is used.
 ///
 /// This demonstrates finite analytic-Line pulses, not infinite dash phase or
 /// flowing curves. Pair: web/python/examples/ordinary_signal_trains.py.
@@ -201,7 +202,7 @@ impl LiveContinuation for SignalTrains {
     }
 }
 
-pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
+fn train_scene() -> Result<(Scene, SignalTrains), String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut trains = Vec::new();
@@ -225,9 +226,45 @@ pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
             }
             trains.push((signals, time_width));
         }
-        Ok(scene.into_live_program(SignalTrains { trains, stage: 0 })?)
+        Ok((scene, SignalTrains { trains, stage: 0 }))
     };
     build().map_err(|error| error.to_string())
+}
+
+pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
+    let (scene, continuation) = train_scene()?;
+    scene
+        .into_live_program(continuation)
+        .map_err(|error| error.to_string())
+}
+
+/// Record the same finite continuation once for ordinary retained playback.
+///
+/// Retention must start before the first admission or completion. The existing
+/// runtime pins retired identities and retains local inverse revisions; no frame
+/// images, second scene, special signal clock, or host callbacks are recorded.
+/// After sealing, ordinary ExecutionSession::seek restores those revisions.
+pub fn train_playback() -> Result<crate::ExecutionSession, String> {
+    let record = || -> Result<_, Box<dyn std::error::Error>> {
+        let (mut scene, mut continuation) = train_scene()?;
+        let mut execution = scene.execution_session()?;
+        execution.begin_replay_retention(noon_runtime::ReplayLimits::default())?;
+        {
+            let mut live = scene.live(&mut execution);
+            loop {
+                let step = continuation.resume(&mut live)?;
+                let ContinuationStep::Await(segment) = step else {
+                    break;
+                };
+                live.advance_segment_to(segment, segment.end_time())?;
+                live.complete_segment(segment)?;
+            }
+        }
+        execution.seal_replay()?;
+        execution.seek(0.0)?;
+        Ok(execution)
+    };
+    record().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -348,8 +385,8 @@ mod tests {
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 
-    // Emulate the existing native host's staged segment drive and coherent
-    // renderer-admission barrier; never rewind a completed transient session.
+    // Emulate the native host's segment drive and renderer-admission barrier.
+    // Recorded, post-completion seeking is tested separately below.
     fn sample_program(
         program: &mut LiveProgram<super::SignalTrains>,
         callbacks: &mut crate::RustHostCallbackTable,
@@ -431,5 +468,41 @@ mod tests {
                 .collect()
         }
         assert_eq!(sample(), sample());
+    }
+
+    #[test]
+    fn finite_signal_trains_restore_retired_membership_with_existing_replay_retention() {
+        let mut session = super::train_playback().unwrap();
+        assert!(session.replay_is_sealed());
+        let reference = session.seek(2.0).unwrap().clone();
+        let retained = session.replay_stats();
+        for (time, expected_signals) in [
+            (4.2, 0),
+            (1.5, 10),
+            (0.0, 0),
+            (2.0, 16),
+            (4.15, 0),
+            (0.9, 4),
+            (1.5, 10),
+        ] {
+            let frame = session.seek(time).unwrap();
+            for rail in 0..2 {
+                assert!(frame.is_present(rail));
+                assert_eq!(frame.objects[rail], reference.objects[rail]);
+                assert_eq!(frame.reveal(rail), 1.0);
+            }
+            for (index, object) in frame.objects.iter().enumerate() {
+                if frame.is_present(index) {
+                    assert_eq!(object.id, reference.objects[index].id);
+                }
+            }
+            let visible = (2..frame.objects.len())
+                .filter(|&index| frame.is_present(index) && frame.reveal(index) > 1.0e-5)
+                .count();
+            assert_eq!(visible, expected_signals, "retained signals at t={time}");
+        }
+        let after = session.replay_stats();
+        assert_eq!(after.revisions_retained, retained.revisions_retained);
+        assert_eq!(after.payloads_retained, retained.payloads_retained);
     }
 }

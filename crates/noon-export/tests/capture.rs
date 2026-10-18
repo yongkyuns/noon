@@ -426,4 +426,21 @@ fn native_capture_signal_trains_keep_rails_and_reproduce_pixels() {
         first[0], first[6],
         "transient pulses must leave both rails intact"
     );
+
+    // Opt-in finite history retains the ordinary transient membership revisions.
+    // Compare post-completion seeks with the independently captured live output.
+    let mut session = noon::example_scenes::line_passing_flash::train_playback().unwrap();
+    assert!(session.replay_is_sealed());
+    let mut capture = noon_export::SessionCapture::new(&session, software(640, 360)).unwrap();
+    for index in [6, 2, 0, 4, 1, 5, 3, 6, 0, 2] {
+        let time = SAMPLES[index] as f64 / FRAME_RATE as f64;
+        session.seek(time).unwrap();
+        let frame = capture.capture(&mut session).unwrap();
+        assert_eq!(frame.receipt.published_time, time);
+        assert_eq!(frame.rgba, first[index], "retained seek pixels at t={time}");
+    }
+    session
+        .seek(noon::example_scenes::line_passing_flash::TRAIN_DURATION)
+        .unwrap();
+    assert_eq!(capture.capture(&mut session).unwrap().rgba, first[0]);
 }
