@@ -502,6 +502,45 @@ def _proportion_from_point(api):
     }
 
 
+def _curve_function_queries(api):
+    import numpy as np
+
+    path = api.VMobject().start_new_path((0, 0, 0))
+    path.add_cubic_bezier_curve_to((1, 0, 0), (1, 1, 0), (2, 1, 0))
+    path.add_cubic_bezier_curve_to((3, 1, 0), (3, 2, 0), (4, 2, 0))
+    parameters = np.array([[0.0], [0.25], [0.5], [1.0]])
+
+    def sample(function):
+        return {
+            "name": function.__name__,
+            "scalar": [float(value) for value in function(0.5)],
+            "column_vector": [
+                [float(value) for value in row]
+                for row in function(parameters)
+            ],
+        }
+
+    individual = path.get_nth_curve_function(1)
+    with_length, length = path.get_nth_curve_function_with_length(
+        0, sample_points=6
+    )
+    return {
+        "individual": sample(individual),
+        "individual_with_length": {
+            "curve": sample(with_length),
+            "length": float(length),
+        },
+        "functions": [sample(function) for function in path.get_curve_functions()],
+        "functions_with_lengths": [
+            {"curve": sample(function), "length": float(curve_length)}
+            for function, curve_length in path.get_curve_functions_with_lengths(
+                sample_points=6
+            )
+        ],
+        "empty_functions": list(api.VMobject().get_curve_functions()),
+    }
+
+
 def _z_index_probe(api):
     a, b = api.Square(z_index=2.5), api.Circle(z_index=2.5)
     nested = api.VGroup(a, b, z_index=2.5)
@@ -1532,6 +1571,7 @@ FIXTURES = [
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
+    Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
