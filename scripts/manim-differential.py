@@ -2203,6 +2203,12 @@ FIXTURES = [
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
     Fixture("family_own_paint", lambda: _family_own_paint_probe(noon), lambda: _family_own_paint_probe(manim), 1e-5),
+    Fixture(
+        "family_own_paint_live",
+        lambda: _noon_live_scene_probe(lambda _scene: _family_own_paint_probe(noon)),
+        lambda: _family_own_paint_probe(manim),
+        1e-5,
+    ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),

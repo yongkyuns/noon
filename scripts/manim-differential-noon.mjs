@@ -265,6 +265,7 @@ batch.add_cubic_bezier_curves(curves)
 cubic_batch_extension = batch.get_all_points().tolist()
 observations = noon_observations()
 family_paint = observations["family_own_paint"]
+assert observations["family_own_paint_live"] == family_paint
 def color_components(color):
     return (color.red, color.green, color.blue)
 def assert_color(actual, expected):
