@@ -42,6 +42,11 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Capture staged Python source using shared Rust rendering
         run: node scripts/showcase-capture.mjs
+      - name: Review normal gallery Run, completion, retained seek and responsive view
+        run: |
+          # Temporary CI workspace only. Public source/catalog stay unchanged.
+          cp web/python/examples/staging_data_links_manifest.json web/python/examples/noon_showcase_manifest.json
+          node scripts/showcase-live-review.mjs
       - name: Retain real poster, temporal samples and provenance
         if: always()
         uses: actions/upload-artifact@v7
