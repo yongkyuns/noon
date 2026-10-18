@@ -491,6 +491,15 @@ assert not _compare(
     1e-5,
 )
 assert not _compare(
+    observations["vgroup_root_style_play"],
+    observations["vgroup_root_style_play_live"],
+    1e-5,
+), _compare(
+    observations["vgroup_root_style_play"],
+    observations["vgroup_root_style_play_live"],
+    1e-5,
+)
+assert not _compare(
     observations["vgroup_root_paint_arrays"],
     observations["vgroup_root_paint_arrays_live"],
     1e-5,
@@ -548,6 +557,23 @@ for value in copy_target_style.values():
 assert abs(copy_target_style["source"]["stroke_width"] - 4) <= 1e-6
 assert abs(copy_target_style["copy"]["stroke_width"] - 4) <= 1e-6
 assert abs(copy_target_style["target"]["stroke_width"] - 7) <= 1e-6
+root_style_play = observations["vgroup_root_style_play_live"]
+assert _compare(root_style_play["after"], root_style_play["target"], 1e-5) == []
+assert_color(root_style_play["source_before"]["fill_color"], noon.RED)
+assert_color(root_style_play["source_before"]["stroke_color"], noon.YELLOW)
+assert_color(root_style_play["target"]["fill_color"], noon.GREEN)
+assert_color(root_style_play["target"]["stroke_color"], noon.BLUE)
+assert abs(root_style_play["source_before"]["fill_opacity"] - 0.1) <= 1e-6
+assert abs(root_style_play["source_before"]["stroke_opacity"] - 0.3) <= 1e-6
+assert abs(root_style_play["target"]["fill_opacity"] - 0.7) <= 1e-6
+assert abs(root_style_play["target"]["stroke_opacity"] - 0.8) <= 1e-6
+assert abs(root_style_play["source_before"]["stroke_width"] - 2) <= 1e-6
+assert abs(root_style_play["target"]["stroke_width"] - 6) <= 1e-6
+assert_color(root_style_play["child_after"]["fill_color"], noon.RED)
+assert_color(root_style_play["child_after"]["stroke_color"], noon.RED)
+assert abs(root_style_play["child_after"]["fill_opacity"] - 0.25) <= 1e-6
+assert abs(root_style_play["child_after"]["stroke_opacity"] - 0.5) <= 1e-6
+assert abs(root_style_play["child_after"]["stroke_width"] - 2) <= 1e-6
 root_paint_arrays = observations["vgroup_root_paint_arrays"]["root"]
 child_paint_arrays = observations["vgroup_root_paint_arrays"]["child"]
 for value in (root_paint_arrays, child_paint_arrays):

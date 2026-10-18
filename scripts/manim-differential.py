@@ -2166,6 +2166,66 @@ def _vgroup_root_style_copy_target_probe(api, scene=None):
     }
 
 
+def _vgroup_root_style_play_probe(api, scene=None):
+    child = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.RED,
+        stroke_opacity=0.5,
+        stroke_width=2,
+    ).start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.1,
+        stroke_color=api.YELLOW,
+        stroke_width=2,
+        stroke_opacity=0.3,
+        family=False,
+    )
+    if scene is None:
+        scene = api.Scene()
+    scene.add(family)
+    animation = family.animate.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.7,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    target = animation.target
+
+    def profile(value):
+        style = value.get_style(simple=True)
+        leaf = value.submobjects[0]
+        return {
+            "fill_color": _paint_rgb(style["fill_color"]),
+            "fill_opacity": float(style["fill_opacity"]),
+            "stroke_color": _paint_rgb(style["stroke_color"]),
+            "stroke_width": float(style["stroke_width"]),
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "child_fill": _paint_rgb(leaf.get_fill_color()),
+            "child_stroke": _paint_rgb(leaf.get_stroke_color()),
+        }
+
+    before_profile = profile(family)
+    target_profile = profile(target)
+    scene.play(animation, run_time=1, rate_func=api.linear)
+    return {
+        "source_before": before_profile,
+        "target": target_profile,
+        "after": profile(family),
+        "child_after": {
+            "fill_color": _paint_rgb(child.get_fill_color()),
+            "fill_opacity": float(child.get_fill_opacity()),
+            "stroke_color": _paint_rgb(child.get_stroke_color()),
+            "stroke_width": float(child.get_stroke_width()),
+            "stroke_opacity": float(child.get_stroke_opacity()),
+        },
+    }
+
+
 def _family_own_paint_play_probe(api, scene=None):
     """Observe root-only family color after an ordinary method animation."""
     family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE), color=api.GREEN)
@@ -3110,6 +3170,20 @@ FIXTURES = [
             lambda scene: _vgroup_root_style_copy_target_probe(noon, scene)
         ),
         lambda: _vgroup_root_style_copy_target_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_play",
+        lambda: _vgroup_root_style_play_probe(noon),
+        lambda: _vgroup_root_style_play_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_play_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _vgroup_root_style_play_probe(noon, scene)
+        ),
+        lambda: _vgroup_root_style_play_probe(manim),
         1e-5,
     ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),

@@ -1470,6 +1470,60 @@ fn own_family_color_stays_authored_until_transform_completion() {
 }
 
 #[test]
+fn own_family_style_stays_authored_until_method_target_completion() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 1.0);
+    let source = family(&mut store, &[source_leaf]);
+    let target = family(&mut store, &[target_leaf]);
+    let source_style = store.node(source).unwrap().family_style().unwrap().clone();
+    let child_style = store
+        .semantic_object_state_checked(source_leaf)
+        .unwrap()
+        .style
+        .clone();
+    let mut target_style = store.node(target).unwrap().family_style().unwrap().clone();
+    target_style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::Color::GREEN));
+    target_style.fill_opacity = 0.7;
+    target_style.stroke = Some(noon_core::SemanticPaint::Solid(noon_core::Color::BLUE));
+    target_style.stroke_opacity = 0.8;
+    target_style.stroke_width = 6.0;
+    let mut style = noon_core::SemanticMutationTransaction::new();
+    style.set_family_style(target, target_style.clone());
+    style.apply(&mut store).unwrap();
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyMethodTargetTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_style(),
+        Some(&source_style)
+    );
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_style(),
+        Some(&target_style)
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(source_leaf)
+            .unwrap()
+            .style,
+        child_style
+    );
+}
+
+#[test]
 fn nested_family_metadata_releases_once_at_animation_completion() {
     let mut store = SemanticStore::new();
     let source_leaf = object(&mut store, 0.0);
@@ -1478,11 +1532,34 @@ fn nested_family_metadata_releases_once_at_animation_completion() {
     let target_child = family(&mut store, &[target_leaf]);
     let source = family(&mut store, &[source_child, source_child]);
     let target = family(&mut store, &[target_child, target_child]);
+    let mut root_style = store.node(target).unwrap().family_style().unwrap().clone();
+    root_style.fill_opacity = 0.65;
+    root_style.stroke_opacity = 0.75;
+    root_style.stroke_width = 5.0;
+    root_style.set_family_color(noon_core::Color::BLUE);
+    let mut child_style = store
+        .node(target_child)
+        .unwrap()
+        .family_style()
+        .unwrap()
+        .clone();
+    child_style.fill_opacity = 0.4;
+    child_style.stroke_width = 3.0;
+    child_style.set_family_color(noon_core::Color::RED);
     let mut color = noon_core::SemanticMutationTransaction::new();
     color
+        .set_family_style(target, root_style.clone())
+        .set_family_style(target_child, child_style.clone())
         .set_family_color(target, noon_core::Color::BLUE)
         .set_family_color(target_child, noon_core::Color::RED);
     color.apply(&mut store).unwrap();
+    let source_root_style = store.node(source).unwrap().family_style().unwrap().clone();
+    let source_child_style = store
+        .node(source_child)
+        .unwrap()
+        .family_style()
+        .unwrap()
+        .clone();
     let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
     let request = SemanticCompositionRequest::FamilyMethodTargetTo {
         source,
@@ -1499,6 +1576,14 @@ fn nested_family_metadata_releases_once_at_animation_completion() {
         store.node(source_child).unwrap().family_color(),
         Some(noon_core::Color::WHITE)
     );
+    assert_eq!(
+        store.node(source).unwrap().family_style(),
+        Some(&source_root_style)
+    );
+    assert_eq!(
+        store.node(source_child).unwrap().family_style(),
+        Some(&source_child_style)
+    );
     session.advance_segment_to(segment, 1.0).unwrap();
     session.complete_segment(&mut store, segment).unwrap();
     assert_eq!(
@@ -1508,6 +1593,14 @@ fn nested_family_metadata_releases_once_at_animation_completion() {
     assert_eq!(
         store.node(source_child).unwrap().family_color(),
         Some(noon_core::Color::RED)
+    );
+    assert_eq!(
+        store.node(source).unwrap().family_style(),
+        Some(&root_style)
+    );
+    assert_eq!(
+        store.node(source_child).unwrap().family_style(),
+        Some(&child_style)
     );
 }
 

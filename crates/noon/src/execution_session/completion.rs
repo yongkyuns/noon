@@ -225,6 +225,7 @@ impl ExecutionSession {
             lifecycle_removals,
             family_transform,
             family_colors,
+            family_styles,
             object_entries: entries,
             scalar_entries,
         } = &pending.kind;
@@ -378,6 +379,9 @@ impl ExecutionSession {
         }
         for (family, color) in family_colors {
             semantic.set_family_color(*family, *color);
+        }
+        for (family, style) in family_styles {
+            semantic.set_family_style(*family, style.clone());
         }
         for (object, style) in &completed_styles {
             semantic.replace_style(*object, style.clone());

@@ -125,6 +125,7 @@ impl AnimationAdmissions {
 /// Mutable transaction state shared while recursively staging a composition.
 struct CompositionStaging<'a> {
     family_colors: &'a mut std::collections::BTreeMap<SemanticNodeId, noon_core::Color>,
+    family_styles: &'a mut std::collections::BTreeMap<SemanticNodeId, noon_core::SemanticStyle>,
     declaration: &'a mut SemanticMutationTransaction,
     admitted: &'a mut AnimationAdmissions,
     removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
@@ -158,6 +159,7 @@ enum PreparedAnimationLifecycle {
         root: SemanticNodeId,
         admits: bool,
         family_colors: Vec<(SemanticNodeId, noon_core::Color)>,
+        family_styles: Vec<(SemanticNodeId, noon_core::SemanticStyle)>,
         removals: Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
         callback_intervals: Vec<(
             noon_core::SemanticLocalNodeToken,
@@ -1694,6 +1696,7 @@ impl ExecutionSession {
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
                 family_colors: Vec::new(),
+                family_styles: Vec::new(),
                 object_entries: completions,
                 scalar_entries: Vec::new(),
             },
@@ -2021,6 +2024,7 @@ impl ExecutionSession {
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
                 family_colors: Vec::new(),
+                family_styles: Vec::new(),
                 object_entries: Vec::new(),
                 scalar_entries: vec![ScalarSegmentCompletionEntry {
                     signal,
@@ -2113,12 +2117,14 @@ impl ExecutionSession {
         let mut removals = Vec::new();
         let mut callback_intervals = Vec::new();
         let mut family_colors = std::collections::BTreeMap::new();
+        let mut family_styles = std::collections::BTreeMap::new();
         let animation = self.stage_composition_request(
             store,
             root,
             request,
             CompositionStaging {
                 family_colors: &mut family_colors,
+                family_styles: &mut family_styles,
                 declaration: &mut declaration,
                 admitted: &mut admitted,
                 removals: &mut removals,
@@ -2136,6 +2142,7 @@ impl ExecutionSession {
                 root,
                 admits: !admitted.is_empty(),
                 family_colors: family_colors.into_iter().collect(),
+                family_styles: family_styles.into_iter().collect(),
                 removals,
                 callback_intervals,
             }),
@@ -2204,6 +2211,7 @@ impl ExecutionSession {
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let CompositionStaging {
             family_colors,
+            family_styles,
             declaration,
             admitted,
             removals,
@@ -2460,6 +2468,32 @@ impl ExecutionSession {
                         }
                     };
                     family_colors.extend(colors);
+
+                    let styles = match crate::state_replacement::paired_family_styles(
+                        store,
+                        *source,
+                        *target_state,
+                    ) {
+                        Ok(styles) => styles,
+                        Err(error) if is_flat_family(*source) && is_flat_family(*target_state) => {
+                            let style = store
+                                .node(*target_state)
+                                .and_then(noon_core::SemanticNode::family_style)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?;
+                            vec![(*source, style)]
+                        }
+                        Err(error) => {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                error.to_string(),
+                            ))
+                        }
+                    };
+                    family_styles.extend(styles);
                 }
 
                 // Straight flat family transforms must share one correspondence/lifecycle
@@ -2533,6 +2567,7 @@ impl ExecutionSession {
                             &expanded,
                             CompositionStaging {
                                 family_colors: &mut *family_colors,
+                                family_styles: &mut *family_styles,
                                 declaration,
                                 admitted,
                                 removals,
@@ -2664,6 +2699,7 @@ impl ExecutionSession {
                             },
                             CompositionStaging {
                                 family_colors: &mut *family_colors,
+                                family_styles: &mut *family_styles,
                                 declaration,
                                 admitted,
                                 removals,
@@ -3163,6 +3199,7 @@ impl ExecutionSession {
                             child,
                             CompositionStaging {
                                 family_colors: &mut *family_colors,
+                                family_styles: &mut *family_styles,
                                 declaration,
                                 admitted,
                                 removals,
@@ -4509,12 +4546,18 @@ impl ExecutionSession {
             Some(PreparedAnimationLifecycle::Composition { family_colors, .. })
                 if !family_colors.is_empty()
         );
+        let has_family_style_completion = matches!(
+            lifecycle.as_ref(),
+            Some(PreparedAnimationLifecycle::Composition { family_styles, .. })
+                if !family_styles.is_empty()
+        );
         let (token, next_segment_sequence) = if definitions.is_empty()
             && projection.family_animations().is_empty()
             && scalar_completions.is_empty()
             && derived_display_plan.is_none()
             && family_replacement.is_none()
             && !has_family_color_completion
+            && !has_family_style_completion
         {
             (None, self.next_segment_sequence)
         } else {
@@ -4601,6 +4644,16 @@ impl ExecutionSession {
         }
         let family_colors = family_colors.into_iter().collect();
 
+        let mut family_styles = std::collections::BTreeMap::new();
+        if let Some(PreparedAnimationLifecycle::Composition {
+            family_styles: staged,
+            ..
+        }) = lifecycle.as_ref()
+        {
+            family_styles.extend(staged.iter().cloned());
+        }
+        let family_styles = family_styles.into_iter().collect();
+
         self.next_activation_track_id = next_track_id;
         self.derived_display_plan = derived_display_plan;
         self.derived_display_objects.clear();
@@ -4654,6 +4707,7 @@ impl ExecutionSession {
                     },
                     family_transform: family_transform_completion,
                     family_colors,
+                    family_styles,
                     object_entries: entries,
                     scalar_entries: scalar_completions.into_values().collect(),
                 },

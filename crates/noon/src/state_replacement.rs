@@ -177,7 +177,18 @@ fn stage_paired_family_styles(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<(), AuthoringError> {
-    for pair in store
+    for (source, style) in paired_family_styles(store, source, target)? {
+        transaction.set_family_style(source, style);
+    }
+    Ok(())
+}
+
+pub(crate) fn paired_family_styles(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle)>, AuthoringError> {
+    store
         .ordered_family_root_pairs(source, target)
         .map_err(AuthoringError::from)?
         .into_iter()
@@ -191,11 +202,7 @@ fn stage_paired_family_styles(
                     AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
                 })
         })
-    {
-        let (source, style) = pair?;
-        transaction.set_family_style(source, style);
-    }
-    Ok(())
+        .collect()
 }
 
 #[derive(Clone)]
