@@ -1,5 +1,5 @@
 # Temporary developer bootstrap for this repair branch; remove before review/merge.
-# Archives contain only tracked repository sources and public Rust dependencies/tools.
+# Only public pinned test dependencies; no repository credentials are archived.
 name: Code quality repair bootstrap
 on:
   push:
@@ -11,39 +11,15 @@ jobs:
   bootstrap:
     if: github.repository == 'yongkyuns/noon' && github.ref == 'refs/heads/fix/code-border-manim-parity'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Archive exact tracked source for offline repair
+      - name: Download pinned reference lexer
         run: |
-          mkdir -p /tmp/noon-repair-source
-          git archive --format=tar HEAD | gzip -1 > /tmp/noon-repair-source/source.tar.gz
-          git rev-parse HEAD > /tmp/noon-repair-source/revision.txt
-          sha256sum /tmp/noon-repair-source/source.tar.gz
+          mkdir -p /tmp/noon-code-oracle
+          python3 -m pip download --no-deps --dest /tmp/noon-code-oracle 'Pygments==2.19.2'
+          sha256sum /tmp/noon-code-oracle/*.whl > /tmp/noon-code-oracle/SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
-          name: code-repair-source
-          path: /tmp/noon-repair-source
-          retention-days: 1
-      - name: Resolve the repository-pinned public Rust build inputs
-        run: |
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
-          mkdir -p /tmp/noon-repair-tools
-          # This library workspace intentionally ignores Cargo.lock. Resolve once,
-          # then vendor under --locked and preserve that exact offline resolution.
-          cargo generate-lockfile
-          cargo vendor --locked --versioned-dirs /tmp/noon-repair-vendor > /tmp/noon-repair-vendor-config.toml
-          cp Cargo.lock /tmp/noon-repair-tools/Cargo.lock
-          tar -C "$(rustc --print sysroot)" -czf /tmp/noon-repair-tools/rust-toolchain.tar.gz bin lib
-          tar -C /tmp -czf /tmp/noon-repair-tools/vendor.tar.gz noon-repair-vendor noon-repair-vendor-config.toml
-          rustc --version > /tmp/noon-repair-tools/versions.txt
-          cargo --version >> /tmp/noon-repair-tools/versions.txt
-          sha256sum /tmp/noon-repair-tools/*.tar.gz
-      - uses: actions/upload-artifact@v7
-        with:
-          name: code-repair-public-build-inputs
-          path: /tmp/noon-repair-tools
-          compression-level: 0
+          name: code-repair-pygments-oracle
+          path: /tmp/noon-code-oracle
           retention-days: 1
