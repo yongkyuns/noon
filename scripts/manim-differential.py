@@ -1922,6 +1922,12 @@ def _style_query_probe(api):
         stroke_opacity=0.6,
         stroke_width=4,
     )
+    default_mutator_returns_self = [
+        source.set_stroke(background=True) is source,
+        source.set_background_stroke() is source,
+        source.set_sheen(0.0, api.UL) is source,
+        source.set_sheen_direction(api.UL) is source,
+    ]
 
     def observe(value):
         style = value.get_style()
@@ -1969,6 +1975,7 @@ def _style_query_probe(api):
     return {
         "source": observe(source),
         "round_trip": observe(round_trip),
+        "default_mutator_returns_self": default_mutator_returns_self,
     }
 
 
@@ -2501,6 +2508,8 @@ UNSUPPORTED = {
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
+    "background_stroke_and_sheen": "default background-stroke and zero-sheen mutators are supported; non-default background paint and sheen gradients still require shared style/renderer channels",
+    "vgroup_root_style": "VGroup root style getters remain unqualified because Noon family wrappers do not model Manim's separate VMobject-owned root paint profile",
 }
 
 

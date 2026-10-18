@@ -9,6 +9,41 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
+    def test_default_background_and_sheen_mutators_match_the_pinned_surface(self):
+        self.assertEqual(list(inspect.signature(compat.VMobject.set_stroke).parameters), [
+            "self", "color", "width", "opacity", "background", "family",
+        ])
+        self.assertEqual(list(inspect.signature(compat.VGroup.set_stroke).parameters), [
+            "self", "color", "width", "opacity", "background", "family",
+        ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.set_background_stroke).parameters), [
+            "self", "kwargs",
+        ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.set_sheen).parameters), [
+            "self", "factor", "direction", "family",
+        ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.set_sheen_direction).parameters), [
+            "self", "direction", "family",
+        ])
+
+        obj = identity_only_wrapper(compat.Circle)
+        self.assertIs(obj.set_stroke(background=True), obj)
+        self.assertIs(obj.set_background_stroke(), obj)
+        self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
+        self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
+
+        unsupported = (
+            lambda: obj.set_stroke(color=compat._base.RED, width=2, background=True),
+            lambda: obj.set_background_stroke(color=compat._base.RED, width=2),
+            lambda: obj.set_sheen(0.5),
+            lambda: obj.set_sheen_direction(compat._base.UP),
+        )
+        for operation in unsupported:
+            with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
+                operation()
+        with self.assertRaises(TypeError):
+            obj.set_background_stroke(unrecognized_option=True)
+
     def test_set_style_exposes_the_pinned_options_without_a_catch_all_kwargs(self):
         parameters = list(inspect.signature(compat.VMobject.set_style).parameters)
         self.assertEqual(parameters, [

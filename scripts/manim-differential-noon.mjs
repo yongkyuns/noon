@@ -345,6 +345,30 @@ def style_query_contract(value):
             "stroke_width": float(simple["stroke_width"]),
         },
     }
+style_mutator_returns_self = [
+    point_owner.set_stroke(background=True) is point_owner,
+    point_owner.set_background_stroke() is point_owner,
+    point_owner.set_sheen(0.0, noon.UL) is point_owner,
+    point_owner.set_sheen_direction(noon.UL) is point_owner,
+]
+def rejected_without_style_change(operation):
+    before = style_query_contract(point_owner)
+    try:
+        operation()
+    except NotImplementedError:
+        return style_query_contract(point_owner) == before
+    return False
+style_mutator_rejections = {
+    "background_stroke": rejected_without_style_change(
+        lambda: point_owner.set_background_stroke(color=noon.BLUE, width=2)
+    ),
+    "sheen_factor": rejected_without_style_change(
+        lambda: point_owner.set_sheen(0.5)
+    ),
+    "sheen_direction": rejected_without_style_change(
+        lambda: point_owner.set_sheen_direction(noon.RIGHT)
+    ),
+}
 round_trip_style = VMobject()
 round_trip_style.set_style(**point_owner.get_style())
 style_queries = {
@@ -472,6 +496,8 @@ json.dumps({
     "point_mobject": point_mobject,
     "paint_arrays": paint_arrays,
     "style_queries": style_queries,
+    "style_mutator_returns_self": style_mutator_returns_self,
+    "style_mutator_rejections": style_mutator_rejections,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -608,6 +634,12 @@ json.dumps({
       assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
     }
   }
+  assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true]);
+  assert.deepEqual(product.style_mutator_rejections, {
+    background_stroke: true,
+    sheen_factor: true,
+    sheen_direction: true,
+  });
   const {
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,

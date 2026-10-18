@@ -523,6 +523,18 @@ class VMobject(Mobject):
                           background_stroke_width, background_stroke_opacity,
                           sheen_factor, sheen_direction, background_image, family)
 
+    def set_background_stroke(self, **kwargs):
+        kwargs["background"] = True
+        return self.set_stroke(**kwargs)
+
+    def set_sheen_direction(self, direction, family=True):
+        from _manim_semantic_handles import _set_sheen_direction
+        return _set_sheen_direction(self, direction, family)
+
+    def set_sheen(self, factor, direction=None, family=True):
+        from _manim_semantic_handles import _set_sheen
+        return _set_sheen(self, factor, direction, family)
+
     def match_style(self, vmobject, family=True):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
@@ -544,8 +556,12 @@ class VMobject(Mobject):
         color: object = None,
         width: float | None = None,
         opacity: float | None = None,
+        background: bool = False,
         family: bool = True,
     ) -> VMobject:
+        if background:
+            from _manim_semantic_handles import _set_background_stroke
+            return _set_background_stroke(self, color, width, opacity, family)
         from _manim_updaters import _canonical_vmobject_set_stroke
         return _canonical_vmobject_set_stroke(self, color=color, width=width, opacity=opacity, family=family)
 
@@ -1001,6 +1017,9 @@ class VGroup(Group):
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary
+    set_background_stroke = VMobject.set_background_stroke
+    set_sheen_direction = VMobject.set_sheen_direction
+    set_sheen = VMobject.set_sheen
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
@@ -1009,9 +1028,15 @@ class VGroup(Group):
         return _group_set_fill(self, color, opacity)
 
     def set_stroke(self, color: object = None, width: float | None = None,
-                   opacity: float | None = None) -> VGroup:
+                   opacity: float | None = None, background: bool = False,
+                   family: bool = True) -> VGroup:
+        if background:
+            from _manim_semantic_handles import _set_background_stroke
+            return _set_background_stroke(self, color, width, opacity, family)
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_stroke(self, color, width, opacity)
+        if not family:
+            raise NotImplementedError("non-recursive Group stroke requires shared family style state")
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 

@@ -1408,6 +1408,58 @@ def _set_style(
     return self
 
 
+def _set_background_stroke(self, color=None, width=None, opacity=None, family=True):
+    del family
+    color = _style_color(color, "background stroke color")
+    width = _style_value(width, "background stroke width")
+    opacity = _style_value(opacity, "background stroke opacity")
+    normalized_width = None if width is None else _compat._manim_stroke_width(width)
+    normalized_opacity = None if opacity is None else _compat._opacity(
+        "background stroke opacity", opacity
+    )
+    if color is not None and color != _base.BLACK:
+        raise NotImplementedError("background strokes require shared background paint")
+    if normalized_width is not None and normalized_width != 0.0:
+        raise NotImplementedError("background strokes require shared background paint")
+    if normalized_opacity is not None and normalized_opacity != 1.0:
+        raise NotImplementedError("background strokes require shared background paint")
+    return self
+
+
+def _set_sheen_direction(self, direction, family=True):
+    del family
+    if hasattr(direction, "tolist"):
+        direction = direction.tolist()
+    elif not isinstance(direction, (list, tuple)):
+        try:
+            direction = tuple(direction)
+        except TypeError:
+            raise NotImplementedError(
+                "sheen direction requires shared gradient paint"
+            ) from None
+    if isinstance(direction, (list, tuple)) and len(direction) == 2:
+        direction = (*direction, 0.0)
+    if not isinstance(direction, (list, tuple)) or len(direction) != 3:
+        raise NotImplementedError("sheen direction requires shared gradient paint")
+    values = tuple(
+        _ir._finite_number(f"sheen direction[{index}]", value)
+        for index, value in enumerate(direction)
+    )
+    if values != (-1.0, 1.0, 0.0):
+        raise NotImplementedError("non-default sheen direction requires shared gradient paint")
+    return self
+
+
+def _set_sheen(self, factor, direction=None, family=True):
+    del family
+    value = _ir._finite_number("sheen factor", factor)
+    if value != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
+    if direction is not None:
+        return _set_sheen_direction(self, direction)
+    return self
+
+
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
