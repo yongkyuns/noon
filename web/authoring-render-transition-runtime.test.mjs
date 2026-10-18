@@ -665,7 +665,7 @@ test("render substage timing is opt-in and drains bounded renderer samples", asy
   assert.deepEqual(JSON.parse(JSON.stringify(response.metrics.renderSubstageSamples)), [first]);
   assert.equal(harness.createdRenderer.renderSubstageProfiling, true);
   assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
-    "currentMetrics().renderSubstageSamples", harness.context,
+    "currentMetrics({profileRenderSubstages:true}).renderSubstageSamples", harness.context,
   ))), [], "taking metrics drains samples instead of retaining an unbounded history");
 });
 
@@ -689,8 +689,41 @@ test("queue completion diagnostics are separately opt-in and drain host observat
   assert.deepEqual(JSON.parse(JSON.stringify(response.metrics.gpuCompletion)), observed);
   assert.equal(harness.createdRenderer.gpuCompletionProfiling, true);
   assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
-    "currentMetrics().gpuCompletion.samples", harness.context,
+    "currentMetrics({profileGpuCompletion:true}).gpuCompletion.samples", harness.context,
   ))), []);
+});
+
+test("ordinary metrics polls preserve diagnostics for the requested profile", async () => {
+  const harness = await createManagedWakeHarness();
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:80, profileRenderSubstages:true,
+    profileGpuCompletion:true});`, harness.context);
+  const substage = { session: 53, sequence: 7, encodeCpuWallMs: 1.25 };
+  const completion = { samples: [{ session: 53, sequence: 7,
+    presentationSequence: 9, gpuGeneration: 1,
+    submissionStartedMs: 10, completionObservedMs: 12 }] };
+  harness.createdRenderer.renderSubstageSamplesJson = JSON.stringify([substage]);
+  harness.createdRenderer.gpuCompletionSamplesJson = JSON.stringify(completion);
+
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:81});`, harness.context);
+  const ordinary = harness.mainMessages.find((message) => message.requestId === 81).metrics;
+  assert.equal(ordinary.renderSubstageProfiling, true);
+  assert.equal(ordinary.gpuCompletionProfiling, true);
+  assert.equal(Object.hasOwn(ordinary, "renderSubstageSamples"), false);
+  assert.equal(Object.hasOwn(ordinary, "gpuCompletion"), false);
+
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:82, profileGpuCompletion:true});`, harness.context);
+  const gpu = harness.mainMessages.find((message) => message.requestId === 82).metrics;
+  assert.deepEqual(JSON.parse(JSON.stringify(gpu.gpuCompletion)), completion);
+  assert.equal(Object.hasOwn(gpu, "renderSubstageSamples"), false);
+
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:83, profileRenderSubstages:true});`, harness.context);
+  const render = harness.mainMessages.find((message) => message.requestId === 83).metrics;
+  assert.deepEqual(JSON.parse(JSON.stringify(render.renderSubstageSamples)), [substage]);
+  assert.equal(Object.hasOwn(render, "gpuCompletion"), false);
 });
 
 test("renderer transition discards an old timing sample even when publication identity repeats", async () => {
