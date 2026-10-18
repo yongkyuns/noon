@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { posterEvidence, assertRetainedPoster } from "./showcase-posters.mjs";
+import { posterEvidence, assertRetainedPoster, assertRetainedCudaFidelityPoster } from "./showcase-posters.mjs";
 
 const web = new URL("../web/", import.meta.url);
 const read = path => readFile(new URL(path, web));
@@ -15,9 +15,19 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  assert.deepEqual(evidence.posters.map(poster => poster.id), manifest.entries.map(entry => entry.id));
-  for (const [index, entry] of manifest.entries.entries()) {
+  const existingEntries = manifest.entries.filter(entry => entry.id !== "showcase-cuda-transpose");
+  assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
+    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
+  assert.ok(evidence.posters.length === existingEntries.length ||
+    evidence.posters.length === existingEntries.length + 1,
+    "capture evidence must be the original batch or a fully refreshed batch");
+  for (const [index, entry] of existingEntries.entries()) {
     assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
+  }
+  if (evidence.posters.length > existingEntries.length) {
+    const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
+    assertPoster(cuda, evidence.posters[existingEntries.length],
+      await read(cuda.path), await read(cuda.thumbnail));
   }
 });
 
@@ -90,4 +100,34 @@ test("failed or mixed-build reports cannot generate a retained evidence record",
     {}, { checkoutRevision: "a".repeat(40), servedBuildIdentity: { sourceRevision: "b".repeat(40) } },
     { checkoutRevision: "a".repeat(40), servedBuildIdentity: { sourceRevision: "a".repeat(40), buildId: "b".repeat(64) }, backendRequested: "fake", results: [] },
   ]) assert.throws(() => posterEvidence(manifest, report));
+});
+
+test("CUDA showcase has exact renderer-derived, source-bound supplementary poster evidence", async () => {
+  const entry = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
+  assert.ok(entry);
+  const record = JSON.parse(await read("thumbnails/showcase/showcase-cuda-transpose-evidence.json"));
+  const source = await read(entry.path), png = await read(entry.thumbnail);
+  assertRetainedCudaFidelityPoster(entry, record, source, png);
+  assert.throws(() => assertRetainedCudaFidelityPoster(
+    { ...entry, duration: entry.duration + 1 }, record, source, png), /storyboard duration/);
+  for (const mutate of [
+    (copy) => { copy.capture.rendererBackend = "CPU"; },
+    (copy) => { copy.capture.cudaValidated = true; },
+    (copy) => { copy.capture.artifactId = 0; },
+    (copy) => { copy.capture.authoredDurationSeconds = 81.71; },
+    (copy) => { copy.capture.runtimeBuildIdentity.buildId = "wrong"; },
+    (copy) => { copy.sample.publishedTime += 1; },
+    (copy) => { copy.image.pngSha256 = "0".repeat(64); },
+    (copy) => { copy.sourceSha256 = "0".repeat(64); },
+  ]) {
+    const bad = structuredClone(record);
+    mutate(bad);
+    assert.throws(() => assertRetainedCudaFidelityPoster(entry, bad, source, png));
+  }
+  assert.throws(() => assertRetainedCudaFidelityPoster(entry, record,
+    Buffer.concat([source, Buffer.from("\\n# changed")]), png), /recapture/);
+  const wrongPixels = Buffer.from(png);
+  wrongPixels[wrongPixels.length - 1] ^= 1;
+  assert.throws(() => assertRetainedCudaFidelityPoster(entry, record, source, wrongPixels),
+    /differ from the captured/);
 });
