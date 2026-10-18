@@ -429,8 +429,8 @@ class VMobject(Mobject):
         return point_from_proportion(self, alpha)
 
     def proportion_from_point(self, point: object) -> float:
-        from _manim_path_queries import _reject_staged_custom_stride_proportion
-        _reject_staged_custom_stride_proportion(self)
+        from _manim_path_queries import _reject_staged_custom_stride_query
+        _reject_staged_custom_stride_query(self)
         self.throw_error_if_no_points()
         from _manim_path_queries import proportion_from_point
         return proportion_from_point(self, point)

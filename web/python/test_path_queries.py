@@ -1031,6 +1031,14 @@ class PathQueryTests(unittest.TestCase):
                 value.point_from_proportion(0.5)
             with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
                 value.proportion_from_point((15.5, 0.0, 0.0))
+            for query in (
+                value.get_anchors,
+                value.get_start_anchors,
+                value.get_end_anchors,
+                value.get_anchors_and_handles,
+            ):
+                with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                    query()
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
 
