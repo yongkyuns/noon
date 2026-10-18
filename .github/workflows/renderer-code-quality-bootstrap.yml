@@ -1,0 +1,45 @@
+# Temporary developer bootstrap for this repair branch; remove before review/merge.
+# Archives contain only tracked repository sources and public Rust dependencies/tools.
+name: Code quality repair bootstrap
+on:
+  push:
+    branches: [fix/code-border-manim-parity]
+    paths: [.github/workflows/renderer-code-quality-bootstrap.yml]
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    if: github.repository == 'yongkyuns/noon' && github.ref == 'refs/heads/fix/code-border-manim-parity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Archive exact tracked source for offline repair
+        run: |
+          mkdir -p /tmp/noon-repair-source
+          git archive --format=tar HEAD | gzip -1 > /tmp/noon-repair-source/source.tar.gz
+          git rev-parse HEAD > /tmp/noon-repair-source/revision.txt
+          sha256sum /tmp/noon-repair-source/source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-repair-source
+          path: /tmp/noon-repair-source
+          retention-days: 1
+      - name: Resolve the repository-pinned public Rust build inputs
+        run: |
+          rustup show active-toolchain
+          cargo vendor --locked --versioned-dirs /tmp/noon-repair-vendor > /tmp/noon-repair-vendor-config.toml
+          mkdir -p /tmp/noon-repair-tools
+          tar -C "$(rustc --print sysroot)" -czf /tmp/noon-repair-tools/rust-toolchain.tar.gz bin lib
+          tar -C /tmp -czf /tmp/noon-repair-tools/vendor.tar.gz noon-repair-vendor noon-repair-vendor-config.toml
+          rustc --version > /tmp/noon-repair-tools/versions.txt
+          cargo --version >> /tmp/noon-repair-tools/versions.txt
+          sha256sum /tmp/noon-repair-tools/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-repair-public-build-inputs
+          path: /tmp/noon-repair-tools
+          compression-level: 0
+          retention-days: 1
