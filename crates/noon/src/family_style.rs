@@ -203,6 +203,49 @@ impl MobjectFamily {
         }
         self.validate()?;
         target.validate()?;
+        let target_is_empty = self
+            .integration_store()
+            .borrow()
+            .node(target.node_id())
+            .expect("validated family")
+            .member_count()
+            == 0;
+        if target_is_empty {
+            // Manim reuses the empty target's root style for each receiver child.
+            // Preserve the current topology and publish all resulting paint edits
+            // together instead of materializing duplicated child wrappers.
+            let target_style = target.own_style()?;
+            let receiver_nodes = self
+                .integration_store()
+                .borrow()
+                .ordered_authoring_nodes(self.node_id())
+                .map_err(AuthoringError::from)?;
+            let mut transaction = SemanticMutationTransaction::new();
+            for node in receiver_nodes {
+                let family_style = self
+                    .integration_store()
+                    .borrow()
+                    .node(node)
+                    .and_then(|entry| entry.family_style())
+                    .cloned();
+                if let Some(original) = family_style {
+                    let mut matched = original.clone();
+                    match_paint(&mut matched, &target_style);
+                    if matched != original {
+                        transaction.set_family_style(node, matched);
+                    }
+                } else {
+                    let object = Mobject::from_node(Rc::clone(self.integration_store()), node)?;
+                    let mut matched = capture(&object)?;
+                    let original = matched.clone();
+                    match_paint(&mut matched, &target_style);
+                    if matched != original {
+                        transaction.replace_style(node, matched);
+                    }
+                }
+            }
+            return Ok(transaction);
+        }
         let root_pairs = self
             .integration_store()
             .borrow()

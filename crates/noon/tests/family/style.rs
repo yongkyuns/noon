@@ -307,6 +307,97 @@ fn recursive_style_matching_copies_nested_family_root_paint() {
 }
 
 #[test]
+fn empty_family_style_matches_fan_out_over_receiver_roots_and_leaves() {
+    use noon::{SemanticPaint, StyleUpdate};
+    let mut scene = Scene::new();
+    let a = scene.circle(0.3).unwrap();
+    let nested = scene.family(&[(&a).into()]).unwrap();
+    let b = scene.square(0.4).unwrap();
+    let receiver = scene.family(&[(&nested).into(), (&b).into()]).unwrap();
+    let donor = scene.family(&[]).unwrap();
+    donor
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.25),
+            stroke_color: Some(Color::BLUE),
+            stroke_width: Some(0.12),
+            stroke_opacity: Some(0.45),
+        })
+        .unwrap();
+
+    receiver.match_style(&donor).unwrap();
+    for style in [receiver.own_style().unwrap(), nested.own_style().unwrap()] {
+        assert_eq!(style.fill, donor.own_style().unwrap().fill);
+        assert_eq!(style.fill_opacity, 0.25);
+        assert_eq!(style.stroke, donor.own_style().unwrap().stroke);
+        assert_eq!(style.stroke_width, 0.12);
+        assert_eq!(style.stroke_opacity, 0.45);
+    }
+    for member in [&a, &b] {
+        let style = member.state().unwrap().style;
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::GREEN)));
+        assert_eq!(member.fill_opacity().unwrap(), 0.25);
+        assert_eq!(style.stroke, Some(SemanticPaint::Solid(Color::BLUE)));
+        assert_eq!(style.stroke_width, 0.12);
+        assert_eq!(member.stroke_opacity().unwrap(), 0.45);
+    }
+}
+
+#[test]
+fn live_empty_family_style_matching_updates_receiver_subtree_atomically() {
+    use noon::StyleUpdate;
+    let mut scene = Scene::new();
+    let a = scene.circle(0.3).unwrap();
+    let nested = scene.family(&[(&a).into()]).unwrap();
+    let b = scene.square(0.4).unwrap();
+    let receiver = scene.family(&[(&nested).into(), (&b).into()]).unwrap();
+    let donor = scene.family(&[]).unwrap();
+    donor
+        .set_own_style(StyleUpdate {
+            fill_color: Some(Color::GREEN),
+            fill_opacity: Some(0.25),
+            stroke_color: Some(Color::BLUE),
+            stroke_width: Some(0.12),
+            stroke_opacity: Some(0.45),
+        })
+        .unwrap();
+    scene.add_many(&[(&receiver).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let revision = scene.revision();
+
+    let matched = live.match_family_style(&receiver, &donor).unwrap();
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(matched.impacts().len(), 4);
+    assert_eq!(receiver.own_style().unwrap(), donor.own_style().unwrap());
+    assert_eq!(nested.own_style().unwrap(), donor.own_style().unwrap());
+    for member in [&a, &b] {
+        let effective = live.effective(member).unwrap();
+        assert_eq!(
+            effective.style.fill,
+            Some(Color::rgba(
+                Color::GREEN.red,
+                Color::GREEN.green,
+                Color::GREEN.blue,
+                0.25,
+            ))
+        );
+        assert!((effective.fill_opacity() - 0.25).abs() < 1e-6);
+        assert_eq!(
+            effective.style.stroke,
+            Some(Color::rgba(
+                Color::BLUE.red,
+                Color::BLUE.green,
+                Color::BLUE.blue,
+                0.45,
+            ))
+        );
+        assert_eq!(effective.style.stroke_width, 0.12);
+        assert!((effective.stroke_opacity() - 0.45).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
     use noon::StyleUpdate;
     let mut scene = Scene::new();

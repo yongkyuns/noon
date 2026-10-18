@@ -1938,6 +1938,59 @@ def _family_own_paint_probe(api):
         ],
     ]
 
+    fanout_receiver_nested = api.VGroup(api.Circle(color=api.BLUE))
+    fanout_receiver = api.VGroup(
+        fanout_receiver_nested,
+        api.Square(color=api.RED),
+    )
+    fanout_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    fanout_receiver_nested.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.9,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    empty_style_donor = api.VGroup()
+    empty_style_donor.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_width=5,
+        stroke_opacity=0.4,
+        family=False,
+    )
+    fanout_receiver.match_style(empty_style_donor)
+    fanout_match = [
+        _paint_rgb(fanout_receiver.get_fill_color()),
+        fanout_receiver.get_fill_opacity(),
+        _paint_rgb(fanout_receiver.get_stroke_color()),
+        fanout_receiver.get_stroke_width(),
+        fanout_receiver.get_stroke_opacity(),
+        [
+            [
+                _paint_rgb(node.get_fill_color()),
+                node.get_fill_opacity(),
+                _paint_rgb(node.get_stroke_color()),
+                node.get_stroke_width(),
+                node.get_stroke_opacity(),
+            ]
+            for node in (
+                fanout_receiver_nested,
+                fanout_receiver_nested.submobjects[0],
+                fanout_receiver.submobjects[1],
+            )
+        ],
+    ]
+
     empty = api.Group()
     empty.set_color(api.YELLOW, family=False)
 
@@ -2000,6 +2053,7 @@ def _family_own_paint_probe(api):
         "vgroup_root_only_set_style": root_style_observation,
         "vgroup_root_only_match_style": root_only_match,
         "vgroup_recursive_match_style": recursive_match,
+        "vgroup_empty_donor_match_style": fanout_match,
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]
