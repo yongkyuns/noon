@@ -7,17 +7,15 @@ Original CUDA kernel:
 https://github.com/ourarash/cuda-algorithm-lab/blob/main/matrix_transpose/03_padded/03_transpose_padded.cu
 Copyright and MIT permission notice: see cuda_transpose_banks.LICENSE.
 
-Default: labeled CPU reference replay, not CUDA execution. To replay captured
-addresses and values, replace GPU_TRACE=None with the assignment produced by
-record_cuda.cu in tools/cuda-transpose. Service order and timing are schematic,
-not recorded GPU scheduling or a benchmark.
+Educational visualization of CUDA shared-memory accesses. Animation timing
+is illustrative, not measured GPU execution time. Correctness validation and
+optional CUDA capture are separate tools in tools/cuda-transpose.
 """
 from noon import *
 import re
 
 SPEED = 1.0
 COLUMN = 3
-GPU_TRACE = None  # Replace with the recorder's assignment to use captured reads.
 SYNTAX_HIGHLIGHT = True
 
 # Strong enough to identify active lines, while staying quieter than syntax colors.
@@ -93,27 +91,6 @@ def reference_trace(stride, column, base_word=0):
                 for r in range(32) for c in range(32))
     return dict(stride=stride, base_word=base_word, loads=loads,
                 reads=selected, verified_output_words=valid)
-
-
-def get_trace(stride):
-    if GPU_TRACE is None:
-        return reference_trace(stride, COLUMN)
-    if not isinstance(GPU_TRACE, dict) or GPU_TRACE.get("column") != COLUMN:
-        raise ValueError("GPU_TRACE must match COLUMN; rerun the CUDA recorder.")
-    payload = GPU_TRACE.get("runs")
-    if not isinstance(payload, list) or any(not isinstance(r, dict) for r in payload):
-        raise ValueError("GPU_TRACE.runs must be a list of run dictionaries.")
-    runs = [r for r in payload if r.get("stride") == stride]
-    if len(runs) != 1:
-        raise ValueError("GPU_TRACE needs exactly one run for each stride: 32 and 33.")
-    run = runs[0]
-    base = run.get("base_word")
-    if type(base) is not int or base < 0:
-        raise ValueError("GPU trace has an invalid shared-memory base address.")
-    expected = reference_trace(stride, COLUMN, base)
-    if any(run.get(k) != v for k, v in expected.items()):
-        raise ValueError("GPU trace does not match the fixed 32x32 transpose fixture.")
-    return run
 
 
 def service_batches(reads):
@@ -422,16 +399,14 @@ class CudaTransposeBanks(Scene):
             raise ValueError("SPEED must be a finite number between 0 and 100.")
         if type(COLUMN) is not int or not 0 <= COLUMN < 32:
             raise ValueError("COLUMN must be an integer from 0 to 31.")
-        traces = [get_trace(s) for s in (32, 33)]
+        traces = [reference_trace(s, COLUMN) for s in (32, 33)]
         self.captions, self.code_objects, self.highlights, self.active_keys = [], [], {}, ()
         self.add(rect(0, 0, 14.23, 8.01, BG, 1, 0))
         self.panels = [rect(-3.51, 0.10, 6.65, 5.46, PANEL, 1, 0),
                        rect(3.43, 0.10, 6.65, 5.46, PANEL, 1, 0)]
         self.add(*self.panels)
         title = label("ONE EXTRA COLUMN", y=3.57, size=30)
-        provenance = ("GPU-recorded selected read addresses + values" if GPU_TRACE is not None
-                      else "CPU reference replay / CUDA is not running")
-        meta = label(provenance + "  |  block 32 x 8  |  column %d" % COLUMN,
+        meta = label("CUDA shared-memory transpose  |  block 32 x 8  |  column %d" % COLUMN,
                      y=3.14, size=12, color=MUTED)
         foot = label("CUDA Algorithm Lab  |  service rounds are schematic, not GPU cycles or a benchmark",
                      y=-3.84, size=10, color=MUTED)
@@ -587,7 +562,7 @@ class CudaTransposeBanks(Scene):
         else:
             await self.narrate("The same 32 values now reach 32 different banks.",
                          "Only the shared row stride changed: 32 -> 33.", GREEN)
-        # Trace-derived examples, including a nonzero physical base from a GPU capture.
+        # The same deterministic model drives the mapping example and packet motion.
         example = label("lane 0: word %d -> B%02d" % (reads[0][2], reads[0][2] % 32),
                         -3.45, 1.01, 14, ROW_COLORS[0], width=5.9)
         await self.play_for(FadeIn(example), seconds=0.18)

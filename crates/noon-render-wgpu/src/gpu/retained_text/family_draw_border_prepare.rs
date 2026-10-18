@@ -526,7 +526,10 @@ pub(super) fn draw_border_glyph_style(
 ) -> Style {
     draw_border_style(
         Style {
-            fill: Some(run.fill.or(object_style.fill).unwrap_or(Color::WHITE)),
+            fill: Some(
+                crate::text::resolve_text_paint(run.fill, object_style.fill)
+                    .unwrap_or(Color::WHITE),
+            ),
             ..object_style
         },
         phase,

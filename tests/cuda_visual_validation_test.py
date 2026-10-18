@@ -9,6 +9,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 def load(name, filename):
@@ -172,6 +173,91 @@ class BrowserRunnerContracts(unittest.TestCase):
         self.assertIn('NOON_CUDA_REQUIRE_GPU',s)
         self.assertIn('a CPU fixture is not GPU evidence',s)
         self.assertIn('cudaValidated: false',s)
+
+
+class ModelComparisonTests(unittest.TestCase):
+    """Synthetic capture rows test the comparator, not CUDA execution."""
+
+    def bundle(self):
+        # Physical bases deliberately rotate the bank numbering between runs.
+        return {"columns": {str(c): {"column": c, "runs": [
+            trace(stride, c, (0, 1, 31, 32, 128)[(c + stride) % 5])
+            for stride in (32, 33)]} for c in range(32)}}
+
+    def test_actual_demo_model_matches_all_columns_without_injecting_capture(self):
+        bundle = self.bundle()
+        before = copy.deepcopy(bundle)
+        result = capture.compare_demo_model(bundle)
+        self.assertEqual(result["cases"], 64)
+        self.assertEqual(result["columns"], 32)
+        self.assertEqual(result["layouts"], [32, 33])
+        self.assertEqual(result["addressBasis"], "tile-relative")
+        self.assertEqual(result["sceneSha256"], capture.digest(
+            (ROOT / "web/python/examples/cuda_transpose_banks.py").read_bytes()))
+        self.assertEqual(bundle, before)
+
+    def test_captured_wrong_word_value_output_or_base_is_rejected(self):
+        for change in (lambda r: r["reads"][9].__setitem__(2, r["reads"][9][2] + 1),
+                       lambda r: r["reads"][9].__setitem__(3, 999),
+                       lambda r: r["reads"][9].__setitem__(4, -1),
+                       lambda r: r.__setitem__("base_word", r["base_word"] + 1),
+                       lambda r: r.__setitem__("loads", [255] * 4)):
+            bundle = self.bundle()
+            change(bundle["columns"]["31"]["runs"][1])
+            with self.assertRaisesRegex(ValueError, "demo model differs"):
+                capture.compare_demo_model(bundle)
+
+    def test_missing_layout_cannot_pass_comparison(self):
+        bundle = self.bundle()
+        bundle["columns"]["31"]["runs"].pop()
+        with self.assertRaisesRegex(ValueError, "both layouts"):
+            capture.compare_demo_model(bundle)
+
+    def check_source(self, source):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scene.py"
+            path.write_text(source, encoding="utf-8")
+            return capture.compare_demo_model(self.bundle(), path)
+
+    def test_bug_in_real_demo_model_is_detected(self):
+        old = "selected.append([tx, c, word, c * 32 + tx, tile[word]])"
+        self.assertEqual(SCENE.count(old), 1)
+        bad = SCENE.replace(old, "selected.append([tx, c, word, c * 32 + tx, tile[word] + 1])")
+        with self.assertRaisesRegex(ValueError, "demo model differs"):
+            self.check_source(bad)
+
+    def test_wrong_service_multiplicity_is_detected(self):
+        tree = ast.parse(SCENE)
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "service_batches")
+        lines = SCENE.splitlines(keepends=True)
+        bad = "".join(lines[:fn.lineno-1]) + "def service_batches(reads):\n    return [list(range(32))]\n" + "".join(lines[fn.end_lineno:])
+        with self.assertRaisesRegex(ValueError, "service rounds differ"):
+            self.check_source(bad)
+
+    def test_comparison_does_not_import_or_execute_the_scene(self):
+        source = "raise AssertionError('the scene must not execute in this comparator')\n" + SCENE
+        self.assertEqual(self.check_source(source)["cases"], 64)
+
+    def test_missing_model_helper_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "helpers missing"):
+            self.check_source(SCENE.replace("def reference_trace(", "def renamed_model("))
+
+    def test_runner_preserves_demo_model_and_binds_comparison_to_tested_source(self):
+        runner = (ROOT / "scripts/cuda-transpose-qualification.mjs").read_text()
+        self.assertNotIn("GPU_TRACE", runner)
+        self.assertNotIn("capture.columns", runner)
+        self.assertIn("verification.modelComparison.sceneSha256, report.sceneSha256", runner)
+        self.assertIn("verification.modelComparison.cases, 64", runner)
+        self.assertLess(runner.index("report.status='passed';"),
+                        runner.index("report.cudaValidated = capture !== null;"))
+
+    def test_recorder_emits_full_json_not_demo_playback_assignment(self):
+        recorder = (ROOT / "tools/cuda-transpose/record_cuda.cu").read_text()
+        self.assertNotIn("GPU_TRACE", recorder)
+        self.assertNotIn("bool full", recorder)
+        self.assertNotIn("if (full)", recorder)
+        for field in ("load_accesses", "read_accesses", "original_output"):
+            self.assertIn(field, recorder)
 
 
 if __name__=='__main__':

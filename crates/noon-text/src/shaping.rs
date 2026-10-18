@@ -113,6 +113,9 @@ pub struct NativeTextOptions {
     /// The resulting `font_size * (1 + line_spacing)` step is converted from
     /// Manim's SVG units to shaping coordinates. Markup uses natural font spacing.
     pub line_spacing: f32,
+    /// Disable optional OpenType `liga` and `clig` substitutions. Required
+    /// shaping and combining-mark clusters remain intact.
+    pub disable_ligatures: bool,
     pub fill: Option<Color>,
     pub variations: Arc<[FontVariationSetting]>,
 }
@@ -122,6 +125,7 @@ impl NativeTextOptions {
         Self {
             font_size,
             line_spacing: -1.0,
+            disable_ligatures: false,
             fill: None,
             variations: Arc::from([]),
         }
@@ -465,7 +469,7 @@ impl NativeTextCompiler {
                     * 3.6) as f32
             }
         };
-        let mut shaper = self
+        let builder = self
             .shape_context
             .builder_with_id(
                 font_ref,
@@ -476,8 +480,13 @@ impl NativeTextCompiler {
             )
             .script(Script::Latin)
             .size(shaping_size)
-            .variations(variations)
-            .build();
+            .variations(variations);
+        let builder = if options.disable_ligatures {
+            builder.features([("liga", 0), ("clig", 0)])
+        } else {
+            builder
+        };
+        let mut shaper = builder.build();
         shaper.add_str(text);
         let layout_unit = match font.metrics_profile {
             NativeFontMetricsProfile::CairoFreeType => MANIM_PANGO_LAYOUT_PIXEL,
@@ -833,6 +842,9 @@ fn layout_artifact(
 ) -> TextLayoutArtifact {
     let mut identity = format!("{NATIVE_TEXT_BACKEND_VERSION}\0{NATIVE_TEXT_TEMPLATE_VERSION}\0{:?}\0{}\0{}\0{:08x}\0{:08x}\0", kind, base_font.face_key, base_font.face_index, options.font_size.to_bits(), options.line_spacing.to_bits());
     append_metrics_identity(&mut identity, base_font);
+    if options.disable_ligatures {
+        identity.push_str("\0disable-ligatures");
+    }
     append_color_identity(&mut identity, options.fill);
     for setting in options.variations.iter() {
         identity.push('\0');
@@ -1280,6 +1292,81 @@ mod tests {
         );
         assert!(matches!(
             compiler.compile_styled(source, &font, &options, &different_fill),
+            Err(NativeTextError::UnshapableStyleBoundary { offset: 1 })
+        ));
+    }
+
+    #[test]
+    fn disabled_ligatures_allow_code_character_paints_and_reset_between_requests() {
+        let font = libertinus_serif_regular_font();
+        let source = "ffi -> !=";
+        let mut compiler = NativeTextCompiler::new();
+        let ordinary_options = NativeTextOptions::new(24.0);
+        let ordinary = compiler
+            .compile_plain(source, &font, &ordinary_options)
+            .unwrap();
+        assert!(ordinary.resource.runs[0]
+            .glyphs
+            .iter()
+            .any(|glyph| glyph.cluster.source_span == TextSourceSpan::new(0, 3)));
+        let mut code_options = ordinary_options.clone();
+        code_options.disable_ligatures = true;
+        let cuts = (1..=source.len())
+            .map(|end| {
+                (
+                    end,
+                    Some(if end % 2 == 0 {
+                        Color::RED
+                    } else {
+                        Color::BLUE
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let code = compiler
+            .compile_styled(source, &font, &code_options, &spans(source, &font, &cuts))
+            .unwrap();
+        assert!(code
+            .resource
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter())
+            .all(|glyph| glyph.cluster.source_span.end - glyph.cluster.source_span.start == 1));
+        let unpainted_code = compiler
+            .compile_plain(source, &font, &code_options)
+            .unwrap();
+        assert_ne!(
+            ordinary.resource.layout_artifact,
+            unpainted_code.resource.layout_artifact
+        );
+        // Reusing the compiler must not leak the previous request's feature settings.
+        assert_eq!(
+            compiler
+                .compile_plain(source, &font, &ordinary_options)
+                .unwrap()
+                .resource,
+            ordinary.resource
+        );
+    }
+
+    #[test]
+    fn disabled_ligatures_preserve_combining_mark_clusters() {
+        let font = libertinus_serif_regular_font();
+        let source = "a\u{0301}";
+        let mut options = NativeTextOptions::new(24.0);
+        options.disable_ligatures = true;
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler.compile_plain(source, &font, &options).unwrap();
+        assert!(artifact.resource.runs[0].glyphs.iter().all(|glyph| {
+            glyph.cluster.source_span == TextSourceSpan::new(0, source.len() as u32)
+        }));
+        let styles = spans(
+            source,
+            &font,
+            &[(1, Some(Color::RED)), (source.len(), Some(Color::BLUE))],
+        );
+        assert!(matches!(
+            compiler.compile_styled(source, &font, &options, &styles),
             Err(NativeTextError::UnshapableStyleBoundary { offset: 1 })
         ));
     }

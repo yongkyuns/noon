@@ -784,7 +784,11 @@ impl RetainedFramePreparer {
                                 scratch.transform = object.transform;
                                 scratch.style = Style {
                                     fill: Some(
-                                        run.fill.or(object.style.fill).unwrap_or(Color::WHITE),
+                                        crate::text::resolve_text_paint(
+                                            run.fill,
+                                            object.style.fill,
+                                        )
+                                        .unwrap_or(Color::WHITE),
                                     ),
                                     stroke: None,
                                     stroke_width: 0.0,
