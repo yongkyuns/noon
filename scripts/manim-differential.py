@@ -280,6 +280,27 @@ def _apply_to_family_probe(api) -> Any:
     return {"visited": visited, "returned_self": result is family}
 
 
+def _family_updaters_probe(api) -> Any:
+    def root_first(mobject):
+        return mobject
+
+    def root_second(mobject, dt):
+        return dt
+
+    def circle_updater(mobject):
+        return mobject
+
+    def square_updater(mobject, dt):
+        return dt
+
+    circle = api.Circle(radius=0.2).add_updater(circle_updater)
+    square = api.Square(side_length=0.4).add_updater(square_updater)
+    nested = api.Group(square)
+    family = api.Group(circle, nested).add_updater(root_first).add_updater(root_second)
+    names = [updater.__name__ for updater in family.get_family_updaters()]
+    return {"updaters": names}
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2552,6 +2573,8 @@ FIXTURES = [
     Fixture("set_z_zero", _noon_set_z_zero, _manim_set_z_zero),
     Fixture("apply_to_family", lambda: _apply_to_family_probe(noon),
             lambda: _apply_to_family_probe(manim)),
+    Fixture("family_updaters", lambda: _family_updaters_probe(noon),
+            lambda: _family_updaters_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

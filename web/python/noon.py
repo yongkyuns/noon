@@ -433,6 +433,14 @@ class Mobject:
         from _manim_semantic_handles import _get_family
         return _get_family(self)
 
+    def get_family_updaters(self) -> list[Callable[..., Any]]:
+        """Return each member's updaters in shared family order."""
+        return [
+            updater
+            for mobject in self.get_family()
+            for updater in mobject.get_updaters()
+        ]
+
     def split(self) -> list[Mobject]:
         """Return this point-owning object, if any, followed by direct children."""
         result = [self] if self.has_points() else []

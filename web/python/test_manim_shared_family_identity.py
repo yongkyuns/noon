@@ -8,6 +8,24 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
+        from unittest.mock import Mock, call
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        child = identity_only_wrapper(compat.Circle)
+        root_updaters = [Mock(), Mock()]
+        child_updaters = [Mock()]
+        root.get_family = Mock(return_value=[root, child])
+        root.get_updaters = Mock(return_value=root_updaters)
+        child.get_updaters = Mock(return_value=child_updaters)
+
+        self.assertEqual(root.get_family_updaters(), root_updaters + child_updaters)
+        root.get_family.assert_called_once_with()
+        self.assertEqual(root.get_updaters.call_args_list, [call()])
+        self.assertEqual(child.get_updaters.call_args_list, [call()])
+
     def test_apply_to_family_invokes_callbacks_in_shared_pointful_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat
