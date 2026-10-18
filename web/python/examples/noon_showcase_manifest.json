@@ -133,6 +133,26 @@
       "beats": [{"time": 0.8, "label": "Write the equation"}, {"time": 2.0, "label": "Write the heading"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
+      "id": "showcase-code-blocks",
+      "title": "Code with native syntax highlighting",
+      "lesson": "Display Python and CUDA source with native Rust-owned syntax coloring, preserved indentation and line numbers; reveal and move the retained code blocks as normal scene objects.",
+      "primary_feature": "native-syntax-highlighted-code",
+      "category": "Text and mathematics",
+      "path": "python/examples/showcase_code_blocks.py",
+      "features": ["Code", "Python", "CUDA C++", "syntax highlighting", "indentation", "line numbers", "Monokai", "Emacs", "FadeIn", "animate.shift"],
+      "duration": 6.0,
+      "thumbnail_time": 5.5,
+      "thumbnail": "thumbnails/showcase/showcase-code-blocks.png",
+      "thumbnail_alt": "Actual Noon-rendered dark Python code window and light CUDA C++ source panel with native token colors and aligned line numbers",
+      "still_intervals": [[2.0, 2.5], [3.7, 4.2], [5.2, 6.0]],
+      "beats": [
+        {"time": 1.6, "label": "Reveal highlighted Python with indentation"},
+        {"time": 3.2, "label": "Reveal CUDA C++ in another theme"},
+        {"time": 4.7, "label": "Animate both code families"},
+        {"time": 5.5, "label": "Inspect complete source panels"}
+      ]
+    },
+    {
       "id": "showcase-latex-create", "title": "Draw and write LaTeX",
       "lesson": "Compare Create and Write on compiled LaTeX glyphs and fraction bars.",
       "primary_feature": "latex-create", "category": "Text and mathematics",

@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog manifest currently lists twenty-four authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-five authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -116,7 +116,7 @@ Live review retains an unseeked first-pass image and state before any replay att
 
 ## Remaining coverage and migration
 
-The twenty-four curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
+The twenty-five curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
 
 - Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.
@@ -147,8 +147,8 @@ successful CUDA fidelity CI run [39055762669](https://github.com/yongkyuns/noon/
 artifact `12110234543`, case `column-3-speed-1-none`, at authored
 time `64.0499998399999`, padded bank transfer endpoint. The poster SHA-256
 and exact scene source SHA-256 are checked by a dedicated source-bound
-evidence sidecar rather than mislabeling the earlier 23-posters
+evidence sidecar rather than mislabeling the earlier 24-posters
 capture bundle with a different renderer build identity. Its provenance
 is independent of the Manim/reference catalog and the other showcase cards.
 Regular `scripts/showcase-capture.mjs` can independently recapture a
-complete refreshed 24-scene bundle, without changing the original source.
+complete refreshed 25-scene bundle, without changing the original source.

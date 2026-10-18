@@ -89,7 +89,7 @@ export function assertRetainedPoster(entry, record, source, png, captureIdentity
 
 /**
  * Separate source-bound proof for a genuine CUDA fidelity-test screenshot.
- * The earlier 23 showcase posters belong to one different renderer build.
+ * The earlier 24 showcase posters belong to one different renderer build.
  * Never overwrite their aggregate build identity to make this card fit.
  */
 export function assertRetainedCudaFidelityPoster(entry, record, source, png) {

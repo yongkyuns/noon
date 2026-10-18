@@ -17,7 +17,7 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
   const existingEntries = manifest.entries.filter(entry => entry.id !== "showcase-cuda-transpose");
   assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
-    existingEntries.map(entry => entry.id), "all original 23 source-bound posters must remain");
+    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
   assert.ok(evidence.posters.length === existingEntries.length ||
     evidence.posters.length === existingEntries.length + 1,
     "capture evidence must be the original batch or a fully refreshed batch");
