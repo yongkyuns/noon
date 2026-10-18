@@ -80,8 +80,6 @@ class PathQueryTests(unittest.TestCase):
             observe.assert_not_called()
 
     def test_vmobject_constructor_accepts_query_stride_and_tolerance(self):
-        import numpy as np
-
         with patch.object(semantic_handles, "_empty_path_init") as initialize:
             value = compat.VMobject(
                 n_points_per_cubic_curve=3,
@@ -92,7 +90,7 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(value.n_points_per_cubic_curve, 3)
         self.assertEqual(value.n_points_per_curve, 3)
         self.assertEqual(value.tolerance_for_point_equality, 2e-5)
-        np.testing.assert_array_equal(value._bezier_t_values, [0., .5, 1.])
+        self.assertEqual(list(value._bezier_t_values), [0., .5, 1.])
         initialize.assert_called_once_with(
             value, color=compat._base.WHITE, kind="VMobject", marker="forwarded"
         )
@@ -257,7 +255,10 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(handle.cubicBezierPointRanges.call_args_list[-1].args, (10, 3.0))
 
     def test_cubic_tuple_getter_groups_the_current_rust_path_snapshot(self):
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy grouped-array result shape")
 
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
@@ -292,6 +293,41 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(query.free.call_count, 2)
         self.assertEqual(handle.cubicBezierPointRanges.call_args_list[0].args, (8, 4.0))
         self.assertEqual(handle.cubicBezierPointRanges.call_args_list[1].args, (8, 3.0))
+
+    def test_cubic_tuple_getter_current_snapshot_without_numpy_returns_nested_vec2(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.points.return_value = [
+            0., 0., 1., 0., 1., 1., 2., 1.,
+            2., 1., 3., 1., 3., 2., 4., 2.,
+        ]
+        handle = Mock()
+        handle.cubicBezierPointRanges.side_effect = [[0, 4, 4, 8], [0, 3, 3, 6]]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ), patch.object(queries, "_handle_for", return_value=handle):
+            default = value.get_cubic_bezier_tuples()
+            value.n_points_per_cubic_curve = 3
+            custom = value.get_cubic_bezier_tuples()
+
+        def observe(groups):
+            return [[tuple(point) for point in group] for group in groups]
+
+        self.assertEqual(
+            observe(default),
+            [
+                [(0., 0.), (1., 0.), (1., 1.), (2., 1.)],
+                [(2., 1.), (3., 1.), (3., 2.), (4., 2.)],
+            ],
+        )
+        self.assertEqual(
+            observe(custom),
+            [
+                [(0., 0.), (1., 0.), (1., 1.)],
+                [(2., 1.), (2., 1.), (3., 1.)],
+            ],
+        )
+        self.assertEqual(query.free.call_count, 2)
 
     def test_cubic_tuple_helpers_preserve_negative_and_zero_stride_behavior(self):
         value = identity_only_wrapper(compat.VMobject)
