@@ -1,0 +1,147 @@
+# Research only; never merge. Store tested source objects, never update refs.
+name: 2195 compact CPU accounting qualification
+on:
+  push:
+    branches: [codex/2195-compact-cpu-qualify]
+permissions:
+  contents: read
+concurrency:
+  group: 2195-compact-cpu-qualify
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      EXPECTED_BASE: 9c38889652430814955adf0dce355dcf572370e3
+      PROOF_DIR: /tmp/noon-compact-cpu-proof
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Apply the reviewed one-file change to the exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          cp experiments/2195/apply-compact-cpu.py "$PROOF_DIR/apply.py"
+          echo '9f2e30509a36548ddab8fc7d1cebbb0860a52c3c5248d78482df27b13cc9cb72  '"$PROOF_DIR/apply.py" | sha256sum --check
+          git fetch --depth=1 origin "$EXPECTED_BASE"
+          git checkout --detach "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD > "$PROOF_DIR/base.txt"
+          python3 "$PROOF_DIR/apply.py"
+          git diff --check
+          git diff --binary > "$PROOF_DIR/unformatted.patch"
+      - name: Install pinned Rust and software Vulkan prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF_DIR/toolchain.txt"
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libvulkan1 mesa-vulkan-drivers
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-2195-compact-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+            ${{ runner.os }}-2195-init-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and fail closed on source scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          changed = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
+          assert changed == ['crates/noon-render-wgpu/src/gpu/mod.rs'], changed
+          (proof / 'changed-files.json').write_text(json.dumps(changed) + '\n')
+          (proof / 'applied.patch').write_bytes(subprocess.check_output(['git', 'diff', '--binary']))
+          PY
+      - name: Execute both compact CPU accounting regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --lib compact_path_cpu_accounting -- --nocapture 2>&1 | tee "$PROOF_DIR/compact-cpu.log"
+          grep -F 'test result: ok. 2 passed; 0 failed;' "$PROOF_DIR/compact-cpu.log"
+      - name: Check the public getter example
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --all-features --doc 2>&1 | tee "$PROOF_DIR/doctests.log"
+      - name: Run the repository fast entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast HEAD 2>&1 | tee "$PROOF_DIR/fast-gate.log"
+      - name: Compile the direct browser target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee "$PROOF_DIR/wasm-check.log"
+      - name: Retain exact mixed pixels and all four MSAA samples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::tests::mixed_mega_native_exact_pixels_against_individual_paths -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$PROOF_DIR/native-msaa.log"
+      - name: Store tested source objects without advancing any branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, urllib.request
+          from pathlib import Path
+          proof = Path(os.environ['PROOF_DIR'])
+          base = os.environ['EXPECTED_BASE']
+          path = 'crates/noon-render-wgpu/src/gpu/mod.rs'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == base
+          assert subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines() == [path]
+          applied = subprocess.check_output(['git', 'diff', '--binary'])
+          assert applied == (proof / 'applied.patch').read_bytes(), 'Tests changed source'
+          def api(method, suffix, payload=None):
+              request = urllib.request.Request('https://api.github.com/repos/yongkyuns/noon/' + suffix,
+                  data=None if payload is None else json.dumps(payload).encode(), method=method,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          source = Path(path).read_bytes()
+          blob = api('POST', 'git/blobs', {'content': source.decode(), 'encoding': 'utf-8'})
+          original = api('GET', 'git/commits/' + base)
+          tree = api('POST', 'git/trees', {'base_tree': original['tree']['sha'], 'tree': [{'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']}]})
+          commit = api('POST', 'git/commits', {'message': 'feat(renderer): account for compact CPU mirror and test allocation lifecycle (#2195)', 'tree': tree['sha'], 'parents': [base]})
+          result = {'base': base, 'commit': commit['sha'], 'tree': tree['sha'], 'changed_files': [path], 'source_sha256': {path: hashlib.sha256(source).hexdigest()}, 'source_blob': blob['sha'], 'patch_sha256': hashlib.sha256(applied).hexdigest(), 'workflow_run': os.environ['GITHUB_RUN_ID'], 'ref_updated': False}
+          (proof / 'publication.json').write_text(json.dumps(result, indent=2) + '\n')
+          print('TESTED_COMMIT=' + commit['sha'])
+          print(json.dumps(result, indent=2))
+          PY
+      - name: Preserve evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: 2195-compact-cpu-proof
+          path: ${{ env.PROOF_DIR }}
+          retention-days: 3
+          if-no-files-found: error
