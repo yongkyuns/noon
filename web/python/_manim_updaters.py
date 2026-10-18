@@ -382,6 +382,20 @@ def get_updaters(self: _base.Mobject) -> list[Callable[..., Any]]:
     return list(_updaters(self))
 
 
+def get_time_based_updaters(self: _base.Mobject) -> list[Callable[..., Any]]:
+    return [
+        updater
+        for updater in _updaters(self)
+        if "dt" in inspect.signature(updater).parameters
+    ]
+
+
+def has_time_based_updater(self: _base.Mobject) -> bool:
+    return any(
+        "dt" in inspect.signature(updater).parameters for updater in _updaters(self)
+    )
+
+
 def has_updaters(self: _base.Mobject) -> bool:
     return bool(_updaters(self))
 

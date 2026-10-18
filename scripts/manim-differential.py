@@ -301,6 +301,30 @@ def _family_updaters_probe(api) -> Any:
     return {"updaters": names}
 
 
+def _time_based_updaters_probe(api) -> Any:
+    def ordinary(mobject):
+        return mobject
+
+    def positional_dt(mobject, dt):
+        return dt
+
+    def keyword_only_dt(mobject, *, dt):
+        return dt
+
+    def variadic(mobject, *args):
+        return args
+
+    mobject = api.Mobject()
+    for updater in (ordinary, positional_dt, keyword_only_dt, variadic):
+        mobject.add_updater(updater)
+    selected = mobject.get_time_based_updaters()
+    return {
+        "selected": [updater.__name__ for updater in selected],
+        "has_time_based": mobject.has_time_based_updater(),
+        "empty_has_time_based": api.Mobject().has_time_based_updater(),
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2575,6 +2599,8 @@ FIXTURES = [
             lambda: _apply_to_family_probe(manim)),
     Fixture("family_updaters", lambda: _family_updaters_probe(noon),
             lambda: _family_updaters_probe(manim)),
+    Fixture("time_based_updaters", lambda: _time_based_updaters_probe(noon),
+            lambda: _time_based_updaters_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

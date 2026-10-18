@@ -78,6 +78,30 @@ class UpdaterLifecycleTests(unittest.TestCase):
         updaters.prepare_canonical_callbacks(self.scene, self.context)
         self.assertEqual(len(self.context.calls), 3, "published occurrences are not replayed")
 
+    def test_time_based_updater_introspection_matches_explicit_dt_parameter(self):
+        def plain(mobject):
+            return mobject
+
+        def positional_dt(mobject, dt):
+            return dt
+
+        def keyword_only_dt(mobject, *, dt):
+            return dt
+
+        def variadic(mobject, *args):
+            return args
+
+        callbacks = [plain, positional_dt, keyword_only_dt, variadic]
+        for callback in callbacks:
+            updaters.add_updater(self.mobject, callback)
+
+        self.assertEqual(
+            updaters.get_time_based_updaters(self.mobject),
+            [positional_dt, keyword_only_dt],
+        )
+        self.assertTrue(updaters.has_time_based_updater(self.mobject))
+        self.assertFalse(updaters.has_time_based_updater(SimpleNamespace()))
+
     def test_failed_shared_registration_does_not_commit_callable_identity(self):
         self.bind()
         callback = lambda mobject: None

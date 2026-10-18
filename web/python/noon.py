@@ -728,6 +728,12 @@ class Mobject:
     def get_updaters(self) -> list[Callable[..., Any]]:
         return _callback_operations().get_updaters(self)
 
+    def get_time_based_updaters(self) -> list[Callable[..., Any]]:
+        return _callback_operations().get_time_based_updaters(self)
+
+    def has_time_based_updater(self) -> bool:
+        return _callback_operations().has_time_based_updater(self)
+
     def has_updaters(self) -> bool:
         return _callback_operations().has_updaters(self)
 
