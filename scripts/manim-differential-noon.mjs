@@ -306,6 +306,51 @@ paint_arrays = {
     "styled": paint_array_contract(point_owner),
     "transparent_black": paint_array_contract(direct_point),
 }
+def style_query_contract(value):
+    style = value.get_style()
+    simple = value.get_style(simple=True)
+    color_rgb = lambda color: None if color is None else [
+        float(color.red), float(color.green), float(color.blue)
+    ]
+    vector = lambda value: value.tolist() if hasattr(value, "tolist") else [float(x) for x in value]
+    scalar_or_list = lambda value: value.tolist() if hasattr(value, "tolist") else [float(value)]
+    return {
+        "keys": sorted(style),
+        "types": {
+            "fill_color_list": isinstance(style["fill_color"], list),
+            "fill_opacity_array": getattr(style["fill_opacity"], "ndim", 0) > 0,
+            "stroke_color_list": isinstance(style["stroke_color"], list),
+            "stroke_opacity_array": getattr(style["stroke_opacity"], "ndim", 0) > 0,
+            "background_stroke_color_list": isinstance(style["background_stroke_color"], list),
+            "background_stroke_opacity_array": getattr(style["background_stroke_opacity"], "ndim", 0) > 0,
+            "sheen_direction_array": getattr(style["sheen_direction"], "ndim", 0) > 0,
+        },
+        "stroke_opacity": float(style["stroke_opacity"]),
+        "stroke_width": float(style["stroke_width"]),
+        "fill_colors": [color_rgb(color) for color in style["fill_color"]],
+        "fill_opacities": scalar_or_list(style["fill_opacity"]),
+        "stroke_colors": [color_rgb(color) for color in style["stroke_color"]],
+        "stroke_opacities": scalar_or_list(style["stroke_opacity"]),
+        "background_stroke_colors": [color_rgb(color) for color in style["background_stroke_color"]],
+        "background_stroke_width": float(style["background_stroke_width"]),
+        "background_stroke_opacity": scalar_or_list(style["background_stroke_opacity"]),
+        "sheen_factor": float(style["sheen_factor"]),
+        "sheen_direction": vector(style["sheen_direction"]),
+        "background_image": style["background_image"],
+        "simple": {
+            "fill_color": color_rgb(simple["fill_color"]),
+            "fill_opacity": float(simple["fill_opacity"]),
+            "stroke_color": color_rgb(simple["stroke_color"]),
+            "stroke_opacity": float(simple["stroke_opacity"]),
+            "stroke_width": float(simple["stroke_width"]),
+        },
+    }
+round_trip_style = VMobject()
+round_trip_style.set_style(**point_owner.get_style())
+style_queries = {
+    "source": style_query_contract(point_owner),
+    "round_trip": style_query_contract(round_trip_style),
+}
 custom_stride_authored_queries = {
     "boundary_points": [
         [float(coordinate) for coordinate in point]
@@ -426,6 +471,7 @@ json.dumps({
     "path_pieces": path_pieces,
     "point_mobject": point_mobject,
     "paint_arrays": paint_arrays,
+    "style_queries": style_queries,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -516,6 +562,52 @@ json.dumps({
     stroke_colors: [[0, 0, 0]],
     stroke_opacities: [1],
   });
+  const expectedStyleKeys = [
+    "background_image",
+    "background_stroke_color",
+    "background_stroke_opacity",
+    "background_stroke_width",
+    "fill_color",
+    "fill_opacity",
+    "sheen_direction",
+    "sheen_factor",
+    "stroke_color",
+    "stroke_opacity",
+    "stroke_width",
+  ];
+  for (const style of [product.style_queries.source, product.style_queries.round_trip]) {
+    assert.deepEqual(style.keys, expectedStyleKeys);
+    assert.deepEqual(style.types, {
+      fill_color_list: true,
+      fill_opacity_array: true,
+      stroke_color_list: true,
+      stroke_opacity_array: false,
+      background_stroke_color_list: true,
+      background_stroke_opacity_array: false,
+      sheen_direction_array: true,
+    });
+    assert.deepEqual(style.stroke_opacity, 0.6);
+    assert.deepEqual(style.stroke_width, 4);
+    assert.deepEqual(style.fill_opacities, [0.35]);
+    assert.deepEqual(style.stroke_opacities, [0.6]);
+    assert.deepEqual(style.background_stroke_colors, [[0, 0, 0]]);
+    assert.deepEqual(style.background_stroke_width, 0);
+    assert.deepEqual(style.background_stroke_opacity, [1]);
+    assert.deepEqual(style.sheen_factor, 0);
+    assert.deepEqual(style.sheen_direction, [-1, 1, 0]);
+    assert.equal(style.background_image, null);
+    assert.deepEqual(style.simple.fill_opacity, 0.35);
+    assert.deepEqual(style.simple.stroke_opacity, 0.6);
+    assert.deepEqual(style.simple.stroke_width, 4);
+    for (const [actual, expected] of [
+      [style.fill_colors[0], [131 / 255, 193 / 255, 103 / 255]],
+      [style.stroke_colors[0], [252 / 255, 98 / 255, 85 / 255]],
+      [style.simple.fill_color, [131 / 255, 193 / 255, 103 / 255]],
+      [style.simple.stroke_color, [252 / 255, 98 / 255, 85 / 255]],
+    ]) {
+      assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
+    }
+  }
   const {
     proportion_from_point,
     nth_curve_points_array: liveCurvePointsArray,

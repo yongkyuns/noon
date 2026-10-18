@@ -1914,6 +1914,64 @@ def _paint_array_probe(api):
     }
 
 
+def _style_query_probe(api):
+    source = api.VMobject(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+
+    def observe(value):
+        style = value.get_style()
+        simple = value.get_style(simple=True)
+        return {
+            "keys": sorted(style),
+            "types": {
+                "fill_color_list": isinstance(style["fill_color"], list),
+                "fill_opacity_array": getattr(style["fill_opacity"], "ndim", 0) > 0,
+                "stroke_color_list": isinstance(style["stroke_color"], list),
+                "stroke_opacity_array": getattr(style["stroke_opacity"], "ndim", 0) > 0,
+                "background_stroke_color_list": isinstance(style["background_stroke_color"], list),
+                "background_stroke_opacity_array": getattr(style["background_stroke_opacity"], "ndim", 0) > 0,
+                "sheen_direction_array": getattr(style["sheen_direction"], "ndim", 0) > 0,
+            },
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "stroke_width": float(style["stroke_width"]),
+            "fill_colors": [_paint_rgb(color) for color in style["fill_color"]],
+            "fill_opacities": style["fill_opacity"].tolist(),
+            "stroke_colors": [_paint_rgb(color) for color in style["stroke_color"]],
+            "stroke_opacities": style["stroke_opacity"].tolist()
+            if hasattr(style["stroke_opacity"], "tolist")
+            else [float(style["stroke_opacity"])],
+            "background_stroke_colors": [
+                _paint_rgb(color) for color in style["background_stroke_color"]
+            ],
+            "background_stroke_width": float(style["background_stroke_width"]),
+            "background_stroke_opacity": style["background_stroke_opacity"].tolist()
+            if hasattr(style["background_stroke_opacity"], "tolist")
+            else [float(style["background_stroke_opacity"])],
+            "sheen_factor": float(style["sheen_factor"]),
+            "sheen_direction": [float(component) for component in style["sheen_direction"]],
+            "background_image": style["background_image"],
+            "simple": {
+                "fill_color": _paint_rgb(simple["fill_color"]),
+                "fill_opacity": float(simple["fill_opacity"]),
+                "stroke_color": _paint_rgb(simple["stroke_color"]),
+                "stroke_opacity": float(simple["stroke_opacity"]),
+                "stroke_width": float(simple["stroke_width"]),
+            },
+        }
+
+    full_style = source.get_style()
+    round_trip = api.VMobject().set_style(**full_style)
+    return {
+        "source": observe(source),
+        "round_trip": observe(round_trip),
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -2311,6 +2369,7 @@ FIXTURES = [
     Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
     Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
     Fixture("paint_arrays", lambda: _paint_array_probe(noon), lambda: _paint_array_probe(manim), 1e-5),
+    Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),

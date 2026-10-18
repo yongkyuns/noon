@@ -10,6 +10,7 @@ from _noon_errors import engine_call, raise_engine_error
 
 import copy
 import json
+import numbers
 import operator
 import sys
 from typing import Any
@@ -1301,10 +1302,92 @@ def _style_target(value):
     return _handle_for(value), _live_mutation_context(value), ""
 
 
-def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-               stroke_width=None, stroke_opacity=None, family=True, **kwargs):
-    if kwargs:
-        raise NotImplementedError("unsupported shared style option(s): " + ", ".join(sorted(kwargs)))
+def _style_value(value, name):
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise NotImplementedError(
+                f"multi-value {name} requires shared gradient paint"
+            )
+        return value[0]
+    return value
+
+
+def _style_color(value, name):
+    if value is None:
+        return None
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        value = value[0]
+        if value is None:
+            return None
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) in (3, 4)
+        and all(isinstance(component, numbers.Real) for component in value)
+    ):
+        components = [
+            _ir._unit_interval(f"{name} component", component)
+            for component in value
+        ]
+        return _base.Color(*components)
+    if isinstance(value, (list, tuple)):
+        raise NotImplementedError(
+            f"multi-color {name} requires shared gradient paint"
+        )
+    return _compat._as_color(name, value)
+
+
+def _set_style(
+    self,
+    fill_color=None,
+    fill_opacity=None,
+    stroke_color=None,
+    stroke_width=None,
+    stroke_opacity=None,
+    background_stroke_color=None,
+    background_stroke_width=None,
+    background_stroke_opacity=None,
+    sheen_factor=None,
+    sheen_direction=None,
+    background_image=None,
+    family=True,
+):
+    fill_color = _style_color(fill_color, "fill color")
+    stroke_color = _style_color(stroke_color, "stroke color")
+    fill_opacity = _style_value(fill_opacity, "fill opacity")
+    stroke_opacity = _style_value(stroke_opacity, "stroke opacity")
+    background_stroke_color = _style_color(
+        background_stroke_color, "background stroke color"
+    )
+    background_stroke_width = _style_value(
+        background_stroke_width, "background stroke width"
+    )
+    background_stroke_opacity = _style_value(
+        background_stroke_opacity, "background stroke opacity"
+    )
+
+    # Ordinary shared SemanticStyle stores one fill and one stroke. It has no
+    # background-stroke, sheen, or image paint fields, so preserve the pinned
+    # default profile and reject requested changes before publishing any part
+    # of a combined style update.
+    if background_stroke_color is not None and background_stroke_color != _base.BLACK:
+        raise NotImplementedError("background strokes require shared background paint")
+    if background_stroke_width is not None and float(background_stroke_width) != 0.0:
+        raise NotImplementedError("background strokes require shared background paint")
+    if background_stroke_opacity is not None and _compat._opacity(
+        "background stroke opacity", background_stroke_opacity
+    ) != 1.0:
+        raise NotImplementedError("background strokes require shared background paint")
+    if sheen_factor is not None and _ir._finite_number("sheen factor", sheen_factor) != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
+    if background_image:
+        raise NotImplementedError("background images require shared image paint")
+
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")

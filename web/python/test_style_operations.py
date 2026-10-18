@@ -1,4 +1,5 @@
 import unittest
+import inspect
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,24 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
+    def test_set_style_exposes_the_pinned_options_without_a_catch_all_kwargs(self):
+        parameters = list(inspect.signature(compat.VMobject.set_style).parameters)
+        self.assertEqual(parameters, [
+            "self",
+            "fill_color",
+            "fill_opacity",
+            "stroke_color",
+            "stroke_width",
+            "stroke_opacity",
+            "background_stroke_color",
+            "background_stroke_width",
+            "background_stroke_opacity",
+            "sheen_factor",
+            "sheen_direction",
+            "background_image",
+            "family",
+        ])
+
     def test_combined_style_is_one_typed_request_and_validates_before_dispatch(self):
         obj = identity_only_wrapper(compat.Circle)
         bridge = SimpleNamespace(setStyle=Mock())
@@ -19,6 +38,11 @@ class StyleOperationsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 obj.set_style(fill_color='#00FF00', stroke_opacity=2)
             self.assertEqual(bridge.setStyle.call_count, 1)
+            with self.assertRaises(NotImplementedError):
+                obj.set_style(fill_color='#00FF00', background_stroke_opacity=0.5)
+            self.assertEqual(bridge.setStyle.call_count, 1)
+        with self.assertRaises(TypeError):
+            obj.set_style(unrecognized_option=True)
 
     def test_matching_uses_live_family_route_and_rejects_unsupported_options(self):
         source = identity_only_wrapper(compat.VGroup)

@@ -449,7 +449,7 @@ class VMobject(Mobject):
 
     def get_stroke_rgbas(self, background=False):
         if background:
-            raise NotImplementedError("background strokes require shared background paint")
+            return _manim_rgba_rows(_base.BLACK, 1.0)
         from _manim_semantic_handles import _paint_color
         return _manim_rgba_rows(_paint_color(self, "stroke"), self.get_stroke_opacity())
 
@@ -460,14 +460,68 @@ class VMobject(Mobject):
         return _manim_opacities_from_rgbas(self.get_stroke_rgbas(background))
 
     def get_stroke_width(self, background=False):
+        if background:
+            return 0.0
         from _manim_semantic_handles import _get_stroke_width
         return _get_stroke_width(self, background)
 
-    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+    def get_sheen_factor(self):
+        return 0.0
+
+    def get_sheen_direction(self):
+        default_direction = (-1.0, 1.0, 0.0)
+        try:
+            import numpy as np
+        except ImportError:
+            return list(default_direction)
+        return np.asarray(default_direction, dtype=np.float64)
+
+    def get_background_image(self):
+        return None
+
+    def get_style(self, simple=False):
+        style = {
+            "stroke_opacity": self.get_stroke_opacity(),
+            "stroke_width": self.get_stroke_width(),
+        }
+        if simple:
+            style["fill_color"] = self.get_fill_color()
+            style["fill_opacity"] = self.get_fill_opacity()
+            style["stroke_color"] = self.get_stroke_color()
+            return style
+        style.update({
+            "fill_color": self.get_fill_colors(),
+            "fill_opacity": self.get_fill_opacities(),
+            "stroke_color": self.get_stroke_colors(),
+            "background_stroke_color": self.get_stroke_colors(background=True),
+            "background_stroke_width": self.get_stroke_width(background=True),
+            "background_stroke_opacity": self.get_stroke_opacity(background=True),
+            "sheen_factor": self.get_sheen_factor(),
+            "sheen_direction": self.get_sheen_direction(),
+            "background_image": self.get_background_image(),
+        })
+        return style
+
+    def set_style(
+        self,
+        fill_color=None,
+        fill_opacity=None,
+        stroke_color=None,
+        stroke_width=None,
+        stroke_opacity=None,
+        background_stroke_color=None,
+        background_stroke_width=None,
+        background_stroke_opacity=None,
+        sheen_factor=None,
+        sheen_direction=None,
+        background_image=None,
+        family=True,
+    ):
         from _manim_semantic_handles import _set_style
         return _set_style(self, fill_color, fill_opacity, stroke_color,
-                          stroke_width, stroke_opacity, family, **kwargs)
+                          stroke_width, stroke_opacity, background_stroke_color,
+                          background_stroke_width, background_stroke_opacity,
+                          sheen_factor, sheen_direction, background_image, family)
 
     def match_style(self, vmobject, family=True):
         from _manim_semantic_handles import _match_style
@@ -505,7 +559,7 @@ class VMobject(Mobject):
 
     def get_stroke_opacity(self, background=False) -> float:
         if background:
-            raise NotImplementedError("background strokes require shared background paint")
+            return 1.0
         from _manim_semantic_handles import _get_stroke_opacity
         return _get_stroke_opacity(self)
 
@@ -720,11 +774,26 @@ class Group(Mobject):
 
     set_submobject_colors_by_gradient = set_color_by_gradient
 
-    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+    def set_style(
+        self,
+        fill_color=None,
+        fill_opacity=None,
+        stroke_color=None,
+        stroke_width=None,
+        stroke_opacity=None,
+        background_stroke_color=None,
+        background_stroke_width=None,
+        background_stroke_opacity=None,
+        sheen_factor=None,
+        sheen_direction=None,
+        background_image=None,
+        family=True,
+    ):
         from _manim_semantic_handles import _set_style
         return _set_style(self, fill_color, fill_opacity, stroke_color,
-                          stroke_width, stroke_opacity, family, **kwargs)
+                          stroke_width, stroke_opacity, background_stroke_color,
+                          background_stroke_width, background_stroke_opacity,
+                          sheen_factor, sheen_direction, background_image, family)
 
     def match_style(self, vmobject, family=True):
         from _manim_semantic_handles import _match_style
@@ -927,7 +996,8 @@ class Group(Mobject):
 
 
 class VGroup(Group):
-    # The family wrapper reuses vector-class queries without duplicating them.
+    # The family wrapper reuses vector-class geometry queries without duplicating them.
+    # Paint getters stay on VMobject until the family root has authoritative own-style state.
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary

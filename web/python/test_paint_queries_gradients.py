@@ -72,7 +72,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         self.assertEqual(fill_opacities.tolist(), [0.25])
         self.assertEqual(stroke_opacities.tolist(), [0.75])
 
-    def test_transparent_black_has_no_manim_fill_color_and_background_strokes_reject(self):
+    def test_transparent_black_and_default_background_stroke_match_manim(self):
         obj = identity_only_wrapper(compat.Circle)
         black = noon.Color(0.0, 0.0, 0.0)
         with patch.object(handles, '_paint_color', return_value=black), \
@@ -80,8 +80,11 @@ class PaintQueriesGradientsTests(unittest.TestCase):
             self.assertEqual(obj.get_fill_rgbas().tolist(), [[0.0, 0.0, 0.0, 0.0]])
             self.assertEqual(obj.get_fill_colors(), [None])
             self.assertIsNone(obj.get_fill_color())
-        with self.assertRaisesRegex(NotImplementedError, 'background strokes require shared background paint'):
-            obj.get_stroke_rgbas(background=True)
+        self.assertEqual(obj.get_stroke_rgbas(background=True).tolist(), [[0.0, 0.0, 0.0, 1.0]])
+        self.assertEqual(obj.get_stroke_colors(background=True), [noon.BLACK])
+        self.assertEqual(obj.get_stroke_opacities(background=True).tolist(), [1.0])
+        self.assertEqual(obj.get_stroke_opacity(background=True), 1.0)
+        self.assertEqual(obj.get_stroke_width(background=True), 0.0)
 
     def test_gradient_is_one_shared_family_request_without_python_interpolation(self):
         group = identity_only_wrapper(compat.VGroup)
