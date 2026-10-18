@@ -122,6 +122,13 @@ authored_direction_negative.set_points(direction_points)
 authored_direction_negative.n_points_per_cubic_curve = -2
 default_stride_direction = VMobject()
 default_stride_direction.set_points(direction_points)
+def curve_points_array_contract(value):
+    points = value.get_nth_curve_points(0)
+    return {
+        "type": type(points).__name__,
+        "shape": list(points.shape),
+        "dtype": str(points.dtype),
+    }
 custom_stride_live_queries = {
     "x_max": float(live_custom_stride.get_extremum_along_dim(dim=0, key=1)),
     "boundary_point": [
@@ -138,6 +145,7 @@ custom_stride_live_queries = {
     ],
     "center": [float(value) for value in live_custom_stride.get_center()],
     "num_curves": int(live_custom_stride.get_num_curves()),
+    "nth_curve_points_array": curve_points_array_contract(live_custom_stride),
     "nth_curve_points": [
         [float(coordinate) for coordinate in point]
         for point in live_custom_stride.get_nth_curve_points(0)
@@ -205,6 +213,7 @@ custom_stride_authored_queries = {
     ],
     "center": [float(value) for value in authored_custom_stride.get_center()],
     "num_curves": int(authored_custom_stride.get_num_curves()),
+    "nth_curve_points_array": curve_points_array_contract(authored_custom_stride),
     "nth_curve_points": [
         [float(coordinate) for coordinate in point]
         for point in authored_custom_stride.get_nth_curve_points(0)
@@ -330,7 +339,18 @@ json.dumps({
   assert.equal(product.custom_stride_negative_direction_live, "CCW");
   assert.equal(product.custom_stride_negative_direction_authored, "CCW");
   assert.equal(product.default_stride_direction, "CCW");
-  const { proportion_from_point, ...liveQueryValues } = product.custom_stride_live_queries;
+  const {
+    proportion_from_point,
+    nth_curve_points_array: liveCurvePointsArray,
+    ...liveQueryValues
+  } = product.custom_stride_live_queries;
+  const authoredCurvePointsArray = product.custom_stride_authored_queries.nth_curve_points_array;
+  assert.deepEqual(liveCurvePointsArray, {
+    type: "ndarray",
+    shape: [2, 2],
+    dtype: "float64",
+  });
+  assert.deepEqual(authoredCurvePointsArray, liveCurvePointsArray);
   assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
@@ -361,6 +381,7 @@ json.dumps({
       critical_point: product.custom_stride_live_queries.critical_point,
       center: product.custom_stride_live_queries.center,
       num_curves: product.custom_stride_live_queries.num_curves,
+      nth_curve_points_array: product.custom_stride_live_queries.nth_curve_points_array,
       nth_curve_points: product.custom_stride_live_queries.nth_curve_points,
       start_anchors: product.custom_stride_live_queries.start_anchors,
       end_anchors: product.custom_stride_live_queries.end_anchors,

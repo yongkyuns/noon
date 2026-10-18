@@ -1304,6 +1304,11 @@ class PathQueryTests(unittest.TestCase):
             query.free.assert_called_once()
 
     def test_curve_queries_share_one_snapshot_and_release_it(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
@@ -1325,7 +1330,14 @@ class PathQueryTests(unittest.TestCase):
         ):
             self.assertEqual(value.get_num_curves(), 2)
             self.assertEqual(value.get_num_points(), 9)
-            self.assertEqual(value.get_nth_curve_points(0), [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
+            selected = value.get_nth_curve_points(0)
+            if np is None:
+                self.assertEqual(selected, [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
+            else:
+                np.testing.assert_array_equal(
+                    selected,
+                    [(0., 0.), (1., 2.), (2., 2.), (3., 0.)],
+                )
             self.assertEqual(value.get_start_anchors(), [(0., 0.), (3., 0.)])
             self.assertEqual(value.get_end_anchors(), [(3., 0.), (4., 0.)])
             self.assertEqual(len(value.get_anchors()), 4)
@@ -1339,6 +1351,11 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(handle.cubicBezierPointRanges.call_count, 3)
 
     def test_nth_curve_points_match_negative_slice_and_assertion_semantics(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy curve point arrays")
+
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
@@ -1350,8 +1367,12 @@ class PathQueryTests(unittest.TestCase):
         with patch.object(queries, "_typed_manim_observation", return_value=query), patch.object(
             queries, "_handle_for", return_value=handle
         ):
-            self.assertEqual(value.get_nth_curve_points(-1), [])
-            self.assertEqual(value.get_nth_curve_points(-2), points[1:5])
+            empty = value.get_nth_curve_points(-1)
+            self.assertIsInstance(empty, np.ndarray)
+            self.assertEqual(empty.shape, (0, 2))
+            selected = value.get_nth_curve_points(-2)
+            self.assertIsInstance(selected, np.ndarray)
+            np.testing.assert_array_equal(selected, points[1:5])
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_points(2)
             with self.assertRaisesRegex(TypeError, "slice indices must be integers"):
@@ -1361,7 +1382,26 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(query.free.call_count, 7)
         self.assertEqual(handle.cubicBezierPointRanges.call_count, 4)
 
+    def test_nth_curve_points_fall_back_to_point_list_without_numpy(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.pointCount = 4
+        query.points.return_value = [0., 0., 1., 2., 2., 2., 3., 0.]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 4]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ), patch.object(queries, "_handle_for", return_value=handle):
+            selected = value.get_nth_curve_points(0)
+
+        self.assertEqual(selected, [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
+
     def test_curve_count_and_nth_points_follow_custom_stride(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 3
         query = Mock()
@@ -1376,7 +1416,11 @@ class PathQueryTests(unittest.TestCase):
             queries, "_handle_for", return_value=handle
         ):
             self.assertEqual(value.get_num_curves(), 3)
-            self.assertEqual(value.get_nth_curve_points(2), points[6:9])
+            selected = value.get_nth_curve_points(2)
+            if np is None:
+                self.assertEqual(selected, points[6:9])
+            else:
+                np.testing.assert_array_equal(selected, points[6:9])
 
         handle.cubicBezierPointRanges.assert_any_call(10, 3.0)
         self.assertEqual(query.free.call_count, 3)

@@ -604,7 +604,12 @@ def curve_points(value, n):
     query = _query(value)
     try:
         points = _points(engine_call(query.points))
-        return points[stride * n : stride * (n + 1)]
+        selected = points[stride * n : stride * (n + 1)]
+        try:
+            import numpy as np
+        except ImportError:
+            return selected
+        return np.asarray(selected, dtype=np.float64).reshape((-1, 2))
     finally:
         query.free()
 
