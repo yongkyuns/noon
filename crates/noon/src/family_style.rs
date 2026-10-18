@@ -104,6 +104,31 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
 }
 
 impl MobjectFamily {
+    /// Read this non-rendered family root's independent VMobject paint style.
+    pub fn own_style(&self) -> Result<SemanticStyle, AuthoringError> {
+        self.validate()?;
+        Ok(self
+            .integration_store()
+            .borrow()
+            .node(self.node_id())
+            .expect("validated family")
+            .family_style()
+            .expect("family style")
+            .clone())
+    }
+
+    /// Atomically update the non-rendered family root without touching members.
+    pub fn set_own_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
+        let mut style = self.own_style()?;
+        update.apply(&mut style)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(self.node_id(), style);
+        transaction
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     /// Atomically recolor selected leaves by current authoritative family order.
     /// `None` preserves a leaf. The exact length is validated before staging.
     pub fn set_member_colors(&self, colors: &[Option<Color>]) -> Result<(), AuthoringError> {
@@ -471,6 +496,116 @@ mod tests {
         assert_eq!(changes[0].1.stroke.unwrap().alpha, 0.1875);
         assert_eq!(changes[0].1.opacity, phase_style.opacity);
         assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
+    }
+
+    #[test]
+    fn family_root_style_is_independent_and_updates_atomically() {
+        let mut scene = Scene::new();
+        let mut leaf = scene.square(1.0).unwrap();
+        leaf.set_fill(1.0, 0.0, 0.0, 0.35).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        let leaf_before = leaf.state().unwrap().style;
+        let root_before = family.own_style().unwrap();
+        assert_eq!(root_before.fill_opacity, 0.0);
+        assert_eq!(root_before.stroke_width, 0.04);
+
+        let revision_before = scene.integration_store().borrow().scene_revision();
+        family
+            .set_own_style(StyleUpdate {
+                fill_color: Some(Color::BLUE),
+                fill_opacity: Some(0.7),
+                ..StyleUpdate::default()
+            })
+            .unwrap();
+        let root_after = family.own_style().unwrap();
+        assert_eq!(
+            root_after.fill,
+            Some(noon_core::SemanticPaint::Solid(Color::BLUE))
+        );
+        assert_eq!(root_after.fill_opacity, 0.7);
+        assert_eq!(leaf.state().unwrap().style, leaf_before);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision_before.checked_next().unwrap()
+        );
+
+        let revision_after = scene.integration_store().borrow().scene_revision();
+        let style_after = family.own_style().unwrap();
+        assert!(family
+            .set_own_style(StyleUpdate {
+                stroke_width: Some(f64::NAN),
+                ..StyleUpdate::default()
+            })
+            .is_err());
+        assert_eq!(family.own_style().unwrap(), style_after);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision_after
+        );
+    }
+
+    #[test]
+    fn family_root_style_survives_copy_and_become() {
+        let mut scene = Scene::new();
+        let first = scene.square(0.5).unwrap();
+        let second = scene.circle(0.25).unwrap();
+        let source = scene.family(&[(&first).into()]).unwrap();
+        let target = scene.family(&[(&second).into()]).unwrap();
+        source
+            .set_own_style(StyleUpdate {
+                fill_color: Some(Color::BLUE),
+                fill_opacity: Some(0.6),
+                stroke_color: Some(Color::GREEN),
+                stroke_width: Some(2.5),
+                ..StyleUpdate::default()
+            })
+            .unwrap();
+        let expected = source.own_style().unwrap();
+        assert_eq!(source.own_color().unwrap(), Color::BLUE);
+
+        let copy = source.copy_family().unwrap();
+        assert_eq!(copy.root().own_style().unwrap(), expected);
+        assert_eq!(copy.root().own_color().unwrap(), Color::BLUE);
+        target
+            .set_own_style(StyleUpdate {
+                fill_color: Some(Color::RED),
+                ..StyleUpdate::default()
+            })
+            .unwrap();
+        target
+            .become_family(&source, crate::ManimBecomeOptions::default())
+            .unwrap();
+        assert_eq!(target.own_style().unwrap(), expected);
+        assert_eq!(target.own_color().unwrap(), Color::BLUE);
+    }
+
+    #[test]
+    fn family_root_style_survives_persistent_become_reconciliation() {
+        let mut scene = Scene::new();
+        let source_leaf = scene.square(0.5).unwrap();
+        let target_leaf_a = scene.circle(0.25).unwrap();
+        let target_leaf_b = scene.square(0.3).unwrap();
+        let source = scene.family(&[(&source_leaf).into()]).unwrap();
+        let target = scene
+            .family(&[(&target_leaf_a).into(), (&target_leaf_b).into()])
+            .unwrap();
+        target
+            .set_own_style(StyleUpdate {
+                fill_color: Some(Color::BLUE),
+                fill_opacity: Some(0.4),
+                stroke_color: Some(Color::GREEN),
+                stroke_opacity: Some(0.75),
+                stroke_width: Some(2.5),
+            })
+            .unwrap();
+        let expected = target.own_style().unwrap();
+
+        source
+            .become_family(&target, crate::ManimBecomeOptions::default())
+            .unwrap();
+
+        assert_eq!(source.own_style().unwrap(), expected);
+        assert_eq!(source.own_color().unwrap(), Color::BLUE);
     }
 
     #[test]

@@ -461,11 +461,28 @@ impl SemanticNode {
             _ => None,
         }
     }
+    pub fn family_style(&self) -> Option<&SemanticStyle> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(&state.own_style),
+            _ => None,
+        }
+    }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
             unreachable!("preflighted family color");
         };
         state.own_color = color;
+        state.own_style.set_family_color(color);
+    }
+    pub(crate) fn set_family_style(&mut self, style: SemanticStyle) {
+        let SemanticNodeKind::Family(state) = &mut self.kind else {
+            unreachable!("preflighted family style");
+        };
+        let color = style.family_color();
+        state.own_style = style;
+        if let Some(color) = color {
+            state.own_color = color;
+        }
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {

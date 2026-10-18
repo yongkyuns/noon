@@ -282,6 +282,48 @@ impl SemanticStyle {
         }
     }
 
+    /// Default paint profile owned by a Manim VMobject family root.
+    ///
+    /// The root itself is not a rendered family leaf, but Manim stores a full
+    /// vector style there and exposes it through VMobject getters and
+    /// `family=False` mutations. Stroke widths are stored in scene units, where
+    /// the compatibility layer maps Manim's four-pixel default to `0.04`.
+    pub fn manim_family_root(color: crate::Color) -> Self {
+        Self {
+            fill: Some(SemanticPaint::Solid(color)),
+            fill_opacity: 0.0,
+            stroke: Some(SemanticPaint::Solid(color)),
+            stroke_opacity: 1.0,
+            stroke_width: 0.04,
+            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            stroke_join: StrokeJoin::Round,
+            stroke_cap: StrokeCap::Round,
+            object_opacity: 1.0,
+        }
+    }
+
+    /// Set the authored family color without changing channel enablement or opacity.
+    pub fn set_family_color(&mut self, color: crate::Color) {
+        for paint in [&mut self.fill, &mut self.stroke] {
+            if paint.is_some() {
+                *paint = Some(SemanticPaint::Solid(color));
+            }
+        }
+    }
+
+    /// Return Manim VMobject's root color selection from its fill/stroke profile.
+    pub fn family_color(&self) -> Option<crate::Color> {
+        let paint = if self.fill_opacity == 0.0 {
+            self.stroke.as_ref()
+        } else {
+            self.fill.as_ref()
+        }?;
+        match paint {
+            SemanticPaint::Solid(color) => Some(*color),
+            SemanticPaint::Resource(_) => None,
+        }
+    }
+
     pub fn effective_fill_opacity(&self) -> f64 {
         self.fill_opacity * self.object_opacity
     }
@@ -300,16 +342,18 @@ pub struct SemanticPresentation {
 }
 
 /// Authored state on a non-rendered family root, independent of its leaves.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticFamilyState {
     pub presentation: SemanticPresentation,
     pub own_color: crate::Color,
+    pub own_style: SemanticStyle,
 }
 impl Default for SemanticFamilyState {
     fn default() -> Self {
         Self {
             presentation: SemanticPresentation::default(),
             own_color: crate::Color::WHITE,
+            own_style: SemanticStyle::manim_family_root(crate::Color::WHITE),
         }
     }
 }

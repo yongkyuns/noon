@@ -163,7 +163,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if copied.contains_key(&id) {
             continue;
         }
-        let (members, family_z, family_color, graph_declaration) = {
+        let (members, family_z, family_color, family_style, graph_declaration) = {
             let store = store.borrow();
             let node = store.node(id).ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
@@ -173,9 +173,10 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                     Some(node.members_iter().collect::<Vec<_>>()),
                     Some(presentation.presentation.z_index),
                     Some(presentation.own_color),
+                    Some(presentation.own_style.clone()),
                     node.graph_declaration().cloned(),
                 ),
-                SemanticNodeKind::AuthoringObject => (None, None, None, None),
+                SemanticNodeKind::AuthoringObject => (None, None, None, None, None),
                 _ => {
                     return Err(AuthoringError::from(
                         noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
@@ -219,6 +220,9 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         }
         if let Some(color) = family_color {
             transaction.set_family_color(pending, color);
+        }
+        if let Some(style) = family_style {
+            transaction.set_family_style(pending, style);
         }
         copied.insert(id, pending);
     }

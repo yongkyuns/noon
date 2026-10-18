@@ -262,8 +262,10 @@ mod tests {
         let center = scene.circle(0.5).unwrap();
         let mut far = scene.square(1.0).unwrap();
         far.shift(3.0, 0.0).unwrap();
-        let mut point_free_style = SemanticStyle::default();
-        point_free_style.fill = Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)));
+        let point_free_style = SemanticStyle {
+            fill: Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0))),
+            ..SemanticStyle::default()
+        };
         let point_free = scene.path(VectorPath::new(), point_free_style).unwrap();
 
         let nested = scene

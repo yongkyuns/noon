@@ -327,6 +327,25 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn family_style(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::SemanticStyle> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_style)
+                .cloned(),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
+                }
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,
@@ -688,6 +707,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::FamilyColor(object)
+        | SemanticMutationKey::FamilyStyle(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
@@ -750,6 +770,9 @@ pub(super) fn duplicate_mutation_error(
         )) => SemanticMutationTransactionError::DuplicateContent { index, object },
         SemanticMutationKey::FamilyColor(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateFamilyColor { index, node }
+        }
+        SemanticMutationKey::FamilyStyle(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateFamilyStyle { index, node }
         }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }

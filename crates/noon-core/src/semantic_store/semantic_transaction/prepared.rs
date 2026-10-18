@@ -829,6 +829,49 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
     }
 
+    /// Observe staged own vector style on an existing or pending family.
+    pub fn family_style(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::SemanticStyle, SemanticTransactionReadError> {
+        let node = node.into();
+        match node {
+            SemanticTransactionNodeRef::Existing(id)
+                if self.preflight.removed_existing.contains(&id) =>
+            {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+            }
+            _ => {}
+        }
+        if let Some(style) = self.preflight.staged_family_styles.get(&node) {
+            return Ok(style.clone());
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?
+                .family_style()
+                .cloned()
+                .ok_or(SemanticTransactionReadError::NotFamily(node)),
+            SemanticTransactionNodeRef::Pending(token)
+                if matches!(
+                    self.pending_creation(token),
+                    Some(SemanticNodeCreation::Family { .. })
+                ) =>
+            {
+                Ok(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
+            }
+            _ => Err(SemanticTransactionReadError::NotFamily(node)),
+        }
+    }
+
     /// Read proposed object or family painter priority without committing it.
     pub fn z_index(
         &self,
@@ -1517,6 +1560,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_family_color(color);
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyColor { node });
+                }
+                SemanticMutation::SetFamilyStyle { node, style } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted family")
+                        .set_family_style(style);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::FamilyStyle { node });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
