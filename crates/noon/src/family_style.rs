@@ -119,14 +119,30 @@ impl MobjectFamily {
 
     /// Atomically update the non-rendered family root without touching members.
     pub fn set_own_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
+        self.own_style_transaction(update)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn own_style_transaction(
+        &self,
+        update: StyleUpdate,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let mut style = self.own_style()?;
         update.apply(&mut style)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_family_style(self.node_id(), style);
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        Ok(transaction)
+    }
+
+    /// Match Manim VMobject.set_opacity() for this root's foreground fill/stroke.
+    pub fn set_own_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
+        self.set_own_style(StyleUpdate {
+            fill_opacity: Some(opacity),
+            stroke_opacity: Some(opacity),
+            ..StyleUpdate::default()
+        })
     }
 
     /// Atomically recolor selected leaves by current authoritative family order.
@@ -529,8 +545,14 @@ mod tests {
             revision_before.checked_next().unwrap()
         );
 
+        family.set_own_opacity(0.25).unwrap();
+        let opacity_style = family.own_style().unwrap();
+        assert_eq!(opacity_style.fill_opacity, 0.25);
+        assert_eq!(opacity_style.stroke_opacity, 0.25);
+        assert_eq!(leaf.state().unwrap().style, leaf_before);
+
         let revision_after = scene.integration_store().borrow().scene_revision();
-        let style_after = family.own_style().unwrap();
+        let style_after = opacity_style;
         assert!(family
             .set_own_style(StyleUpdate {
                 stroke_width: Some(f64::NAN),
@@ -606,6 +628,39 @@ mod tests {
 
         assert_eq!(source.own_style().unwrap(), expected);
         assert_eq!(source.own_color().unwrap(), Color::BLUE);
+    }
+
+    #[test]
+    fn live_family_root_style_publishes_without_changing_child_paint() {
+        let mut scene = Scene::new();
+        let leaf = scene.square(0.5).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let leaf_before = live.effective(&leaf).unwrap();
+
+        let result = live
+            .set_family_own_style(
+                &family,
+                StyleUpdate {
+                    fill_color: Some(Color::GREEN),
+                    fill_opacity: Some(0.4),
+                    stroke_opacity: Some(0.25),
+                    ..StyleUpdate::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.impacts(),
+            &[noon_core::SemanticMutationImpact::FamilyStyle {
+                node: family.node_id()
+            }]
+        );
+        assert_eq!(family.own_style().unwrap().fill_opacity, 0.4);
+        assert_eq!(family.own_style().unwrap().stroke_opacity, 0.25);
+        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
     }
 
     #[test]

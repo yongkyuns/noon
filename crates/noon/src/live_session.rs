@@ -2955,6 +2955,17 @@ impl<'a> LiveSession<'a> {
         self.edit_family_style(family, |style| update.apply(style))
     }
 
+    /// Publish authored paint changes on the non-rendered family root only.
+    pub fn set_family_own_style(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.own_style_transaction(update)?)
+    }
+
     /// Match coherent effective paint, preserving non-paint source presentation.
     pub fn match_style(
         &mut self,

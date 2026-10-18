@@ -9615,6 +9615,57 @@ mod wasm {
                 .live_set_family_style(&source.semantic_family()?, update)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyOwnFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_own_fill(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                false,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                None,
+                None,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyOwnOpacity)]
+        pub fn live_set_family_own_opacity(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            let update = noon::StyleUpdate {
+                fill_opacity: Some(opacity),
+                stroke_opacity: Some(opacity),
+                ..noon::StyleUpdate::default()
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
         pub fn live_match_family_style(
             &mut self,

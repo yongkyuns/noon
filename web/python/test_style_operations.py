@@ -9,7 +9,7 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
-    def test_vgroup_fill_and_opacity_expose_family_and_reject_root_only_paint(self):
+    def test_vgroup_fill_and_opacity_expose_family_and_root_only_dispatch(self):
         self.assertEqual(list(inspect.signature(compat.VGroup.set_fill).parameters), [
             "self", "color", "opacity", "family",
         ])
@@ -21,14 +21,12 @@ class StyleOperationsTests(unittest.TestCase):
 
         group = identity_only_wrapper(compat.VGroup, submobjects=[])
         group._semantic_family_handle = Mock()
-        with patch.object(handles, "_group_set_fill") as set_fill:
-            with self.assertRaisesRegex(NotImplementedError, "non-recursive Group fill"):
-                group.set_fill(compat._base.RED, 0.5, family=False)
-        set_fill.assert_not_called()
-        with patch.object(handles, "_group_set_opacity") as set_opacity:
-            with self.assertRaisesRegex(NotImplementedError, "non-recursive Group opacity"):
-                group.set_opacity(0.5, family=False)
-        set_opacity.assert_not_called()
+        with patch.object(handles, "_group_set_fill", return_value=group) as set_fill:
+            self.assertIs(group.set_fill(compat._base.RED, 0.5, family=False), group)
+        set_fill.assert_called_once_with(group, compat._base.RED, 0.5, False)
+        with patch.object(handles, "_group_set_opacity", return_value=group) as set_opacity:
+            self.assertIs(group.set_opacity(0.5, family=False), group)
+        set_opacity.assert_called_once_with(group, 0.5, False)
 
     def test_default_vector_style_mutators_match_the_pinned_surface(self):
         self.assertEqual(list(inspect.signature(compat.VMobject.set_stroke).parameters), [

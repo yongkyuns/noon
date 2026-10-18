@@ -1789,6 +1789,22 @@ def _family_own_paint_probe(api):
     late_child = api.Triangle(color=api.RED)
     root_only.add(late_child)
 
+    vector_root_only = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    vector_root_only.set_fill(api.GREEN, 0.35, family=False)
+    root_fill_style = [
+        rgb(vector_root_only),
+        vector_root_only.get_fill_opacity(),
+        vector_root_only.get_stroke_opacity(),
+        [rgb(member) for member in vector_root_only.submobjects],
+    ]
+    vector_root_only.set_opacity(0.6, family=False)
+    root_opacity_style = [
+        rgb(vector_root_only),
+        vector_root_only.get_fill_opacity(),
+        vector_root_only.get_stroke_opacity(),
+        [rgb(member) for member in vector_root_only.submobjects],
+    ]
+
     empty = api.Group()
     empty.set_color(api.YELLOW, family=False)
 
@@ -1814,6 +1830,7 @@ def _family_own_paint_probe(api):
         "root_only_and_late_add": [
             rgb(root_only), [rgb(member) for member in root_only.submobjects]
         ],
+        "vgroup_root_only_fill_and_opacity": [root_fill_style, root_opacity_style],
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]

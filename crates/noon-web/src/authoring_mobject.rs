@@ -1355,6 +1355,28 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setOwnFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_fill(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style(noon::StyleUpdate {
+                    fill_color: color,
+                    fill_opacity: opacity,
+                    ..noon::StyleUpdate::default()
+                })
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStroke)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_stroke(
@@ -1379,6 +1401,29 @@ mod wasm {
         pub fn set_opacity(&self, opacity: f64) -> Result<(), JsValue> {
             self.semantic_family()?
                 .set_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnOpacity)]
+        pub fn set_own_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownFillOpacity)]
+        pub fn own_fill_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.fill_opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeOpacity)]
+        pub fn own_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.stroke_opacity)
                 .map_err(js_error)
         }
 

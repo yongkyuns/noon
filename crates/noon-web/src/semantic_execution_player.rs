@@ -1420,6 +1420,15 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_family_style(
         &mut self,
         source: &noon::MobjectFamily,

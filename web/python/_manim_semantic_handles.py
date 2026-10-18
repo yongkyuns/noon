@@ -1718,6 +1718,14 @@ def _paint_opacity_observation(value: object, layer: str):
     if phase is not None:
         paint = getattr(phase[2].style, layer)
         return 0.0 if paint is None else float(paint[3])
+    family_handle = getattr(value, "_semantic_family_handle", None)
+    if family_handle is not None:
+        from _manim_updaters import _canonical_phase_context
+        if _canonical_phase_context(value) is not None:
+            raise NotImplementedError("family root paint getters require staged style observation")
+        method = getattr(family_handle, f"own{layer.title()}Opacity", None)
+        if method is not None:
+            return engine_call(method)
     return _typed_manim_observation(
         value, f"{layer}Opacity", f"queryMobject{layer.title()}Opacity", handle_property=True
     )
@@ -1765,6 +1773,8 @@ def _group_paint(self, operation, arguments):
     if phase is not None:
         if operation == "OwnColor":
             raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
+        if operation in {"OwnFill", "OwnOpacity"}:
+            raise NotImplementedError("callback root-only Group paint requires staged family style writes")
         phase.paint_family(handle, operation, arguments)
         return self
     context = _group_target_context(self)
@@ -1792,10 +1802,9 @@ def _group_set_color(self, color, family=True):
 
 
 def _group_set_fill(self, color=None, opacity=None, family=True):
-    if not family:
-        raise NotImplementedError("non-recursive Group fill requires shared family style state")
     alpha = None if opacity is None else _compat._opacity("fill opacity", opacity)
-    return _group_paint(self, "Fill", (*_family_color_arguments(color), alpha))
+    operation = "Fill" if family else "OwnFill"
+    return _group_paint(self, operation, (*_family_color_arguments(color), alpha))
 
 
 def _group_set_stroke(self, color=None, width=None, opacity=None):
@@ -1805,10 +1814,9 @@ def _group_set_stroke(self, color=None, width=None, opacity=None):
 
 
 def _group_set_opacity(self, opacity, family=True):
-    if not family:
-        raise NotImplementedError("non-recursive Group opacity requires shared family style state")
     alpha = _compat._opacity("opacity", opacity)
-    return _group_paint(self, "Opacity", (alpha,))
+    operation = "Opacity" if family else "OwnOpacity"
+    return _group_paint(self, operation, (alpha,))
 
 
 def _fade(self, darkness=0.5, family=True):
