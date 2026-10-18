@@ -148,6 +148,8 @@ def anchor_array_contract(value):
     anchors = value.get_anchors()
     groups = value.get_anchors_and_handles()
     return {
+        "start": point_array_contract(value.get_start()),
+        "end": point_array_contract(value.get_end()),
         "starts": point_array_contract(value.get_start_anchors()),
         "ends": point_array_contract(value.get_end_anchors()),
         "anchors_type": type(anchors).__name__,
@@ -395,6 +397,8 @@ json.dumps({
   assert.deepEqual(liveSubpathArrays, expectedSubpathArrays);
   assert.deepEqual(authoredSubpathArrays, liveSubpathArrays);
   const expectedAnchorArrays = {
+    start: { type: "ndarray", shape: [2], dtype: "float64" },
+    end: { type: "ndarray", shape: [2], dtype: "float64" },
     starts: { type: "ndarray", shape: [2, 2], dtype: "float64" },
     ends: { type: "ndarray", shape: [2, 2], dtype: "float64" },
     anchors_type: "list",

@@ -953,13 +953,42 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(value.point_from_proportion(0.25), (2.5, -1.0))
             observe.assert_called_with(value, 'pathQuery', 'queryMobjectPath')
             query.pointFromProportion.assert_called_with(0.25)
-            self.assertEqual(value.get_start(), (1., 2.))
+            start = value.get_start()
             query.start.assert_called_once_with()
-            self.assertEqual(value.get_end(), (3., 4.))
+            end = value.get_end()
             query.end.assert_called_once_with()
+            try:
+                import numpy as np
+            except ImportError:
+                self.assertEqual(start, (1., 2.))
+                self.assertEqual(end, (3., 4.))
+            else:
+                self.assertIsInstance(start, np.ndarray)
+                self.assertIsInstance(end, np.ndarray)
+                self.assertEqual(start.shape, (2,))
+                self.assertEqual(end.shape, (2,))
+                self.assertEqual(start.dtype, np.dtype(np.float64))
+                self.assertEqual(end.dtype, np.dtype(np.float64))
+                np.testing.assert_array_equal(start, [1., 2.])
+                np.testing.assert_array_equal(end, [3., 4.])
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.curveLength.assert_called_with(0, 20)
         self.assertEqual(query.free.call_count, 6)
+
+    def test_endpoint_queries_fall_back_to_vec2_without_numpy(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.pointCount = 2
+        query.start.return_value = [1.25, -2.5]
+        query.end.return_value = [3.75, 4.5]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_typed_manim_observation", return_value=query
+        ):
+            self.assertEqual(value.get_start(), noon.Vec2(1.25, -2.5))
+            self.assertEqual(value.get_end(), noon.Vec2(3.75, 4.5))
+        self.assertEqual(query.free.call_count, 4)
 
     def test_point_from_proportion_follows_mutable_stride_in_rust(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -1174,10 +1203,20 @@ class PathQueryTests(unittest.TestCase):
         query.start.return_value = [1.0, 2.0]
         query.end.return_value = [3.0, 4.0]
         with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
-            self.assertEqual(
-                value.get_start_and_end(),
-                (noon.Vec2(1.0, 2.0), noon.Vec2(3.0, 4.0)),
-            )
+            points = value.get_start_and_end()
+            try:
+                import numpy as np
+            except ImportError:
+                self.assertEqual(
+                    points,
+                    (noon.Vec2(1.0, 2.0), noon.Vec2(3.0, 4.0)),
+                )
+            else:
+                self.assertEqual(len(points), 2)
+                for point, expected in zip(points, ([1.0, 2.0], [3.0, 4.0])):
+                    self.assertIsInstance(point, np.ndarray)
+                    self.assertEqual(point.shape, (2,))
+                    np.testing.assert_array_equal(point, expected)
             self.assertEqual(observe.call_count, 4)
             self.assertEqual(query.start.call_count, 1)
             self.assertEqual(query.end.call_count, 1)

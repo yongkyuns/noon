@@ -566,6 +566,9 @@ def _curve_function_queries(api):
             ],
         }
 
+    def point_array_contract(point):
+        return {"type": type(point).__name__, "dtype": str(point.dtype)}
+
     def capture(call):
         try:
             return {"value": call()}
@@ -644,6 +647,10 @@ def _curve_function_queries(api):
         ],
         "mutable_custom_stride": {
             "count": custom_stride_path.get_num_curves(),
+            "endpoint_arrays": {
+                "start": point_array_contract(custom_stride_path.get_start()),
+                "end": point_array_contract(custom_stride_path.get_end()),
+            },
             "direction": {
                 "positive_stride": positive_stride_direction.get_direction(),
                 "negative_stride": negative_stride_direction.get_direction(),

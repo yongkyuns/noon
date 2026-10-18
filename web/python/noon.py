@@ -458,19 +458,19 @@ class Mobject:
         z_index_group = getattr(self, "z_index_group", self)
         return z_index_group.get_center()
 
-    def get_start(self) -> Vec2:
+    def get_start(self) -> Any:
         """Return the first point of this object's path."""
         self.throw_error_if_no_points()
         from _manim_path_queries import endpoint
         return endpoint(self, False)
 
-    def get_end(self) -> Vec2:
+    def get_end(self) -> Any:
         """Return the last point of this object's path."""
         self.throw_error_if_no_points()
         from _manim_path_queries import endpoint
         return endpoint(self, True)
 
-    def get_start_and_end(self) -> tuple[Vec2, Vec2]:
+    def get_start_and_end(self) -> tuple[Any, Any]:
         """Return the starting and ending point of this object's path."""
         return self.get_start(), self.get_end()
 

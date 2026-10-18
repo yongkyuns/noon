@@ -192,7 +192,12 @@ def endpoint(value, end):
     query = _query(value)
     try:
         coordinates = engine_call(query.end if end else query.start)
-        return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+        # ManimCE returns independent NumPy point rows for get_start/get_end.
+        # Reuse the optional array conversion used by the other path queries,
+        # retaining Vec2 for installations without NumPy.
+        return _points_array([
+            _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+        ])[0]
     finally:
         query.free()
 
