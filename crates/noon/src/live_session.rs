@@ -1492,6 +1492,13 @@ impl<'a> LiveSession<'a> {
         Ok(f64::from(self.effective(mobject)?.style.stroke_width))
     }
 
+    pub fn effective_stroke_cap(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<noon_core::StrokeCap, LiveSessionError> {
+        Ok(self.effective(mobject)?.style.stroke_cap)
+    }
+
     /// Read visible fill RGB, falling back to stroke RGB, at the current publication.
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
@@ -2894,6 +2901,18 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_stroke_opacity(style, opacity))
     }
 
+    pub fn set_stroke_cap(
+        &mut self,
+        mobject: &Mobject,
+        cap: &str,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
+        self.edit_style(mobject, |style| {
+            style.stroke_cap = cap;
+            Ok(())
+        })
+    }
+
     /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
     pub fn set_opacity(
         &mut self,
@@ -2964,6 +2983,20 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(family.own_style_transaction(update)?)
+    }
+
+    pub fn set_family_own_stroke_cap(
+        &mut self,
+        family: &MobjectFamily,
+        cap: &str,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let mut style = family.own_style()?;
+        style.stroke_cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(family.node_id(), style);
+        self.apply(transaction)
     }
 
     /// Match coherent effective paint, preserving non-paint source presentation.

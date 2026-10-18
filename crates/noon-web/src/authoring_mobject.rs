@@ -1478,6 +1478,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = ownStrokeCap)]
+        pub fn own_stroke_cap(&self) -> Result<String, JsValue> {
+            self.semantic_family()?
+                .own_stroke_cap()
+                .map(|cap| cap.as_str().to_owned())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeCap)]
+        pub fn set_stroke_cap(&self, cap: &str) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_stroke_cap(cap)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStroke)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_stroke(
@@ -2308,6 +2323,14 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = strokeWidth)]
         pub fn stroke_width(&self) -> Result<f64, JsValue> {
             self.handle.stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeCap)]
+        pub fn stroke_cap(&self) -> Result<String, JsValue> {
+            self.handle
+                .stroke_cap()
+                .map(|cap| cap.as_str().to_owned())
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setColorGradient)]
@@ -3349,6 +3372,7 @@ mod tests {
         );
         assert_eq!(square_style.stroke_join, StrokeJoin::Bevel);
         assert_eq!(square_style.stroke_cap, StrokeCap::Square);
+        assert_eq!(square.stroke_cap().unwrap(), StrokeCap::Square);
         assert_eq!(square_style.object_opacity, 0.8);
     }
 

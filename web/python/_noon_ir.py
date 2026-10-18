@@ -57,9 +57,14 @@ def _stroke_join(value: Any) -> str:
 
 def _stroke_cap(value: Any) -> str:
     if not isinstance(value, str):
+        from enum import Enum
+
+        if isinstance(value, Enum):
+            value = value.name.lower()
+    if not isinstance(value, str):
         raise TypeError("stroke_cap must be a string")
-    if value not in {"round", "butt", "square"}:
-        raise ValueError("stroke_cap must be round, butt, or square")
+    if value not in {"auto", "round", "butt", "square"}:
+        raise ValueError("stroke_cap must be auto, round, butt, or square")
     return value
 
 

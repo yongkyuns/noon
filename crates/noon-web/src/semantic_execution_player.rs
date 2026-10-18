@@ -1393,6 +1393,22 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_stroke_width(target))
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_stroke_cap(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_cap(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_stroke_cap(
+        &mut self,
+        target: &noon::Mobject,
+        cap: &str,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_stroke_cap(target, cap))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_style(
         &mut self,
         source: &noon::Mobject,
@@ -1426,6 +1442,15 @@ impl SemanticExecutionPlayer {
         update: noon::StyleUpdate,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_own_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_stroke_cap(
+        &mut self,
+        source: &noon::MobjectFamily,
+        cap: &str,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_stroke_cap(source, cap))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]

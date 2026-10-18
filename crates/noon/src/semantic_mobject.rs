@@ -25,10 +25,10 @@ pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fade_occurrences,
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
-    edit_stroke_width, manim_color_from_effective, opaque_paint_color, validate_fade_to_inputs,
-    PaintStyleEdit,
+    edit_stroke_width, manim_color_from_effective, opaque_paint_color, parse_stroke_cap,
+    validate_fade_to_inputs, PaintStyleEdit,
 };
-use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
+use style::{parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -791,6 +791,9 @@ impl Mobject {
     pub fn wire_stroke_width(&self) -> Result<f64, AuthoringError> {
         Ok(finite_f32("stroke width", self.state()?.style.stroke_width)? as f64)
     }
+    pub fn stroke_cap(&self) -> Result<StrokeCap, AuthoringError> {
+        Ok(self.state()?.style.stroke_cap)
+    }
     pub fn wire_object_opacity(&self) -> Result<f64, AuthoringError> {
         Ok(self.state()?.style.object_opacity as f32 as f64)
     }
@@ -1368,7 +1371,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke_width: 0.04,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
-        stroke_cap: StrokeCap::Butt,
+        stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
     }
 }

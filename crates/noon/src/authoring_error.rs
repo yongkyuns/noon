@@ -354,7 +354,9 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("stroke_width_mode must be scale_with_object or screen_space")
             }
             Self::InvalidStrokeJoin(_) => f.write_str("stroke_join must be round, miter, or bevel"),
-            Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
+            Self::InvalidStrokeCap(_) => {
+                f.write_str("stroke_cap must be auto, round, butt, or square")
+            }
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
             Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
             Self::FamilyMemberValueCount { expected, actual } => write!(

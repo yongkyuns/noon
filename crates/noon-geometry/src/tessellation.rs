@@ -1139,6 +1139,7 @@ fn lyon_line_join(join: StrokeJoin) -> LineJoin {
 
 fn lyon_line_cap(cap: StrokeCap) -> LineCap {
     match cap {
+        StrokeCap::Auto => LineCap::Butt,
         StrokeCap::Round => LineCap::Round,
         StrokeCap::Butt => LineCap::Butt,
         StrokeCap::Square => LineCap::Square,

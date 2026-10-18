@@ -3322,8 +3322,8 @@ fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
         })
         .miter_limit(stroke.miter_limit)
         .cap(match stroke.cap {
+            StrokeCap::Auto | StrokeCap::Butt => ZenoCap::Butt,
             StrokeCap::Round => ZenoCap::Round,
-            StrokeCap::Butt => ZenoCap::Butt,
             StrokeCap::Square => ZenoCap::Square,
         })
         .dash(stroke.dash_array.as_ref(), stroke.dash_phase);

@@ -297,7 +297,7 @@ impl SemanticStyle {
             stroke_width: 0.04,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
-            stroke_cap: StrokeCap::Round,
+            stroke_cap: StrokeCap::Auto,
             object_opacity: 1.0,
         }
     }

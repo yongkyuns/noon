@@ -2617,6 +2617,48 @@ def _vgroup_root_paint_array_probe(api, scene=None):
     }
 
 
+def _cap_style_probe(api, scene=None):
+    cap_type = api.CapStyleType
+    cap_names = ("AUTO", "ROUND", "BUTT", "SQUARE")
+    caps = [getattr(cap_type, name) for name in cap_names]
+    default_value = api.VMobject()
+    if scene is not None:
+        scene.add(default_value)
+    constructed = []
+    for cap in caps:
+        value = api.VMobject(cap_style=cap)
+        if scene is not None:
+            scene.add(value)
+        constructed.append({"requested": cap.name, "observed": value.cap_style.name})
+
+    mutations = []
+    for cap in caps:
+        value = api.VMobject()
+        if scene is not None:
+            scene.add(value)
+        returned_self = value.set_cap_style(cap) is value
+        mutations.append({"requested": cap.name, "observed": value.cap_style.name,
+                          "returned_self": returned_self})
+
+    child = api.VMobject()
+    family = api.VGroup(child)
+    if scene is not None:
+        scene.add(family)
+    family_returned_self = family.set_cap_style(cap_type.SQUARE) is family
+    child_returned_self = child.set_cap_style(cap_type.BUTT) is child
+    return {
+        "default": default_value.cap_style.name,
+        "constructed": constructed,
+        "mutations": mutations,
+        "family": {
+            "root": family.cap_style.name,
+            "child": child.cap_style.name,
+            "root_returned_self": family_returned_self,
+            "child_returned_self": child_returned_self,
+        },
+    }
+
+
 def _style_query_probe(api):
     source = api.VMobject(
         fill_color=api.GREEN,
@@ -3150,6 +3192,10 @@ FIXTURES = [
                 lambda scene: _vgroup_root_paint_array_probe(noon, scene)
             ),
             lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
+    Fixture("cap_style", lambda: _cap_style_probe(noon), lambda: _cap_style_probe(manim)),
+    Fixture("cap_style_live",
+            lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),
+            lambda: _cap_style_probe(manim)),
     Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
     Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
             lambda: _gradient_start_end_probe(manim), 1e-5),
@@ -3350,7 +3396,6 @@ UNSUPPORTED = {
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
     "background_stroke_and_sheen": "default background-stroke and zero-sheen mutators are supported; non-default background paint and sheen gradients still require shared style/renderer channels",
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
-    "set_cap_style": "the default AUTO cap style is a supported no-op; other cap styles require shared renderer cap semantics",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
     "vgroup_root_style": "The common-success profile now covers VGroup's one-row float64 root solid-paint arrays/getters and simple/full get_style in authored/live fixtures; non-default background stroke, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",

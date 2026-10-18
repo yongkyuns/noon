@@ -240,6 +240,11 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
     state before publication; Python only applies public argument coercions.
     """
     options = dict(kwargs)
+    cap_style = options.pop("cap_style", _CONSTRUCTOR_MISSING)
+    if cap_style is not _CONSTRUCTOR_MISSING:
+        if "stroke_cap" in options:
+            raise TypeError("cap_style and stroke_cap cannot both be supplied")
+        options["stroke_cap"] = _ir._stroke_cap(cap_style)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
         "stroke_width", "stroke_width_mode", "stroke_join", "stroke_cap",
@@ -1523,9 +1528,34 @@ def _set_sheen(self, factor, direction=None, family=True):
 
 
 def _set_cap_style(self, cap_style):
-    if cap_style != _base.CapStyleType.AUTO:
-        raise NotImplementedError("non-default vector cap styles require shared renderer cap semantics")
+    cap = _ir._stroke_cap(cap_style)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("cap styles require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.setStrokeCap, cap)
+        else:
+            engine_call(context.liveSetFamilyOwnStrokeCap, target, cap)
+    elif context is None:
+        engine_call(target.setStrokeCap, cap)
+    else:
+        engine_call(context.liveSetStrokeCap, target, cap)
     return self
+
+
+def _get_cap_style(self):
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("cap styles require the shared Rust authoring host")
+    if suffix == "Family":
+        cap = engine_call(target.ownStrokeCap)
+    elif context is None:
+        # wasm-bindgen exposes strokeCap as a JavaScript property getter.
+        cap = target.strokeCap
+    else:
+        cap = engine_call(context.queryMobjectStrokeCap, target)
+    return getattr(_base.CapStyleType, str(cap).upper())
 
 
 def _rotate_sheen_direction(self, angle, axis, family=True):

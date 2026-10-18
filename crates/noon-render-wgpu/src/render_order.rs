@@ -1652,8 +1652,8 @@ fn pack_derived_display_object(
             transform.padding = state.reveal.clamp(0.0, 1.0);
             let mut style = style;
             style.stroke_enabled |= match state.style.stroke_cap {
+                noon_core::StrokeCap::Auto | noon_core::StrokeCap::Butt => 1 << 2,
                 noon_core::StrokeCap::Round => 0,
-                noon_core::StrokeCap::Butt => 1 << 2,
                 noon_core::StrokeCap::Square => 2 << 2,
             };
             prepared.lines.push(crate::LineInstance {

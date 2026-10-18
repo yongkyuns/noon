@@ -481,8 +481,9 @@ pub(super) fn parse_stroke_join(join: &str) -> Result<StrokeJoin, AuthoringError
     }
 }
 
-pub(super) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
+pub(crate) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
     match cap {
+        "auto" => Ok(StrokeCap::Auto),
         "round" => Ok(StrokeCap::Round),
         "butt" => Ok(StrokeCap::Butt),
         "square" => Ok(StrokeCap::Square),
@@ -674,6 +675,15 @@ impl Mobject {
 #[cfg(test)]
 mod opacity_tests {
     use super::*;
+
+    #[test]
+    fn stroke_cap_parser_accepts_manim_auto_and_explicit_caps() {
+        assert_eq!(parse_stroke_cap("auto").unwrap(), StrokeCap::Auto);
+        assert_eq!(parse_stroke_cap("round").unwrap(), StrokeCap::Round);
+        assert_eq!(parse_stroke_cap("butt").unwrap(), StrokeCap::Butt);
+        assert_eq!(parse_stroke_cap("square").unwrap(), StrokeCap::Square);
+        assert!(parse_stroke_cap("invalid").is_err());
+    }
 
     #[test]
     fn repeated_fade_to_preserves_small_blends_and_bounds_shared_alias_work() {

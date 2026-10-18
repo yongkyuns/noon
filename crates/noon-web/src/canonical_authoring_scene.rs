@@ -1207,6 +1207,17 @@ impl CanonicalAuthoringScene {
             crate::SemanticExecutionPlayer::live_effective_stroke_width,
         )
     }
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_stroke_cap(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::stroke_cap,
+            crate::SemanticExecutionPlayer::live_effective_stroke_cap,
+        )
+    }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_color(
         &mut self,
@@ -7716,6 +7727,16 @@ mod wasm {
                 .mobject_stroke_width(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = queryMobjectStrokeCap)]
+        pub fn query_mobject_stroke_cap(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<String, JsValue> {
+            self.inner
+                .mobject_stroke_cap(target.semantic_mobject())
+                .map(|cap| cap.as_str().to_owned())
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveSetColorGradient)]
         pub fn live_set_color_gradient(
             &mut self,
@@ -9256,6 +9277,23 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetStrokeCap)]
+        pub fn live_set_stroke_cap(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            cap: &str,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_stroke_cap(handle.semantic_mobject(), cap)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetOpacity)]
         pub fn live_set_opacity(
             &mut self,
@@ -9654,6 +9692,19 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_family_own_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyOwnStrokeCap)]
+        pub fn live_set_family_own_stroke_cap(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            cap: &str,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_stroke_cap(&source.semantic_family()?, cap)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveSetFamilyOwnFill)]

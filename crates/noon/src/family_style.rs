@@ -117,6 +117,21 @@ impl MobjectFamily {
             .clone())
     }
 
+    pub fn own_stroke_cap(&self) -> Result<noon_core::StrokeCap, AuthoringError> {
+        Ok(self.own_style()?.stroke_cap)
+    }
+
+    pub fn set_own_stroke_cap(&self, cap: &str) -> Result<(), AuthoringError> {
+        let mut style = self.own_style()?;
+        style.stroke_cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(self.node_id(), style);
+        transaction
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     /// Atomically update the non-rendered family root without touching members.
     pub fn set_own_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
         self.own_style_transaction(update)?
@@ -590,6 +605,7 @@ mod tests {
         let root_before = family.own_style().unwrap();
         assert_eq!(root_before.fill_opacity, 0.0);
         assert_eq!(root_before.stroke_width, 0.04);
+        assert_eq!(root_before.stroke_cap, noon_core::StrokeCap::Auto);
 
         let revision_before = scene.integration_store().borrow().scene_revision();
         family
@@ -617,8 +633,15 @@ mod tests {
         assert_eq!(opacity_style.stroke_opacity, 0.25);
         assert_eq!(leaf.state().unwrap().style, leaf_before);
 
+        family.set_own_stroke_cap("square").unwrap();
+        assert_eq!(
+            family.own_stroke_cap().unwrap(),
+            noon_core::StrokeCap::Square
+        );
+        assert_eq!(leaf.state().unwrap().style, leaf_before);
+
         let revision_after = scene.integration_store().borrow().scene_revision();
-        let style_after = opacity_style;
+        let style_after = family.own_style().unwrap();
         assert!(family
             .set_own_style(StyleUpdate {
                 stroke_width: Some(f64::NAN),
@@ -727,6 +750,22 @@ mod tests {
         assert_eq!(family.own_style().unwrap().fill_opacity, 0.4);
         assert_eq!(family.own_style().unwrap().stroke_opacity, 0.25);
         assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
+
+        live.set_family_own_stroke_cap(&family, "square").unwrap();
+        assert_eq!(
+            family.own_stroke_cap().unwrap(),
+            noon_core::StrokeCap::Square
+        );
+        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
+        live.set_stroke_cap(&leaf, "butt").unwrap();
+        assert_eq!(
+            live.effective_stroke_cap(&leaf).unwrap(),
+            noon_core::StrokeCap::Butt
+        );
+        assert_eq!(
+            family.own_stroke_cap().unwrap(),
+            noon_core::StrokeCap::Square
+        );
     }
 
     #[test]

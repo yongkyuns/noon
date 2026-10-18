@@ -491,6 +491,19 @@ pub enum StrokeCap {
     Round,
     Butt,
     Square,
+    /// Preserve the renderer's default cap (Cairo's default is butt).
+    Auto,
+}
+
+impl StrokeCap {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Round => "round",
+            Self::Butt => "butt",
+            Self::Square => "square",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

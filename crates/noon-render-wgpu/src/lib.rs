@@ -2641,8 +2641,8 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
     // these bits off circles/rectangles/paths preserves their exact packed bytes
     // and prevents line-cap semantics from perturbing unrelated raster paths.
     style.stroke_enabled |= match object.style.stroke_cap {
+        StrokeCap::Auto | StrokeCap::Butt => 1 << 2,
         StrokeCap::Round => 0,
-        StrokeCap::Butt => 1 << 2,
         StrokeCap::Square => 2 << 2,
     };
     LineInstance {

@@ -479,6 +479,25 @@ expectedFamilyPointCounts = {
 }
 assert observations["family_point_counts"] == expectedFamilyPointCounts
 assert observations["family_point_counts_live"] == expectedFamilyPointCounts
+expected_cap_style = {
+    "default": "AUTO",
+    "constructed": [
+        {"requested": name, "observed": name}
+        for name in ("AUTO", "ROUND", "BUTT", "SQUARE")
+    ],
+    "mutations": [
+        {"requested": name, "observed": name, "returned_self": True}
+        for name in ("AUTO", "ROUND", "BUTT", "SQUARE")
+    ],
+    "family": {
+        "root": "SQUARE",
+        "child": "BUTT",
+        "root_returned_self": True,
+        "child_returned_self": True,
+    },
+}
+assert observations["cap_style"] == expected_cap_style
+assert observations["cap_style_live"] == expected_cap_style
 assert not _compare(
     observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5
 ), _compare(observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5)
@@ -762,7 +781,7 @@ json.dumps({
     sheen_factor: true,
     sheen_direction: true,
     sheen_rotation: true,
-    cap_style: true,
+    cap_style: false,
   });
   const {
     proportion_from_point,

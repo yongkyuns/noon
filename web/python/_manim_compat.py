@@ -143,6 +143,16 @@ class VMobject(Mobject):
     tolerance_for_point_equality = 1e-6
 
     @property
+    def cap_style(self):
+        from _manim_semantic_handles import _get_cap_style
+        return _get_cap_style(self)
+
+    @cap_style.setter
+    def cap_style(self, value):
+        from _manim_semantic_handles import _set_cap_style
+        _set_cap_style(self, value)
+
+    @property
     def n_points_per_curve(self) -> int:
         """The current cubic stride, matching Manim's mutable instance value."""
         return self.n_points_per_cubic_curve
@@ -1043,6 +1053,7 @@ class Group(Mobject):
 class VGroup(Group):
     # The family wrapper reuses vector-class geometry queries without duplicating them.
     # Paint getters stay on VMobject until the family root has authoritative own-style state.
+    cap_style = VMobject.cap_style
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary

@@ -45,6 +45,7 @@ class StyleOperationsTests(unittest.TestCase):
             "background_image", "family",
         ])
         self.assertIs(compat.VGroup.get_style, compat.VMobject.get_style)
+        self.assertIs(compat.VGroup.cap_style, compat.VMobject.cap_style)
         self.assertIs(compat.VGroup.get_sheen_factor, compat.VMobject.get_sheen_factor)
         self.assertIs(compat.VGroup.get_sheen_direction, compat.VMobject.get_sheen_direction)
         self.assertIs(compat.VGroup.set_style, compat.VMobject.set_style)
@@ -84,14 +85,60 @@ class StyleOperationsTests(unittest.TestCase):
         obj = identity_only_wrapper(compat.Circle)
         self.assertIs(obj.set_stroke(background=True), obj)
         self.assertIs(obj.set_background_stroke(), obj)
-        self.assertIs(obj.set_cap_style(compat._base.CapStyleType.AUTO), obj)
         self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
         self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
         self.assertIs(obj.rotate_sheen_direction(0.0), obj)
         group = identity_only_wrapper(compat.VGroup)
         self.assertIs(group.rotate_sheen_direction(0.0), group)
-        self.assertIs(group.set_cap_style(compat._base.CapStyleType.AUTO), group)
         self.assertIsNone(group.get_background_image())
+
+    def test_cap_style_constructor_and_mutations_use_shared_rust_state(self):
+        cap = compat._base.CapStyleType
+        constructor_handle = SimpleNamespace(setStrokeCap=Mock())
+        handles._apply_shared_constructor_options(
+            constructor_handle, {"cap_style": cap.SQUARE}
+        )
+        constructor_handle.setStrokeCap.assert_called_once_with("square")
+        with self.assertRaises(TypeError):
+            handles._apply_shared_constructor_options(
+                constructor_handle, {"cap_style": cap.ROUND, "stroke_cap": "butt"}
+            )
+
+        obj = identity_only_wrapper(compat.VMobject)
+        detached = SimpleNamespace(setStrokeCap=Mock(), strokeCap="square")
+        with patch.object(handles, "_style_target", return_value=(detached, None, "")):
+            self.assertIs(obj.set_cap_style(cap.SQUARE), obj)
+            self.assertIs(obj.cap_style, cap.SQUARE)
+            obj.cap_style = cap.ROUND
+        self.assertEqual(
+            [call.args for call in detached.setStrokeCap.call_args_list],
+            [("square",), ("round",)],
+        )
+
+        live_context = SimpleNamespace(
+            liveSetStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
+        )
+        with patch.object(handles, "_style_target", return_value=(detached, live_context, "")):
+            self.assertIs(obj.set_cap_style(cap.BUTT), obj)
+            self.assertIs(obj.cap_style, cap.BUTT)
+        live_context.liveSetStrokeCap.assert_called_once_with(detached, "butt")
+        live_context.queryMobjectStrokeCap.assert_called_once_with(detached)
+
+        family = identity_only_wrapper(compat.VGroup)
+        family_handle = SimpleNamespace(
+            setStrokeCap=Mock(), ownStrokeCap=Mock(return_value="butt")
+        )
+        with patch.object(handles, "_style_target", return_value=(family_handle, None, "Family")):
+            self.assertIs(family.set_cap_style(cap.BUTT), family)
+            self.assertIs(family.cap_style, cap.BUTT)
+        family_handle.setStrokeCap.assert_called_once_with("butt")
+
+        family_context = SimpleNamespace(liveSetFamilyOwnStrokeCap=Mock())
+        with patch.object(
+            handles, "_style_target", return_value=(family_handle, family_context, "Family")
+        ):
+            self.assertIs(family.set_cap_style(cap.ROUND), family)
+        family_context.liveSetFamilyOwnStrokeCap.assert_called_once_with(family_handle, "round")
 
     def test_none_background_image_helpers_restore_white_through_shared_color(self):
         obj = identity_only_wrapper(compat.VMobject)
@@ -134,7 +181,6 @@ class StyleOperationsTests(unittest.TestCase):
             lambda: obj.set_sheen(0.5),
             lambda: obj.set_sheen_direction(compat._base.UP),
             lambda: obj.rotate_sheen_direction(0.5),
-            lambda: obj.set_cap_style(compat._base.CapStyleType.ROUND),
         )
         for operation in unsupported:
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
