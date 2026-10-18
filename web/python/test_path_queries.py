@@ -711,6 +711,67 @@ class PathQueryTests(unittest.TestCase):
             0.0,
         )
 
+    def test_custom_stride_live_extrema_and_boundary_use_effective_path_query(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value._object = object()
+        value._semantic_handle = Mock()
+        value._semantic_handle_fresh = True
+        value._semantic_handle.extremumFromPoints.return_value = 30.0
+        value._semantic_handle.boundaryPointFromPoints.return_value = [30.0, 0.0]
+
+        path_query = Mock()
+        path_query.points.return_value = [
+            0.0, 0.0,
+            30.0, 0.0,
+            1.0, 0.0,
+            2.0, 0.0,
+        ]
+        context = Mock()
+        context.queryMobjectPath.return_value = path_query
+        scene = Mock()
+        scene._canonical_authoring_context = context
+        value._scene = scene
+
+        self.assertEqual(
+            semantic_handles._extremum_along_dim_observation(value, 0, 1.0),
+            30.0,
+        )
+        self.assertEqual(
+            semantic_handles._boundary_point_observation(value, 1.0, 0.0),
+            [30.0, 0.0],
+        )
+
+        expected_anchor_coordinates = [
+            0.0, 0.0,
+            30.0, 0.0,
+            1.0, 0.0,
+            2.0, 0.0,
+        ]
+        self.assertEqual(
+            value._semantic_handle.extremumFromPoints.call_args.args,
+            (expected_anchor_coordinates, 2, 0, 1.0),
+        )
+        self.assertEqual(
+            value._semantic_handle.boundaryPointFromPoints.call_args.args,
+            (expected_anchor_coordinates, 2, 1.0, 0.0),
+        )
+        self.assertEqual(context.queryMobjectPath.call_count, 2)
+        self.assertEqual(path_query.points.call_count, 2)
+        self.assertEqual(path_query.free.call_count, 2)
+
+    def test_custom_stride_extrema_and_boundary_reject_staged_callbacks(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        with patch(
+            "_manim_updaters.canonical_callback_phase_active",
+            return_value=True,
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                semantic_handles._extremum_along_dim_observation(value, 0, 1.0)
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                semantic_handles._boundary_point_observation(value, 1.0, 0.0)
+
     def test_length_over_dim_uses_rust_and_accepts_negative_dimensions(self):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(

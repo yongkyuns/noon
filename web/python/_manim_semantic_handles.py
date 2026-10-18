@@ -1910,9 +1910,9 @@ def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
         if stride != 4:
             from _manim_updaters import canonical_callback_phase_active
 
-            if _is_bound(value) or canonical_callback_phase_active():
+            if canonical_callback_phase_active():
                 raise NotImplementedError(
-                    "custom-stride VMobject extrema require an authored point snapshot"
+                    "custom-stride VMobject extrema are unavailable during staged callbacks"
                 )
             if dim == 2:
                 return 0.0
@@ -2013,9 +2013,9 @@ def _boundary_point_observation(
         if stride != 4:
             from _manim_updaters import canonical_callback_phase_active
 
-            if _is_bound(value) or canonical_callback_phase_active():
+            if canonical_callback_phase_active():
                 raise NotImplementedError(
-                    "custom-stride VMobject boundary points require an authored point snapshot"
+                    "custom-stride VMobject boundary points are unavailable during staged callbacks"
                 )
             anchors = value.get_anchors()
             coordinates = [

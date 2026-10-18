@@ -94,6 +94,21 @@ except Exception as error:
     }
 else:
     custom_stride_scaling_gate = {"unexpected_success": True}
+from noon import Scene
+live_scene = Scene()
+live_custom_stride = VMobject()
+live_custom_stride.set_points([
+    (0, 0), (30, 0), (1, 0), (2, 0),
+])
+live_custom_stride.n_points_per_cubic_curve = 2
+live_scene.add(live_custom_stride)
+custom_stride_live_queries = {
+    "x_max": float(live_custom_stride.get_extremum_along_dim(dim=0, key=1)),
+    "boundary_point": [
+        float(value)
+        for value in live_custom_stride.get_boundary_point((1, 0, 0))
+    ],
+}
 batch = VMobject()
 curves = np.array([
     [[0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 1, 0]],
@@ -105,6 +120,7 @@ json.dumps({
     "observations": noon_observations(),
     "custom_stride_anchor_gate": custom_stride_gate,
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
+    "custom_stride_live_queries": custom_stride_live_queries,
     "cubic_batch_extension": cubic_batch_extension,
 }, allow_nan=False)
 `));
@@ -116,6 +132,10 @@ json.dumps({
   assert.deepEqual(product.custom_stride_scaling_gate, {
     error_type: "NotImplementedError",
     error_message: "scale_handle_to_anchor_distances requires the supported four-point cubic stride",
+  });
+  assert.deepEqual(product.custom_stride_live_queries, {
+    x_max: 30,
+    boundary_point: [30, 0],
   });
   assert.deepEqual(product.cubic_batch_extension, [
     [0, 0], [1, 0], [1, 1], [2, 1],
