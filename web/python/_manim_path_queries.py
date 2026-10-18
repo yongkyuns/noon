@@ -13,6 +13,7 @@ from _manim_semantic_handles import (
     _length_over_dim_observation,
     _path_boundary_points_observation,
     _typed_manim_observation,
+    _handle_for,
 )
 
 
@@ -101,6 +102,36 @@ def boundary_points(value):
             "get_points_defining_boundary requires a valid shared Rust handle"
         )
     return _format_points(coordinates)
+
+
+def consider_points_equals(value, p0, p1):
+    """Adapt NumPy point-array broadcasting, then compare values in Rust."""
+    try:
+        import numpy as np
+    except ImportError:
+        left = [float(component) for component in p0]
+        right = [float(component) for component in p1]
+        if len(left) != len(right):
+            raise ValueError("point arrays must have equal lengths when NumPy is unavailable")
+    else:
+        left_array, right_array = np.broadcast_arrays(np.asarray(p0), np.asarray(p1))
+        left = left_array.astype(np.float64, copy=False).reshape(-1).tolist()
+        right = right_array.astype(np.float64, copy=False).reshape(-1).tolist()
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("point equality requires a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    return bool(engine_call(handle.pointsAllClose, left, right, tolerance))
+
+
+def consider_points_equals_2d(value, p0, p1):
+    left = [float(p0[0]), float(p0[1])]
+    right = [float(p1[0]), float(p1[1])]
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("point equality requires a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    return bool(engine_call(handle.points2dClose, left, right, tolerance))
 
 
 def _format_points(coordinates):

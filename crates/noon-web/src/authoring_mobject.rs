@@ -1832,6 +1832,46 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = pointsAllClose)]
+        pub fn points_allclose(
+            &self,
+            left: Vec<f64>,
+            right: Vec<f64>,
+            absolute_tolerance: f64,
+        ) -> Result<bool, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            if left.len() != right.len() {
+                return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                    left.len().max(right.len()),
+                )));
+            }
+            Ok(noon::manim_points_allclose(
+                &left,
+                &right,
+                absolute_tolerance,
+            ))
+        }
+
+        #[wasm_bindgen(js_name = points2dClose)]
+        pub fn points_2d_close(
+            &self,
+            left: Vec<f64>,
+            right: Vec<f64>,
+            absolute_tolerance: f64,
+        ) -> Result<bool, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            if left.len() < 2 || right.len() < 2 {
+                return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                    left.len().min(right.len()),
+                )));
+            }
+            Ok(noon::manim_points_2d_close(
+                [left[0], left[1]],
+                [right[0], right[1]],
+                absolute_tolerance,
+            ))
+        }
+
         #[wasm_bindgen(js_name = extremumAlongDim)]
         pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
             noon::MobjectTarget::from(&self.handle)

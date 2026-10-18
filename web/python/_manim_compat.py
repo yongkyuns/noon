@@ -94,6 +94,8 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    tolerance_for_point_equality = 1e-6
+
     @property
     def n_points_per_curve(self) -> int:
         """The fixed cubic stride used by Noon path queries."""
@@ -113,6 +115,14 @@ class VMobject(Mobject):
     def __init__(self, *, color=_base.WHITE, **kwargs):
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)
+
+    def consider_points_equals(self, p0, p1):
+        from _manim_path_queries import consider_points_equals
+        return consider_points_equals(self, p0, p1)
+
+    def consider_points_equals_2d(self, p0, p1):
+        from _manim_path_queries import consider_points_equals_2d
+        return consider_points_equals_2d(self, p0, p1)
 
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners

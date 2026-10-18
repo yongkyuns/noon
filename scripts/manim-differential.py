@@ -1198,6 +1198,34 @@ def _path_editing(api):
     )
     reversed_handles.scale_handle_to_anchor_distances(-0.5)
 
+    point_comparison = api.VMobject()
+    point_comparison.tolerance_for_point_equality = 2.0e-4
+    point_equality = {
+        "absolute_tolerance": point_comparison.consider_points_equals(
+            [0.0, 0.0, 0.0], [1.5e-4, 0.0, 0.0]
+        ),
+        "relative_tolerance": point_comparison.consider_points_equals(
+            [100_000.0, 0.0, 0.0], [100_001.0, 0.0, 0.0]
+        ),
+        "relative_direction": [
+            point_comparison.consider_points_equals(
+                [100_000.0, 0.0, 0.0], [100_001.000205, 0.0, 0.0]
+            ),
+            point_comparison.consider_points_equals(
+                [100_001.000205, 0.0, 0.0], [100_000.0, 0.0, 0.0]
+            ),
+        ],
+        "nan": point_comparison.consider_points_equals(
+            [float("nan"), 0.0, 0.0], [float("nan"), 0.0, 0.0]
+        ),
+        "matching_infinity": point_comparison.consider_points_equals(
+            [float("inf"), 0.0, 0.0], [float("inf"), 0.0, 0.0]
+        ),
+        "two_dimensional_ignores_z": point_comparison.consider_points_equals_2d(
+            [1.0, 2.0, 0.0], [1.0, 2.0, 100.0]
+        ),
+    }
+
     return {
         "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
         "append_corners": observe(corners),
@@ -1215,6 +1243,7 @@ def _path_editing(api):
         "unit_handle_scale": observe(unchanged_handles),
         "zero_handle_scale": observe(collapsed_handles),
         "negative_handle_scale": observe(reversed_handles),
+        "point_equality": point_equality,
     }
 
 

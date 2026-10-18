@@ -715,6 +715,36 @@ pub fn reduce_point_extremum(
     })
 }
 
+/// Compare equal-length numeric arrays using NumPy's default `allclose`
+/// tolerances used by ManimCE's VMobject point-equality helper.
+pub fn manim_points_allclose(left: &[f64], right: &[f64], absolute_tolerance: f64) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(&a, &b)| manim_numpy_isclose(a, b, absolute_tolerance))
+}
+
+/// Compare the two planar coordinates using ManimCE's explicit 2D helper.
+/// Unlike NumPy's vectorized `allclose`, this implementation also rejects an
+/// overflowing coordinate difference before applying the tolerance.
+pub fn manim_points_2d_close(left: [f64; 2], right: [f64; 2], absolute_tolerance: f64) -> bool {
+    left.into_iter().zip(right).all(|(a, b)| {
+        if a == b {
+            return true;
+        }
+        let difference = (a - b).abs();
+        difference <= absolute_tolerance + 1.0e-5 * b.abs() && difference.is_finite()
+    })
+}
+
+fn manim_numpy_isclose(a: f64, b: f64, absolute_tolerance: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    b.is_finite() && (a - b).abs() <= absolute_tolerance + 1.0e-5 * b.abs()
+}
+
 fn extremum_for_xy_points(
     points: &[(f64, f64)],
     dim: usize,
@@ -863,5 +893,45 @@ impl Mobject {
                 .as_planar()
                 .ok_or(AuthoringError::NonFiniteObjectState)?,
         )
+    }
+}
+
+#[cfg(test)]
+mod point_equality_tests {
+    use super::*;
+
+    #[test]
+    fn point_equality_matches_manim_absolute_relative_and_nonfinite_rules() {
+        assert!(manim_points_allclose(&[0.0, 2.0], &[5.0e-7, 2.0], 1.0e-6));
+        assert!(!manim_points_allclose(&[0.0], &[2.0e-6], 1.0e-6));
+        assert!(manim_points_allclose(&[100_000.0], &[100_001.0], 1.0e-6));
+        assert!(manim_points_allclose(
+            &[f64::INFINITY],
+            &[f64::INFINITY],
+            1.0e-6
+        ));
+        assert!(!manim_points_allclose(&[f64::NAN], &[f64::NAN], 1.0e-6));
+        assert!(manim_points_allclose(
+            &[f64::INFINITY],
+            &[1.0],
+            f64::INFINITY
+        ));
+
+        assert!(manim_points_2d_close([0.0, 1.0], [5.0e-7, 1.0], 1.0e-6));
+        assert!(!manim_points_2d_close(
+            [f64::NAN, 1.0],
+            [f64::NAN, 1.0],
+            1.0e-6
+        ));
+        assert!(manim_points_2d_close(
+            [f64::INFINITY, 1.0],
+            [f64::INFINITY, 1.0],
+            1.0e-6,
+        ));
+        assert!(!manim_points_2d_close(
+            [f64::MAX, 1.0],
+            [-f64::MAX, 1.0],
+            f64::INFINITY,
+        ));
     }
 }

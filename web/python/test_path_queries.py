@@ -9,6 +9,39 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_vmobject_point_equality_uses_rust_with_broadcast_arrays_and_tolerance(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.tolerance_for_point_equality = 2e-6
+        handle = Mock()
+        handle.pointsAllClose.return_value = True
+        handle.points2dClose.return_value = False
+        with patch.object(queries, "_handle_for", return_value=handle):
+            self.assertTrue(value.consider_points_equals([1, 2, 3], [1, 2, 3]))
+            self.assertFalse(value.consider_points_equals_2d([1, 2, 8], [1, 2, -8]))
+        handle.pointsAllClose.assert_called_once_with([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], 2e-6)
+        handle.points2dClose.assert_called_once_with([1.0, 2.0], [1.0, 2.0], 2e-6)
+
+    def test_vmobject_point_equality_preserves_numpy_broadcasting_and_shape_errors(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy broadcasting behavior")
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        with patch.object(queries, "_handle_for", return_value=handle):
+            value.consider_points_equals(np.array([[1.0], [2.0]]), np.array([1.0, 2.0]))
+            with self.assertRaises(ValueError):
+                value.consider_points_equals([1, 2], [1, 2, 3])
+        handle.pointsAllClose.assert_called_once_with(
+            [1.0, 1.0, 2.0, 2.0], [1.0, 2.0, 1.0, 2.0], 1e-6
+        )
+
+    def test_vmobject_exposes_mutable_default_point_equality_tolerance(self):
+        value = object.__new__(compat.VMobject)
+        self.assertEqual(value.tolerance_for_point_equality, 1e-6)
+        value.tolerance_for_point_equality = 3e-5
+        self.assertEqual(value.tolerance_for_point_equality, 3e-5)
+
     def test_n_points_per_curve_reports_noons_fixed_cubic_stride(self):
         value = identity_only_wrapper(compat.VMobject)
         self.assertEqual(value.n_points_per_curve, 4)
