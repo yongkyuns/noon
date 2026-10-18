@@ -1791,7 +1791,9 @@ def _group_set_color(self, color, family=True):
     return _group_paint(self, "Color" if family else "OwnColor", arguments)
 
 
-def _group_set_fill(self, color=None, opacity=None):
+def _group_set_fill(self, color=None, opacity=None, family=True):
+    if not family:
+        raise NotImplementedError("non-recursive Group fill requires shared family style state")
     alpha = None if opacity is None else _compat._opacity("fill opacity", opacity)
     return _group_paint(self, "Fill", (*_family_color_arguments(color), alpha))
 
@@ -1802,7 +1804,9 @@ def _group_set_stroke(self, color=None, width=None, opacity=None):
     return _group_paint(self, "Stroke", (*_family_color_arguments(color), stroke_width, alpha))
 
 
-def _group_set_opacity(self, opacity):
+def _group_set_opacity(self, opacity, family=True):
+    if not family:
+        raise NotImplementedError("non-recursive Group opacity requires shared family style state")
     alpha = _compat._opacity("opacity", opacity)
     return _group_paint(self, "Opacity", (alpha,))
 

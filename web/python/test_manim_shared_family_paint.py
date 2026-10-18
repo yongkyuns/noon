@@ -86,11 +86,14 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 group = identity_only_wrapper(cls, submobjects=[])
                 group._semantic_family_handle = Mock()
                 with patch.object(handles, "_group_set_fill", return_value=group) as fill, \
-                     patch.object(handles, "_group_set_stroke", return_value=group) as stroke:
+                     patch.object(handles, "_group_set_stroke", return_value=group) as stroke, \
+                     patch.object(handles, "_group_set_opacity", return_value=group) as opacity:
                     self.assertIs(group.set_fill(compat._base.GREEN, .75), group)
                     self.assertIs(group.set_stroke(compat._base.YELLOW, 25, .625), group)
-                fill.assert_called_once_with(group, compat._base.GREEN, .75)
+                    self.assertIs(group.set_opacity(.5), group)
+                fill.assert_called_once_with(group, compat._base.GREEN, .75, True)
                 stroke.assert_called_once_with(group, compat._base.YELLOW, 25, .625)
+                opacity.assert_called_once_with(group, .5, True)
 
     def test_root_only_color_uses_one_shared_root_operation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])

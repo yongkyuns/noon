@@ -1056,11 +1056,18 @@ class VGroup(Group):
     rotate_sheen_direction = VMobject.rotate_sheen_direction
     set_sheen = VMobject.set_sheen
 
-    def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:
+    def set_fill(
+        self,
+        color: object = None,
+        opacity: float | None = None,
+        family: bool = True,
+    ) -> VGroup:
+        if not family:
+            raise NotImplementedError("non-recursive Group fill requires shared family style state")
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_fill(self, color, opacity)
         from _manim_semantic_handles import _group_set_fill
-        return _group_set_fill(self, color, opacity)
+        return _group_set_fill(self, color, opacity, family)
 
     def set_stroke(self, color: object = None, width: float | None = None,
                    opacity: float | None = None, background: bool = False,
@@ -1075,11 +1082,13 @@ class VGroup(Group):
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 
-    def set_opacity(self, opacity: float) -> VGroup:
+    def set_opacity(self, opacity: float, family: bool = True) -> VGroup:
+        if not family:
+            raise NotImplementedError("non-recursive Group opacity requires shared family style state")
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_opacity(self, opacity)
         from _manim_semantic_handles import _group_set_opacity
-        return _group_set_opacity(self, opacity)
+        return _group_set_opacity(self, opacity, family)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")
