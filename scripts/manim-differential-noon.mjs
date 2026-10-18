@@ -25,7 +25,7 @@ try {
   page.setDefaultTimeout(180_000);
   page.on("console", message => console.log(`[browser] ${message.text()}`));
   await page.goto(`${server.baseUrl}/web/authoring-errors-smoke.html`);
-  const observations = await page.evaluate(async ({ modules, probes, pyodideUrl }) => {
+  const product = await page.evaluate(async ({ modules, probes, pyodideUrl }) => {
     const wasm = await import("/web/pkg/noon_web.js");
     await wasm.default();
     const { resolveAnimationOptionsPlain } = await import("/web/animation-options.js");
@@ -69,12 +69,33 @@ try {
 import sys, json
 sys.path.insert(0, "/tmp")
 from noon_differential import noon_observations
-json.dumps(noon_observations(), allow_nan=False)
+from _manim_compat import VMobject
+value = VMobject()
+value.n_points_per_cubic_curve = 2
+try:
+    value.set_anchors_and_handles([(0, 0)], [(1, 0)], [(1, 1)], [(2, 1)])
+except Exception as error:
+    custom_stride_gate = {
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+    }
+else:
+    custom_stride_gate = {"unexpected_success": True}
+json.dumps({
+    "observations": noon_observations(),
+    "custom_stride_anchor_gate": custom_stride_gate,
+}, allow_nan=False)
 `));
   }, { modules, probes, pyodideUrl });
+  assert.deepEqual(product.custom_stride_anchor_gate, {
+    error_type: "NotImplementedError",
+    error_message: "set_anchors_and_handles requires the supported four-point cubic stride",
+  });
+  const observations = product.observations;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(observations, null, 2)}\n`);
   console.log(`Observed ${Object.keys(observations).length} shared Rust/Python semantic fixtures`);
+  console.log("Observed the custom-stride set_anchors_and_handles unsupported disposition in product Pyodide");
 } finally {
   await browser?.close();
   await server.close();

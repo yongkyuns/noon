@@ -81,6 +81,10 @@ def scale_handle_to_anchor_distances(value, factor):
 
 def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
     assert len(anchors1) == len(handles1) == len(handles2) == len(anchors2)
+    if value.n_points_per_cubic_curve != 4:
+        raise NotImplementedError(
+            "set_anchors_and_handles requires the supported four-point cubic stride"
+        )
     curves = [
         [anchor1, handle1, handle2, anchor2]
         for anchor1, handle1, handle2, anchor2 in zip(

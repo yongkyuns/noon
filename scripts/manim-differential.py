@@ -516,6 +516,12 @@ def _curve_function_queries(api):
     )
     vector_family = api.VGroup(family_first, family_second)
     empty_vector_family = api.VGroup()
+    default_stride_anchor_edit = api.VMobject().set_anchors_and_handles(
+        [(0, 0, 0), (2, 0, 0)],
+        [(1, 0, 0), (3, 0, 0)],
+        [(1, 1, 0), (3, 1, 0)],
+        [(2, 1, 0), (4, 1, 0)],
+    )
     custom_stride_path = api.VMobject().set_points_as_corners(
         [(0, 0, 0), (1, 0, 0)]
     )
@@ -612,6 +618,10 @@ def _curve_function_queries(api):
         "empty_vector_family_boundary_shape": list(
             empty_vector_family.get_points_defining_boundary().shape
         ),
+        "default_stride_anchor_edit": [
+            _point_observation(point)
+            for point in default_stride_anchor_edit.get_anchors()
+        ],
         "mutable_custom_stride": {
             "count": custom_stride_path.get_num_curves(),
             "arc_length": float(

@@ -218,6 +218,16 @@ class PathEditingTests(unittest.TestCase):
                 value.set_anchors_and_handles(arrays[0], arrays[1], arrays[2], arrays[3][:-1])
             resolve.assert_not_called()
 
+    def test_set_anchors_and_handles_rejects_unstable_custom_stride(self):
+        value = identity_only_wrapper(compat.VMobject)
+        arrays = ([(0, 0)], [(1, 0)], [(1, 1)], [(2, 1)])
+        for stride in (2, 5):
+            value.n_points_per_cubic_curve = stride
+            with patch.object(editing, '_handle_for') as resolve:
+                with self.assertRaisesRegex(NotImplementedError, 'four-point cubic stride'):
+                    value.set_anchors_and_handles(*arrays)
+                resolve.assert_not_called()
+
     def test_append_vectorized_mobject_dispatches_shared_source_in_authored_or_live_mode(self):
         value = identity_only_wrapper(compat.VMobject)
         source = identity_only_wrapper(compat.VMobject)
