@@ -1,0 +1,34 @@
+name: 2195 initialization contract qualification
+on:
+  push:
+    branches: [codex/2195-init-contract-qualify]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: 2195-init-contract-qualify
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 5f48dbe981554bbd5c9a0964385ae09292c22072
+      - name: Preserve exact source and constructor inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/noon-init-proof
+          git rev-parse HEAD > /tmp/noon-init-proof/base.txt
+          test "$(cat /tmp/noon-init-proof/base.txt)" = 5f48dbe981554bbd5c9a0964385ae09292c22072
+          git grep -n -E '(FramePreparer|for_mixed_retained_path_draws|set_packed_path_buffer_limit|prepare_for_device|prepare_incremental_for_device)' -- '*.rs' > /tmp/noon-init-proof/call-sites.txt
+          git ls-files -z -- '*.rs' '*.toml' '*.sh' '*.py' '*.md' '*.yml' '*.yaml' Cargo.lock | tar --null -T - -czf /tmp/noon-init-proof/source.tar.gz
+          sha256sum /tmp/noon-init-proof/source.tar.gz > /tmp/noon-init-proof/source.sha256
+      - uses: actions/upload-artifact@v6
+        with:
+          name: 2195-init-contract-source
+          path: /tmp/noon-init-proof
+          retention-days: 3
+          if-no-files-found: error
