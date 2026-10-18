@@ -1834,6 +1834,40 @@ def _family_own_paint_probe(api):
         [rgb(member) for member in vector_style_root.submobjects],
     ]
 
+    match_source_children = [api.Circle(color=api.RED), api.Square(color=api.YELLOW)]
+    match_source = api.VGroup(*match_source_children)
+    match_source.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_width=5,
+        stroke_opacity=0.4,
+        family=False,
+    )
+    match_receiver_children = [api.Circle(color=api.BLUE), api.Square(color=api.RED)]
+    match_receiver = api.VGroup(*match_receiver_children)
+    match_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    match_receiver.match_style(match_source, family=False)
+    matched_style = match_receiver.get_style(simple=True)
+    root_only_match = [
+        _paint_rgb(matched_style["fill_color"]),
+        matched_style["fill_opacity"],
+        _paint_rgb(matched_style["stroke_color"]),
+        matched_style["stroke_width"],
+        matched_style["stroke_opacity"],
+        [
+            [rgb(member), _paint_rgb(member.get_stroke_color()), member.get_stroke_width()]
+            for member in match_receiver_children
+        ],
+    ]
+
     empty = api.Group()
     empty.set_color(api.YELLOW, family=False)
 
@@ -1894,6 +1928,7 @@ def _family_own_paint_probe(api):
             root_fill_style, root_opacity_style, root_stroke_style
         ],
         "vgroup_root_only_set_style": root_style_observation,
+        "vgroup_root_only_match_style": root_only_match,
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]

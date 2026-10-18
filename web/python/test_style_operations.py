@@ -198,8 +198,20 @@ class StyleOperationsTests(unittest.TestCase):
                 (source_handle, context, 'Family'), (target_handle, context, 'Family')]):
             self.assertIs(source.match_style(target), source)
         context.liveMatchFamilyStyle.assert_called_once_with(source_handle, target_handle)
+        style = {
+            "fill_color": compat._base.GREEN,
+            "fill_opacity": 0.3,
+            "stroke_color": compat._base.BLUE,
+            "stroke_width": 4.0,
+            "stroke_opacity": 0.45,
+        }
+        with patch.object(compat.VGroup, "get_style", return_value=style) as get_style, \
+             patch.object(compat.VGroup, "set_style", return_value=source) as set_style:
+            self.assertIs(source.match_style(target, family=False), source)
+        get_style.assert_called_once_with(simple=True)
+        set_style.assert_called_once_with(**style, family=False)
         with self.assertRaises(NotImplementedError):
-            source.match_style(target, family=False)
+            identity_only_wrapper(compat.Group).match_style(target, family=False)
         with self.assertRaises(NotImplementedError):
             source.set_style(sheen_factor=0.5)
 

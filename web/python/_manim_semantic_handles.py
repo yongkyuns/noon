@@ -1567,13 +1567,26 @@ def _match_background_image(self, vmobject):
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
-    if _is_shared_family(self) != _is_shared_family(vmobject):
-        raise NotImplementedError("mixed object/family style matching requires shared family style state")
-    if not family and _is_shared_family(self):
-        raise NotImplementedError("non-recursive Group style requires shared family style state")
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("match_style in host callbacks requires staged style capture")
+    if not family:
+        get_style = getattr(vmobject, "get_style", None)
+        receiver_get_style = getattr(self, "get_style", None)
+        set_style = getattr(self, "set_style", None)
+        if (
+            not callable(receiver_get_style)
+            or not callable(get_style)
+            or not callable(set_style)
+        ):
+            raise NotImplementedError(
+                "non-recursive style matching requires vector style access"
+            )
+        # Match only the receiver's VMobject root. set_style(..., family=False)
+        # keeps the write atomic and routes live VGroup roots through Rust too.
+        return set_style(**get_style(simple=True), family=False)
+    if _is_shared_family(self) != _is_shared_family(vmobject):
+        raise NotImplementedError("mixed object/family style matching requires shared family style state")
     source, context, suffix = _style_target(self)
     target, target_context, _ = _style_target(vmobject)
     if source is None or target is None:
