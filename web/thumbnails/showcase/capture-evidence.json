@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "081b03ec6ce1a1736893f4c90082407a8f66cd4f",
+  "captureRevision": "ce5dbe43f3642c2266682d81bbe1fb9c004424b7",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "081b03ec6ce1a1736893f4c90082407a8f66cd4f",
+    "sourceRevision": "ce5dbe43f3642c2266682d81bbe1fb9c004424b7",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -13,23 +13,23 @@
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "424df53082cf25764bfda22b804ed2d3cad491791db18067954e7d1361de15b5"
+        "sha256": "74d305d5c92bc1c1a3b37bab84906dcfbaad5fca220199527450c647043ad073"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "5df35125b354fa6825af07f560faed506f0be21238c47394217da43c11edc525"
+        "sha256": "dc2dc85f2fe21517e5088c0e8a700639fe748410122272940e466dd2e046ba99"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35"
+    "buildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452"
   },
   "posters": [
     {
       "id": "showcase-first-scene",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
       "thumbnailTime": 8,
       "image": {
@@ -50,7 +50,7 @@
     },
     {
       "id": "showcase-dynamic-scene",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca",
       "thumbnailTime": 12.4,
       "image": {
@@ -69,7 +69,7 @@
     },
     {
       "id": "showcase-entrances-exits",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73",
       "thumbnailTime": 2.9,
       "image": {
@@ -88,7 +88,7 @@
     },
     {
       "id": "showcase-timing",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "d0fa3d4e2281f066a2aaa35ae1f5b3e1272b5a2f1d202437a80a457c238e7c2b",
       "thumbnailTime": 7.9,
       "image": {
@@ -107,7 +107,7 @@
     },
     {
       "id": "showcase-gpu-glow",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "526c40036c50a960cdb2b6e01e13178f5d989e1f7680ca7e14af856063be49da",
       "thumbnailTime": 11.4,
       "image": {
@@ -126,7 +126,7 @@
     },
     {
       "id": "showcase-group-slicing",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "1efe31b9783f9bc531b93915cb8d851e09e9ab258b3a6262c2a96084e7e94e69",
       "thumbnailTime": 4.8,
       "image": {
@@ -145,7 +145,7 @@
     },
     {
       "id": "showcase-bezier-paths",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "60e5708b4a235f68c8b0788fd57fb219fdc4a2949aa61573d1aa0cef267ff84b",
       "thumbnailTime": 7.3,
       "image": {
@@ -164,7 +164,7 @@
     },
     {
       "id": "showcase-transform-ownership",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "92f4a1c5e4f50eac1ca45e9abf399228d3e235dc4cd70115560d05ed16d32139",
       "thumbnailTime": 7.2,
       "image": {
@@ -183,7 +183,7 @@
     },
     {
       "id": "showcase-shape-matching",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "3f407fa427902125efd71645fc6d93bce1c70755f91be08e4fc77e043dc298e3",
       "thumbnailTime": 8.3,
       "image": {
@@ -204,7 +204,7 @@
     },
     {
       "id": "showcase-ordered-reveal",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "36a2186b6bcfb4eb2be4e6a8cc0bc84728e7e7fa5fe1ef99f39d863fd66b8d7c",
       "thumbnailTime": 6.9,
       "image": {
@@ -223,7 +223,7 @@
     },
     {
       "id": "showcase-text-math",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "f2734b513f9f5d590a6e7b6b62f9939a0aa83dab51f9237041cb1f8c7af2b408",
       "thumbnailTime": 5,
       "image": {
@@ -242,15 +242,15 @@
     },
     {
       "id": "showcase-code-blocks",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "8a4530c141a38d0b4a6357ed75075fe8e08023e1c93fd1120f618dc21f140427",
       "thumbnailTime": 5.5,
       "image": {
         "width": 960,
         "height": 540,
         "foregroundPixels": 130841,
-        "pngSha256": "9af37d83b74d200740b6707e77b6af8a8ea4a051b6a505f00a26551e67a18ad3",
-        "pixelSha256": "4534760ee17c6bd8483b150962e93b1b26dada2ce6ec1c89f2fb65bdf079c49a"
+        "pngSha256": "0f8e4495fcbca6fd1987a46cce6f115cb94ed02fc0b18d2c29e5771625167def",
+        "pixelSha256": "db426a421f80953e7499e33a25db21901292a8f25b2fcba298f6fd4918b69c9d"
       },
       "sample": {
         "requestedTime": 5.5,
@@ -261,7 +261,7 @@
     },
     {
       "id": "showcase-latex-create",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "21d3f37a8b0e9357ed2745d5b6969975d8ebdbbf5ea53607d8255643a0b745d8",
       "thumbnailTime": 3.1,
       "image": {
@@ -280,7 +280,7 @@
     },
     {
       "id": "showcase-coordinate-plotting",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "c57bc27a8164d6ca0e576212c1b17233079b2d80d74d18cab34a287b4b16eae1",
       "thumbnailTime": 5.65,
       "image": {
@@ -299,7 +299,7 @@
     },
     {
       "id": "showcase-spatial-scene",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "ec66864e51f0e9a5e0d17a4be43f829cb5b73ad0501b7495d3d4c112e341825a",
       "thumbnailTime": 7.1,
       "image": {
@@ -318,7 +318,7 @@
     },
     {
       "id": "showcase-three-d-axes",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "bb944d4aa44359b3b59eadd2d2fd9faafa2bfeee39f0dda7d8f0550d4962e519",
       "thumbnailTime": 5.7,
       "image": {
@@ -337,7 +337,7 @@
     },
     {
       "id": "showcase-linear-algebra",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "4113dd95fd2471a66c153d803ef782e1670da63f9b241c9e8214f52c5130a9d1",
       "thumbnailTime": 8.25,
       "image": {
@@ -356,7 +356,7 @@
     },
     {
       "id": "showcase-reactive-relationships",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "d97dede34fb4d899fd66230cdcc9888f142853064af2b7deafcf47cf54c89498",
       "thumbnailTime": 4.6,
       "image": {
@@ -375,7 +375,7 @@
     },
     {
       "id": "showcase-camera-follows-path",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "c56944687b2a12d61b2a7ad8b74dd349cafd53132182b14c62b6397d5ee90e5a",
       "thumbnailTime": 7.1,
       "image": {
@@ -394,7 +394,7 @@
     },
     {
       "id": "showcase-always-redraw",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "4d68b5e46aed9dbb39cad38d1060bc30bca0a666b0d5bcbbbc6b5a074ce918cd",
       "thumbnailTime": 4,
       "image": {
@@ -413,7 +413,7 @@
     },
     {
       "id": "showcase-raster-images",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "7901ef5acf95d33125c853c7aef65f6b12e8cc659441c13d4a7c26b6c507492d",
       "thumbnailTime": 6.35,
       "image": {
@@ -432,15 +432,15 @@
     },
     {
       "id": "showcase-pointer-selection",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "98b599c22c9871165bcae52e2cbbbed192eb61dd86b30c2de660058e7ff2a15c",
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 40402,
-        "pngSha256": "52858f26d3d4dfbb8d502c19587680b6198b3bfc3d31d2a3875e764c4fd67318",
-        "pixelSha256": "acdbe660ae1979af6f1651bca7b846632aadc7d9288dfcc4e4132cc134f1e9b6"
+        "foregroundPixels": 40062,
+        "pngSha256": "c0e8284468854c6c2bd33a6981dfe818700eb94cb9eda42995159e10e5a0836f",
+        "pixelSha256": "5c4b29919fe629ea6e868470f14276ba41d9d6763eef06837d0f58a6befe8ce5"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -469,21 +469,21 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 91,
+            "presentedFrames": 105,
             "presentationIntervalMs": null,
             "presentationIntervalSamples": 0,
-            "lastDeltaApplyMs": 0.9000000000232831,
-            "lastRendererCallMs": 3.7999999999883585,
+            "lastDeltaApplyMs": 0.6999999999534339,
+            "lastRendererCallMs": 2.7000000000116415,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 8087.799999999988,
-            "performanceTimeOriginMs": 1792333464018.3,
-            "rendererReadyAtMs": 4770.700000000012,
-            "firstPresentedAtMs": 4871.5,
+            "sampledAtMs": 6510.899999999965,
+            "performanceTimeOriginMs": 1792362197208.9,
+            "rendererReadyAtMs": 3490.399999999965,
+            "firstPresentedAtMs": 3564.6999999999534,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 8034.700000000012,
+            "firstPresentedSessionAtMs": 6467.599999999977,
             "transitionMode": null,
-            "lastFrameTimestamp": 7473.900000000023,
+            "lastFrameTimestamp": 6166.099999999977,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -519,9 +519,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 40402,
-          "pngSha256": "52858f26d3d4dfbb8d502c19587680b6198b3bfc3d31d2a3875e764c4fd67318",
-          "pixelSha256": "acdbe660ae1979af6f1651bca7b846632aadc7d9288dfcc4e4132cc134f1e9b6"
+          "foregroundPixels": 40062,
+          "pngSha256": "c0e8284468854c6c2bd33a6981dfe818700eb94cb9eda42995159e10e5a0836f",
+          "pixelSha256": "5c4b29919fe629ea6e868470f14276ba41d9d6763eef06837d0f58a6befe8ce5"
         },
         "restoredImage": {
           "width": 960,
@@ -534,15 +534,15 @@
     },
     {
       "id": "showcase-translation-drag",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "263b7762e09151e244f377bfd345302141c91ff65235dbc308487f75acde8817",
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 39526,
-        "pngSha256": "780a11a11c0acf6a6fc6b505173435c730db6ec5d10290ada7e1ef27bccd0b76",
-        "pixelSha256": "a41432dfd3d0f981a920e8ee93b3a8ae26a9b3cdf94c12756b4d97cde6bba094"
+        "foregroundPixels": 39452,
+        "pngSha256": "519f21c193a2fb404c8eb2b13e8c59260e663df04fb72bec52b96a89bf27bb68",
+        "pixelSha256": "318a149e1fa5583fd20681e8e45b55e974e2cfbeb22c1dffa2747e00b5a0b8ed"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -575,21 +575,21 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 81,
+            "presentedFrames": 105,
             "presentationIntervalMs": null,
             "presentationIntervalSamples": 0,
-            "lastDeltaApplyMs": 0.6000000000931323,
-            "lastRendererCallMs": 2.299999999930151,
+            "lastDeltaApplyMs": 0.5,
+            "lastRendererCallMs": 1.400000000023283,
             "modeSwitches": 0,
             "rendererRebuilds": 1,
-            "sampledAtMs": 7837.300000000047,
-            "performanceTimeOriginMs": 1792333486415.1,
-            "rendererReadyAtMs": 4628.800000000047,
-            "firstPresentedAtMs": 4711.300000000047,
+            "sampledAtMs": 6708.899999999965,
+            "performanceTimeOriginMs": 1792362214238.9,
+            "rendererReadyAtMs": 3731.0999999999767,
+            "firstPresentedAtMs": 3796.1999999999534,
             "presentedSession": 2,
-            "firstPresentedSessionAtMs": 7807.599999999977,
+            "firstPresentedSessionAtMs": 6689.599999999977,
             "transitionMode": null,
-            "lastFrameTimestamp": 7317.599999999977,
+            "lastFrameTimestamp": 6401.099999999977,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGL2",
@@ -625,9 +625,9 @@
         "selectedImage": {
           "width": 960,
           "height": 540,
-          "foregroundPixels": 39526,
-          "pngSha256": "780a11a11c0acf6a6fc6b505173435c730db6ec5d10290ada7e1ef27bccd0b76",
-          "pixelSha256": "a41432dfd3d0f981a920e8ee93b3a8ae26a9b3cdf94c12756b4d97cde6bba094"
+          "foregroundPixels": 39452,
+          "pngSha256": "519f21c193a2fb404c8eb2b13e8c59260e663df04fb72bec52b96a89bf27bb68",
+          "pixelSha256": "318a149e1fa5583fd20681e8e45b55e974e2cfbeb22c1dffa2747e00b5a0b8ed"
         },
         "restoredImage": {
           "width": 960,
@@ -647,7 +647,7 @@
     },
     {
       "id": "showcase-triangle-light",
-      "captureBuildId": "66876bebf630c5e338614162ce35de3d3c26ac96cba508de724b33150afd7f35",
+      "captureBuildId": "6cbc9800dd8d7705901e1056ed9e947ae853133222c0341b9a3cf7e71161e452",
       "sourceSha256": "242698c9d9e6063dfc920be09af25b1112c615e3528507b920c3b1e1e062eaa7",
       "thumbnailTime": 15.6,
       "image": {
