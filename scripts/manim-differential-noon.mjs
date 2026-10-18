@@ -117,6 +117,12 @@ custom_stride_live_queries = {
         for value in live_custom_stride.get_critical_point((1, 0, 0))
     ],
     "center": [float(value) for value in live_custom_stride.get_center()],
+    "num_curves": int(live_custom_stride.get_num_curves()),
+    "nth_curve_points": [
+        [float(coordinate) for coordinate in point]
+        for point in live_custom_stride.get_nth_curve_points(0)
+    ],
+    "arc_length": float(live_custom_stride.get_arc_length()),
     "point_from_proportion": [
         round(float(value), 7)
         for value in live_custom_stride.point_from_proportion(0.5)
@@ -140,6 +146,12 @@ custom_stride_authored_queries = {
         for value in authored_custom_stride.get_critical_point((1, 0, 0))
     ],
     "center": [float(value) for value in authored_custom_stride.get_center()],
+    "num_curves": int(authored_custom_stride.get_num_curves()),
+    "nth_curve_points": [
+        [float(coordinate) for coordinate in point]
+        for point in authored_custom_stride.get_nth_curve_points(0)
+    ],
+    "arc_length": float(authored_custom_stride.get_arc_length()),
     "point_from_proportion": [
         round(float(value), 7)
         for value in authored_custom_stride.point_from_proportion(0.5)
@@ -180,6 +192,9 @@ json.dumps({
     boundary_points: [[0, 0], [30, 0], [1, 0], [2, 0]],
     critical_point: [30, 0],
     center: [15, 0],
+    num_curves: 2,
+    nth_curve_points: [[0, 0], [30, 0]],
+    arc_length: 31,
     point_from_proportion: [15.5, 0],
   });
   assert.ok(
@@ -191,6 +206,9 @@ json.dumps({
       boundary_points: product.custom_stride_live_queries.boundary_points,
       critical_point: product.custom_stride_live_queries.critical_point,
       center: product.custom_stride_live_queries.center,
+      num_curves: product.custom_stride_live_queries.num_curves,
+      nth_curve_points: product.custom_stride_live_queries.nth_curve_points,
+      arc_length: product.custom_stride_live_queries.arc_length,
       point_from_proportion: product.custom_stride_live_queries.point_from_proportion,
       proportion_from_point: product.custom_stride_live_queries.proportion_from_point,
     },
