@@ -122,6 +122,26 @@ custom_stride_live_queries = {
         [float(coordinate) for coordinate in point]
         for point in live_custom_stride.get_nth_curve_points(0)
     ],
+    "start_anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in live_custom_stride.get_start_anchors()
+    ],
+    "end_anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in live_custom_stride.get_end_anchors()
+    ],
+    "anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in live_custom_stride.get_anchors()
+    ],
+    "anchors_and_handles": [
+        [[float(coordinate) for coordinate in point] for point in group]
+        for group in live_custom_stride.get_anchors_and_handles()
+    ],
+    "subpaths": [
+        [[float(coordinate) for coordinate in point] for point in subpath]
+        for subpath in live_custom_stride.get_subpaths()
+    ],
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
         for function in live_custom_stride.get_curve_functions()
@@ -168,6 +188,26 @@ custom_stride_authored_queries = {
     "nth_curve_points": [
         [float(coordinate) for coordinate in point]
         for point in authored_custom_stride.get_nth_curve_points(0)
+    ],
+    "start_anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in authored_custom_stride.get_start_anchors()
+    ],
+    "end_anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in authored_custom_stride.get_end_anchors()
+    ],
+    "anchors": [
+        [float(coordinate) for coordinate in point]
+        for point in authored_custom_stride.get_anchors()
+    ],
+    "anchors_and_handles": [
+        [[float(coordinate) for coordinate in point] for point in group]
+        for group in authored_custom_stride.get_anchors_and_handles()
+    ],
+    "subpaths": [
+        [[float(coordinate) for coordinate in point] for point in subpath]
+        for subpath in authored_custom_stride.get_subpaths()
     ],
     "curve_function_midpoints": [
         np.asarray(function(0.5), dtype=float).tolist()
@@ -230,6 +270,11 @@ json.dumps({
     center: [15, 0],
     num_curves: 2,
     nth_curve_points: [[0, 0], [30, 0]],
+    start_anchors: [[0, 0], [1, 0]],
+    end_anchors: [[30, 0], [2, 0]],
+    anchors: [[0, 0], [30, 0], [1, 0], [2, 0]],
+    anchors_and_handles: [[[0, 0], [1, 0]], [[30, 0], [2, 0]]],
+    subpaths: [[[0, 0], [30, 0]], [[1, 0], [2, 0]]],
     curve_function_midpoints: [[15, 0, 0], [1.5, 0, 0]],
     curve_function_lengths: [30, 1],
     nth_curve_function_midpoint: [1.5, 0, 0],
@@ -248,6 +293,11 @@ json.dumps({
       center: product.custom_stride_live_queries.center,
       num_curves: product.custom_stride_live_queries.num_curves,
       nth_curve_points: product.custom_stride_live_queries.nth_curve_points,
+      start_anchors: product.custom_stride_live_queries.start_anchors,
+      end_anchors: product.custom_stride_live_queries.end_anchors,
+      anchors: product.custom_stride_live_queries.anchors,
+      anchors_and_handles: product.custom_stride_live_queries.anchors_and_handles,
+      subpaths: product.custom_stride_live_queries.subpaths,
       curve_function_midpoints: product.custom_stride_live_queries.curve_function_midpoints,
       curve_function_lengths: product.custom_stride_live_queries.curve_function_lengths,
       nth_curve_function_midpoint: product.custom_stride_live_queries.nth_curve_function_midpoint,
