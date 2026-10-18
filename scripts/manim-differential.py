@@ -264,6 +264,22 @@ def _manim_set_z_zero() -> Any:
     }
 
 
+def _apply_to_family_probe(api) -> Any:
+    circle = api.Circle(radius=0.2)
+    circle.parity_marker = "circle"
+    square = api.Square(side_length=0.4)
+    square.parity_marker = "square"
+    empty = api.Mobject()
+    empty.parity_marker = "empty"
+    nested = api.Group(square, empty)
+    nested.parity_marker = "nested"
+    family = api.Group(circle, nested)
+    family.parity_marker = "root"
+    visited = []
+    result = family.apply_to_family(lambda mobject: visited.append(mobject.parity_marker))
+    return {"visited": visited, "returned_self": result is family}
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -2534,6 +2550,8 @@ FIXTURES = [
     Fixture("vgroup_arrange", _noon_arrange, _manim_arrange),
     Fixture("set_xy", _noon_set_xy, _manim_set_xy),
     Fixture("set_z_zero", _noon_set_z_zero, _manim_set_z_zero),
+    Fixture("apply_to_family", lambda: _apply_to_family_probe(noon),
+            lambda: _apply_to_family_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),

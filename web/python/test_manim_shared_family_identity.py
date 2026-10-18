@@ -8,6 +8,20 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_apply_to_family_invokes_callbacks_in_shared_pointful_order(self):
+        from unittest.mock import Mock, call
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        members = [object(), object()]
+        root.family_members_with_points = Mock(return_value=members)
+        callback = Mock()
+
+        self.assertIs(root.apply_to_family(callback), root)
+        root.family_members_with_points.assert_called_once_with()
+        self.assertEqual(callback.call_args_list, [call(members[0]), call(members[1])])
+
     def test_family_query_uses_shared_order_and_existing_wrapper_identity(self):
         from unittest.mock import Mock, patch
         import _manim_compat as compat
@@ -46,9 +60,13 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(NotImplementedError, "staged callback membership"):
                 root.get_family()
+            callback = Mock()
+            with self.assertRaisesRegex(NotImplementedError, "staged callback membership"):
+                root.apply_to_family(callback)
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
         root._semantic_family_handle.familyKeys.assert_not_called()
+        callback.assert_not_called()
 
     def test_live_observations_and_coordinates_delegate_without_python_bounds_math(self):
         from types import SimpleNamespace

@@ -442,6 +442,12 @@ class Mobject:
         """Return point-owning family members in the shared family order."""
         return [mobject for mobject in self.get_family() if mobject.get_num_points() > 0]
 
+    def apply_to_family(self, func: Callable[[Mobject], None]) -> Mobject:
+        """Apply ``func`` to every point-owning member in shared family order."""
+        for mobject in self.family_members_with_points():
+            func(mobject)
+        return self
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
