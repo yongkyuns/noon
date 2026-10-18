@@ -985,6 +985,52 @@ class PathQueryTests(unittest.TestCase):
 
         self.assertEqual(query.free.call_count, 4)
 
+    def test_negative_nth_curve_functions_and_lengths_follow_point_slice(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy curve callable and error contracts")
+
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.curveCount = 2
+        query.pointCount = 8
+        query.curvePointsAt.return_value = [1.0, 0.5, 0.0]
+        query.curveLengthPieces.return_value = [2.25]
+        query.curveLength.return_value = 2.25
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 4, 4, 8]
+        axis_error = getattr(np, "AxisError", None) or np.exceptions.AxisError
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            function = value.get_nth_curve_function(-2)
+            np.testing.assert_array_equal(function(0.5), [1.0, 0.5, 0.0])
+            np.testing.assert_array_equal(
+                value.get_nth_curve_length_pieces(-2, sample_points=2), [2.25]
+            )
+            self.assertEqual(value.get_nth_curve_length(-2, sample_points=2), 2.25)
+            with_length, length = value.get_nth_curve_function_with_length(
+                -2, sample_points=2
+            )
+            self.assertEqual(length, 2.25)
+            np.testing.assert_array_equal(with_length(0.5), [1.0, 0.5, 0.0])
+
+            empty = value.get_nth_curve_function(-1)
+            with self.assertRaisesRegex(
+                IndexError, "index 0 is out of bounds for axis 1 with size 0"
+            ):
+                empty(0.5)
+            with self.assertRaisesRegex(
+                axis_error, "axis 1 is out of bounds"
+            ):
+                value.get_nth_curve_length_pieces(-1, sample_points=0)
+            with self.assertRaisesRegex(
+                IndexError, "index 0 is out of bounds for axis 1 with size 0"
+            ):
+                value.get_nth_curve_length_pieces(-1, sample_points=2)
+
     def test_curve_length_queries_forward_sample_count_and_free_snapshots(self):
         try:
             import numpy as np
@@ -994,6 +1040,7 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
+        query.pointCount = 8
         query.curveLengthPieces.side_effect = lambda index, samples: (
             [] if samples == 0 else [0.25, 0.5, 0.75]
         )
@@ -1024,7 +1071,14 @@ class PathQueryTests(unittest.TestCase):
                 value.get_nth_curve_length_pieces(2)
             self.assertEqual(query.free.call_count, 7)
 
-        with patch.object(queries, '_typed_manim_observation') as observe:
+        empty_query = Mock()
+        empty_query.curveCount = 1
+        empty_query.pointCount = 4
+        with patch.object(
+            queries,
+            '_typed_manim_observation',
+            return_value=empty_query,
+        ) as observe:
             for samples in (-1, 2**32):
                 with self.assertRaises(ValueError):
                     value.get_nth_curve_length(0, sample_points=samples)
@@ -1032,7 +1086,7 @@ class PathQueryTests(unittest.TestCase):
                 value.get_nth_curve_length_pieces(0, sample_points=2.5)
             with self.assertRaises(IndexError):
                 value.get_nth_curve_length(-1)
-            self.assertEqual(observe.call_count, 3)
+            self.assertEqual(observe.call_count, 4)
 
     def test_curve_functions_keep_snapshot_and_vectorize_numpy_parameters(self):
         try:
@@ -1082,14 +1136,18 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 1
+        query.pointCount = 4
         with patch.object(queries, '_typed_manim_observation', return_value=query):
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_function(1)
             query.free.assert_called_once()
             with self.assertRaises(TypeError):
                 next(value.get_curve_functions_with_lengths(unsupported=True))
-            with self.assertRaises(IndexError):
-                value.get_nth_curve_function(-1)
+            empty = value.get_nth_curve_function(-1)
+            with self.assertRaisesRegex(
+                IndexError, "index 0 is out of bounds for axis 1 with size 0"
+            ):
+                empty(0.5)
 
     def test_zero_sample_length_matches_numpy_axis_error_only_for_existing_curves(self):
         try:

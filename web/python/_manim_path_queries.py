@@ -486,6 +486,32 @@ def _assert_curve_index(query, index):
         raise AssertionError
 
 
+def _negative_curve_index(value, index, query):
+    """Resolve source-compatible negative indices on aligned cubic slices."""
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    point_count = int(query.pointCount)
+    # VMobject.get_num_curves() uses len(points) // stride. Derive that from
+    # this same immutable observation so the count and slice share a snapshot.
+    assert index < point_count // stride
+    start, stop, _ = slice(stride * index, stride * (index + 1)).indices(
+        point_count
+    )
+    if start >= stop:
+        return None
+    if stride != 4 or stop - start != 4 or start % 4:
+        raise NotImplementedError(
+            "negative curve functions require an aligned four-point cubic slice"
+        )
+    return start // 4
+
+
+def _nth_curve_index(value, index, query):
+    if index < 0:
+        return _negative_curve_index(value, index, query)
+    _assert_curve_index(query, index)
+    return index
+
+
 class _CurveQuerySnapshot:
     """Keep one immutable Rust path observation alive for returned callables."""
 
@@ -525,6 +551,14 @@ def _curve_callable(snapshot, index):
     return curve
 
 
+def _empty_curve_callable():
+    def curve(_t):
+        raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+
+    curve.__name__ = "cubic_bezier"
+    return curve
+
+
 def _curve_functions(value, with_lengths, sample_points=None):
     import numpy as np
 
@@ -552,7 +586,10 @@ def curve_function(value, n):
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
-        _assert_curve_index(query, index)
+        index = _nth_curve_index(value, index, query)
+        if index is None:
+            snapshot.__del__()
+            return _empty_curve_callable()
         return _curve_callable(snapshot, index)
     except Exception:
         snapshot.__del__()
@@ -566,10 +603,12 @@ def curve_function_with_length(value, n, sample_points=None):
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
-        _assert_curve_index(query, index)
+        index = _nth_curve_index(value, index, query)
         samples = _curve_sample_count(sample_points)
         if samples == 0:
             _raise_zero_sample_length_axis_error()
+        if index is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
         function = _curve_callable(snapshot, index)
         length = np.float64(engine_call(query.curveLength, index, samples))
         return function, length
@@ -604,14 +643,14 @@ def curve_length_pieces(value, n, sample_points):
     import numpy as np
 
     index = operator.index(n)
-    if index < 0:
-        raise IndexError("curve index must be between 0 and 4294967295")
     query = _query(value)
     try:
-        _assert_curve_index(query, index)
+        index = _nth_curve_index(value, index, query)
         samples = _curve_sample_count(sample_points)
         if samples == 0:
             _raise_zero_sample_length_axis_error()
+        if index is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
         return np.asarray(
             engine_call(query.curveLengthPieces, index, samples), dtype=np.float64
         )
@@ -623,14 +662,14 @@ def curve_length(value, n, sample_points):
     import numpy as np
 
     index = operator.index(n)
-    if index < 0:
-        raise IndexError("curve index must be between 0 and 4294967295")
     query = _query(value)
     try:
-        _assert_curve_index(query, index)
+        index = _nth_curve_index(value, index, query)
         samples = _curve_sample_count(sample_points)
         if samples == 0:
             _raise_zero_sample_length_axis_error()
+        if index is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
         return np.float64(engine_call(query.curveLength, index, samples))
     finally:
         query.free()

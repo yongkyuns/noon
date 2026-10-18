@@ -581,6 +581,46 @@ def _curve_function_queries(api):
                 sample_points=6
             )
         ],
+        "negative_previous_curve": {
+            "function": capture(
+                lambda: sample(path.get_nth_curve_function(-2))
+            ),
+            "length_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -2, sample_points=2
+                    )
+                ]
+            ),
+            "length": capture(
+                lambda: float(path.get_nth_curve_length(-2, sample_points=2))
+            ),
+            "function_with_length": capture(
+                lambda: _sample_negative_curve_with_length(path, sample)
+            ),
+        },
+        "negative_last_curve": {
+            "function": capture(
+                lambda: sample(path.get_nth_curve_function(-1))
+            ),
+            "length_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -1, sample_points=2
+                    )
+                ]
+            ),
+            "zero_sample_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -1, sample_points=0
+                    )
+                ]
+            ),
+        },
         "empty_functions": list(api.VMobject().get_curve_functions()),
         "empty_functions_with_invalid_length_samples": [
             list(
@@ -595,6 +635,11 @@ def _curve_function_queries(api):
             for sample_points in (0, 1, -1, 2.5)
         ],
     }
+
+
+def _sample_negative_curve_with_length(path, sample):
+    function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
+    return {"curve": sample(function), "length": float(length)}
 
 
 def _nth_curve_point_queries(api):
