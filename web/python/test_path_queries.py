@@ -636,7 +636,7 @@ class PathQueryTests(unittest.TestCase):
         value.get_num_points = Mock(return_value=4)
         with patch.object(
             semantic_handles,
-            "_path_boundary_extremum_along_dim_observation",
+            "_extremum_along_dim_observation",
             side_effect=[-2.0, 3.0],
         ) as observe:
             self.assertEqual(
@@ -646,6 +646,37 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(
             [call.args for call in observe.call_args_list],
             [(value, 0, -1.0), (value, 1, 1.0)],
+        )
+
+    def test_custom_stride_vmobject_critical_point_reduces_anchor_snapshot_in_rust(self):
+        import noon
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.get_num_points = Mock(return_value=4)
+        value.get_anchors = Mock(return_value=[
+            noon.Vec2(0.0, 0.0),
+            noon.Vec2(30.0, 0.0),
+            noon.Vec2(1.0, 0.0),
+            noon.Vec2(2.0, 0.0),
+        ])
+        with patch.object(
+            semantic_handles,
+            "_extremum_from_points_observation",
+            side_effect=[30.0, 0.0],
+        ) as reduce:
+            self.assertEqual(
+                semantic_handles._get_critical_point(value, (1.0, 1.0)),
+                noon.Vec2(30.0, 0.0),
+            )
+        value.get_anchors.assert_called_with()
+        self.assertEqual(value.get_anchors.call_count, 2)
+        self.assertEqual(
+            [call.args for call in reduce.call_args_list],
+            [
+                (value, [0.0, 0.0, 30.0, 0.0, 1.0, 0.0, 2.0, 0.0], 2, 0, 1.0),
+                (value, [0.0, 0.0, 30.0, 0.0, 1.0, 0.0, 2.0, 0.0], 2, 1, 1.0),
+            ],
         )
 
     def test_vmobject_center_uses_anchor_critical_point(self):

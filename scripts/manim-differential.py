@@ -512,6 +512,10 @@ def _curve_function_queries(api):
         [(0, 0, 0), (1, 0, 0)]
     )
     custom_stride_path.n_points_per_cubic_curve = 2
+    custom_stride_boundary_path = api.VMobject().add_subpath([
+        (0, 0, 0), (30, 0, 0), (1, 0, 0), (2, 0, 0),
+    ])
+    custom_stride_boundary_path.n_points_per_cubic_curve = 2
     high_grade_path = api.VMobject().set_points_as_corners(
         [(0, 0, 0), (1, 0, 0), (2, 1, 0), (3, 1, 0)]
     )
@@ -667,6 +671,25 @@ def _curve_function_queries(api):
                     )
                 ],
             },
+        },
+        "mutable_stride_boundary_queries": {
+            "anchors": [
+                _point_observation(point)
+                for point in custom_stride_boundary_path.get_anchors()
+            ],
+            "critical_point": _point_observation(
+                custom_stride_boundary_path.get_critical_point(api.RIGHT)
+            ),
+            "center": _point_observation(custom_stride_boundary_path.get_center()),
+            "x_min": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=0, key=-1)
+            ),
+            "x_max": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=0, key=1)
+            ),
+            "z_max": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=2, key=1)
+            ),
         },
         "functions_with_unknown_length_keyword": capture(
             lambda: list(path.get_curve_functions_with_lengths(unsupported=True))

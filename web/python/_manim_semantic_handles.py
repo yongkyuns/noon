@@ -10,6 +10,7 @@ from _noon_errors import engine_call, raise_engine_error
 
 import copy
 import json
+import operator
 import sys
 from typing import Any
 
@@ -701,8 +702,8 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
         if self.get_num_points() == 0:
             return _base.ORIGIN
         return _base.Vec2(
-            _path_boundary_extremum_along_dim_observation(self, 0, axis.x),
-            _path_boundary_extremum_along_dim_observation(self, 1, axis.y),
+            _extremum_along_dim_observation(self, 0, axis.x),
+            _extremum_along_dim_observation(self, 1, axis.y),
         )
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
@@ -1900,6 +1901,35 @@ def _family_point_count_observation(value: _base.Mobject) -> int | None:
 
 def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
     if isinstance(value, _compat.VMobject):
+        try:
+            stride = operator.index(
+                getattr(value, "n_points_per_cubic_curve", 4)
+            )
+        except TypeError:
+            stride = None
+        if stride != 4:
+            from _manim_updaters import canonical_callback_phase_active
+
+            if _is_bound(value) or canonical_callback_phase_active():
+                raise NotImplementedError(
+                    "custom-stride VMobject extrema require an authored point snapshot"
+                )
+            if dim == 2:
+                return 0.0
+            anchors = value.get_anchors()
+            coordinates = [
+                float(coordinate)
+                for point in anchors
+                for coordinate in (point[0], point[1])
+            ]
+            result = _extremum_from_points_observation(
+                value, coordinates, 2, dim, key
+            )
+            if result is None:
+                raise NotImplementedError(
+                    "custom-stride VMobject extrema require a shared Rust handle"
+                )
+            return float(result)
         return _point_query_observation(
             value,
             "PathBoundaryExtremumAlongDim",
