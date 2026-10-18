@@ -134,8 +134,19 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
           python3 scripts/test_code_pygments_parity.py
+      # Unlike the ordinary PR CI jobs, this one intentionally checks out
+      # the immutable PR head, not the synthetic PR merge. Preserve the strict
+      # build identity assertion by pinning its expected SHA to that same head.
+      - name: Verify source checkout is the advertised PR head
+        env:
+          PINNED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PINNED_HEAD_SHA"
+          echo "Source checkout $PINNED_HEAD_SHA; PR test merge $GITHUB_SHA"
       - name: Build exact head source browser runtime
         uses: ./.github/actions/dev-wasm-build
+        env:
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           preflight: 'false'
       - name: Install pinned renderer tools
