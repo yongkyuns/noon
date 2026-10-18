@@ -99,13 +99,120 @@ def add_subpath(value, points):
 def add_smooth_curve_to(value, *points):
     if len(points) not in (1, 2):
         raise ValueError("Only call add_smooth_curve_to with 1 or 2 points")
+    stride = _curve_append_stride(value, empty_checks_first=False)
+    if _line_append_arity_is_invalid(value) and (
+        value.has_new_path_started()
+        if stride == 4
+        else _has_new_path_started_with_stride(value, stride)
+    ):
+        _validate_line_append_arity(value)
     return edit_points(
         value,
         "addSmoothCurveTo",
         "liveAddSmoothCurveTo",
         points,
         array=True,
+        suffix=_curve_append_suffix(stride),
     )
+
+
+def add_line_to(value, point):
+    _validate_line_append_arity(value)
+    stride = _curve_append_stride(value, empty_checks_first=True)
+    return edit_points(
+        value,
+        "addLineTo",
+        "liveAddLineTo",
+        (point,),
+        suffix=_curve_append_suffix(stride),
+    )
+
+
+def add_quadratic_bezier_curve_to(value, control, anchor):
+    stride = _curve_append_stride(value, empty_checks_first=True)
+    return edit_points(
+        value,
+        "addQuadraticBezierCurveTo",
+        "liveAddQuadraticBezierCurveTo",
+        (control, anchor),
+        suffix=_curve_append_suffix(stride),
+    )
+
+
+def add_cubic_bezier_curve_to(value, control1, control2, anchor):
+    stride = _curve_append_stride(value, empty_checks_first=True)
+    return edit_points(
+        value,
+        "addCubicBezierCurveTo",
+        "liveAddCubicBezierCurveTo",
+        (control1, control2, anchor),
+        suffix=_curve_append_suffix(stride),
+    )
+
+
+def _curve_append_suffix(stride):
+    return () if stride == 4 else (stride,)
+
+
+def _has_new_path_started_with_stride(value, stride):
+    from _manim_path_queries import _query
+
+    query = _query(value)
+    try:
+        return bool(engine_call(query.hasNewPathStarted, stride))
+    finally:
+        query.free()
+
+
+def _curve_append_stride(value, *, empty_checks_first):
+    import operator
+
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_cubic_curve exceeds the supported path stride")
+    if stride == 0:
+        if not empty_checks_first:
+            raise ZeroDivisionError("integer modulo by zero")
+        from _manim_path_queries import _query
+
+        query = _query(value)
+        try:
+            if int(query.pointCount) != 0:
+                raise ZeroDivisionError("integer modulo by zero")
+        finally:
+            query.free()
+    return stride
+
+
+def _validate_line_append_arity(value):
+    try:
+        sample_count = len(value._bezier_t_values)
+    except AttributeError:
+        return
+    generated_points = sample_count - 1
+    if generated_points == 3:
+        return
+    method = f"{type(value).__name__}.add_cubic_bezier_curve_to()"
+    parameter_names = ("handle1", "handle2", "anchor")
+    if generated_points < 3:
+        missing = parameter_names[max(generated_points, 0) :]
+        if len(missing) == 1:
+            description = f"1 required positional argument: '{missing[0]}'"
+        else:
+            names = ", ".join(f"'{name}'" for name in missing[:-1])
+            names = f"{names} and '{missing[-1]}'" if names else f"'{missing[-1]}'"
+            description = f"{len(missing)} required positional arguments: {names}"
+        raise TypeError(f"{method} missing {description}")
+    raise TypeError(
+        f"{method} takes 4 positional arguments but {generated_points + 1} were given"
+    )
+
+
+def _line_append_arity_is_invalid(value):
+    try:
+        return len(value._bezier_t_values) != 4
+    except AttributeError:
+        return False
 
 
 def scale_handle_to_anchor_distances(value, factor):

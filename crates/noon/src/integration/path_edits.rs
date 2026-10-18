@@ -42,6 +42,11 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         point: Vec2,
     },
+    LineWithStride {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+    },
     Close {
         object: &'a Mobject,
     },
@@ -62,16 +67,35 @@ pub enum BorrowedPathEdit<'a> {
         control: Vec2,
         anchor: Vec2,
     },
+    QuadraticWithStride {
+        object: &'a Mobject,
+        control: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    },
     Cubic {
         object: &'a Mobject,
         control1: Vec2,
         control2: Vec2,
         anchor: Vec2,
     },
+    CubicWithStride {
+        object: &'a Mobject,
+        control1: Vec2,
+        control2: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    },
     SmoothCurve {
         object: &'a Mobject,
         handle2: Option<Vec2>,
         anchor: Vec2,
+    },
+    SmoothCurveWithStride {
+        object: &'a Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+        stride: i32,
     },
     CubicCurve {
         object: &'a Mobject,
@@ -141,6 +165,11 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::AnchorMode { object, smooth } => (object, PathEdit::AnchorMode(smooth)),
         BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
+        BorrowedPathEdit::LineWithStride {
+            object,
+            point,
+            stride,
+        } => (object, PathEdit::LineWithStride(point, stride)),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
         BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
         BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start { point, stride: 4 }),
@@ -154,17 +183,49 @@ pub fn publish_borrowed_path_edit(
             control,
             anchor,
         } => (object, PathEdit::Quadratic(control, anchor)),
+        BorrowedPathEdit::QuadraticWithStride {
+            object,
+            control,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::QuadraticWithStride(control, anchor, stride),
+        ),
         BorrowedPathEdit::Cubic {
             object,
             control1,
             control2,
             anchor,
         } => (object, PathEdit::Cubic(control1, control2, anchor)),
+        BorrowedPathEdit::CubicWithStride {
+            object,
+            control1,
+            control2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::CubicWithStride(control1, control2, anchor, stride),
+        ),
         BorrowedPathEdit::SmoothCurve {
             object,
             handle2,
             anchor,
         } => (object, PathEdit::SmoothCurve { handle2, anchor }),
+        BorrowedPathEdit::SmoothCurveWithStride {
+            object,
+            handle2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::SmoothCurveWithStride {
+                handle2,
+                anchor,
+                stride,
+            },
+        ),
         BorrowedPathEdit::CubicCurve {
             object,
             anchor1,

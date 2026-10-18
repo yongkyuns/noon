@@ -852,10 +852,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         source: &noon::Mobject,
         point: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithStride {
             object: source,
             point,
+            stride,
         })
     }
 
@@ -865,11 +867,13 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         control: noon_core::Vec2,
         anchor: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Quadratic {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::QuadraticWithStride {
             object: source,
             control,
             anchor,
+            stride,
         })
     }
 
@@ -880,12 +884,14 @@ impl SemanticExecutionPlayer {
         control1: noon_core::Vec2,
         control2: noon_core::Vec2,
         anchor: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Cubic {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicWithStride {
             object: source,
             control1,
             control2,
             anchor,
+            stride,
         })
     }
 
@@ -895,12 +901,16 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         handle2: Option<noon_core::Vec2>,
         anchor: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SmoothCurve {
-            object: source,
-            handle2,
-            anchor,
-        })
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
+                object: source,
+                handle2,
+                anchor,
+                stride,
+            },
+        )
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -913,6 +913,41 @@ def _raw_point_smooth_curve_appends(api):
     return result
 
 
+def _raw_point_custom_stride_curve_appends(api):
+    import numpy as np
+
+    result = {}
+    for point_count in (5, 6):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        for operation in ("line", "quadratic", "cubic", "smooth", "smooth_explicit"):
+            value = api.VMobject().set_points(initial.copy())
+            # Manim's stride is mutable. Mutate it after construction so the
+            # default four Bezier samples remain while pending-anchor checks
+            # use the new five-point grouping.
+            value.n_points_per_cubic_curve = 5
+            pending_before = value.has_new_path_started()
+            if operation == "line":
+                value.add_line_to((11.0, -1.0, 0.0))
+            elif operation == "quadratic":
+                value.add_quadratic_bezier_curve_to((8.0, 2.0, 0.0), (11.0, -1.0, 0.0))
+            elif operation == "cubic":
+                value.add_cubic_bezier_curve_to(
+                    (7.0, 1.0, 0.0), (9.0, 2.0, 0.0), (11.0, -1.0, 0.0)
+                )
+            elif operation == "smooth":
+                value.add_smooth_curve_to((11.0, -1.0, 0.0))
+            else:
+                value.add_smooth_curve_to((7.0, 2.0, 0.0), (11.0, -1.0, 0.0))
+            result[f"{point_count}_{operation}"] = {
+                "count": value.get_num_points(),
+                "pending_before": pending_before,
+                "points": [_point_observation(point) for point in value.get_all_points()],
+            }
+    return result
+
+
 def _sample_negative_curve_with_length(path, sample):
     function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
     return {"curve": sample(function), "length": float(length)}
@@ -2003,6 +2038,7 @@ FIXTURES = [
     Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
     Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),
     Fixture("raw_point_smooth_curve_appends", lambda: _raw_point_smooth_curve_appends(noon), lambda: _raw_point_smooth_curve_appends(manim), 1e-5),
+    Fixture("raw_point_custom_stride_curve_appends", lambda: _raw_point_custom_stride_curve_appends(noon), lambda: _raw_point_custom_stride_curve_appends(manim), 1e-5),
     Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 

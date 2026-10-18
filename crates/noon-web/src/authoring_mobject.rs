@@ -1641,8 +1641,9 @@ mod wasm {
             self.value.curve_count() as u32
         }
         #[wasm_bindgen(js_name = hasNewPathStarted)]
-        pub fn has_new_path_started(&self) -> bool {
-            self.value.has_new_path_started()
+        pub fn has_new_path_started(&self, stride: Option<i32>) -> bool {
+            self.value
+                .has_new_path_started_with_stride(stride.unwrap_or(4))
         }
         pub fn direction(&self) -> String {
             self.value.direction().to_owned()
@@ -2319,9 +2320,16 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = addLineTo)]
-        pub fn add_line_to(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
+        pub fn add_line_to(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: Option<i32>,
+        ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;
-            self.handle.add_line_to(point).map_err(js_error)
+            self.handle
+                .add_line_to_with_stride(point, stride.unwrap_or(4))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
@@ -2331,11 +2339,12 @@ mod wasm {
             control_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control = crate::authoring_geometry::point(control_x, control_y)?;
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.handle
-                .add_quadratic_bezier_curve_to(control, anchor)
+                .add_quadratic_bezier_curve_to_with_stride(control, anchor, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 
@@ -2348,17 +2357,27 @@ mod wasm {
             control2_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
             let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.handle
-                .add_cubic_bezier_curve_to(control1, control2, anchor)
+                .add_cubic_bezier_curve_to_with_stride(
+                    control1,
+                    control2,
+                    anchor,
+                    stride.unwrap_or(4),
+                )
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addSmoothCurveTo)]
-        pub fn add_smooth_curve_to(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+        pub fn add_smooth_curve_to(
+            &mut self,
+            values: Vec<f64>,
+            stride: Option<i32>,
+        ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points(&values)?;
             let (handle2, anchor) = match points.as_slice() {
                 [anchor] => (None, *anchor),
@@ -2370,7 +2389,7 @@ mod wasm {
                 }
             };
             self.handle
-                .add_smooth_curve_to(handle2, anchor)
+                .add_smooth_curve_to_with_stride(handle2, anchor, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 

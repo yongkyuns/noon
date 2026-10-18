@@ -1111,6 +1111,23 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(query.hasNewPathStarted.call_count, 2)
         self.assertEqual(query.free.call_count, 2)
 
+    def test_has_new_path_started_uses_mutable_stride_and_rejects_zero_before_query(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        query = Mock()
+        query.hasNewPathStarted.return_value = True
+        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+            self.assertTrue(value.has_new_path_started())
+        observe.assert_called_once_with(value, "pathQuery", "queryMobjectPath")
+        query.hasNewPathStarted.assert_called_once_with(5)
+        query.free.assert_called_once_with()
+
+        value.n_points_per_cubic_curve = 0
+        with patch.object(queries, "_typed_manim_observation") as observe:
+            with self.assertRaisesRegex(ZeroDivisionError, "integer modulo by zero"):
+                value.has_new_path_started()
+        observe.assert_not_called()
+
     def test_curve_sample_validation_matches_curve_iteration_and_frees_snapshots(self):
         try:
             import numpy as np

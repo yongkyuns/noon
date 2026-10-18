@@ -103,6 +103,70 @@ class PathEditingTests(unittest.TestCase):
         with self.assertRaisesRegex(ZeroDivisionError, "integer modulo by zero"):
             value.start_new_path((1, 2, 0))
 
+    def test_scalar_curve_appends_forward_mutable_stride_to_authored_and_live_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        cases = [
+            (value.add_line_to, ((1, 2, 0),), 'addLineTo', 'liveAddLineTo', [1., 2., 5]),
+            (
+                value.add_quadratic_bezier_curve_to,
+                ((1, 2, 0), (3, 4, 0)),
+                'addQuadraticBezierCurveTo',
+                'liveAddQuadraticBezierCurveTo',
+                [1., 2., 3., 4., 5],
+            ),
+            (
+                value.add_cubic_bezier_curve_to,
+                ((1, 2, 0), (3, 4, 0), (5, 6, 0)),
+                'addCubicBezierCurveTo',
+                'liveAddCubicBezierCurveTo',
+                [1., 2., 3., 4., 5., 6., 5],
+            ),
+            (
+                value.add_smooth_curve_to,
+                ((1, 2, 0),),
+                'addSmoothCurveTo',
+                'liveAddSmoothCurveTo',
+                [[1., 2.], 5],
+            ),
+            (
+                value.add_smooth_curve_to,
+                ((1, 2, 0), (3, 4, 0)),
+                'addSmoothCurveTo',
+                'liveAddSmoothCurveTo',
+                [[1., 2., 3., 4.], 5],
+            ),
+        ]
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}):
+            for call, points, authored_method, live_method, expected in cases:
+                for context in (None, Mock()):
+                    with self.subTest(method=authored_method, live=context is not None), \
+                         patch.object(editing, '_handle_for', return_value=handle), \
+                         patch.object(editing, '_live_mutation_context', return_value=context), \
+                         patch.object(editing, '_live_constructor_context', return_value=None):
+                        self.assertIs(call(*points), value)
+                    if context is None:
+                        getattr(handle, authored_method).assert_called_once_with(*expected)
+                    else:
+                        getattr(context, live_method).assert_called_once_with(handle, *expected)
+                    handle.reset_mock()
+
+    def test_line_append_preserves_constructor_sample_arity_errors(self):
+        cases = [
+            ([0., .5, 1.], "VMobject.add_cubic_bezier_curve_to() missing 1 required positional argument: 'anchor'"),
+            ([0., .25, .5, .75, 1.], "VMobject.add_cubic_bezier_curve_to() takes 4 positional arguments but 5 were given"),
+        ]
+        for samples, expected_error in cases:
+            value = identity_only_wrapper(compat.VMobject)
+            value._bezier_t_values = samples
+            with self.subTest(sample_count=len(samples)):
+                with self.assertRaises(TypeError) as captured:
+                    value.add_line_to((1, 2, 0))
+                self.assertEqual(str(captured.exception), expected_error)
+
     @unittest.skipIf(numpy is None, "NumPy resize contracts run in the pinned utility qualification lane")
     def test_resize_points_uses_resize_function_then_shared_setter(self):
         value = identity_only_wrapper(compat.VMobject)

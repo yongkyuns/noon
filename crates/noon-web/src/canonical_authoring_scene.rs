@@ -8119,12 +8119,13 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
             point_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_line_to(source.semantic_mobject(), point)
+                .live_add_line_to(source.semantic_mobject(), point, stride.unwrap_or(4))
                 .map_err(typed_js_error)
         }
 
@@ -8136,13 +8137,19 @@ mod wasm {
             control_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control = crate::authoring_geometry::point(control_x, control_y)?;
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_quadratic_bezier_curve_to(source.semantic_mobject(), control, anchor)
+                .live_add_quadratic_bezier_curve_to(
+                    source.semantic_mobject(),
+                    control,
+                    anchor,
+                    stride.unwrap_or(4),
+                )
                 .map_err(typed_js_error)
         }
 
@@ -8156,6 +8163,7 @@ mod wasm {
             control2_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
             let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
@@ -8168,6 +8176,7 @@ mod wasm {
                     control1,
                     control2,
                     anchor,
+                    stride.unwrap_or(4),
                 )
                 .map_err(typed_js_error)
         }
@@ -8177,6 +8186,7 @@ mod wasm {
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points(&values)?;
             let (handle2, anchor) = match points.as_slice() {
@@ -8191,7 +8201,12 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_smooth_curve_to(source.semantic_mobject(), handle2, anchor)
+                .live_add_smooth_curve_to(
+                    source.semantic_mobject(),
+                    handle2,
+                    anchor,
+                    stride.unwrap_or(4),
+                )
                 .map_err(typed_js_error)
         }
 

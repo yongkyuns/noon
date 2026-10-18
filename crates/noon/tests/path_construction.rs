@@ -189,6 +189,170 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
     }
 }
 
+#[test]
+fn scalar_curve_appends_classify_pending_anchors_using_mutable_stride() {
+    #[derive(Clone, Copy)]
+    enum Edit {
+        Line,
+        Quadratic,
+        Cubic,
+        Smooth,
+        SmoothWithHandle,
+    }
+
+    let stride = 5;
+    for point_count in [5, 6] {
+        let initial = (0..point_count)
+            .map(|index| Vec2::new(index as f32, (index % 2) as f32))
+            .collect::<Vec<_>>();
+        for edit in [
+            Edit::Line,
+            Edit::Quadratic,
+            Edit::Cubic,
+            Edit::Smooth,
+            Edit::SmoothWithHandle,
+        ] {
+            for live in [false, true] {
+                let mut scene = Scene::new();
+                let mut object = scene
+                    .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+                    .unwrap();
+                object.set_points(&initial).unwrap();
+                if live {
+                    scene.add(&object).unwrap();
+                }
+
+                let start = *initial.last().unwrap();
+                let anchor = Vec2::new(11., -1.);
+                let (control1, control2) = match edit {
+                    Edit::Line => {
+                        let direction = anchor - start;
+                        (start + direction / 3.0, start + direction * (2.0 / 3.0))
+                    }
+                    Edit::Quadratic => {
+                        let control = Vec2::new(8., 2.);
+                        (
+                            control * (2.0 / 3.0) + start / 3.0,
+                            control * (2.0 / 3.0) + anchor / 3.0,
+                        )
+                    }
+                    Edit::Cubic => (Vec2::new(7., 1.), Vec2::new(9., 2.)),
+                    Edit::Smooth | Edit::SmoothWithHandle if point_count % stride == 1 => {
+                        let direction = anchor - start;
+                        (start + direction / 3.0, start + direction * (2.0 / 3.0))
+                    }
+                    Edit::Smooth | Edit::SmoothWithHandle => {
+                        let previous_handle = initial[initial.len() - 2];
+                        let tangent = start - previous_handle;
+                        let control2 = if matches!(edit, Edit::SmoothWithHandle) {
+                            Vec2::new(7., 2.)
+                        } else {
+                            let direction = anchor - start;
+                            let reflected = direction.normalized().map_or(tangent, |axis| {
+                                axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y)) - tangent
+                            });
+                            anchor - reflected
+                        };
+                        (start + tangent, control2)
+                    }
+                };
+
+                let mut expected = initial.clone();
+                if point_count % stride != 1 {
+                    expected.push(start);
+                }
+                expected.extend([control1, control2, anchor]);
+
+                if live {
+                    let mut session = scene.execution_session().unwrap();
+                    let operation = match edit {
+                        Edit::Line => noon::integration::BorrowedPathEdit::LineWithStride {
+                            object: &object,
+                            point: anchor,
+                            stride,
+                        },
+                        Edit::Quadratic => {
+                            noon::integration::BorrowedPathEdit::QuadraticWithStride {
+                                object: &object,
+                                control: Vec2::new(8., 2.),
+                                anchor,
+                                stride,
+                            }
+                        }
+                        Edit::Cubic => noon::integration::BorrowedPathEdit::CubicWithStride {
+                            object: &object,
+                            control1,
+                            control2,
+                            anchor,
+                            stride,
+                        },
+                        Edit::Smooth => {
+                            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
+                                object: &object,
+                                handle2: None,
+                                anchor,
+                                stride,
+                            }
+                        }
+                        Edit::SmoothWithHandle => {
+                            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
+                                object: &object,
+                                handle2: Some(Vec2::new(7., 2.)),
+                                anchor,
+                                stride,
+                            }
+                        }
+                    };
+                    noon::integration::publish_borrowed_path_edit(
+                        scene.integration_store(),
+                        scene.root(),
+                        &mut session,
+                        operation,
+                    )
+                    .unwrap();
+                    let actual = noon::integration::effective_path_query(
+                        scene.integration_store(),
+                        &session,
+                        &object,
+                    )
+                    .unwrap()
+                    .points()
+                    .unwrap();
+                    assert_raw_points_match(&actual, &expected);
+                } else {
+                    match edit {
+                        Edit::Line => object.add_line_to_with_stride(anchor, stride).unwrap(),
+                        Edit::Quadratic => object
+                            .add_quadratic_bezier_curve_to_with_stride(
+                                Vec2::new(8., 2.),
+                                anchor,
+                                stride,
+                            )
+                            .unwrap(),
+                        Edit::Cubic => object
+                            .add_cubic_bezier_curve_to_with_stride(
+                                control1, control2, anchor, stride,
+                            )
+                            .unwrap(),
+                        Edit::Smooth => object
+                            .add_smooth_curve_to_with_stride(None, anchor, stride)
+                            .unwrap(),
+                        Edit::SmoothWithHandle => object
+                            .add_smooth_curve_to_with_stride(
+                                Some(Vec2::new(7., 2.)),
+                                anchor,
+                                stride,
+                            )
+                            .unwrap(),
+                    }
+                    let actual = object.path_query().unwrap().points().unwrap();
+                    assert_raw_points_match(&actual, &expected);
+                }
+            }
+        }
+    }
+}
+
 fn assert_raw_points_match(actual: &[(f64, f64)], expected: &[Vec2]) {
     assert_eq!(actual.len(), expected.len());
     for (actual, expected) in actual.iter().zip(expected) {

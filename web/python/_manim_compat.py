@@ -196,16 +196,16 @@ class VMobject(Mobject):
         return start_new_path(self, point)
 
     def add_line_to(self, point):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "addLineTo", "liveAddLineTo", (point,))
+        from _manim_path_editing import add_line_to
+        return add_line_to(self, point)
 
     def add_quadratic_bezier_curve_to(self, control, anchor):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "addQuadraticBezierCurveTo", "liveAddQuadraticBezierCurveTo", (control, anchor))
+        from _manim_path_editing import add_quadratic_bezier_curve_to
+        return add_quadratic_bezier_curve_to(self, control, anchor)
 
     def add_cubic_bezier_curve_to(self, control1, control2, anchor):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
+        from _manim_path_editing import add_cubic_bezier_curve_to
+        return add_cubic_bezier_curve_to(self, control1, control2, anchor)
 
     def add_smooth_curve_to(self, *points):
         from _manim_path_editing import add_smooth_curve_to

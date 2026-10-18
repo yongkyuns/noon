@@ -1,6 +1,6 @@
 use noon::{
-    AnimationCompositionRequest, AnimationOptions, MobjectTarget, RateFunction, Scene,
-    SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
+    AnimationCompositionRequest, AnimationOptions, ManimGeometryOptions, MobjectTarget,
+    RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 
 fn near(actual: (f64, f64), expected: (f64, f64)) {
@@ -319,6 +319,36 @@ fn new_path_started_tracks_the_unfinished_cubic_anchor() {
         )
         .unwrap();
     assert!(reopened.path_query().unwrap().has_new_path_started());
+
+    let mut custom_stride = scene
+        .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
+        .unwrap();
+    custom_stride
+        .set_points(&[
+            Vec2::ZERO,
+            Vec2::ONE,
+            Vec2::new(2., 0.),
+            Vec2::new(3., 1.),
+            Vec2::new(4., 0.),
+        ])
+        .unwrap();
+    let query = custom_stride.path_query().unwrap();
+    assert!(!query.has_new_path_started_with_stride(5));
+    assert!(query.has_new_path_started());
+
+    custom_stride
+        .set_points(&[
+            Vec2::ZERO,
+            Vec2::ONE,
+            Vec2::new(2., 0.),
+            Vec2::new(3., 1.),
+            Vec2::new(4., 0.),
+            Vec2::new(5., 1.),
+        ])
+        .unwrap();
+    let query = custom_stride.path_query().unwrap();
+    assert!(query.has_new_path_started_with_stride(5));
+    assert!(!query.has_new_path_started());
 }
 
 #[test]

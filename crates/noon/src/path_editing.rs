@@ -627,13 +627,21 @@ pub(crate) enum PathEdit<'a> {
         stride: i32,
     },
     Line(Vec2),
+    LineWithStride(Vec2, i32),
     AppendCorners(&'a [Vec2]),
     Quadratic(Vec2, Vec2),
+    QuadraticWithStride(Vec2, Vec2, i32),
     Cubic(Vec2, Vec2, Vec2),
+    CubicWithStride(Vec2, Vec2, Vec2, i32),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
     SmoothCurve {
         handle2: Option<Vec2>,
         anchor: Vec2,
+    },
+    SmoothCurveWithStride {
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+        stride: i32,
     },
     CubicCurves(&'a [[Vec2; 4]]),
     SetCubicCurves(&'a [[Vec2; 4]]),
@@ -764,44 +772,17 @@ impl PathEdit<'_> {
             return Ok(Some(path));
         }
         if let Self::SmoothCurve { handle2, anchor } = self {
-            if !anchor.x.is_finite()
-                || !anchor.y.is_finite()
-                || handle2.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
             let path = world_path(store, state)?;
-            let points = manim_points_for_path(&path)?;
-            if points.is_empty() {
-                return Err(AuthoringError::PathQuery(
-                    noon_geometry::PathProportionError::EmptyPath,
-                ));
-            }
-            let path = if points.len() % 4 == 1 {
-                // Manim treats a pending one-point subpath as a straight line,
-                // even when the optional second control point was supplied.
-                let start = *points.last().expect("the path was checked above");
-                let (control1, control2) = cubic_line_controls(start, anchor);
-                append_manim_cubic_to_path(points, control1, control2, anchor)?
-            } else {
-                let last_handle2 = points[points.len() - 2];
-                let last = points[points.len() - 1];
-                let tangent = last - last_handle2;
-                let handle1 = last + tangent;
-                let handle2 = handle2.unwrap_or_else(|| {
-                    let direction = anchor - last;
-                    // Manim rotates the incoming tangent by pi about the
-                    // anchor-to-anchor axis. In the planar model this is the
-                    // reflection across that axis; a zero axis leaves it
-                    // unchanged, matching Manim's zero-rotvec fallback.
-                    let reflected = direction.normalized().map_or(tangent, |axis| {
-                        axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y)) - tangent
-                    });
-                    anchor - reflected
-                });
-                append_manim_cubic_to_path(points, handle1, handle2, anchor)?
-            };
-            return Ok(Some(path));
+            return append_smooth_curve_path(path, handle2, anchor, 4).map(Some);
+        }
+        if let Self::SmoothCurveWithStride {
+            handle2,
+            anchor,
+            stride,
+        } = self
+        {
+            let path = world_path(store, state)?;
+            return append_smooth_curve_path(path, handle2, anchor, stride).map(Some);
         }
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
@@ -891,6 +872,16 @@ impl PathEdit<'_> {
             ))?;
             let (control1, control2) = cubic_line_controls(start, to);
             path = append_manim_cubic_to_path(points, control1, control2, to)?;
+        } else if let Self::LineWithStride(to, stride) = self {
+            if !to.x.is_finite() || !to.y.is_finite() {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::EmptyPath,
+            ))?;
+            let (control1, control2) = cubic_line_controls(start, to);
+            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
         } else if let Self::Quadratic(control, to) = self {
             if [control, to]
                 .iter()
@@ -905,6 +896,20 @@ impl PathEdit<'_> {
             let control1 = control * (2.0 / 3.0) + start / 3.0;
             let control2 = control * (2.0 / 3.0) + to / 3.0;
             path = append_manim_cubic_to_path(points, control1, control2, to)?;
+        } else if let Self::QuadraticWithStride(control, to, stride) = self {
+            if [control, to]
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::EmptyPath,
+            ))?;
+            let control1 = control * (2.0 / 3.0) + start / 3.0;
+            let control2 = control * (2.0 / 3.0) + to / 3.0;
+            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
         } else if let Self::Cubic(control1, control2, to) = self {
             if [control1, control2, to]
                 .iter()
@@ -914,14 +919,30 @@ impl PathEdit<'_> {
             }
             let points = manim_points_for_path(&path)?;
             path = append_manim_cubic_to_path(points, control1, control2, to)?;
+        } else if let Self::CubicWithStride(control1, control2, to, stride) = self {
+            if [control1, control2, to]
+                .iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            let points = manim_points_for_path(&path)?;
+            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
         } else {
             let (first, last) = path.endpoints().ok_or(AuthoringError::PathQuery(
                 noon_geometry::PathProportionError::EmptyPath,
             ))?;
             path = match self {
                 Self::Line(to) => path.open_last_subpath().line_to(to),
+                Self::LineWithStride(to, _) => path.open_last_subpath().line_to(to),
                 Self::Quadratic(control, to) => path.open_last_subpath().quadratic_to(control, to),
+                Self::QuadraticWithStride(control, to, _) => {
+                    path.open_last_subpath().quadratic_to(control, to)
+                }
                 Self::Cubic(c1, c2, to) => path.open_last_subpath().cubic_to(c1, c2, to),
+                Self::CubicWithStride(c1, c2, to, _) => {
+                    path.open_last_subpath().cubic_to(c1, c2, to)
+                }
                 Self::Close => {
                     if (last - first).length() < 1e-6 {
                         path
@@ -958,6 +979,7 @@ impl PathEdit<'_> {
                 | Self::ScaleHandles(_)
                 | Self::CubicCurve(_, _, _, _)
                 | Self::SmoothCurve { .. }
+                | Self::SmoothCurveWithStride { .. }
                 | Self::CubicCurves(_)
                 | Self::SetCubicCurves(_)
                 | Self::AppendCorners(_)
@@ -993,17 +1015,75 @@ fn cubic_line_controls(start: Vec2, end: Vec2) -> (Vec2, Vec2) {
 }
 
 fn append_manim_cubic_to_path(
+    points: Vec<Vec2>,
+    control1: Vec2,
+    control2: Vec2,
+    anchor: Vec2,
+) -> Result<VectorPath, AuthoringError> {
+    append_manim_cubic_to_path_with_stride(points, control1, control2, anchor, 4)
+}
+
+fn append_smooth_curve_path(
+    path: VectorPath,
+    handle2: Option<Vec2>,
+    anchor: Vec2,
+    stride: i32,
+) -> Result<VectorPath, AuthoringError> {
+    if !anchor.x.is_finite()
+        || !anchor.y.is_finite()
+        || handle2.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let points = manim_points_for_path(&path)?;
+    if points.is_empty() {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::EmptyPath,
+        ));
+    }
+    if manim_remainder_is_one(points.len(), stride) {
+        // Manim treats a pending one-point subpath as a straight line, even
+        // when the optional second control point was supplied.
+        let start = *points.last().expect("the path was checked above");
+        let (control1, control2) = cubic_line_controls(start, anchor);
+        append_manim_cubic_to_path_with_stride(points, control1, control2, anchor, stride)
+    } else {
+        let last_handle2 = points[points.len() - 2];
+        let last = points[points.len() - 1];
+        let tangent = last - last_handle2;
+        let handle1 = last + tangent;
+        let handle2 = handle2.unwrap_or_else(|| {
+            let direction = anchor - last;
+            // Manim rotates the incoming tangent by pi about the
+            // anchor-to-anchor axis. In the planar model this is the
+            // reflection across that axis; a zero axis leaves it unchanged,
+            // matching Manim's zero-rotvec fallback.
+            let reflected = direction.normalized().map_or(tangent, |axis| {
+                axis * (2.0 * (tangent.x * axis.x + tangent.y * axis.y)) - tangent
+            });
+            anchor - reflected
+        });
+        append_manim_cubic_to_path_with_stride(points, handle1, handle2, anchor, stride)
+    }
+}
+
+fn manim_remainder_is_one(point_count: usize, stride: i32) -> bool {
+    crate::path_queries::point_array_has_new_path_started(point_count, stride)
+}
+
+fn append_manim_cubic_to_path_with_stride(
     mut points: Vec<Vec2>,
     control1: Vec2,
     control2: Vec2,
     anchor: Vec2,
+    stride: i32,
 ) -> Result<VectorPath, AuthoringError> {
     let last = points.last().copied().ok_or(AuthoringError::PathQuery(
         noon_geometry::PathProportionError::EmptyPath,
     ))?;
     // add_cubic_bezier_curve_to appends three points after a pending new
     // subpath anchor, and otherwise prefixes those three with get_last_point.
-    if points.len() % 4 != 1 {
+    if !manim_remainder_is_one(points.len(), stride) {
         points.push(last);
     }
     points.extend([control1, control2, anchor]);
@@ -1342,12 +1422,27 @@ impl Mobject {
     pub fn add_line_to(&mut self, point: Vec2) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Line(point))
     }
+    pub fn add_line_to_with_stride(
+        &mut self,
+        point: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::LineWithStride(point, stride))
+    }
     pub fn add_quadratic_bezier_curve_to(
         &mut self,
         control: Vec2,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Quadratic(control, anchor))
+    }
+    pub fn add_quadratic_bezier_curve_to_with_stride(
+        &mut self,
+        control: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::QuadraticWithStride(control, anchor, stride))
     }
     pub fn add_cubic_bezier_curve_to(
         &mut self,
@@ -1357,12 +1452,35 @@ impl Mobject {
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Cubic(control1, control2, anchor))
     }
+    pub fn add_cubic_bezier_curve_to_with_stride(
+        &mut self,
+        control1: Vec2,
+        control2: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::CubicWithStride(
+            control1, control2, anchor, stride,
+        ))
+    }
     pub fn add_smooth_curve_to(
         &mut self,
         handle2: Option<Vec2>,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::SmoothCurve { handle2, anchor })
+    }
+    pub fn add_smooth_curve_to_with_stride(
+        &mut self,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SmoothCurveWithStride {
+            handle2,
+            anchor,
+            stride,
+        })
     }
     /// Append a cubic curve from its start anchor and two controls.
     pub fn add_cubic_bezier_curve(

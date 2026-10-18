@@ -71,10 +71,16 @@ impl PathQuery {
         self.manim_points.len()
     }
 
-    /// Whether the path ends with a MoveTo anchor that has not joined a curve.
-    /// Noon stores each cubic with four points, matching Manim's default stride.
+    /// Whether the raw point array ends with a pending subpath anchor at the
+    /// default four-point cubic stride.
     pub fn has_new_path_started(&self) -> bool {
-        self.point_count() % 4 == 1
+        self.has_new_path_started_with_stride(4)
+    }
+
+    /// Whether the raw point array ends with a pending subpath anchor at the
+    /// caller's current Manim stride.
+    pub fn has_new_path_started_with_stride(&self, stride: i32) -> bool {
+        point_array_has_new_path_started(self.point_count(), stride)
     }
 
     /// Cubic controls in this snapshot's coordinate space. Lines and quadratics
@@ -443,6 +449,18 @@ impl PathQuery {
                 .map_err(AuthoringError::PathQuery)
         })
     }
+}
+
+pub(crate) fn point_array_has_new_path_started(point_count: usize, stride: i32) -> bool {
+    if stride == 0 {
+        return false;
+    }
+    let divisor = i64::from(stride);
+    let mut remainder = point_count as i64 % divisor;
+    if remainder != 0 && remainder.signum() != divisor.signum() {
+        remainder += divisor;
+    }
+    remainder == 1
 }
 
 pub(crate) fn points_coincide(left: (f64, f64), right: (f64, f64)) -> bool {

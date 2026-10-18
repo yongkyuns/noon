@@ -566,9 +566,15 @@ def extremum_along_dim(value, points=None, dim=0, key=0):
 
 
 def has_new_path_started(value):
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_cubic_curve exceeds the supported path stride")
+    if stride == 0:
+        raise ZeroDivisionError("integer modulo by zero")
     query = _query(value)
     try:
-        return bool(engine_call(query.hasNewPathStarted))
+        arguments = () if stride == 4 else (stride,)
+        return bool(engine_call(query.hasNewPathStarted, *arguments))
     finally:
         query.free()
 
