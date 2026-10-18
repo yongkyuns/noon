@@ -7,10 +7,11 @@ comparison reads their observations and executes the equivalent pinned ManimCE
 probes. It reports a structural diff on mismatch. Serialized observations are a
 test boundary, never engine input.
 
-Add new probes only for behavior Noon claims to support.  Unsupported behavior
-belongs in ``UNSUPPORTED`` below until an implementation PR promotes it to a
-gated fixture.  That distinction prevents the compatibility suite from turning
-missing API surface into an accidental semantic specification.
+Add common-success probes only when Noon and pinned ManimCE both have defined
+outputs. Unsupported, deferred, or intentionally divergent behavior belongs in
+``UNSUPPORTED`` below with its reason until it has an appropriate qualification
+lane. That distinction prevents the compatibility suite from turning missing
+API surface into an accidental semantic specification.
 """
 
 from __future__ import annotations
@@ -2230,10 +2231,11 @@ FIXTURES = [
     Fixture("rotate_about_origin", _noon_rotate_about_origin, _manim_rotate_about_origin),
 ]
 
-# Explicitly tracked but not yet differential-gated.  Keep this list close to the
-# harness so unsupported behavior is never silently treated as a mismatch.
+# Explicitly tracked but not yet common-success differential-gated. Keep this
+# list close to the harness so unsupported behavior and intentional divergences
+# are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
-    "vmobject_add_cubic_bezier_curves": "ManimCE 0.21.0 flattens the input before appending it as 3D points, so ordinary four-point curve batches raise ValueError; excluded from common-success differential comparison.",
+    "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
@@ -2350,7 +2352,7 @@ def main() -> int:
                 print(f"  {difference}")
         print(f"\n{len(FIXTURES) - failures}/{len(FIXTURES)} supported fixtures match ManimCE {manim.__version__}")
         if UNSUPPORTED:
-            print(f"{len(UNSUPPORTED)} explicitly unsupported/deferred semantic areas")
+            print(f"{len(UNSUPPORTED)} explicitly unsupported/deferred/divergent semantic areas")
 
     return 1 if failures else 0
 

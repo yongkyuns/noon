@@ -70,6 +70,7 @@ import sys, json
 sys.path.insert(0, "/tmp")
 from noon_differential import noon_observations
 from _manim_compat import VMobject
+import numpy as np
 value = VMobject()
 value.n_points_per_cubic_curve = 2
 try:
@@ -93,10 +94,18 @@ except Exception as error:
     }
 else:
     custom_stride_scaling_gate = {"unexpected_success": True}
+batch = VMobject()
+curves = np.array([
+    [[0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 1, 0]],
+    [[2, 1, 0], [3, 1, 0], [3, 2, 0], [4, 2, 0]],
+], dtype=float)
+batch.add_cubic_bezier_curves(curves)
+cubic_batch_extension = batch.get_all_points().tolist()
 json.dumps({
     "observations": noon_observations(),
     "custom_stride_anchor_gate": custom_stride_gate,
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
+    "cubic_batch_extension": cubic_batch_extension,
 }, allow_nan=False)
 `));
   }, { modules, probes, pyodideUrl });
@@ -108,11 +117,15 @@ json.dumps({
     error_type: "NotImplementedError",
     error_message: "scale_handle_to_anchor_distances requires the supported four-point cubic stride",
   });
+  assert.deepEqual(product.cubic_batch_extension, [
+    [0, 0], [1, 0], [1, 1], [2, 1],
+    [2, 1], [3, 1], [3, 2], [4, 2],
+  ]);
   const observations = product.observations;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(observations, null, 2)}\n`);
   console.log(`Observed ${Object.keys(observations).length} shared Rust/Python semantic fixtures`);
-  console.log("Observed the custom-stride set_anchors_and_handles and handle-scaling unsupported dispositions in product Pyodide");
+  console.log("Observed two custom-stride dispositions and the intentional cubic-batch extension in product Pyodide");
 } finally {
   await browser?.close();
   await server.close();
