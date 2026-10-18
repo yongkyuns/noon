@@ -597,6 +597,52 @@ def _curve_function_queries(api):
     }
 
 
+def _nth_curve_point_queries(api):
+    path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0)]
+    )
+    empty = api.VMobject()
+
+    def capture(call):
+        try:
+            return {"value": call()}
+        except Exception as error:
+            return {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+
+    def points_at(value, index):
+        return [_point_observation(point) for point in value.get_nth_curve_points(index)]
+
+    observations = {
+        "curve_count": path.get_num_curves(),
+        "first": points_at(path, 0),
+        "last_positive": points_at(path, 2),
+        "negative_last": points_at(path, -1),
+        "negative_second": points_at(path, -2),
+        "negative_first": points_at(path, -3),
+        "negative_before_start": points_at(path, -4),
+        "past_end": capture(lambda: points_at(path, 3)),
+        "fractional_index": capture(lambda: points_at(path, 0.5)),
+        "empty_negative_last": points_at(empty, -1),
+        "empty_zero": capture(lambda: points_at(empty, 0)),
+    }
+    path.n_points_per_cubic_curve = 3
+    observations["custom_stride"] = {
+        "curve_count": path.get_num_curves(),
+        "last": points_at(path, 3),
+    }
+    path.n_points_per_cubic_curve = 3.5
+    fractional_curve_count = path.get_num_curves()
+    observations["noninteger_stride"] = {
+        "curve_count": fractional_curve_count,
+        "curve_count_type": type(fractional_curve_count).__name__,
+        "slice": capture(lambda: points_at(path, 0)),
+    }
+    return observations
+
+
 def _z_index_probe(api):
     a, b = api.Square(z_index=2.5), api.Circle(z_index=2.5)
     nested = api.VGroup(a, b, z_index=2.5)
@@ -1633,6 +1679,7 @@ FIXTURES = [
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
+    Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),

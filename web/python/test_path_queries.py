@@ -896,13 +896,21 @@ class PathQueryTests(unittest.TestCase):
         query = Mock()
         query.curveCount = 2
         query.pointCount = 9
-        query.curvePoints.return_value = [0., 0., 1., 2., 2., 2., 3., 0.]
+        query.points.return_value = [
+            0., 0., 1., 2., 2., 2., 3., 0.,
+            3., 0., 3.3, 0., 3.6, 0., 4., 0.,
+            5., 0.,
+        ]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 4, 4, 8]
         query.startAnchors.return_value = [0., 0., 3., 0.]
         query.endAnchors.return_value = [3., 0., 4., 0.]
         query.firstHandles.return_value = [1., 2., 3.3, 0.]
         query.secondHandles.return_value = [2., 2., 3.6, 0.]
         query.anchors.return_value = [0., 0., 3., 0., 3., 0., 4., 0.]
-        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
+        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe, patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
             self.assertEqual(value.get_num_curves(), 2)
             self.assertEqual(value.get_num_points(), 9)
             self.assertEqual(value.get_nth_curve_points(0), [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
@@ -911,11 +919,71 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(len(value.get_anchors()), 4)
             columns = value.get_anchors_and_handles()
             self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
-            self.assertEqual(observe.call_count, 7)
-            self.assertEqual(query.free.call_count, 7)
-            query.curvePoints.side_effect = ValueError('curve index out of bounds')
-            with self.assertRaises(ValueError): value.get_nth_curve_points(4)
+            self.assertEqual(observe.call_count, 8)
             self.assertEqual(query.free.call_count, 8)
+            with self.assertRaises(AssertionError):
+                value.get_nth_curve_points(4)
+            self.assertEqual(query.free.call_count, 9)
+            self.assertEqual(handle.cubicBezierPointRanges.call_count, 3)
+
+    def test_nth_curve_points_match_negative_slice_and_assertion_semantics(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.curveCount = 2
+        query.pointCount = 9
+        points = [(float(index), float(-index)) for index in range(9)]
+        query.points.return_value = [coordinate for point in points for coordinate in point]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 4, 4, 8]
+        with patch.object(queries, "_typed_manim_observation", return_value=query), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            self.assertEqual(value.get_nth_curve_points(-1), [])
+            self.assertEqual(value.get_nth_curve_points(-2), points[1:5])
+            with self.assertRaises(AssertionError):
+                value.get_nth_curve_points(2)
+            with self.assertRaisesRegex(TypeError, "slice indices must be integers"):
+                value.get_nth_curve_points(0.5)
+
+        self.assertEqual(query.points.call_count, 3)
+        self.assertEqual(query.free.call_count, 7)
+        self.assertEqual(handle.cubicBezierPointRanges.call_count, 4)
+
+    def test_curve_count_and_nth_points_follow_custom_stride(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 3
+        query = Mock()
+        query.curveCount = 2
+        query.pointCount = 10
+        points = [(float(index), float(-index)) for index in range(10)]
+        query.points.return_value = [coordinate for point in points for coordinate in point]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 3, 3, 6, 6, 9]
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            self.assertEqual(value.get_num_curves(), 3)
+            self.assertEqual(value.get_nth_curve_points(2), points[6:9])
+
+        handle.cubicBezierPointRanges.assert_any_call(10, 3.0)
+        self.assertEqual(query.free.call_count, 3)
+
+    def test_curve_count_preserves_mutable_noninteger_stride_behavior(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 3.5
+        query = Mock()
+        query.pointCount = 10
+        query.points.return_value = [float(index) for index in range(20)]
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.get_num_curves(), 2.0)
+            with self.assertRaisesRegex(TypeError, "slice indices must be integers"):
+                value.get_nth_curve_points(0)
+            value.n_points_per_cubic_curve = 0.0
+            with self.assertRaises(ZeroDivisionError):
+                value.get_num_curves()
+
+        self.assertEqual(query.free.call_count, 4)
 
     def test_curve_length_queries_forward_sample_count_and_free_snapshots(self):
         try:

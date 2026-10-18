@@ -105,12 +105,48 @@ def _points(coordinates):
     return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
 
 
+def _cubic_bezier_point_ranges(value, point_count):
+    points_per_curve = operator.index(
+        getattr(value, "n_points_per_cubic_curve", 4)
+    )
+    if point_count > 0xFFFFFFFF:
+        raise ValueError("points exceed the supported array size")
+    if points_per_curve == 0:
+        # Preserve the source helper's native integer modulo error.
+        point_count % points_per_curve
+    try:
+        stride_number = float(points_per_curve)
+    except OverflowError:
+        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("cubic tuple queries require a shared Rust Mobject handle")
+    ranges = engine_call(handle.cubicBezierPointRanges, point_count, stride_number)
+    indices = [int(index) for index in ranges]
+    if len(indices) % 2:
+        raise RuntimeError("Rust cubic tuple query returned an incomplete range")
+    return indices
+
+
 def curve_count(value):
     query = _query(value)
     try:
-        return int(query.curveCount)
+        point_count = int(query.pointCount)
     finally:
         query.free()
+    points_per_curve = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(points_per_curve)
+    except TypeError:
+        # Manim's property is mutable and get_num_curves uses Python's //
+        # directly, so preserve its behavior for non-integer assignments.
+        return point_count // points_per_curve
+    points_per_curve = integer_stride
+    if points_per_curve <= 0:
+        # Match len(self.points) // n_points_per_cubic_curve, including the
+        # source's negative result and division-by-zero error.
+        return point_count // points_per_curve
+    return len(_cubic_bezier_point_ranges(value, point_count)) // 2
 
 
 def point_count(value):
@@ -277,26 +313,8 @@ def gen_subpaths_from_points_2d(value, points):
 
 def gen_cubic_bezier_tuples_from_points(value, points):
     """Group complete point strides using Rust-computed slice boundaries."""
-    points_per_curve = operator.index(
-        getattr(value, "n_points_per_cubic_curve", 4)
-    )
     point_count = len(points)
-    if point_count > 0xFFFFFFFF:
-        raise ValueError("points exceed the supported array size")
-    if points_per_curve == 0:
-        # Preserve the source helper's native integer modulo error.
-        point_count % points_per_curve
-    try:
-        stride_number = float(points_per_curve)
-    except OverflowError:
-        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
-    handle = _handle_for(value)
-    if handle is None:
-        raise RuntimeError("cubic tuple queries require a shared Rust Mobject handle")
-    ranges = engine_call(handle.cubicBezierPointRanges, point_count, stride_number)
-    indices = [int(index) for index in ranges]
-    if len(indices) % 2:
-        raise RuntimeError("Rust cubic tuple query returned an incomplete range")
+    indices = _cubic_bezier_point_ranges(value, point_count)
     return tuple(
         points[indices[index]:indices[index + 1]]
         for index in range(0, len(indices), 2)
@@ -427,12 +445,15 @@ def has_new_path_started(value):
 
 
 def curve_points(value, n):
-    index = operator.index(n)
-    if not 0 <= index <= 0xFFFFFFFF:
-        raise IndexError("curve index must be between 0 and 4294967295")
+    # Match VMobject.get_nth_curve_points(): it only asserts the upper bound,
+    # then uses Python slicing over the stored point array. In particular,
+    # negative indices retain the source's slice behavior.
+    assert n < value.get_num_curves()
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
     query = _query(value)
     try:
-        return _points(engine_call(query.curvePoints, index))
+        points = _points(engine_call(query.points))
+        return points[stride * n : stride * (n + 1)]
     finally:
         query.free()
 
