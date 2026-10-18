@@ -169,6 +169,12 @@ pub(super) fn highlight(
                     message,
                 },
             )?
+        } else if syntax.name == "Python" {
+            python_word_operator_fills(parsed_line, &changes, state.path.clone(), &highlighter)
+                .map_err(|message| HighlightError::Parse {
+                    line: index + 1,
+                    message,
+                })?
         } else {
             Vec::new()
         };
@@ -231,6 +237,68 @@ fn push_fill(fills: &mut Vec<TextSourceFill>, start: usize, end: usize, color: C
 /// nested expressions, then extends code tokens with CUDA qualifiers/builtins
 /// and launch delimiters. This explicit profile is not a plain C++ alias and
 /// does not recolor keywords embedded inside comments or quoted/raw strings.
+/// Syntect's bundled Python grammar marks some word operators as ordinary
+/// keywords (notably \`in\` in comprehensions). Pygments 2.19.2 calls these
+/// Operator.Word. Overlay only whole Python operator words outside lexically
+/// scoped comments and strings; identifiers and all other syntax retain the
+/// bundled grammar's original highlighting.
+fn python_word_operator_fills(
+    line: &str,
+    changes: &[(usize, syntect::parsing::ScopeStackOp)],
+    mut stack: ScopeStack,
+    highlighter: &Highlighter<'_>,
+) -> Result<Vec<TextSourceFill>, String> {
+    let comment = scope("comment");
+    let string = scope("string");
+    let word_operator = color(
+        highlighter
+            .style_for_stack(&[scope("keyword.operator.word")])
+            .foreground,
+    );
+    let mut fills = Vec::new();
+    for (range, operation) in ScopeRangeIterator::new(changes, line) {
+        stack.apply(operation).map_err(|error| error.to_string())?;
+        if range.is_empty()
+            || stack
+                .as_slice()
+                .iter()
+                .any(|s| comment.is_prefix_of(*s) || string.is_prefix_of(*s))
+        {
+            continue;
+        }
+        let mut cursor = range.start;
+        while cursor < range.end {
+            let remaining = &line[cursor..range.end];
+            let character = remaining.chars().next().expect("nonempty region");
+            if character == '_' || character.is_alphanumeric() {
+                let length = remaining
+                    .char_indices()
+                    .find(|(_, c)| *c != '_' && !c.is_alphanumeric())
+                    .map_or(remaining.len(), |(offset, _)| offset);
+                let token = &remaining[..length];
+                let start_boundary = line[..cursor]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| c != '_' && !c.is_alphanumeric());
+                let end_boundary = line[cursor + length..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| c != '_' && !c.is_alphanumeric());
+                if matches!(token, "and" | "or" | "not" | "in" | "is")
+                    && start_boundary
+                    && end_boundary
+                {
+                    push_fill(&mut fills, cursor, cursor + length, word_operator);
+                }
+                cursor += length;
+            } else {
+                cursor += character.len_utf8();
+            }
+        }
+    }
+    Ok(fills)
+}
+
 fn cuda_fills(
     line: &str,
     changes: &[(usize, syntect::parsing::ScopeStackOp)],
@@ -532,6 +600,34 @@ mod tests {
         assert_eq!(at(&result.lines[0], "True"), color(rgb(0x66d9ef)));
         assert_eq!(at(&result.lines[0], "in"), color(rgb(0xff4689)));
         assert_eq!(at(&result.lines[0], "False"), color(rgb(0x66d9ef)));
+    }
+
+    #[test]
+    fn python_operator_words_match_pygments_without_recoloring_strings_comments_or_names() {
+        let result = highlight(
+            "for x in values:\n    if x is not None and y or z:\n        # in is not and or\n        inside = \"in and or is not\"",
+            Some("python"),
+            "monokai",
+        )
+        .unwrap();
+        let word_operator = color(rgb(0xff4689));
+        assert_eq!(at(&result.lines[0], "for"), color(rgb(0x66d9ef)));
+        assert_eq!(at(&result.lines[0], "in"), word_operator);
+        for token in ["is", "not", "and", "or"] {
+            assert_eq!(at(&result.lines[1], token), word_operator, "{token}");
+        }
+        assert_eq!(at(&result.lines[2], "in"), color(rgb(0x959077)));
+        assert_ne!(at(&result.lines[3], "inside"), word_operator);
+        let string_offset = result.lines[3].source.find('"').unwrap() as u32 + 1;
+        let string_color = result.lines[3]
+            .fills
+            .iter()
+            .find(|fill| {
+                fill.source_span.start <= string_offset && string_offset < fill.source_span.end
+            })
+            .unwrap()
+            .color;
+        assert_eq!(string_color, color(rgb(0xe6db74)));
     }
 
     #[test]
