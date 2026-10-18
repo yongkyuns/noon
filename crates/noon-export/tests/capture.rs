@@ -358,49 +358,69 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
 
 #[test]
 #[ignore = "requires software Vulkan; run by Native Host Smoke without DISPLAY"]
-fn native_capture_signal_trains_keep_rails_and_reproduce_seek_pixels() {
-    let mut session = noon::example_scenes::line_passing_flash::train_session().unwrap();
-    let mut capture = noon_export::SessionCapture::new(&session, software(640, 360)).unwrap();
-    let times = [0.0, 0.65, 0.9, 1.5, 2.0, 3.55, 4.2];
-    let mut forward = Vec::new();
-    for (index, time) in times.into_iter().enumerate() {
-        session.advance_to(time).unwrap();
-        let frame = capture.capture(&mut session).unwrap();
-        assert_eq!(frame.receipt.published_time, time);
-        let pixels = frame.rgba.as_chunks::<4>().0;
-        assert!(pixels.iter().all(|pixel| pixel[3] == 255));
-        let cyan = pixels
-            .iter()
-            .filter(|p| p[1] > 128 && p[2] > 128 && p[0] < 64)
-            .count();
-        let yellow = pixels
-            .iter()
-            .filter(|p| p[0] > 128 && p[1] > 100 && p[2] < 64)
-            .count();
-        if time > 0.5 && time < 3.7 {
-            assert!(cyan > 4, "missing forward signal at t={time}");
-            assert!(yellow > 4, "missing reverse signal at t={time}");
-        } else {
-            assert_eq!((cyan, yellow), (0, 0));
-        }
-        assert!(pixels
-            .iter()
-            .any(|p| { p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2] }));
-        proof(&format!("signal-trains-{index:02}"), frame.rgba, 640, 360);
-        forward.push(frame.rgba.to_vec());
+fn native_capture_signal_trains_keep_rails_and_reproduce_pixels() {
+    const FRAME_RATE: u64 = 20;
+    // The 4.2-second program has eighty-four presentation samples, ending at
+    // 4.15s. Capture just seven evidence frames and replay a fresh continuation.
+    const SAMPLES: [u64; 7] = [0, 13, 18, 30, 40, 71, 83];
+
+    fn run() -> Vec<Vec<u8>> {
+        let mut program = noon::example_scenes::line_passing_flash::train_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        let mut pixels = Vec::new();
+        let options = ExportFrameOptions {
+            frame_rate: FrameRate::new(FRAME_RATE as u32, 1).unwrap(),
+            start_frame: 0,
+            stop: ExportStop::SourceEnd,
+            max_frames: 128,
+            max_transitions_per_sample: 64,
+            final_hold_seconds: 0.0,
+        };
+        let summary = capture_frames(
+            &mut program,
+            &mut callbacks,
+            options,
+            software(640, 360),
+            |frame| {
+                let index = frame.frame.source_sample.index();
+                if SAMPLES.contains(&index) {
+                    assert_eq!(
+                        frame.observation.requested_time,
+                        index as f64 / FRAME_RATE as f64
+                    );
+                    assert!(frame.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+                    let rgb = frame.rgba.as_chunks::<4>().0;
+                    let cyan = rgb
+                        .iter()
+                        .filter(|p| p[1] > 128 && p[2] > 128 && p[0] < 64)
+                        .count();
+                    let yellow = rgb
+                        .iter()
+                        .filter(|p| p[0] > 128 && p[1] > 100 && p[2] < 64)
+                        .count();
+                    if (13..=71).contains(&index) {
+                        assert!(cyan > 4, "missing cyan pulse in frame {index}");
+                        assert!(yellow > 4, "missing yellow pulse in frame {index}");
+                    } else {
+                        assert_eq!((cyan, yellow), (0, 0));
+                    }
+                    assert!(rgb.iter().any(|p| {
+                        p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2]
+                    }));
+                    proof(&format!("signal-trains-{index:02}"), frame.rgba, 640, 360);
+                    pixels.push(frame.rgba.to_vec());
+                }
+                Ok::<_, Infallible>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.sampling.frames, 84);
+        assert_eq!(pixels.len(), SAMPLES.len());
+        pixels
     }
-    assert_ne!(forward[1], forward[2], "signals must visibly travel");
-    assert_eq!(
-        forward[0], forward[6],
-        "transient signals must leave the rails intact"
-    );
-    for index in [5, 2, 0, 4, 1, 6, 3] {
-        session.seek(times[index]).unwrap();
-        let frame = capture.capture(&mut session).unwrap();
-        assert_eq!(
-            frame.rgba, forward[index],
-            "seek pixels at t={}",
-            times[index]
-        );
-    }
+    let first = run();
+    let replay = run();
+    assert_eq!(first, replay, "fresh exports must replay identical pixels");
+    assert_ne!(first[1], first[2], "signals must visibly travel");
+    assert_eq!(first[0], first[6], "transient pulses must leave both rails intact");
 }

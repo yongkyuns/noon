@@ -117,24 +117,92 @@ pub fn program() -> Result<LiveProgram<LinePassingFlash>, String> {
 /// Duration of the finite travelling-signal example, including its two holds.
 pub const TRAIN_DURATION: f64 = 4.2;
 
-/// Compose two finite signal trains using the existing Rust animation scheduler.
+/// Compose two finite signal trains using the ordinary live Rust scheduler.
 ///
-/// The upper rail carries long cyan pulses from left to right; the lower rail
-/// carries short yellow pulses in the opposite direction. A separate dim rail
-/// stays visible before, during, and after the transient signals. Each train has
-/// nine signals lasting 1.6 seconds, staggered by 0.2 seconds (lag ratio 0.125).
+/// Each rail stays present while its detached signal lines enter and leave at
+/// their authored times. The continuation is essential: pre-completing the
+/// flashes and rewinding a static session cannot replay their transient
+/// membership. No separate clock, runtime model, or frontend updater is used.
 ///
-/// This deliberately tests composition before adding a new flow primitive. It
-/// is not a dense/infinite patterned-stroke implementation, a round-dot profile,
-/// or a claim of support for moving/curved source paths. The same declarations,
-/// lowering, and timeline drive native Rust and the paired Python scene; no
-/// callback, private clock, or per-frame geometry reconstruction is installed.
-/// Pair: `web/python/examples/ordinary_signal_trains.py`.
-pub fn train_session() -> Result<crate::ExecutionSession, String> {
-    let build = || -> Result<_, Box<dyn std::error::Error>> {
-        use crate::AnimationCompositionRequest;
-        use noon_core::SemanticAnimationCompositionKind;
+/// This demonstrates finite analytic-Line pulses, not infinite dash phase or
+/// flowing curves. Pair: web/python/examples/ordinary_signal_trains.py.
+pub struct SignalTrains {
+    trains: Vec<(Vec<Mobject>, f64)>,
+    stage: u8,
+}
 
+impl LiveContinuation for SignalTrains {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        use crate::AnimationCompositionRequest as Request;
+        use noon_core::SemanticAnimationCompositionKind as Kind;
+
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.wait_segment(0.5)
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            1 => {
+                let request = Request::Composition {
+                    kind: Kind::Parallel,
+                    children: self
+                        .trains
+                        .iter()
+                        .map(|(signals, time_width)| Request::Composition {
+                            kind: Kind::Parallel,
+                            children: signals
+                                .iter()
+                                .map(|target| Request::PassingFlash {
+                                    target,
+                                    time_width: *time_width,
+                                    options: AnimationOptions::new()
+                                        .run_time(1.6)
+                                        .rate_func(RateFunction::Linear),
+                                })
+                                .collect(),
+                            options: AnimationOptions::new()
+                                .lag_ratio(0.125)
+                                .rate_func(RateFunction::Linear),
+                        })
+                        .collect(),
+                    options: AnimationOptions::new()
+                        .run_time(3.2)
+                        .lag_ratio(0.0)
+                        .rate_func(RateFunction::Linear),
+                };
+                let segment = live
+                    .declare_and_activate_composition(&request, AnimationOptions::new())
+                    .map_err(|error| error.to_string())?;
+                self.stage = 2;
+                Ok(ContinuationStep::Await(segment))
+            }
+            2 => {
+                for (signals, _) in &self.trains {
+                    for signal in signals {
+                        if live.contains(signal).map_err(|error| error.to_string())? {
+                            return Err("PassingFlash did not retire a transient signal".into());
+                        }
+                    }
+                }
+                self.stage = 3;
+                live.wait_segment(0.5)
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                self.stage = 4;
+                Ok(ContinuationStep::Finished)
+            }
+            _ => Err("signal train continuation resumed after completion".into()),
+        }
+    }
+}
+
+pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
+    let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut trains = Vec::new();
         for (start, end, color, time_width) in [
@@ -157,52 +225,7 @@ pub fn train_session() -> Result<crate::ExecutionSession, String> {
             }
             trains.push((signals, time_width));
         }
-        // Requests are inert: detached pulses are not scheduled at bootstrap.
-        // The live operation below admits all targets and declares their tracks
-        // together, through the same atomic composition used by the frontends.
-        let together = AnimationCompositionRequest::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: trains
-                .iter()
-                .map(|(signals, time_width)| AnimationCompositionRequest::Composition {
-                    kind: SemanticAnimationCompositionKind::Parallel,
-                    children: signals
-                        .iter()
-                        .map(|signal| AnimationCompositionRequest::PassingFlash {
-                            target: signal,
-                            time_width: *time_width,
-                            options: AnimationOptions::new()
-                                .run_time(1.6)
-                                .rate_func(RateFunction::Linear),
-                        })
-                        .collect(),
-                    options: AnimationOptions::new()
-                        .lag_ratio(0.125)
-                        .rate_func(RateFunction::Linear),
-                })
-                .collect(),
-            options: AnimationOptions::new()
-                .run_time(3.2)
-                .lag_ratio(0.0)
-                .rate_func(RateFunction::Linear),
-        };
-
-        let mut execution = scene.execution_session()?;
-        {
-            let mut live = scene.live(&mut execution);
-            let before = live.wait_segment(0.5)?;
-            live.advance_segment_to(before, before.end_time())?;
-            live.complete_segment(before)?;
-            let signals =
-                live.declare_and_activate_composition(&together, AnimationOptions::new())?;
-            live.advance_segment_to(signals, signals.end_time())?;
-            live.complete_segment(signals)?;
-            let after = live.wait_segment(0.5)?;
-            live.advance_segment_to(after, after.end_time())?;
-            live.complete_segment(after)?;
-        }
-        execution.seek(0.0)?;
-        Ok(execution)
+        Ok(scene.into_live_program(SignalTrains { trains, stage: 0 })?)
     };
     build().map_err(|error| error.to_string())
 }
@@ -325,28 +348,63 @@ mod tests {
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 
+    // Emulate the existing native host's staged segment drive and coherent
+    // renderer-admission barrier; never rewind a completed transient session.
+    fn sample_program(
+        program: &mut LiveProgram<super::SignalTrains>,
+        callbacks: &mut crate::RustHostCallbackTable,
+        time: f64,
+    ) -> noon_runtime::FrameState {
+        loop {
+            match program.status() {
+                LiveProgramStatus::ReadyToResume => {
+                    if program.session().frame().time >= time {
+                        break;
+                    }
+                    program.resume().unwrap();
+                }
+                LiveProgramStatus::Awaiting(_) => {
+                    if program.session().frame().time >= time {
+                        break;
+                    }
+                    program.drive_to(callbacks, time).unwrap();
+                }
+                LiveProgramStatus::PublicationPending(expected) => {
+                    let publication = program.take_renderer_publication().context();
+                    assert_eq!(publication, expected);
+                    program.admit_publication(publication).unwrap();
+                }
+                LiveProgramStatus::Finished => break,
+                LiveProgramStatus::Terminal => panic!("signal train terminated"),
+            }
+        }
+        assert_eq!(program.session().frame().time, time);
+        program.session().frame().clone()
+    }
+
     #[test]
-    fn finite_signal_trains_keep_the_rails_and_stagger_transient_signals() {
-        let mut session = super::train_session().unwrap();
-        let initial = session.frame().clone();
+    fn finite_signal_trains_keep_rails_and_stagger_transient_signals() {
+        let mut program = super::train_program().unwrap();
+        let mut callbacks = crate::RustHostCallbackTable::new();
+        let beginning = sample_program(&mut program, &mut callbacks, 0.0);
+        assert_eq!(beginning.objects.len(), 2);
+        assert!(beginning.is_present(0));
+        assert!(beginning.is_present(1));
+
+        // The active composition admits the eighteen detached pulse objects.
+        let initial = sample_program(&mut program, &mut callbacks, 0.55);
         assert_eq!(initial.objects.len(), 20);
         let identities: Vec<_> = initial.objects.iter().map(|object| object.id).collect();
-        // Independent schedule: nine 1.6-second signals per rail, starting at
-        // 0.5 + i * 0.2. Exact starts/ends have zero visible window.
-        for (time, expected_signals) in [(0.0, 0), (1.5, 10), (2.0, 16), (4.2, 0)] {
-            let frame = session.advance_to(time).unwrap();
+        for (time, expected_signals) in [(1.5, 10), (2.0, 16), (4.15, 0)] {
+            let frame = sample_program(&mut program, &mut callbacks, time);
             assert_eq!(frame.objects.len(), 20);
             assert_eq!(
-                frame
-                    .objects
-                    .iter()
-                    .map(|object| object.id)
-                    .collect::<Vec<_>>(),
+                frame.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
                 identities
             );
             for rail in 0..2 {
                 assert!(frame.is_present(rail));
-                assert_eq!(frame.objects[rail], initial.objects[rail]);
+                assert_eq!(frame.objects[rail], beginning.objects[rail]);
                 assert_eq!(frame.reveal(rail), 1.0);
             }
             let visible = (2..frame.objects.len())
@@ -354,18 +412,20 @@ mod tests {
                 .count();
             assert_eq!(visible, expected_signals, "signal schedule at t={time}");
         }
-        assert!((session.frame().time - super::TRAIN_DURATION).abs() < 1.0e-9);
+        sample_program(&mut program, &mut callbacks, super::TRAIN_DURATION);
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 
     #[test]
-    fn finite_signal_trains_seek_and_replay_without_a_callback_clock() {
-        let mut session = super::train_session().unwrap();
-        let mut forward = Vec::new();
-        for time in [0.0, 0.55, 0.9, 1.5, 2.0, 2.6, 3.55, 3.9, 4.2] {
-            forward.push(session.advance_to(time).unwrap().clone());
+    fn finite_signal_trains_repeat_from_fresh_program_without_callback_clock() {
+        fn sample() -> Vec<noon_runtime::FrameState> {
+            let mut program = super::train_program().unwrap();
+            let mut callbacks = crate::RustHostCallbackTable::new();
+            [0.0, 0.55, 0.9, 1.5, 2.0, 2.6, 3.55, 3.9, 4.15]
+                .into_iter()
+                .map(|time| sample_program(&mut program, &mut callbacks, time))
+                .collect()
         }
-        for expected in forward.iter().rev().chain(forward.iter()) {
-            assert_eq!(session.seek(expected.time).unwrap(), expected);
-        }
+        assert_eq!(sample(), sample());
     }
 }
