@@ -6311,6 +6311,16 @@ mod tests {
         assert!(upload_a.text.bytes_uploaded > 0);
         assert!(renderer.mega_path_index_capacity_bytes() > 0);
         assert!(renderer.mega_path_vertex_instance_capacity_bytes() > 0);
+        let before_compaction = renderer.geometry_buffer_residency();
+        assert_eq!(
+            before_compaction.mega_path_indices,
+            renderer.mega_path_index_capacity_bytes() as u64
+        );
+        assert_eq!(
+            before_compaction.mega_path_vertex_instances,
+            renderer.mega_path_vertex_instance_capacity_bytes() as u64
+        );
+        assert!(before_compaction.packed_path_bytes() > 8);
 
         let compacted = retained
             .compact_path_meshes(&device, &queue, &mut renderer, &requests)
@@ -6323,6 +6333,13 @@ mod tests {
         // nevertheless keep its old packed handles alive.
         assert_eq!(renderer.mega_path_index_capacity_bytes(), 0);
         assert_eq!(renderer.mega_path_vertex_instance_capacity_bytes(), 0);
+        let after_compaction = renderer.geometry_buffer_residency();
+        // Recorded usable capacity is zero, but the two current GPU handles
+        // are actual four-byte placeholders, not zero allocated bytes.
+        assert_eq!(after_compaction.mega_path_indices, 4);
+        assert_eq!(after_compaction.mega_path_vertex_instances, 4);
+        assert_eq!(after_compaction.packed_path_bytes(), 8);
+        assert!(after_compaction.total_bytes() < before_compaction.total_bytes());
 
         {
             let prepared_compacted = retained
@@ -6343,6 +6360,10 @@ mod tests {
             assert!(renderer.mega_path_index_capacity_bytes() > 0);
             assert!(renderer.mega_path_vertex_instance_capacity_bytes() > 0);
         }
+        assert_eq!(
+            renderer.geometry_buffer_residency().packed_path_bytes(),
+            before_compaction.packed_path_bytes()
+        );
 
         let next_image_handle = images.intern_rgba8(1, 1, vec![255, 192, 64, 255]).unwrap();
         assert_ne!(image_handle, next_image_handle);
@@ -6417,6 +6438,56 @@ mod tests {
         assert!(draw.geometry.draw_calls > 0 && draw.text.draw_calls > 0);
         assert_eq!(draw.images, 1);
         queue.submit(Some(encoder.finish()));
+
+        // Repeating the explicit compaction barrier must not accumulate
+        // current packed GPU capacity across identical scene generations.
+        // This intentionally says nothing about allocations still owned by
+        // in-flight submissions or about physical driver memory.
+        let steady = renderer.geometry_buffer_residency();
+        for _ in 0..3 {
+            let compacted = retained
+                .compact_path_meshes(&device, &queue, &mut renderer, &requests)
+                .unwrap();
+            assert_eq!(compacted.upload.buffer_reallocations, 5);
+            assert_eq!(renderer.geometry_buffer_residency().packed_path_bytes(), 8);
+
+            {
+                let restored = retained
+                    .prepare_with_image_resources(
+                        &device,
+                        &frame,
+                        &FrameChanges::all(),
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                renderer.upload_retained(&device, &queue, &restored, &mut text_state);
+            }
+            assert_eq!(
+                renderer.geometry_buffer_residency().packed_path_bytes(),
+                steady.packed_path_bytes()
+            );
+
+            let idle = retained
+                .prepare_with_image_resources(
+                    &device,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    &images,
+                    metrics,
+                )
+                .unwrap();
+            let idle_upload = renderer.upload_retained(&device, &queue, &idle, &mut text_state);
+            assert_eq!(idle_upload.geometry.bytes_uploaded, 0);
+            assert_eq!(idle_upload.geometry.buffer_reallocations, 0);
+            queue.submit([]);
+        }
     }
 
     #[test]

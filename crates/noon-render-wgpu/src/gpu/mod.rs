@@ -406,6 +406,47 @@ pub struct UploadStats {
     pub buffer_reallocations: usize,
 }
 
+/// Sizes of the renderer's *current* geometry buffer handles, read from wgpu.
+///
+/// Includes each four-byte empty placeholder and any spare growth capacity.
+/// This excludes CPU vectors, mesh caches, text/images, textures, and older
+/// buffers still referenced by encoded or in-flight command submissions.
+/// It is not device VRAM usage, a process total, or a hard memory budget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GeometryBufferResidency {
+    pub circles: u64,
+    pub rectangles: u64,
+    pub lines: u64,
+    pub path_vertices: u64,
+    pub compact_path_vertices: u64,
+    pub path_indices: u64,
+    pub path_instances: u64,
+    pub mega_path_indices: u64,
+    pub mega_path_vertex_instances: u64,
+}
+
+impl GeometryBufferResidency {
+    pub fn packed_path_bytes(&self) -> u64 {
+        self.mega_path_indices + self.mega_path_vertex_instances
+    }
+
+    pub fn total_bytes(&self) -> u64 {
+        [
+            self.circles,
+            self.rectangles,
+            self.lines,
+            self.path_vertices,
+            self.compact_path_vertices,
+            self.path_indices,
+            self.path_instances,
+            self.mega_path_indices,
+            self.mega_path_vertex_instances,
+        ]
+        .into_iter()
+        .sum()
+    }
+}
+
 /// One actual `Queue::write_buffer` operation performed by an instrumented upload.
 ///
 /// This is opt-in diagnostic data. Normal rendering keeps the existing compact
@@ -1932,6 +1973,23 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
     ) -> DrawStats {
         self.draw_ordered(pass, prepared, false)
+    }
+
+    /// A constant-time read of actual wgpu buffer sizes for the nine stable
+    /// geometry lanes. No GPU submission, synchronization, or memory scan.
+    /// Old command-buffer generations are deliberately not counted here.
+    pub fn geometry_buffer_residency(&self) -> GeometryBufferResidency {
+        GeometryBufferResidency {
+            circles: self.circle_buffer.size(),
+            rectangles: self.rectangle_buffer.size(),
+            lines: self.line_buffer.size(),
+            path_vertices: self.path_vertex_buffer.size(),
+            compact_path_vertices: self.compact_path_vertex_buffer.size(),
+            path_indices: self.path_index_buffer.size(),
+            path_instances: self.path_instance_buffer.size(),
+            mega_path_indices: self.mega_path_index_buffer.size(),
+            mega_path_vertex_instances: self.mega_path_vertex_instance_buffer.size(),
+        }
     }
 
     pub const fn circle_capacity_bytes(&self) -> usize {
