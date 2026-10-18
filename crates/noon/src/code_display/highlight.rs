@@ -264,6 +264,18 @@ fn cuda_fills(
             .style_for_stack(&[scope("storage.modifier.cuda")])
             .foreground,
     );
+    // Pygments CudaLexer variable qualifiers (including __device__) use
+    // Keyword.Type. Keep this separate from function qualifiers (Keyword.Reserved).
+    let type_keyword = color(
+        highlighter
+            .style_for_stack(&[scope("storage.type.cuda")])
+            .foreground,
+    );
+    let function = color(
+        highlighter
+            .style_for_stack(&[scope("entity.name.function")])
+            .foreground,
+    );
     let builtin = color(
         highlighter
             .style_for_stack(&[scope("support.function.cuda")])
@@ -297,18 +309,17 @@ fn cuda_fills(
                     .map_or(remaining.len(), |(offset, _)| offset);
                 let token = &remaining[..length];
                 let fill = match token {
-                    "__global__" | "__device__" | "__host__" | "__shared__" | "__constant__"
-                    | "__managed__" | "__restrict__" | "__noinline__" | "__forceinline__"
-                    | "__launch_bounds__" | "__align__" | "__grid_constant__" => Some(keyword),
+                    "__device__" | "__shared__" | "__constant__" | "__restrict__" => {
+                        Some(type_keyword)
+                    }
+                    "__global__" | "__host__" | "__managed__" | "__noinline__"
+                    | "__forceinline__" | "__launch_bounds__" | "__align__"
+                    | "__grid_constant__" => Some(keyword),
                     "threadIdx" | "blockIdx" | "blockDim" | "gridDim" | "warpSize" => Some(value),
-                    "__syncthreads"
-                    | "__syncthreads_count"
-                    | "__syncthreads_and"
-                    | "__syncthreads_or"
-                    | "__syncwarp"
-                    | "__threadfence"
-                    | "__threadfence_block"
-                    | "__threadfence_system"
+                    "__syncthreads" | "__syncthreads_count" | "__syncthreads_and"
+                    | "__syncthreads_or" | "__threadfence" | "__threadfence_block"
+                    | "__threadfence_system" => Some(function),
+                    "__syncwarp"
                     | "__shfl_sync"
                     | "__shfl_up_sync"
                     | "__shfl_down_sync"
@@ -558,7 +569,7 @@ mod tests {
         }
         let cuda = highlight("__global__ void f() {\n __shared__ int x = threadIdx.x;\n __syncthreads();\n}\nf<<<2, 32>>>();", Some("cuda"), "vim").unwrap();
         assert_eq!(at(&cuda.lines[0], "__global__"), color(rgb(0xcdcd00)));
-        assert_eq!(at(&cuda.lines[1], "__shared__"), color(rgb(0xcdcd00)));
+        assert_eq!(at(&cuda.lines[1], "__shared__"), color(rgb(0x00cd00)));
         assert_eq!(at(&cuda.lines[1], "threadIdx"), color(rgb(0xcd00cd)));
         assert_eq!(at(&cuda.lines[2], "__syncthreads"), color(rgb(0xcd00cd)));
         assert_eq!(at(&cuda.lines[4], "<<<"), color(rgb(0x3399cc)));
@@ -639,5 +650,50 @@ mod tests {
         assert!(languages.contains(&"TypeScript".into()));
         assert!(languages.contains(&"CUDA C++".into()));
         assert!(languages.contains(&"Python".into()));
+    }
+
+
+    // Pinned independent ManimCE 0.21.0 Code color observations, extracted
+    // from Pygments 2.19.2. The Python oracle recomputes lexer/theme output
+    // without importing Noon; this test holds the native subset to that data.
+    // It does not claim pixel-perfect equivalence with Manim's renderer.
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn pinned_manim_pygments_code_colors_match_supported_native_profile() {
+        let oracle: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/code/pygments-2.19.2-code-colors.json"
+        ))
+        .expect("pinned Code oracle is valid JSON");
+        assert_eq!(oracle["reference"]["manim"], "0.21.0");
+        assert_eq!(oracle["reference"]["pygments"], "2.19.2");
+        for case in oracle["cases"].as_array().expect("Code reference cases") {
+            let id = case["id"].as_str().unwrap();
+            let source = case["source"].as_str().unwrap();
+            let language = case["language"].as_str().unwrap();
+            let style = case["style"].as_str().unwrap();
+            let observed = highlight(source, Some(language), style).unwrap();
+            for probe in case["probes"].as_array().unwrap() {
+                let line_index = probe["line"].as_u64().unwrap() as usize;
+                let start = probe["start"].as_u64().unwrap() as usize;
+                let needle = probe["text"].as_str().unwrap();
+                let end = start + needle.len();
+                let row = &observed.lines[line_index];
+                assert_eq!(row.source.get(start..end), Some(needle), "{id}: stale source span");
+                let fill = row
+                    .fills
+                    .iter()
+                    .find(|fill| {
+                        fill.source_span.start as usize <= start
+                            && start < fill.source_span.end as usize
+                    })
+                    .unwrap_or_else(|| panic!("{id}: missing paint for {needle}"));
+                let expected = u32::from_str_radix(probe["rgb"].as_str().unwrap(), 16).unwrap();
+                assert_eq!(
+                    fill.color,
+                    color(rgb(expected)),
+                    "{id}: {needle} at line {line_index} byte {start}"
+                );
+            }
+        }
     }
 }
