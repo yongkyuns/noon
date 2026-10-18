@@ -33,11 +33,12 @@ def github_json(endpoint, token):
 def github_zip(endpoint, token, limit=100 * 1024 * 1024):
     req = urllib.request.Request(
         f"https://api.github.com/repos/{REPOSITORY}/{endpoint}",
-        headers={"Authorization": f"Bearer {token}",
-                 "Accept": "application/vnd.github+json",
+        headers={"Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28",
                  "User-Agent": "noon-physical-aa"},
     )
+    # GitHub redirects to a signed storage URL that must not receive the API token.
+    req.add_unredirected_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=180) as response:
         body = response.read(limit + 1)
     if not body or len(body) > limit:
