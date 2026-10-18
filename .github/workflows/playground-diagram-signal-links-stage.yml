@@ -55,3 +55,43 @@ jobs:
           path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
           if-no-files-found: warn
           retention-days: 3
+
+  pin-captured-poster:
+    name: Pin verified renderer poster to the staging branch
+    needs: capture
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'work/2188-m3-data-link-gallery-stage' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the exact trusted staging branch revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+      - name: Download WebGPU proof from this qualified run
+        uses: actions/download-artifact@v7
+        with:
+          name: stage-data-links-webgpu
+          path: stage-upload
+      - name: Verify exact source, renderer, raster and completion
+        run: python3 scripts/stage-data-links-evidence.py
+      - name: Pin only the original validated image and its source-bound evidence
+        run: |
+          set -eu
+          expected=${{ github.event.pull_request.head.sha }}
+          observed=$(git ls-remote origin refs/heads/work/2188-m3-data-link-gallery-stage | cut -f1)
+          if [ "$observed" != "$expected" ]; then
+            echo 'Stale PR event; newer source must be recaptured, not overwritten'
+            exit 0
+          fi
+          mkdir -p web/thumbnails/showcase
+          cp stage-upload/showcase-data-links.png web/thumbnails/showcase/showcase-data-links.png
+          cp stage-upload/capture-evidence.json web/thumbnails/showcase/showcase-data-links-evidence.json
+          git add web/thumbnails/showcase/showcase-data-links.png web/thumbnails/showcase/showcase-data-links-evidence.json
+          if git diff --cached --quiet; then
+            echo 'Exact poster already pinned; no duplicate commit'
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Stage source-bound Noon renderer poster evidence [skip ci]'
+          git push origin HEAD:refs/heads/work/2188-m3-data-link-gallery-stage
