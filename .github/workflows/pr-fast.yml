@@ -102,6 +102,14 @@ jobs:
       - name: Run web preflight
         run: bash scripts/build-web-demo.sh
 
+      # Full Manim raster qualification stays scheduled/manual. Its existing
+      # PR preflight must stay offline and cheap. Run this small independent
+      # pinned lexer/theme oracle here instead of installing Pygments there.
+      - name: Verify pinned Manim Code lexer and color oracle
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
+          python3 scripts/test_code_pygments_parity.py
+
   web-fast:
     name: Browser fast checks
     runs-on: ubuntu-latest

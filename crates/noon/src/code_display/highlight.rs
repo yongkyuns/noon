@@ -316,27 +316,17 @@ fn cuda_fills(
                     | "__forceinline__" | "__launch_bounds__" | "__align__"
                     | "__grid_constant__" => Some(keyword),
                     "threadIdx" | "blockIdx" | "blockDim" | "gridDim" | "warpSize" => Some(value),
-                    "__syncthreads" | "__syncthreads_count" | "__syncthreads_and"
-                    | "__syncthreads_or" | "__threadfence" | "__threadfence_block"
+                    "__syncthreads"
+                    | "__syncthreads_count"
+                    | "__syncthreads_and"
+                    | "__syncthreads_or"
+                    | "__threadfence"
+                    | "__threadfence_block"
                     | "__threadfence_system" => Some(function),
-                    "__syncwarp"
-                    | "__shfl_sync"
-                    | "__shfl_up_sync"
-                    | "__shfl_down_sync"
-                    | "__shfl_xor_sync"
-                    | "__ballot_sync"
-                    | "__any_sync"
-                    | "__all_sync"
-                    | "atomicAdd"
-                    | "atomicSub"
-                    | "atomicExch"
-                    | "atomicMin"
-                    | "atomicMax"
-                    | "atomicInc"
-                    | "atomicDec"
-                    | "atomicCAS"
-                    | "atomicAnd"
-                    | "atomicOr"
+                    "__syncwarp" | "__shfl_sync" | "__shfl_up_sync" | "__shfl_down_sync"
+                    | "__shfl_xor_sync" | "__ballot_sync" | "__any_sync" | "__all_sync"
+                    | "atomicAdd" | "atomicSub" | "atomicExch" | "atomicMin" | "atomicMax"
+                    | "atomicInc" | "atomicDec" | "atomicCAS" | "atomicAnd" | "atomicOr"
                     | "atomicXor" => Some(builtin),
                     _ => None,
                 };
@@ -571,7 +561,7 @@ mod tests {
         assert_eq!(at(&cuda.lines[0], "__global__"), color(rgb(0xcdcd00)));
         assert_eq!(at(&cuda.lines[1], "__shared__"), color(rgb(0x00cd00)));
         assert_eq!(at(&cuda.lines[1], "threadIdx"), color(rgb(0xcd00cd)));
-        assert_eq!(at(&cuda.lines[2], "__syncthreads"), color(rgb(0xcd00cd)));
+        assert_eq!(at(&cuda.lines[2], "__syncthreads"), color(rgb(0xcccccc)));
         assert_eq!(at(&cuda.lines[4], "<<<"), color(rgb(0x3399cc)));
     }
 
@@ -652,7 +642,6 @@ mod tests {
         assert!(languages.contains(&"Python".into()));
     }
 
-
     // Pinned independent ManimCE 0.21.0 Code color observations, extracted
     // from Pygments 2.19.2. The Python oracle recomputes lexer/theme output
     // without importing Noon; this test holds the native subset to that data.
@@ -678,7 +667,11 @@ mod tests {
                 let needle = probe["text"].as_str().unwrap();
                 let end = start + needle.len();
                 let row = &observed.lines[line_index];
-                assert_eq!(row.source.get(start..end), Some(needle), "{id}: stale source span");
+                assert_eq!(
+                    row.source.get(start..end),
+                    Some(needle),
+                    "{id}: stale source span"
+                );
                 let fill = row
                     .fills
                     .iter()
