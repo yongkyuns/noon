@@ -38,6 +38,62 @@ def fixture(source=SOURCE, extra=None, omit=None):
 
 
 class ArchiveIntegrity(unittest.TestCase):
+    def test_recovery_has_its_own_registry_and_preserves_the_complete_original_plan(self):
+        root = MODULE.parent.parent / "benchmarks"
+        original = json.loads((root / "perf-physical-aa-study.json").read_bytes())
+        registration = json.loads((root / "perf-physical-aa-transport-recovery.json").read_bytes())
+        recovery = {**original, "studyId": registration["studyId"], "registration": registration}
+        self.assertEqual(ARCHIVE.registered_workflow(original), "perf-physical-aa.yml")
+        self.assertEqual(ARCHIVE.registered_workflow(recovery), registration["workflow"])
+        for changed in (
+            {**recovery, "studyId": original["studyId"]},
+            {**recovery, "retries": 1},
+            {**recovery, "plannedPairCommands": 99},
+            {**recovery, "registration": {**registration, "priorRun": 0}},
+            {**recovery, "registration": {**registration, "workflow": "perf-physical-aa.yml"}},
+        ):
+            with self.subTest(plan=changed), self.assertRaises(ValueError):
+                ARCHIVE.registered_workflow(changed)
+
+    def test_recovery_requires_authenticated_zero_sample_original_failure(self):
+        root = MODULE.parent.parent / "benchmarks"
+        original = (root / "perf-physical-aa-study.json").read_bytes()
+        registration = json.loads((root / "perf-physical-aa-transport-recovery.json").read_bytes())
+        for change in (None, "sample", "plan", "attempt", "digest", "run", "expired"):
+            with self.subTest(change=change):
+                entries = {"attempt.txt": f"{registration['priorRun']}/1".encode(),
+                           "registered-plan.json": original,
+                           "physical-readiness.json": b"{}", "single-manual-dispatch.json": b"{}"}
+                if change == "sample":
+                    entries["product/report.json"] = b"{}"
+                if change == "plan":
+                    entries["registered-plan.json"] = original + b"\n"
+                if change == "attempt":
+                    entries["attempt.txt"] = f"{registration['priorRun']}/2".encode()
+                out = BytesIO()
+                with zipfile.ZipFile(out, "w") as z:
+                    for name, content in entries.items():
+                        z.writestr("evidence/inputs/" + name, content)
+                raw = out.getvalue()
+                r = {**registration, "priorArtifactSha256": ARCHIVE.sha256(raw)}
+                run = {"id": r["priorRun"], "run_attempt": 1, "status": "completed",
+                       "conclusion": "failure", "event": "workflow_dispatch", "head_branch": "master"}
+                meta = {"id": r["priorArtifact"], "expired": change == "expired",
+                        "workflow_run": {"id": r["priorRun"]},
+                        "digest": "sha256:" + r["priorArtifactSha256"]}
+                if change == "digest":
+                    r["priorArtifactSha256"] = "0" * 64
+                    meta["digest"] = "sha256:" + r["priorArtifactSha256"]
+                if change == "run":
+                    run["conclusion"] = "success"
+                with mock.patch.object(ARCHIVE, "github_json", side_effect=[run, meta]), \
+                        mock.patch.object(ARCHIVE, "github_zip", return_value=raw):
+                    if change is None:
+                        self.assertEqual(ARCHIVE.prior_setup_failure({"registration": r}, "fixture-token"), raw)
+                    else:
+                        with self.assertRaises(ValueError):
+                            ARCHIVE.prior_setup_failure({"registration": r}, "fixture-token")
+
     def test_archive_redirect_keeps_api_authentication_off_signed_storage(self):
         payload = fixture()
         signed_url = "https://storage.example/original.zip?signature=fixture"
