@@ -1255,6 +1255,14 @@ def _paint_color(self, channel):
     phase = _canonical_phase_context(self)
     if phase is not None:
         raise NotImplementedError("paint color getters in host callbacks require staged color observation")
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is not None:
+        method = getattr(family_handle, f"own{channel.title()}Color", None)
+        if method is not None:
+            color = engine_call(method)
+            if color is None:
+                return None
+            return _base.Color(float(color.red), float(color.green), float(color.blue), 1.0)
     color = _typed_manim_observation(self, f"{channel}Color", f"queryMobject{channel.title()}Color")
     if color is None:
         return None
@@ -1267,6 +1275,11 @@ def _get_stroke_width(self, background=False):
     from _manim_updaters import _canonical_phase_context
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError("stroke width getters in host callbacks require staged width observation")
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is not None:
+        method = getattr(family_handle, "ownStrokeWidth", None)
+        if method is not None:
+            return float(engine_call(method)) * 100.0
     width = _typed_manim_observation(self, "strokeWidth", "queryMobjectStrokeWidth", handle_property=True)
     if width is None:
         raise RuntimeError("paint observations require the shared Rust authoring host")
@@ -1773,7 +1786,7 @@ def _group_paint(self, operation, arguments):
     if phase is not None:
         if operation == "OwnColor":
             raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
-        if operation in {"OwnFill", "OwnOpacity"}:
+        if operation in {"OwnFill", "OwnStroke", "OwnOpacity"}:
             raise NotImplementedError("callback root-only Group paint requires staged family style writes")
         phase.paint_family(handle, operation, arguments)
         return self
@@ -1807,10 +1820,13 @@ def _group_set_fill(self, color=None, opacity=None, family=True):
     return _group_paint(self, operation, (*_family_color_arguments(color), alpha))
 
 
-def _group_set_stroke(self, color=None, width=None, opacity=None):
+def _group_set_stroke(self, color=None, width=None, opacity=None, family=True):
     stroke_width = None if width is None else _compat._manim_stroke_width(width)
     alpha = None if opacity is None else _compat._opacity("stroke opacity", opacity)
-    return _group_paint(self, "Stroke", (*_family_color_arguments(color), stroke_width, alpha))
+    operation = "Stroke" if family else "OwnStroke"
+    return _group_paint(
+        self, operation, (*_family_color_arguments(color), stroke_width, alpha)
+    )
 
 
 def _group_set_opacity(self, opacity, family=True):

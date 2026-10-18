@@ -24,6 +24,9 @@ class StyleOperationsTests(unittest.TestCase):
         with patch.object(handles, "_group_set_fill", return_value=group) as set_fill:
             self.assertIs(group.set_fill(compat._base.RED, 0.5, family=False), group)
         set_fill.assert_called_once_with(group, compat._base.RED, 0.5, False)
+        with patch.object(handles, "_group_set_stroke", return_value=group) as set_stroke:
+            self.assertIs(group.set_stroke(compat._base.BLUE, 12, 0.4, family=False), group)
+        set_stroke.assert_called_once_with(group, compat._base.BLUE, 12, 0.4, False)
         with patch.object(handles, "_group_set_opacity", return_value=group) as set_opacity:
             self.assertIs(group.set_opacity(0.5, family=False), group)
         set_opacity.assert_called_once_with(group, 0.5, False)

@@ -92,7 +92,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                     self.assertIs(group.set_stroke(compat._base.YELLOW, 25, .625), group)
                     self.assertIs(group.set_opacity(.5), group)
                 fill.assert_called_once_with(group, compat._base.GREEN, .75, True)
-                stroke.assert_called_once_with(group, compat._base.YELLOW, 25, .625)
+                stroke.assert_called_once_with(group, compat._base.YELLOW, 25, .625, True)
                 opacity.assert_called_once_with(group, .5, True)
 
     def test_root_only_color_uses_one_shared_root_operation(self):
@@ -104,8 +104,9 @@ class SharedFamilyPaintTests(unittest.TestCase):
             compat._base.BLUE.red, compat._base.BLUE.green, compat._base.BLUE.blue, compat._base.BLUE.alpha)
         group._semantic_family_handle.setColor.assert_not_called()
 
-    def test_root_only_fill_and_opacity_use_atomic_shared_style_operations(self):
+    def test_root_only_fill_stroke_and_opacity_use_atomic_shared_style_operations(self):
         color = compat._base.GREEN
+        stroke_color = compat._base.BLUE
         for live in (False, True):
             with self.subTest(live=live):
                 family = identity_only_wrapper(compat.VGroup, submobjects=[])
@@ -113,26 +114,53 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context = Mock() if live else None
                 with patch.object(handles, "_group_target_context", return_value=context):
                     self.assertIs(family.set_fill(color, 0.35, family=False), family)
+                    self.assertIs(family.set_stroke(stroke_color, 4, 0.45, family=False), family)
                     self.assertIs(family.set_opacity(0.6, family=False), family)
                 owner = context if live else family._semantic_family_handle
                 fill = owner.liveSetFamilyOwnFill if live else owner.setOwnFill
+                stroke = owner.liveSetFamilyOwnStroke if live else owner.setOwnStroke
                 opacity = owner.liveSetFamilyOwnOpacity if live else owner.setOwnOpacity
                 prefix = (family._semantic_family_handle,) if live else ()
                 fill.assert_called_once_with(
                     *prefix, True, color.red, color.green, color.blue, color.alpha, 0.35
+                )
+                stroke.assert_called_once_with(
+                    *prefix, True, stroke_color.red, stroke_color.green,
+                    stroke_color.blue, stroke_color.alpha, 0.04, 0.45
                 )
                 opacity.assert_called_once_with(*prefix, 0.6)
 
     def test_vgroup_root_opacity_getters_read_the_family_style_slot(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
         family._semantic_family_handle = Mock(
+            ownFillColor=Mock(return_value=compat._base.GREEN),
+            ownStrokeColor=Mock(return_value=compat._base.BLUE),
+            ownStrokeWidth=Mock(return_value=0.04),
             ownFillOpacity=Mock(return_value=0.35),
             ownStrokeOpacity=Mock(return_value=0.6),
         )
+        self.assertEqual(family.get_fill_color(), compat._base.GREEN)
+        self.assertEqual(family.get_stroke_color(), compat._base.BLUE)
+        self.assertEqual(family.get_stroke_width(), 4.0)
+        fill_rows = family.get_fill_rgbas()
+        stroke_rows = family.get_stroke_rgbas()
+        fill_rows = fill_rows.tolist() if hasattr(fill_rows, "tolist") else fill_rows
+        stroke_rows = stroke_rows.tolist() if hasattr(stroke_rows, "tolist") else stroke_rows
+        self.assertEqual(fill_rows[0], [
+            compat._base.GREEN.red, compat._base.GREEN.green,
+            compat._base.GREEN.blue, 0.35,
+        ])
+        self.assertEqual(stroke_rows[0], [
+            compat._base.BLUE.red, compat._base.BLUE.green,
+            compat._base.BLUE.blue, 0.6,
+        ])
         self.assertEqual(family.get_fill_opacity(), 0.35)
         self.assertEqual(family.get_stroke_opacity(), 0.6)
-        family._semantic_family_handle.ownFillOpacity.assert_called_once_with()
-        family._semantic_family_handle.ownStrokeOpacity.assert_called_once_with()
+        self.assertEqual(family._semantic_family_handle.ownFillColor.call_count, 2)
+        self.assertEqual(family._semantic_family_handle.ownStrokeColor.call_count, 2)
+        family._semantic_family_handle.ownStrokeWidth.assert_called_once_with()
+        self.assertEqual(family._semantic_family_handle.ownFillOpacity.call_count, 3)
+        self.assertEqual(family._semantic_family_handle.ownStrokeOpacity.call_count, 3)
 
     def test_root_only_callback_color_fails_before_leaf_mutation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])
@@ -154,6 +182,18 @@ class SharedFamilyPaintTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(NotImplementedError, "staged family style"):
                 family.set_fill(compat._base.BLUE, 0.4, family=False)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_not_called()
+
+    def test_root_only_callback_stroke_rejects_without_staging_descendant_paint(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "staged family style"):
+                family.set_stroke(compat._base.BLUE, 4, 0.4, family=False)
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
         phase.paint_family.assert_not_called()

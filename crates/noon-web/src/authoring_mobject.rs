@@ -1377,6 +1377,68 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setOwnStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_stroke(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style(noon::StyleUpdate {
+                    stroke_color: color,
+                    stroke_width: width,
+                    stroke_opacity: opacity,
+                    ..noon::StyleUpdate::default()
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownFillColor)]
+        pub fn own_fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| {
+                    style.fill.and_then(|paint| match paint {
+                        noon_core::SemanticPaint::Solid(color) => {
+                            Some(WasmManimColor::from_color(color))
+                        }
+                        noon_core::SemanticPaint::Resource(_) => None,
+                    })
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeColor)]
+        pub fn own_stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| {
+                    style.stroke.and_then(|paint| match paint {
+                        noon_core::SemanticPaint::Solid(color) => {
+                            Some(WasmManimColor::from_color(color))
+                        }
+                        noon_core::SemanticPaint::Resource(_) => None,
+                    })
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeWidth)]
+        pub fn own_stroke_width(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.stroke_width)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStroke)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_stroke(

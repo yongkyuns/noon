@@ -9649,6 +9649,41 @@ mod wasm {
                 .live_set_family_own_style(&source.semantic_family()?, update)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyOwnStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_own_stroke(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                false,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                None,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveSetFamilyOwnOpacity)]
         pub fn live_set_family_own_opacity(
             &mut self,

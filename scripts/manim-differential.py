@@ -1793,6 +1793,7 @@ def _family_own_paint_probe(api):
     vector_root_only.set_fill(api.GREEN, 0.35, family=False)
     root_fill_style = [
         rgb(vector_root_only),
+        _paint_rgb(vector_root_only.get_fill_color()),
         vector_root_only.get_fill_opacity(),
         vector_root_only.get_stroke_opacity(),
         [rgb(member) for member in vector_root_only.submobjects],
@@ -1803,6 +1804,13 @@ def _family_own_paint_probe(api):
         vector_root_only.get_fill_opacity(),
         vector_root_only.get_stroke_opacity(),
         [rgb(member) for member in vector_root_only.submobjects],
+    ]
+    vector_root_only.set_stroke(api.BLUE, width=4, opacity=0.45, family=False)
+    root_stroke_style = [
+        _paint_rgb(vector_root_only.get_stroke_color()),
+        vector_root_only.get_stroke_width(),
+        vector_root_only.get_stroke_opacity(),
+        [_paint_rgb(member.get_stroke_color()) for member in vector_root_only.submobjects],
     ]
 
     empty = api.Group()
@@ -1830,7 +1838,9 @@ def _family_own_paint_probe(api):
         "root_only_and_late_add": [
             rgb(root_only), [rgb(member) for member in root_only.submobjects]
         ],
-        "vgroup_root_only_fill_and_opacity": [root_fill_style, root_opacity_style],
+        "vgroup_root_only_fill_stroke_and_opacity": [
+            root_fill_style, root_opacity_style, root_stroke_style
+        ],
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]
