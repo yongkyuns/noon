@@ -525,6 +525,21 @@ def _curve_function_queries(api):
         0, sample_points=6
     )
     return {
+        "sampled_lengths": {
+            "default_pieces": [
+                float(value) for value in path.get_nth_curve_length_pieces(0)
+            ],
+            "six_point_pieces": [
+                float(value)
+                for value in path.get_nth_curve_length_pieces(0, sample_points=6)
+            ],
+            "single_point_pieces": [
+                float(value)
+                for value in path.get_nth_curve_length_pieces(0, sample_points=1)
+            ],
+            "default_length": float(path.get_nth_curve_length(1)),
+            "six_point_length": float(path.get_nth_curve_length(1, sample_points=6)),
+        },
         "individual": sample(individual),
         "individual_with_length": {
             "curve": sample(with_length),
