@@ -352,6 +352,7 @@ def style_query_contract(value):
 style_mutator_returns_self = [
     point_owner.set_stroke(background=True) is point_owner,
     point_owner.set_background_stroke() is point_owner,
+    point_owner.set_cap_style(noon.CapStyleType.AUTO) is point_owner,
     point_owner.set_sheen(0.0, noon.UL) is point_owner,
     point_owner.set_sheen_direction(noon.UL) is point_owner,
     point_owner.rotate_sheen_direction(0.0) is point_owner,
@@ -375,6 +376,9 @@ style_mutator_rejections = {
     ),
     "sheen_rotation": rejected_without_style_change(
         lambda: point_owner.rotate_sheen_direction(0.5)
+    ),
+    "cap_style": rejected_without_style_change(
+        lambda: point_owner.set_cap_style(noon.CapStyleType.ROUND)
     ),
 }
 round_trip_style = VMobject()
@@ -649,12 +653,13 @@ json.dumps({
       assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
     }
   }
-  assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true, true]);
+  assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true, true, true]);
   assert.deepEqual(product.style_mutator_rejections, {
     background_stroke: true,
     sheen_factor: true,
     sheen_direction: true,
     sheen_rotation: true,
+    cap_style: true,
   });
   const {
     proportion_from_point,

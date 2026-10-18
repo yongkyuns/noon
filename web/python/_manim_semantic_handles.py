@@ -1460,6 +1460,12 @@ def _set_sheen(self, factor, direction=None, family=True):
     return self
 
 
+def _set_cap_style(self, cap_style):
+    if cap_style != _base.CapStyleType.AUTO:
+        raise NotImplementedError("non-default vector cap styles require shared renderer cap semantics")
+    return self
+
+
 def _rotate_sheen_direction(self, angle, axis, family=True):
     del axis, family
     value = _ir._finite_number("sheen rotation angle", angle)

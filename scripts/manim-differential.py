@@ -1936,6 +1936,7 @@ def _style_query_probe(api):
     default_mutator_returns_self = [
         source.set_stroke(background=True) is source,
         source.set_background_stroke() is source,
+        source.set_cap_style(api.CapStyleType.AUTO) is source,
         source.set_sheen(0.0, api.UL) is source,
         source.set_sheen_direction(api.UL) is source,
         source.rotate_sheen_direction(0.0) is source,
@@ -2532,6 +2533,7 @@ UNSUPPORTED = {
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
     "background_stroke_and_sheen": "default background-stroke and zero-sheen mutators are supported; non-default background paint and sheen gradients still require shared style/renderer channels",
+    "set_cap_style": "the default AUTO cap style is a supported no-op; other cap styles require shared renderer cap semantics",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "vgroup_root_style": "VGroup root style getters remain unqualified because Noon family wrappers do not model Manim's separate VMobject-owned root paint profile",
 }

@@ -540,6 +540,10 @@ class VMobject(Mobject):
         kwargs["background"] = True
         return self.set_stroke(**kwargs)
 
+    def set_cap_style(self, cap_style):
+        from _manim_semantic_handles import _set_cap_style
+        return _set_cap_style(self, cap_style)
+
     def set_sheen_direction(self, direction, family=True):
         from _manim_semantic_handles import _set_sheen_direction
         return _set_sheen_direction(self, direction, family)
@@ -1036,6 +1040,7 @@ class VGroup(Group):
     get_points_defining_boundary = VMobject.get_points_defining_boundary
     get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
     set_background_stroke = VMobject.set_background_stroke
+    set_cap_style = VMobject.set_cap_style
     set_sheen_direction = VMobject.set_sheen_direction
     rotate_sheen_direction = VMobject.rotate_sheen_direction
     set_sheen = VMobject.set_sheen

@@ -9,7 +9,7 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
-    def test_default_background_and_sheen_mutators_match_the_pinned_surface(self):
+    def test_default_vector_style_mutators_match_the_pinned_surface(self):
         self.assertEqual(list(inspect.signature(compat.VMobject.set_stroke).parameters), [
             "self", "color", "width", "opacity", "background", "family",
         ])
@@ -28,21 +28,27 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(compat.VMobject.rotate_sheen_direction).parameters), [
             "self", "angle", "axis", "family",
         ])
+        self.assertEqual(list(inspect.signature(compat.VMobject.set_cap_style).parameters), [
+            "self", "cap_style",
+        ])
         self.assertEqual(list(inspect.signature(compat.VMobject.get_gradient_start_and_end_points).parameters), [
             "self",
         ])
         self.assertIs(compat.VGroup.rotate_sheen_direction, compat.VMobject.rotate_sheen_direction)
+        self.assertIs(compat.VGroup.set_cap_style, compat.VMobject.set_cap_style)
         self.assertIs(compat.VGroup.get_gradient_start_and_end_points,
                       compat.VMobject.get_gradient_start_and_end_points)
 
         obj = identity_only_wrapper(compat.Circle)
         self.assertIs(obj.set_stroke(background=True), obj)
         self.assertIs(obj.set_background_stroke(), obj)
+        self.assertIs(obj.set_cap_style(compat._base.CapStyleType.AUTO), obj)
         self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
         self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
         self.assertIs(obj.rotate_sheen_direction(0.0), obj)
         group = identity_only_wrapper(compat.VGroup)
         self.assertIs(group.rotate_sheen_direction(0.0), group)
+        self.assertIs(group.set_cap_style(compat._base.CapStyleType.AUTO), group)
 
     def test_gradient_endpoint_query_combines_rust_backed_center_and_edge_queries(self):
         obj = identity_only_wrapper(compat.VMobject)
@@ -68,6 +74,7 @@ class StyleOperationsTests(unittest.TestCase):
             lambda: obj.set_sheen(0.5),
             lambda: obj.set_sheen_direction(compat._base.UP),
             lambda: obj.rotate_sheen_direction(0.5),
+            lambda: obj.set_cap_style(compat._base.CapStyleType.ROUND),
         )
         for operation in unsupported:
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
