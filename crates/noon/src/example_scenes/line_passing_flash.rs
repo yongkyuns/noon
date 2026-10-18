@@ -246,7 +246,7 @@ pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
 /// After sealing, ordinary ExecutionSession::seek restores those revisions.
 pub fn train_playback() -> Result<crate::ExecutionSession, String> {
     let record = || -> Result<_, Box<dyn std::error::Error>> {
-        let (mut scene, mut continuation) = train_scene()?;
+        let (scene, mut continuation) = train_scene()?;
         let mut execution = scene.execution_session()?;
         execution.begin_replay_retention(noon_runtime::ReplayLimits::default())?;
         {

@@ -137,6 +137,12 @@ mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
 mod selection_overlay_transport;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod signal_trains_smoke;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod webgl_context_lifecycle;
 mod worker_pointer_presentation;
@@ -221,6 +227,12 @@ pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
 pub use selection_overlay_transport::{SelectionOverlayGeometry, SelectionOverlayPresentation};
 pub use semantic_execution_player::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use signal_trains_smoke::*;
 #[cfg(target_arch = "wasm32")]
 pub use text_colors::*;
 #[cfg(target_arch = "wasm32")]
