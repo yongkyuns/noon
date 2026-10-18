@@ -62,6 +62,29 @@ class PathQueryTests(unittest.TestCase):
         query.proportionFromPoint.assert_called_once_with(1.0, 1.0, 0.0)
         query.free.assert_called_once_with()
 
+    def test_proportion_from_point_uses_mutable_stride_ranges_in_rust(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.throw_error_if_no_points = Mock()
+        query = Mock()
+        query.pointCount = 4
+        query.bezierLengthPiecesRange.side_effect = ([2.0], [6.0])
+        query.bezierParametersForPointRange.side_effect = ([], [0.5])
+
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            self.assertEqual(value.proportion_from_point((1.0, 2.0, 0.0)), 0.625)
+
+        self.assertEqual(
+            [call.args for call in query.bezierLengthPiecesRange.call_args_list],
+            [(0, 2, None), (2, 4, None)],
+        )
+        self.assertEqual(
+            [call.args for call in query.bezierParametersForPointRange.call_args_list],
+            [(0, 2, 1.0, 2.0, 0.0), (2, 4, 1.0, 2.0, 0.0)],
+        )
+        query.proportionFromPoint.assert_not_called()
+        query.free.assert_called_once_with()
+
     def test_proportion_from_point_preserves_off_curve_and_empty_path_errors(self):
         value = identity_only_wrapper(compat.VMobject)
         value.throw_error_if_no_points = Mock()

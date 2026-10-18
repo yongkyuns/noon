@@ -1677,6 +1677,23 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = bezierParametersForPointRange)]
+        pub fn bezier_parameters_for_point_range(
+            &self,
+            start: u32,
+            stop: u32,
+            point_x: f64,
+            point_y: f64,
+            point_z: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_parameters_for_point_range(
+                    start as usize,
+                    stop as usize,
+                    (point_x, point_y, point_z),
+                )
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = bezierLengthPiecesRange)]
         pub fn bezier_length_pieces_range(
             &self,

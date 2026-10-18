@@ -633,6 +633,21 @@ def _curve_function_queries(api):
                 _point_observation(custom_stride_path.point_from_proportion(alpha))
                 for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
             ],
+            "proportions_from_points": [
+                float(custom_stride_path.proportion_from_point(point))
+                for point in ((1.0 / 6.0, 0.0, 0.0), (5.0 / 6.0, 0.0, 0.0))
+            ],
+            "high_grade_proportions_from_points": [
+                float(
+                    high_grade_path.proportion_from_point(
+                        tuple(
+                            float(component)
+                            for component in high_grade_path.get_nth_curve_function(index)(0.5)
+                        )
+                    )
+                )
+                for index in range(2)
+            ],
             "functions": [
                 sample(function)
                 for function in custom_stride_path.get_curve_functions()

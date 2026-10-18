@@ -120,6 +120,21 @@ impl PathQuery {
             .collect())
     }
 
+    /// Find rounded ManimCE parameters where an arbitrary Bézier point slice
+    /// intersects a planar point.
+    pub fn bezier_parameters_for_point_range(
+        &self,
+        start: usize,
+        stop: usize,
+        point: (f64, f64, f64),
+    ) -> Result<Vec<f64>, AuthoringError> {
+        if point.2 != 0.0 {
+            return Ok(Vec::new());
+        }
+        let controls = self.bezier_range_controls(start, stop)?;
+        Ok(bezier_parameters_for_point(&controls, (point.0, point.1)))
+    }
+
     /// Sample lengths for an arbitrary Manim point-array Bezier slice.
     pub fn bezier_length_pieces_range(
         &self,
@@ -482,6 +497,155 @@ fn cubic_parameters_for_point(controls: [(f64, f64); 4], point: (f64, f64)) -> V
             x
         }
     }
+}
+
+fn bezier_parameters_for_point(controls: &[(f64, f64)], point: (f64, f64)) -> Vec<f64> {
+    if controls.len() == 4 {
+        return cubic_parameters_for_point(
+            [controls[0], controls[1], controls[2], controls[3]],
+            point,
+        );
+    }
+    let x_roots = bezier_coordinate_roots(
+        &controls.iter().map(|control| control.0).collect::<Vec<_>>(),
+        point.0,
+    );
+    let y_roots = bezier_coordinate_roots(
+        &controls.iter().map(|control| control.1).collect::<Vec<_>>(),
+        point.1,
+    );
+    match (x_roots, y_roots) {
+        (None, None) => Vec::new(),
+        (Some(roots), None) | (None, Some(roots)) => roots,
+        (Some(mut x), Some(y)) => {
+            x.retain(|root| {
+                y.binary_search_by(|candidate| candidate.total_cmp(root))
+                    .is_ok()
+            });
+            x
+        }
+    }
+}
+
+/// Return rounded real roots for one coordinate. `None` means that coordinate
+/// is constant and already equal to the requested point coordinate.
+fn bezier_coordinate_roots(controls: &[f64], point: f64) -> Option<Vec<f64>> {
+    if controls.is_empty() {
+        return Some(Vec::new());
+    }
+    let degree = controls.len() - 1;
+    let mut coefficients = vec![0.0; controls.len()];
+    for (index, &control) in controls.iter().enumerate() {
+        for expansion in 0..=degree - index {
+            let power = index + expansion;
+            let sign = if expansion % 2 == 0 { 1.0 } else { -1.0 };
+            coefficients[power] +=
+                sign * binomial(degree, index) * binomial(degree - index, expansion) * control;
+        }
+    }
+    coefficients[0] -= point;
+    if coefficients.iter().all(|coefficient| *coefficient == 0.0) {
+        return None;
+    }
+
+    let mut roots = real_polynomial_roots_in_unit_interval(&coefficients)
+        .into_iter()
+        .map(|root| (root * 1_000_000.0).round_ties_even() / 1_000_000.0)
+        .filter(|root| (0.0..=1.0).contains(root))
+        .collect::<Vec<_>>();
+    roots.sort_by(f64::total_cmp);
+    roots.dedup();
+    Some(roots)
+}
+
+fn binomial(n: usize, k: usize) -> f64 {
+    let k = k.min(n.saturating_sub(k));
+    (1..=k).fold(1.0, |value, index| {
+        value * (n + 1 - index) as f64 / index as f64
+    })
+}
+
+/// Isolate all real roots in `[0, 1]` by recursively partitioning a polynomial
+/// at its derivative roots. Low-degree paths use the existing exact solver.
+fn real_polynomial_roots_in_unit_interval(coefficients: &[f64]) -> Vec<f64> {
+    if coefficients
+        .iter()
+        .any(|coefficient| !coefficient.is_finite())
+    {
+        return Vec::new();
+    }
+    let degree = coefficients
+        .iter()
+        .rposition(|coefficient| *coefficient != 0.0)
+        .unwrap_or(0);
+    if degree == 0 {
+        return Vec::new();
+    }
+    if degree <= 3 {
+        let mut cubic = [0.0; 4];
+        cubic[..=degree].copy_from_slice(&coefficients[..=degree]);
+        return real_polynomial_roots(cubic)
+            .into_iter()
+            .filter(|root| root.is_finite() && (0.0..=1.0).contains(root))
+            .collect();
+    }
+
+    let derivative = coefficients
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(power, coefficient)| *coefficient * power as f64)
+        .collect::<Vec<_>>();
+    let mut boundaries = vec![0.0];
+    boundaries.extend(real_polynomial_roots_in_unit_interval(&derivative));
+    boundaries.push(1.0);
+    boundaries.sort_by(f64::total_cmp);
+    boundaries.dedup();
+
+    let scale = coefficients
+        .iter()
+        .map(|coefficient| coefficient.abs())
+        .sum::<f64>()
+        .max(1.0);
+    let zero_tolerance = scale * 1.0e-13;
+    let evaluate = |parameter: f64| {
+        coefficients
+            .iter()
+            .rev()
+            .fold(0.0, |value, coefficient| value * parameter + coefficient)
+    };
+    let mut roots = Vec::new();
+    for &boundary in &boundaries {
+        if evaluate(boundary).abs() <= zero_tolerance {
+            roots.push(boundary);
+        }
+    }
+    for interval in boundaries.windows(2) {
+        let mut low = interval[0];
+        let mut high = interval[1];
+        let mut low_value = evaluate(low);
+        let high_value = evaluate(high);
+        if low_value == 0.0 || high_value == 0.0 || low_value.signum() == high_value.signum() {
+            continue;
+        }
+        for _ in 0..80 {
+            let middle = (low + high) * 0.5;
+            let middle_value = evaluate(middle);
+            if middle_value == 0.0 {
+                low = middle;
+                high = middle;
+                break;
+            }
+            if low_value.signum() == middle_value.signum() {
+                low = middle;
+                low_value = middle_value;
+            } else {
+                high = middle;
+            }
+        }
+        roots.push((low + high) * 0.5);
+    }
+    roots
 }
 
 /// `None` means this coordinate is constant and equal to the requested value.

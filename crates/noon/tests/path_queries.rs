@@ -462,7 +462,36 @@ fn arbitrary_bezier_range_queries_match_mutable_stride_slices() {
         assert_eq!(pieces.len(), 1);
         assert!((pieces[0] - 1. / 3.).abs() < 1e-12);
     }
+    for (range, point) in [(0..2, (1. / 6., 0., 0.)), (2..4, (5. / 6., 0., 0.))] {
+        let parameters = query
+            .bezier_parameters_for_point_range(range.start, range.end, point)
+            .unwrap();
+        assert_eq!(parameters.len(), 1);
+        assert!((parameters[0] - 0.5).abs() < 1e-12);
+    }
+    assert!(query
+        .bezier_parameters_for_point_range(0, 2, (1. / 6., 0., 1.))
+        .unwrap()
+        .is_empty());
     assert!(query.bezier_points_at_range(3, 2, &[0.5]).is_err());
+}
+
+#[test]
+fn arbitrary_bezier_range_roots_support_high_grade_slices() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .line_to(Vec2::new(1., 0.))
+        .line_to(Vec2::new(2., 0.));
+    let object = scene.path(path, Default::default()).unwrap();
+    let query = object.path_query().unwrap();
+    let midpoint = query.bezier_points_at_range(0, 5, &[0.5]).unwrap()[0];
+    let parameters = query
+        .bezier_parameters_for_point_range(0, 5, midpoint)
+        .unwrap();
+    assert!(parameters
+        .iter()
+        .any(|parameter| (*parameter - 0.5).abs() < 1e-6));
 }
 
 #[test]
