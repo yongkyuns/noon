@@ -1086,7 +1086,81 @@ class PathQueryTests(unittest.TestCase):
                 value.get_nth_curve_length_pieces(0, sample_points=2.5)
             with self.assertRaises(IndexError):
                 value.get_nth_curve_length(-1)
-            self.assertEqual(observe.call_count, 4)
+        self.assertEqual(observe.call_count, 4)
+
+    def test_custom_stride_curve_functions_and_lengths_use_point_slices(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy curve callable and length contracts")
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        query = Mock()
+        query.curveCount = 1
+        query.pointCount = 4
+        query.bezierPointsAtRange.side_effect = lambda start, stop, parameters: [
+            coordinate
+            for parameter in parameters
+            for coordinate in (
+                start / 3 + parameter * ((stop - 1) / 3 - start / 3),
+                0.0,
+                0.0,
+            )
+        ]
+        query.bezierLengthPiecesRange.side_effect = lambda start, stop, samples: [
+            1.0 / 3.0
+        ]
+        handle = Mock()
+        handle.cubicBezierPointRanges.return_value = [0, 2, 2, 4]
+
+        with patch.object(
+            queries,
+            "_typed_manim_observation",
+            return_value=query,
+        ), patch.object(queries, "_handle_for", return_value=handle):
+            self.assertEqual(value.get_num_curves(), 2)
+            functions = list(value.get_curve_functions())
+            self.assertEqual(
+                [function.__name__ for function in functions],
+                ["linear_bezier", "linear_bezier"],
+            )
+            np.testing.assert_allclose(functions[0](0.5), [1 / 6, 0, 0])
+            np.testing.assert_allclose(functions[1](0.5), [5 / 6, 0, 0])
+            function, length = value.get_nth_curve_function_with_length(
+                1, sample_points=2
+            )
+            np.testing.assert_allclose(function(0.5), [5 / 6, 0, 0])
+            self.assertAlmostEqual(float(length), 1 / 3)
+            lengths = list(
+                value.get_curve_functions_with_lengths(sample_points=2)
+            )
+            self.assertEqual(len(lengths), 2)
+            self.assertAlmostEqual(float(lengths[0][1]), 1 / 3)
+            self.assertAlmostEqual(float(lengths[1][1]), 1 / 3)
+
+        high_grade = identity_only_wrapper(compat.VMobject)
+        high_grade.n_points_per_cubic_curve = 5
+        high_grade_query = Mock()
+        high_grade_query.pointCount = 5
+        high_grade_query.bezierPointsAtRange.side_effect = (
+            lambda start, stop, parameters: [
+                coordinate
+                for parameter in parameters
+                for coordinate in (parameter, parameter, parameter)
+            ]
+        )
+        with patch.object(
+            queries,
+            "_typed_manim_observation",
+            return_value=high_grade_query,
+        ):
+            function = next(high_grade.get_curve_functions())
+            self.assertEqual(function.__name__, "nth_grade_bezier")
+            self.assertEqual(
+                function(np.array([[0., .25], [.5, 1.]])).shape,
+                (4, 3),
+            )
 
     def test_curve_functions_keep_snapshot_and_vectorize_numpy_parameters(self):
         try:
@@ -1098,6 +1172,7 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
+        query.pointCount = 8
         query.curvePointsAt.side_effect = lambda index, values: [
             component
             for parameter in values
@@ -1162,6 +1237,7 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
         query.curveCount = 2
+        query.pointCount = 8
         with patch.object(queries, "_typed_manim_observation", return_value=query):
             for probe in (
                 lambda: value.get_nth_curve_function_with_length(0, sample_points=0),
@@ -1173,6 +1249,7 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(query.free.call_count, 3)
 
             query.curveCount = 0
+            query.pointCount = 0
             self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=-1)), [])
             self.assertEqual(list(value.get_curve_functions_with_lengths(sample_points=2.5)), [])
             self.assertEqual(list(value.get_curve_functions_with_lengths(unsupported=True)), [])

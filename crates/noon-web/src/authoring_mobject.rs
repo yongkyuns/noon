@@ -1649,6 +1649,33 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = bezierPointsAtRange)]
+        pub fn bezier_points_at_range(
+            &self,
+            start: u32,
+            stop: u32,
+            parameters: Vec<f64>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_points_at_range(start as usize, stop as usize, &parameters)
+                .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = bezierLengthPiecesRange)]
+        pub fn bezier_length_pieces_range(
+            &self,
+            start: u32,
+            stop: u32,
+            sample_points: Option<u32>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_length_pieces_range(
+                    start as usize,
+                    stop as usize,
+                    sample_points.map(|n| n as usize),
+                )
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = curveLengthPieces)]
         pub fn curve_length_pieces(
             &self,

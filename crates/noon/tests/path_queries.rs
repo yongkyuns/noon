@@ -411,6 +411,45 @@ fn curve_function_queries_evaluate_batches_and_extrapolate_in_snapshot_space() {
 }
 
 #[test]
+fn arbitrary_bezier_range_queries_match_mutable_stride_slices() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .line_to(Vec2::new(1., 0.));
+    let object = scene.path(path, Default::default()).unwrap();
+    let query = object.path_query().unwrap();
+
+    let first_half = query.bezier_points_at_range(0, 2, &[0., 0.5, 1.]).unwrap();
+    let second_half = query.bezier_points_at_range(2, 4, &[0., 0.5, 1.]).unwrap();
+    for (actual, expected) in
+        first_half
+            .iter()
+            .zip([(0., 0., 0.), (1. / 6., 0., 0.), (1. / 3., 0., 0.)])
+    {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+        assert_eq!(actual.2, expected.2);
+    }
+    for (actual, expected) in
+        second_half
+            .iter()
+            .zip([(2. / 3., 0., 0.), (5. / 6., 0., 0.), (1., 0., 0.)])
+    {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+        assert_eq!(actual.2, expected.2);
+    }
+    for pieces in [
+        query.bezier_length_pieces_range(0, 2, Some(2)).unwrap(),
+        query.bezier_length_pieces_range(2, 4, Some(2)).unwrap(),
+    ] {
+        assert_eq!(pieces.len(), 1);
+        assert!((pieces[0] - 1. / 3.).abs() < 1e-12);
+    }
+    assert!(query.bezier_points_at_range(3, 2, &[0.5]).is_err());
+}
+
+#[test]
 fn path_direction_matches_manim_anchor_trapezoid_and_snapshot_transform() {
     let mut scene = Scene::new();
     let path = VectorPath::new()

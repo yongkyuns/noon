@@ -508,6 +508,14 @@ def _curve_function_queries(api):
     path = api.VMobject().start_new_path((0, 0, 0))
     path.add_cubic_bezier_curve_to((1, 0, 0), (1, 1, 0), (2, 1, 0))
     path.add_cubic_bezier_curve_to((3, 1, 0), (3, 2, 0), (4, 2, 0))
+    custom_stride_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0)]
+    )
+    custom_stride_path.n_points_per_cubic_curve = 2
+    high_grade_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0), (2, 1, 0), (3, 1, 0)]
+    )
+    high_grade_path.n_points_per_cubic_curve = 5
     parameters = np.array([[0.0], [0.25], [0.5], [1.0]])
 
     def sample(function):
@@ -581,6 +589,51 @@ def _curve_function_queries(api):
                 sample_points=6
             )
         ],
+        "mutable_custom_stride": {
+            "count": custom_stride_path.get_num_curves(),
+            "functions": [
+                sample(function)
+                for function in custom_stride_path.get_curve_functions()
+            ],
+            "function_with_lengths": [
+                {"curve": sample(function), "length": float(curve_length)}
+                for function, curve_length in custom_stride_path.get_curve_functions_with_lengths(
+                    sample_points=2
+                )
+            ],
+            "nth_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(1))
+            ),
+            "nth_length": capture(
+                lambda: float(
+                    custom_stride_path.get_nth_curve_length(0, sample_points=2)
+                )
+            ),
+            "negative_previous_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(-2))
+            ),
+            "negative_last_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(-1))
+            ),
+            "high_grade": {
+                "count": high_grade_path.get_num_curves(),
+                "functions": [
+                    sample(function)
+                    for function in high_grade_path.get_curve_functions()
+                ],
+                "function_with_lengths": [
+                    {
+                        "curve": sample(function),
+                        "length": float(curve_length),
+                    }
+                    for function, curve_length in (
+                        high_grade_path.get_curve_functions_with_lengths(
+                            sample_points=2
+                        )
+                    )
+                ],
+            },
+        },
         "functions_with_unknown_length_keyword": capture(
             lambda: list(path.get_curve_functions_with_lengths(unsupported=True))
         ),

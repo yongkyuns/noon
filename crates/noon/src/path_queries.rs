@@ -100,6 +100,68 @@ impl PathQuery {
             .collect())
     }
 
+    /// Evaluate an arbitrary Manim point-array slice as a Bezier curve.
+    ///
+    /// This preserves VMobject's mutable `n_points_per_cubic_curve` behavior,
+    /// where callers may select line, quadratic, or higher-grade point slices.
+    pub fn bezier_points_at_range(
+        &self,
+        start: usize,
+        stop: usize,
+        parameters: &[f64],
+    ) -> Result<Vec<(f64, f64, f64)>, AuthoringError> {
+        let controls = self.bezier_range_controls(start, stop)?;
+        Ok(parameters
+            .iter()
+            .map(|&t| {
+                let (x, y) = evaluate_bezier_points(&controls, t);
+                (x, y, 0.0)
+            })
+            .collect())
+    }
+
+    /// Sample lengths for an arbitrary Manim point-array Bezier slice.
+    pub fn bezier_length_pieces_range(
+        &self,
+        start: usize,
+        stop: usize,
+        sample_points: Option<usize>,
+    ) -> Result<Vec<f64>, AuthoringError> {
+        let controls = self.bezier_range_controls(start, stop)?;
+        let sample_points = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
+        if sample_points < 2 {
+            return Ok(Vec::new());
+        }
+        let mut pieces = Vec::with_capacity(sample_points - 1);
+        let denominator = (sample_points - 1) as f64;
+        let mut previous = evaluate_bezier_points(&controls, 0.0);
+        for sample in 1..sample_points {
+            let current = evaluate_bezier_points(&controls, sample as f64 / denominator);
+            pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
+            previous = current;
+        }
+        Ok(pieces)
+    }
+
+    fn bezier_range_controls(
+        &self,
+        start: usize,
+        stop: usize,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        if start >= stop || stop > self.manim_points.len() {
+            return Err(AuthoringError::PathQuery(
+                PathProportionError::InvalidCurveIndex {
+                    index: stop,
+                    count: self.manim_points.len(),
+                },
+            ));
+        }
+        Ok(self.manim_points[start..stop]
+            .iter()
+            .map(|&(x, y)| self.transform_point(x, y))
+            .collect())
+    }
+
     /// Straight-line sample lengths for one curve, matching ManimCE's
     /// `get_nth_curve_length_pieces` default of ten Bezier samples.
     pub fn curve_length_pieces(
@@ -373,6 +435,36 @@ fn evaluate_cubic(controls: [(f64, f64); 4], t: f64) -> (f64, f64) {
             + 3.0 * u * t * t * controls[2].1
             + t * t * t * controls[3].1,
     )
+}
+
+fn evaluate_bezier_points(controls: &[(f64, f64)], t: f64) -> (f64, f64) {
+    match controls {
+        [point] => *point,
+        [start, end] => (
+            start.0 + t * (end.0 - start.0),
+            start.1 + t * (end.1 - start.1),
+        ),
+        [start, control, end] => {
+            let t2 = t * t;
+            let mt = 1.0 - t;
+            let mt2 = mt * mt;
+            (
+                mt2 * start.0 + 2.0 * t * mt * control.0 + t2 * end.0,
+                mt2 * start.1 + 2.0 * t * mt * control.1 + t2 * end.1,
+            )
+        }
+        [p0, p1, p2, p3] => evaluate_cubic([*p0, *p1, *p2, *p3], t),
+        _ => {
+            let mut points = controls.to_vec();
+            for remaining in (1..points.len()).rev() {
+                for index in 0..remaining {
+                    points[index].0 += t * (points[index + 1].0 - points[index].0);
+                    points[index].1 += t * (points[index + 1].1 - points[index].1);
+                }
+            }
+            points[0]
+        }
+    }
 }
 
 /// Return Manim's six-decimal real parameters where a cubic crosses a 2D point.
