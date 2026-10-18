@@ -481,6 +481,15 @@ assert observations["family_point_counts_live"] == expectedFamilyPointCounts
 assert not _compare(
     observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5
 ), _compare(observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5)
+assert not _compare(
+    observations["vgroup_root_style_copy_target"],
+    observations["vgroup_root_style_copy_target_live"],
+    1e-5,
+), _compare(
+    observations["vgroup_root_style_copy_target"],
+    observations["vgroup_root_style_copy_target_live"],
+    1e-5,
+)
 family_paint = observations["family_own_paint"]
 assert observations["family_own_paint_live"] == family_paint
 family_paint_play = observations["family_own_paint_play_live"]
@@ -511,6 +520,23 @@ assert_color(family_paint["nested_shared_root_only"][1], noon.RED)
 assert_color(family_paint["nested_shared_root_only"][2], noon.GREEN)
 assert_color(family_paint["nested_shared_root_only"][3], noon.YELLOW)
 assert family_paint["nested_shared_root_only"][4:] == [True, True]
+copy_target_style = observations["vgroup_root_style_copy_target"]
+assert_color(copy_target_style["source"]["fill_color"], noon.GREEN)
+assert_color(copy_target_style["source"]["stroke_color"], noon.BLUE)
+assert_color(copy_target_style["source"]["child_fill"], noon.RED)
+assert_color(copy_target_style["source"]["child_stroke"], noon.RED)
+assert_color(copy_target_style["copy"]["fill_color"], noon.YELLOW)
+assert_color(copy_target_style["copy"]["stroke_color"], noon.BLUE)
+assert_color(copy_target_style["copy"]["child_fill"], noon.RED)
+assert_color(copy_target_style["target"]["fill_color"], noon.GREEN)
+assert_color(copy_target_style["target"]["stroke_color"], noon.WHITE)
+assert_color(copy_target_style["target"]["child_fill"], noon.RED)
+for value in copy_target_style.values():
+    assert abs(value["fill_opacity"] - 0.35) <= 1e-6
+    assert abs(value["stroke_opacity"] - 0.45) <= 1e-6
+assert abs(copy_target_style["source"]["stroke_width"] - 4) <= 1e-6
+assert abs(copy_target_style["copy"]["stroke_width"] - 4) <= 1e-6
+assert abs(copy_target_style["target"]["stroke_width"] - 7) <= 1e-6
 assert_color(family_paint["vgroup_save_restore"][0], noon.WHITE)
 assert_color(family_paint["vgroup_save_restore"][1][0], noon.RED)
 assert_color(family_paint["vgroup_save_restore"][1][1], noon.BLUE)

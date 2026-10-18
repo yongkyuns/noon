@@ -2125,6 +2125,47 @@ def _family_own_paint_probe(api):
     }
 
 
+def _vgroup_root_style_copy_target_probe(api, scene=None):
+    child = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    child.set_fill(api.RED, opacity=0.25).set_stroke(api.RED, width=2, opacity=0.5)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        family=False,
+    )
+    if scene is not None:
+        scene.add(family)
+
+    copied = family.copy()
+    target = family.generate_target()
+    if scene is not None:
+        scene.add(copied, target)
+    copied.set_style(fill_color=api.YELLOW, family=False)
+    target.set_style(stroke_color=api.WHITE, stroke_width=7, family=False)
+
+    def profile(value):
+        style = value.get_style(simple=True)
+        return {
+            "fill_color": _paint_rgb(style["fill_color"]),
+            "fill_opacity": float(style["fill_opacity"]),
+            "stroke_color": _paint_rgb(style["stroke_color"]),
+            "stroke_width": float(style["stroke_width"]),
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "child_fill": _paint_rgb(value.submobjects[0].get_fill_color()),
+            "child_stroke": _paint_rgb(value.submobjects[0].get_stroke_color()),
+        }
+
+    return {
+        "source": profile(family),
+        "copy": profile(copied),
+        "target": profile(target),
+    }
+
+
 def _family_own_paint_play_probe(api, scene=None):
     """Observe root-only family color after an ordinary method animation."""
     family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE), color=api.GREEN)
@@ -3022,6 +3063,20 @@ FIXTURES = [
         "family_own_paint_play_live",
         lambda: _family_own_paint_play_probe(noon),
         lambda: _family_own_paint_play_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_copy_target",
+        lambda: _vgroup_root_style_copy_target_probe(noon),
+        lambda: _vgroup_root_style_copy_target_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_copy_target_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _vgroup_root_style_copy_target_probe(noon, scene)
+        ),
+        lambda: _vgroup_root_style_copy_target_probe(manim),
         1e-5,
     ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
