@@ -130,6 +130,50 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 )
                 opacity.assert_called_once_with(*prefix, 0.6)
 
+    def test_root_only_set_style_publishes_one_authored_or_live_transaction(self):
+        fill_color = compat._base.GREEN
+        stroke_color = compat._base.BLUE
+        for live in (False, True):
+            with self.subTest(live=live):
+                family = identity_only_wrapper(compat.VGroup, submobjects=[])
+                family._semantic_family_handle = Mock()
+                context = Mock() if live else None
+                with patch.object(
+                    handles,
+                    "_style_target",
+                    return_value=(family._semantic_family_handle, context, "Family"),
+                ):
+                    self.assertIs(
+                        family.set_style(
+                            fill_color=fill_color,
+                            fill_opacity=0.35,
+                            stroke_color=stroke_color,
+                            stroke_width=4,
+                            stroke_opacity=0.45,
+                            family=False,
+                        ),
+                        family,
+                    )
+                owner = context if live else family._semantic_family_handle
+                method = owner.liveSetFamilyOwnStyle if live else owner.setOwnStyle
+                prefix = (family._semantic_family_handle,) if live else ()
+                method.assert_called_once_with(
+                    *prefix,
+                    True,
+                    fill_color.red,
+                    fill_color.green,
+                    fill_color.blue,
+                    fill_color.alpha,
+                    0.35,
+                    True,
+                    stroke_color.red,
+                    stroke_color.green,
+                    stroke_color.blue,
+                    stroke_color.alpha,
+                    0.04,
+                    0.45,
+                )
+
     def test_vgroup_root_opacity_getters_read_the_family_style_slot(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
         family._semantic_family_handle = Mock(
@@ -156,11 +200,17 @@ class SharedFamilyPaintTests(unittest.TestCase):
         ])
         self.assertEqual(family.get_fill_opacity(), 0.35)
         self.assertEqual(family.get_stroke_opacity(), 0.6)
-        self.assertEqual(family._semantic_family_handle.ownFillColor.call_count, 2)
-        self.assertEqual(family._semantic_family_handle.ownStrokeColor.call_count, 2)
-        family._semantic_family_handle.ownStrokeWidth.assert_called_once_with()
-        self.assertEqual(family._semantic_family_handle.ownFillOpacity.call_count, 3)
-        self.assertEqual(family._semantic_family_handle.ownStrokeOpacity.call_count, 3)
+        style = family.get_style(simple=True)
+        self.assertEqual(style["fill_color"], compat._base.GREEN)
+        self.assertEqual(style["fill_opacity"], 0.35)
+        self.assertEqual(style["stroke_color"], compat._base.BLUE)
+        self.assertEqual(style["stroke_width"], 4.0)
+        self.assertEqual(style["stroke_opacity"], 0.6)
+        self.assertEqual(family._semantic_family_handle.ownFillColor.call_count, 3)
+        self.assertEqual(family._semantic_family_handle.ownStrokeColor.call_count, 3)
+        self.assertEqual(family._semantic_family_handle.ownStrokeWidth.call_count, 2)
+        self.assertEqual(family._semantic_family_handle.ownFillOpacity.call_count, 5)
+        self.assertEqual(family._semantic_family_handle.ownStrokeOpacity.call_count, 5)
 
     def test_root_only_callback_color_fails_before_leaf_mutation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])

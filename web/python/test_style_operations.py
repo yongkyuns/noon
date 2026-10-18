@@ -38,6 +38,14 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(compat.VGroup.set_stroke).parameters), [
             "self", "color", "width", "opacity", "background", "family",
         ])
+        self.assertEqual(list(inspect.signature(compat.VGroup.set_style).parameters), [
+            "self", "fill_color", "fill_opacity", "stroke_color", "stroke_width",
+            "stroke_opacity", "background_stroke_color", "background_stroke_width",
+            "background_stroke_opacity", "sheen_factor", "sheen_direction",
+            "background_image", "family",
+        ])
+        self.assertIs(compat.VGroup.get_style, compat.VMobject.get_style)
+        self.assertIs(compat.VGroup.set_style, compat.VMobject.set_style)
         self.assertEqual(list(inspect.signature(compat.VMobject.set_background_stroke).parameters), [
             "self", "kwargs",
         ])

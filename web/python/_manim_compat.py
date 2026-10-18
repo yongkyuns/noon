@@ -1055,6 +1055,8 @@ class VGroup(Group):
     set_sheen_direction = VMobject.set_sheen_direction
     rotate_sheen_direction = VMobject.rotate_sheen_direction
     set_sheen = VMobject.set_sheen
+    get_style = VMobject.get_style
+    set_style = VMobject.set_style
     get_fill_color = VMobject.get_fill_color
     get_fill_rgbas = VMobject.get_fill_rgbas
     get_fill_colors = VMobject.get_fill_colors

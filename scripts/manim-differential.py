@@ -1813,6 +1813,27 @@ def _family_own_paint_probe(api):
         [_paint_rgb(member.get_stroke_color()) for member in vector_root_only.submobjects],
     ]
 
+    vector_style_root = api.VGroup(
+        api.Circle(color=api.RED), api.Square(color=api.BLUE)
+    )
+    vector_style_root.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        family=False,
+    )
+    root_style = vector_style_root.get_style(simple=True)
+    root_style_observation = [
+        _paint_rgb(root_style["fill_color"]),
+        root_style["fill_opacity"],
+        _paint_rgb(root_style["stroke_color"]),
+        root_style["stroke_width"],
+        root_style["stroke_opacity"],
+        [rgb(member) for member in vector_style_root.submobjects],
+    ]
+
     empty = api.Group()
     empty.set_color(api.YELLOW, family=False)
 
@@ -1841,6 +1862,7 @@ def _family_own_paint_probe(api):
         "vgroup_root_only_fill_stroke_and_opacity": [
             root_fill_style, root_opacity_style, root_stroke_style
         ],
+        "vgroup_root_only_set_style": root_style_observation,
         "empty_root_only": [rgb(empty), len(empty.submobjects)],
         "gradient_root_and_leaves": [
             rgb(gradient), [rgb(member) for member in gradient.submobjects]

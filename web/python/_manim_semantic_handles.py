@@ -1452,8 +1452,7 @@ def _set_style(
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")
-    if not family and _is_shared_family(self):
-        raise NotImplementedError("non-recursive Group style requires shared family style state")
+    own_family_style = not family and _is_shared_family(self)
     arguments = (*_family_color_arguments(fill_color),
                  None if fill_opacity is None else _compat._opacity("fill opacity", fill_opacity),
                  *_family_color_arguments(stroke_color),
@@ -1463,9 +1462,11 @@ def _set_style(
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
     if context is None:
-        engine_call(handle.setStyle, *arguments)
+        method_name = "setOwnStyle" if own_family_style else "setStyle"
+        engine_call(getattr(handle, method_name), *arguments)
     else:
-        engine_call(getattr(context, f"liveSet{suffix}Style"), handle, *arguments)
+        method_suffix = f"{suffix}Own" if own_family_style else suffix
+        engine_call(getattr(context, f"liveSet{method_suffix}Style"), handle, *arguments)
     return self
 
 
