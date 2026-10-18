@@ -2240,6 +2240,28 @@ def _style_query_probe(api):
     }
 
 
+def _inactive_sheen_direction_style_probe(api):
+    omitted_factor = api.VMobject()
+    omitted_result = omitted_factor.set_style(sheen_direction=api.UP)
+    zero_factor = api.VMobject()
+    zero_result = zero_factor.set_style(
+        sheen_factor=0.0,
+        sheen_direction=api.RIGHT,
+    )
+
+    def observe(value, result):
+        return {
+            "returns_self": result is value,
+            "factor": float(value.get_sheen_factor()),
+            "direction": [float(component) for component in value.get_sheen_direction()],
+        }
+
+    return {
+        "omitted_factor": observe(omitted_factor, omitted_result),
+        "zero_factor": observe(zero_factor, zero_result),
+    }
+
+
 def _gradient_start_end_probe(api):
     value = api.Rectangle(width=2, height=1).shift(0.4 * api.RIGHT + 0.2 * api.UP)
     start, end = value.get_gradient_start_and_end_points()
@@ -2726,6 +2748,9 @@ FIXTURES = [
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),
     Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
+    Fixture("inactive_sheen_direction_style",
+            lambda: _inactive_sheen_direction_style_probe(noon),
+            lambda: _inactive_sheen_direction_style_probe(manim)),
 
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),

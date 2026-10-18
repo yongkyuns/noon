@@ -142,6 +142,18 @@ class StyleOperationsTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 obj.set_style(fill_color='#00FF00', background_stroke_opacity=0.5)
             self.assertEqual(bridge.setStyle.call_count, 1)
+            with self.assertRaises(NotImplementedError):
+                obj.set_style(
+                    fill_color='#00FF00',
+                    sheen_factor=0.5,
+                    sheen_direction=compat._base.UP,
+                )
+            self.assertEqual(bridge.setStyle.call_count, 1)
+            self.assertIs(obj.set_style(sheen_direction=compat._base.UP), obj)
+            self.assertIs(obj.set_style(
+                sheen_factor=0.0,
+                sheen_direction=compat._base.RIGHT,
+            ), obj)
         with self.assertRaises(TypeError):
             obj.set_style(unrecognized_option=True)
 
