@@ -404,9 +404,9 @@ fn native_capture_signal_trains_keep_rails_and_reproduce_pixels() {
                     } else {
                         assert_eq!((cyan, yellow), (0, 0));
                     }
-                    assert!(rgb.iter().any(|p| {
-                        p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2]
-                    }));
+                    assert!(rgb
+                        .iter()
+                        .any(|p| { p[0] > 20 && p[0] < 100 && p[0] == p[1] && p[1] == p[2] }));
                     proof(&format!("signal-trains-{index:02}"), frame.rgba, 640, 360);
                     pixels.push(frame.rgba.to_vec());
                 }
@@ -422,5 +422,8 @@ fn native_capture_signal_trains_keep_rails_and_reproduce_pixels() {
     let replay = run();
     assert_eq!(first, replay, "fresh exports must replay identical pixels");
     assert_ne!(first[1], first[2], "signals must visibly travel");
-    assert_eq!(first[0], first[6], "transient pulses must leave both rails intact");
+    assert_eq!(
+        first[0], first[6],
+        "transient pulses must leave both rails intact"
+    );
 }

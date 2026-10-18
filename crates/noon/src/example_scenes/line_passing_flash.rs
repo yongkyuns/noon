@@ -399,7 +399,11 @@ mod tests {
             let frame = sample_program(&mut program, &mut callbacks, time);
             assert_eq!(frame.objects.len(), 20);
             assert_eq!(
-                frame.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+                frame
+                    .objects
+                    .iter()
+                    .map(|object| object.id)
+                    .collect::<Vec<_>>(),
                 identities
             );
             for rail in 0..2 {
