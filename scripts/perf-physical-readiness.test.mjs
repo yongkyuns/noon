@@ -21,7 +21,7 @@ test("build activity distinguishes executable names and rejects missing/malforme
   assert.deepEqual(parseBuildProcesses("1 /usr/bin/node\n2 /opt/app/Codex"), []);
   assert.deepEqual(parseBuildProcesses("1 arm-none-eabi-gcc\n2 clang-18\n3 gmake"),
     [{ pid: 1, executable: "arm-none-eabi-gcc" }, { pid: 2, executable: "clang-18" }, { pid: 3, executable: "gmake" }]);
-  for (const executable of ["swift", "swiftc", "swift-build", "swift-driver", "swift-frontend", "xcodebuild"]) {
+  for (const executable of ["swift", "swiftc", "swift-build", "swift-driver", "swift-frontend", "xcodebuild", "wasm-bindgen"]) {
     const processes = parseBuildProcesses(`1 /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/${executable}\n2 node`);
     assert.deepEqual(processes, [{ pid: 1, executable }]);
     assert.equal(assessReadiness({ ...ok, buildProcesses: processes }).status, "blocked");
@@ -115,7 +115,7 @@ test("readiness retains large process tables and rejects output beyond its bound
   }
 });
 
-for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild", "java"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
+for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild", "java", "wasm-bindgen"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "noon-device-builds-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(path.join(dir, "scripts")); await mkdir(path.join(dir, "bin"));
