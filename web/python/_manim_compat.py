@@ -92,6 +92,41 @@ def _as_color(name: str, value: object) -> _base.Color:
     raise TypeError(f"{name} must be a Color or #RRGGBB value")
 
 
+def _manim_rgba_rows(color: _base.Color | None, opacity: float):
+    # SemanticStyle is the source of truth and currently represents solid paint.
+    # Manim's array facade uses black when a color is omitted and keeps opacity.
+    rgb = (0.0, 0.0, 0.0) if color is None else (
+        float(color.red), float(color.green), float(color.blue)
+    )
+    rows = [[*rgb, float(opacity)]]
+    try:
+        import numpy as np
+    except ImportError:
+        return rows
+    return np.asarray(rows, dtype=np.float64)
+
+
+def _manim_colors_from_rgbas(rgbas):
+    rows = rgbas.tolist() if hasattr(rgbas, "tolist") else rgbas
+    colors = []
+    for row in rows:
+        rgba = [float(component) for component in row]
+        colors.append(
+            None if not any(rgba) else _base.Color(*rgba[:3])
+        )
+    return colors
+
+
+def _manim_opacities_from_rgbas(rgbas):
+    rows = rgbas.tolist() if hasattr(rgbas, "tolist") else rgbas
+    opacities = [float(row[3]) for row in rows]
+    try:
+        import numpy as np
+    except ImportError:
+        return opacities
+    return np.asarray(opacities, dtype=np.float64)
+
+
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
@@ -397,14 +432,32 @@ class VMobject(Mobject):
     set_submobject_colors_by_gradient = set_color_by_gradient
 
     def get_fill_color(self):
+        return self.get_fill_colors()[0]
+
+    def get_fill_rgbas(self):
         from _manim_semantic_handles import _paint_color
-        return _paint_color(self, "fill")
+        return _manim_rgba_rows(_paint_color(self, "fill"), self.get_fill_opacity())
+
+    def get_fill_colors(self):
+        return _manim_colors_from_rgbas(self.get_fill_rgbas())
+
+    def get_fill_opacities(self):
+        return _manim_opacities_from_rgbas(self.get_fill_rgbas())
 
     def get_stroke_color(self, background=False):
+        return self.get_stroke_colors(background)[0]
+
+    def get_stroke_rgbas(self, background=False):
         if background:
             raise NotImplementedError("background strokes require shared background paint")
         from _manim_semantic_handles import _paint_color
-        return _paint_color(self, "stroke")
+        return _manim_rgba_rows(_paint_color(self, "stroke"), self.get_stroke_opacity())
+
+    def get_stroke_colors(self, background=False):
+        return _manim_colors_from_rgbas(self.get_stroke_rgbas(background))
+
+    def get_stroke_opacities(self, background=False):
+        return _manim_opacities_from_rgbas(self.get_stroke_rgbas(background))
 
     def get_stroke_width(self, background=False):
         from _manim_semantic_handles import _get_stroke_width
@@ -450,7 +503,9 @@ class VMobject(Mobject):
         from _manim_semantic_handles import _get_fill_opacity
         return _get_fill_opacity(self)
 
-    def get_stroke_opacity(self) -> float:
+    def get_stroke_opacity(self, background=False) -> float:
+        if background:
+            raise NotImplementedError("background strokes require shared background paint")
         from _manim_semantic_handles import _get_stroke_opacity
         return _get_stroke_opacity(self)
 

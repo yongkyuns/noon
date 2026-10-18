@@ -37,12 +37,51 @@ class PaintQueriesGradientsTests(unittest.TestCase):
     def test_channel_queries_use_typed_observations_and_exclude_opacity(self):
         obj = identity_only_wrapper(compat.Circle)
         color = SimpleNamespace(red=1.0, green=0.0, blue=0.0, alpha=0.2)
-        with patch.object(handles, '_typed_manim_observation', side_effect=[color, color, 0.06]) as query:
+        with patch.object(handles, '_paint_color', side_effect=[color, color]), \
+             patch.object(compat.Circle, 'get_fill_opacity', return_value=0.3), \
+             patch.object(compat.Circle, 'get_stroke_opacity', return_value=0.4), \
+             patch.object(handles, '_typed_manim_observation', return_value=0.06) as query:
             self.assertEqual(obj.get_fill_color().alpha, 1.0)
             self.assertEqual(obj.get_stroke_color().red, 1.0)
             self.assertEqual(obj.get_stroke_width(), 6.0)
         self.assertEqual([call.args[1] for call in query.call_args_list],
-                         ['fillColor', 'strokeColor', 'strokeWidth'])
+                         ['strokeWidth'])
+
+    def test_style_array_queries_reconstruct_shared_solid_paint(self):
+        obj = identity_only_wrapper(compat.Circle)
+        red = noon.Color(1.0, 0.0, 0.0)
+        blue = noon.Color(0.0, 0.0, 1.0)
+        with patch.object(handles, '_paint_color', side_effect=lambda _obj, channel: red if channel == 'fill' else blue), \
+             patch.object(compat.Circle, 'get_fill_opacity', return_value=0.25), \
+             patch.object(compat.Circle, 'get_stroke_opacity', return_value=0.75):
+            fill_rgbas = obj.get_fill_rgbas()
+            stroke_rgbas = obj.get_stroke_rgbas()
+            fill_color = obj.get_fill_colors()[0]
+            stroke_color = obj.get_stroke_colors()[0]
+            self.assertEqual((fill_color.red, fill_color.green, fill_color.blue), (1.0, 0.0, 0.0))
+            self.assertEqual((stroke_color.red, stroke_color.green, stroke_color.blue), (0.0, 0.0, 1.0))
+            fill_opacities = obj.get_fill_opacities()
+            stroke_opacities = obj.get_stroke_opacities()
+
+        self.assertEqual(fill_rgbas.shape, (1, 4))
+        self.assertEqual(stroke_rgbas.shape, (1, 4))
+        self.assertEqual(str(fill_rgbas.dtype), 'float64')
+        self.assertEqual(str(stroke_rgbas.dtype), 'float64')
+        self.assertEqual(fill_rgbas.tolist(), [[1.0, 0.0, 0.0, 0.25]])
+        self.assertEqual(stroke_rgbas.tolist(), [[0.0, 0.0, 1.0, 0.75]])
+        self.assertEqual(fill_opacities.tolist(), [0.25])
+        self.assertEqual(stroke_opacities.tolist(), [0.75])
+
+    def test_transparent_black_has_no_manim_fill_color_and_background_strokes_reject(self):
+        obj = identity_only_wrapper(compat.Circle)
+        black = noon.Color(0.0, 0.0, 0.0)
+        with patch.object(handles, '_paint_color', return_value=black), \
+             patch.object(compat.Circle, 'get_fill_opacity', return_value=0.0):
+            self.assertEqual(obj.get_fill_rgbas().tolist(), [[0.0, 0.0, 0.0, 0.0]])
+            self.assertEqual(obj.get_fill_colors(), [None])
+            self.assertIsNone(obj.get_fill_color())
+        with self.assertRaisesRegex(NotImplementedError, 'background strokes require shared background paint'):
+            obj.get_stroke_rgbas(background=True)
 
     def test_gradient_is_one_shared_family_request_without_python_interpolation(self):
         group = identity_only_wrapper(compat.VGroup)

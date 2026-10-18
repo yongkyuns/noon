@@ -265,14 +265,17 @@ direct_point.set_location((4, 5))
 def point_mobject_contract(value):
     fill = value.get_fill_color()
     stroke = value.get_stroke_color()
+    color_rgb = lambda color: None if color is None else [
+        float(color.red), float(color.green), float(color.blue)
+    ]
     return {
         "type": type(value).__name__,
         "point_count": value.get_num_points(),
         "location": [float(x) for x in value.get_location()],
         "size": [float(value.width), float(value.height)],
         "paint": [
-            [float(fill.red), float(fill.green), float(fill.blue)],
-            [float(stroke.red), float(stroke.green), float(stroke.blue)],
+            color_rgb(fill),
+            color_rgb(stroke),
             float(value.get_fill_opacity()),
             float(value.get_stroke_opacity()),
             float(value.get_stroke_width()),
@@ -282,6 +285,26 @@ point_mobject = {
     "styled": point_mobject_contract(styled_point),
     "center": point_mobject_contract(center_point),
     "direct": point_mobject_contract(direct_point),
+}
+def paint_array_contract(value):
+    fill_rgbas = value.get_fill_rgbas()
+    stroke_rgbas = value.get_stroke_rgbas()
+    color_rgb = lambda color: None if color is None else [
+        float(color.red), float(color.green), float(color.blue)
+    ]
+    return {
+        "fill_rgbas": fill_rgbas.tolist(),
+        "fill_dtype": str(fill_rgbas.dtype),
+        "fill_colors": [color_rgb(color) for color in value.get_fill_colors()],
+        "fill_opacities": value.get_fill_opacities().tolist(),
+        "stroke_rgbas": stroke_rgbas.tolist(),
+        "stroke_dtype": str(stroke_rgbas.dtype),
+        "stroke_colors": [color_rgb(color) for color in value.get_stroke_colors()],
+        "stroke_opacities": value.get_stroke_opacities().tolist(),
+    }
+paint_arrays = {
+    "styled": paint_array_contract(point_owner),
+    "transparent_black": paint_array_contract(direct_point),
 }
 custom_stride_authored_queries = {
     "boundary_points": [
@@ -402,6 +425,7 @@ json.dumps({
     "custom_stride_authored_queries": custom_stride_authored_queries,
     "path_pieces": path_pieces,
     "point_mobject": point_mobject,
+    "paint_arrays": paint_arrays,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -467,7 +491,30 @@ json.dumps({
     point_count: 1,
     location: [4, 5],
     size: [0.01, 0.01],
-    paint: [[0, 0, 0], [0, 0, 0], 0, 1, 0],
+    paint: [null, [0, 0, 0], 0, 1, 0],
+  });
+  const styledPaint = product.paint_arrays.styled;
+  assert.deepEqual(styledPaint.fill_dtype, "float64");
+  assert.deepEqual(styledPaint.stroke_dtype, "float64");
+  assert.deepEqual(styledPaint.fill_opacities, [0.35]);
+  assert.deepEqual(styledPaint.stroke_opacities, [0.6]);
+  for (const [actual, expected] of [
+    [styledPaint.fill_colors[0], [131 / 255, 193 / 255, 103 / 255]],
+    [styledPaint.stroke_colors[0], [252 / 255, 98 / 255, 85 / 255]],
+    [styledPaint.fill_rgbas[0], [131 / 255, 193 / 255, 103 / 255, 0.35]],
+    [styledPaint.stroke_rgbas[0], [252 / 255, 98 / 255, 85 / 255, 0.6]],
+  ]) {
+    assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
+  }
+  assert.deepEqual(product.paint_arrays.transparent_black, {
+    fill_rgbas: [[0, 0, 0, 0]],
+    fill_dtype: "float64",
+    fill_colors: [null],
+    fill_opacities: [0],
+    stroke_rgbas: [[0, 0, 0, 1]],
+    stroke_dtype: "float64",
+    stroke_colors: [[0, 0, 0]],
+    stroke_opacities: [1],
   });
   const {
     proportion_from_point,

@@ -1493,6 +1493,8 @@ def _zero_extent_replace(api):
 
 def _paint_rgb(color):
     # Normalize provider color representations only; never alter scene semantics.
+    if color is None:
+        return None
     if hasattr(color, "to_rgb"):
         return [float(value) for value in color.to_rgb()]
     return [color.red, color.green, color.blue]
@@ -1879,6 +1881,36 @@ def _point_mobject_probe(api):
         "styled": observe(point),
         "center": observe(center_point),
         "direct": observe(default),
+    }
+
+
+def _paint_array_probe(api):
+    styled = api.VMobject(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+    transparent_black = api.VectorizedPoint()
+
+    def observe(value):
+        fill_rgbas = value.get_fill_rgbas()
+        stroke_rgbas = value.get_stroke_rgbas()
+        return {
+            "fill_rgbas": fill_rgbas.tolist(),
+            "fill_dtype": str(fill_rgbas.dtype),
+            "fill_colors": [_paint_rgb(color) for color in value.get_fill_colors()],
+            "fill_opacities": value.get_fill_opacities().tolist(),
+            "stroke_rgbas": stroke_rgbas.tolist(),
+            "stroke_dtype": str(stroke_rgbas.dtype),
+            "stroke_colors": [_paint_rgb(color) for color in value.get_stroke_colors()],
+            "stroke_opacities": value.get_stroke_opacities().tolist(),
+        }
+
+    return {
+        "styled": observe(styled),
+        "transparent_black": observe(transparent_black),
     }
 
 
@@ -2278,6 +2310,7 @@ FIXTURES = [
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
     Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
     Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
+    Fixture("paint_arrays", lambda: _paint_array_probe(noon), lambda: _paint_array_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
