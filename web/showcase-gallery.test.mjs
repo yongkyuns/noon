@@ -185,3 +185,12 @@ test("CUDA lesson reuses canonical source with a genuine retained showcase poste
   row.path = "python/examples/synthetic_capture.py";
   assert.throws(() => normalizeShowcaseManifest(malformed), /unique local showcase source/);
 });
+
+test("published signal-link example resolves to its genuine local renderer poster", async () => {
+  const dataLinks = normalizeShowcaseManifest(manifest).examples.find(x => x.id === "showcase-data-links");
+  assert.ok(dataLinks);
+  assert.equal(dataLinks.path, "./python/examples/showcase_data_links.py");
+  assert.equal(dataLinks.thumbnail, "./thumbnails/showcase/showcase-data-links.png");
+  assert.equal(dataLinks.thumbnailTime, 3.8);
+  assert.equal(dataLinks.playbackCapability, "deterministic-retained-replay");
+});

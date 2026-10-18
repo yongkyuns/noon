@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog manifest currently lists twenty-five authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-six authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -38,6 +38,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | One Extra Column | CUDA transpose addressing, shared-memory bank conflicts, and the effect of 32-to-33 row padding | Running CUDA in the browser or claiming measured GPU timing |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
+| Signals on durable connections | Bidirectional travelling messages on fixed sensor-fusion links using existing PassingFlash/LaggedStart; retained playback | Infinite moving dash phase, curved/moving links or routing |
 | Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal/re-ignition, and simultaneous path/math reveal with glow edits | A separate Python renderer or implied hardware benchmark |
 | Animate part of a group | Indexed slice selection | Identity assertions in source |
 | Bend a vector curve | Cubic anchors, control handles and a smooth path morph | Callback-time path editing and SVG import |
@@ -116,7 +117,7 @@ Live review retains an unseeked first-pass image and state before any replay att
 
 ## Remaining coverage and migration
 
-The twenty-five curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
+The twenty-six curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
 
 - Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.
@@ -151,4 +152,4 @@ evidence sidecar rather than mislabeling the earlier 24-posters
 capture bundle with a different renderer build identity. Its provenance
 is independent of the Manim/reference catalog and the other showcase cards.
 Regular `scripts/showcase-capture.mjs` can independently recapture a
-complete refreshed 25-scene bundle, without changing the original source.
+complete refreshed 26-scene bundle, without changing the original source.

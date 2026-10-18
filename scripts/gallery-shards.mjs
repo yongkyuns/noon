@@ -36,7 +36,8 @@ export function galleryEntriesFromManifests(manifests) {
   const showcase = manifests[3];
   assert.ok(Array.isArray(showcase.entries), "missing showcase manifest entries");
   entries.push(...showcase.entries.filter(entry =>
-    entry.performance || entry.id === "showcase-always-redraw" || entry.id === "showcase-cuda-transpose" || curatedLessons.includes(entry.id)
+    entry.performance || entry.id === "showcase-always-redraw" || entry.id === "showcase-cuda-transpose" ||
+    entry.id === "showcase-data-links" || curatedLessons.includes(entry.id)
   ).map(entry => ({ ...entry, expected_duration: entry.duration })));
   const ids = entries.map(entry => entry.id);
   assert.ok(ids.length > 0, "gallery inventory is empty");

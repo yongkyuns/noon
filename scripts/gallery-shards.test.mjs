@@ -102,3 +102,12 @@ test("CUDA source is exercised by all public browser galleries without redundant
       browser + ": render the full CUDA lesson once; dedicated CUDA CI covers additional runtime permutations");
   }
 });
+
+test("signal-link lesson gets one ordinary real-browser case on each browser", () => {
+  const entry = entries.find(item => item.id === "showcase-data-links");
+  assert.ok(entry, "gallery browser inventory dropped the signal-link lesson");
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    const cases = galleryCaseQueue(entries, browser).filter(value => value.entry.id === entry.id);
+    assert.deepEqual(cases.map(x => x.noJspi), [false]);
+  }
+});

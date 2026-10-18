@@ -428,6 +428,22 @@
           "label": "Compare padded and unpadded read rounds"
         }
       ]
+    },
+    {
+      "id": "showcase-data-links", "title": "Signals on durable connections",
+      "lesson": "Show messages moving in both directions while the underlying sensor-fusion connections remain attached.",
+      "primary_feature": "bidirectional-signal-messages", "category": "System diagrams",
+      "path": "python/examples/showcase_data_links.py",
+      "features": ["VGroup", "Rectangle", "Line", "Text", "Create", "ShowPassingFlash", "LaggedStart"],
+      "duration": 7.2, "thumbnail_time": 3.8,
+      "thumbnail": "thumbnails/showcase/showcase-data-links.png",
+      "thumbnail_alt": "Actual Noon-rendered IMU and GNSS sensors feeding a fusion estimator over two persistent connections, with cyan and yellow travelling messages",
+      "playback_capability": "deterministic-retained-replay",
+      "still_intervals": [[5.25, 5.75], [6.35, 7.2]],
+      "beats": [{"time": 1.7, "label": "Draw durable connections"},
+                {"time": 3.8, "label": "Transmit messages in both directions"},
+                {"time": 5.55, "label": "Messages retire; links remain"},
+                {"time": 6.9, "label": "Resolve the architecture view"}]
     }
   ]
 }

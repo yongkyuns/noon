@@ -15,12 +15,11 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  const existingEntries = manifest.entries.filter(entry => entry.id !== "showcase-cuda-transpose");
+  const existingEntries = manifest.entries.filter(entry => !["showcase-cuda-transpose", "showcase-data-links"].includes(entry.id));
   assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
     existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
-  assert.ok(evidence.posters.length === existingEntries.length ||
-    evidence.posters.length === existingEntries.length + 1,
-    "capture evidence must be the original batch or a fully refreshed batch");
+  assert.ok([existingEntries.length, existingEntries.length + 1, existingEntries.length + 2].includes(evidence.posters.length),
+    "capture evidence must be the original batch, CUDA extension, or fully refreshed batch");
   for (const [index, entry] of existingEntries.entries()) {
     assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
   }
@@ -28,6 +27,11 @@ test("every showcase card has a retained, source-bound real capture", async () =
     const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
     assertPoster(cuda, evidence.posters[existingEntries.length],
       await read(cuda.path), await read(cuda.thumbnail));
+  }
+  if (evidence.posters.length > existingEntries.length + 1) {
+    const links = manifest.entries.find(entry => entry.id === "showcase-data-links");
+    assertPoster(links, evidence.posters[existingEntries.length + 1],
+      await read(links.path), await read(links.thumbnail));
   }
 });
 
@@ -130,4 +134,30 @@ test("CUDA showcase has exact renderer-derived, source-bound supplementary poste
   wrongPixels[wrongPixels.length - 1] ^= 1;
   assert.throws(() => assertRetainedCudaFidelityPoster(entry, record, source, wrongPixels),
     /differ from the captured/);
+});
+
+test("sensor-fusion signal links require their own original WebGPU capture and source-bound poster", async () => {
+  const entry = manifest.entries.find(item => item.id === "showcase-data-links");
+  assert.ok(entry, "signal-link lesson must be published in the manifest");
+  const bytes = await read("thumbnails/showcase/showcase-data-links-evidence.json");
+  const signalEvidence = JSON.parse(bytes);
+  assert.equal(signalEvidence.schema, 1);
+  assert.equal(signalEvidence.publication, "captured-preview");
+  assert.equal(signalEvidence.backend, "webgpu");
+  assert.equal(signalEvidence.captureRevision, signalEvidence.runtimeBuildIdentity.sourceRevision);
+  assert.equal(signalEvidence.posters.length, 1);
+  const record = signalEvidence.posters[0];
+  const source = await read(entry.path);
+  const png = await read(entry.thumbnail);
+  assertRetainedPoster(entry, record, source, png, signalEvidence.runtimeBuildIdentity);
+  const altered = Buffer.from(png);
+  altered[altered.length - 1] ^= 1;
+  assert.throws(() => assertRetainedPoster(entry, record, source, altered, signalEvidence.runtimeBuildIdentity),
+    /retained image/);
+  assert.throws(() => assertRetainedPoster(entry, record,
+    Buffer.concat([source, Buffer.from("#changed")]), png, signalEvidence.runtimeBuildIdentity),
+    /recapture/);
+  assert.throws(() => assertRetainedPoster(entry,
+    { ...record, captureBuildId: "0".repeat(64) }, source, png, signalEvidence.runtimeBuildIdentity),
+    /different runtime build/);
 });
