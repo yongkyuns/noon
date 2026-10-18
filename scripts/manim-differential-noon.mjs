@@ -108,6 +108,27 @@ custom_stride_live_queries = {
         float(value)
         for value in live_custom_stride.get_boundary_point((1, 0, 0))
     ],
+    "point_from_proportion": [
+        round(float(value), 7)
+        for value in live_custom_stride.point_from_proportion(0.5)
+    ],
+    "proportion_from_point": round(
+        float(live_custom_stride.proportion_from_point((15.5, 0, 0))), 7
+    ),
+}
+authored_custom_stride = VMobject()
+authored_custom_stride.set_points([
+    (0, 0), (30, 0), (1, 0), (2, 0),
+])
+authored_custom_stride.n_points_per_cubic_curve = 2
+custom_stride_authored_queries = {
+    "point_from_proportion": [
+        round(float(value), 7)
+        for value in authored_custom_stride.point_from_proportion(0.5)
+    ],
+    "proportion_from_point": round(
+        float(authored_custom_stride.proportion_from_point((15.5, 0, 0))), 7
+    ),
 }
 batch = VMobject()
 curves = np.array([
@@ -121,6 +142,7 @@ json.dumps({
     "custom_stride_anchor_gate": custom_stride_gate,
     "custom_stride_scaling_gate": custom_stride_scaling_gate,
     "custom_stride_live_queries": custom_stride_live_queries,
+    "custom_stride_authored_queries": custom_stride_authored_queries,
     "cubic_batch_extension": cubic_batch_extension,
 }, allow_nan=False)
 `));
@@ -133,10 +155,23 @@ json.dumps({
     error_type: "NotImplementedError",
     error_message: "scale_handle_to_anchor_distances requires the supported four-point cubic stride",
   });
-  assert.deepEqual(product.custom_stride_live_queries, {
+  const { proportion_from_point, ...liveQueryValues } = product.custom_stride_live_queries;
+  assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
+    point_from_proportion: [15.5, 0],
   });
+  assert.ok(
+    Math.abs(proportion_from_point - 0.5) <= 5e-7,
+    `expected a stride-2 inverse proportion near 0.5, got ${proportion_from_point}`,
+  );
+  assert.deepEqual(
+    {
+      point_from_proportion: product.custom_stride_live_queries.point_from_proportion,
+      proportion_from_point: product.custom_stride_live_queries.proportion_from_point,
+    },
+    product.custom_stride_authored_queries,
+  );
   assert.deepEqual(product.cubic_batch_extension, [
     [0, 0], [1, 0], [1, 1], [2, 1],
     [2, 1], [3, 1], [3, 2], [4, 2],

@@ -980,6 +980,39 @@ class PathQueryTests(unittest.TestCase):
         query.pointFromProportion.assert_not_called()
         query.free.assert_called_once()
 
+    def test_custom_stride_proportions_use_bound_live_path_queries(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value._object = object()
+        value.throw_error_if_no_points = Mock()
+        value._semantic_handle = Mock()
+        value._semantic_handle_fresh = True
+
+        path_query = Mock()
+        path_query.pointCount = 4
+        path_query.bezierLengthPiecesRange.side_effect = (
+            [30.0], [1.0], [30.0], [1.0]
+        )
+        path_query.bezierPointsAtRange.return_value = [15.5, 0.0, 0.0]
+        path_query.bezierParametersForPointRange.side_effect = ([15.5 / 30.0], [])
+
+        context = Mock()
+        context.queryMobjectPath.return_value = path_query
+        value._scene = Mock(_canonical_authoring_context=context)
+
+        self.assertEqual(value.point_from_proportion(0.5), (15.5, 0.0))
+        self.assertAlmostEqual(value.proportion_from_point((15.5, 0.0, 0.0)), 0.5)
+
+        self.assertEqual(context.queryMobjectPath.call_count, 2)
+        self.assertEqual(path_query.free.call_count, 2)
+        self.assertEqual(
+            [call.args for call in path_query.bezierLengthPiecesRange.call_args_list],
+            [(0, 2, None), (2, 4, None), (0, 2, None), (2, 4, None)],
+        )
+        path_query.bezierParametersForPointRange.assert_called_once_with(
+            0, 2, 15.5, 0.0, 0.0
+        )
+
     def test_mutable_stride_proportion_one_returns_the_last_stored_point(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2
