@@ -29,9 +29,13 @@ jobs:
           retention-days: 1
       - name: Resolve the repository-pinned public Rust build inputs
         run: |
-          rustup show active-toolchain
-          cargo vendor --locked --versioned-dirs /tmp/noon-repair-vendor > /tmp/noon-repair-vendor-config.toml
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
           mkdir -p /tmp/noon-repair-tools
+          # This library workspace intentionally ignores Cargo.lock. Resolve once,
+          # then vendor under --locked and preserve that exact offline resolution.
+          cargo generate-lockfile
+          cargo vendor --locked --versioned-dirs /tmp/noon-repair-vendor > /tmp/noon-repair-vendor-config.toml
+          cp Cargo.lock /tmp/noon-repair-tools/Cargo.lock
           tar -C "$(rustc --print sysroot)" -czf /tmp/noon-repair-tools/rust-toolchain.tar.gz bin lib
           tar -C /tmp -czf /tmp/noon-repair-tools/vendor.tar.gz noon-repair-vendor noon-repair-vendor-config.toml
           rustc --version > /tmp/noon-repair-tools/versions.txt
