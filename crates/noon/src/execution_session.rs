@@ -4500,11 +4500,21 @@ impl ExecutionSession {
             )
             .map_err(ExecutionSessionAnimationError::Publication)?;
 
+        // A Group method animation can change only family-owned metadata, such as
+        // `set_color(..., family=False)`. That has no render track, but Manim
+        // still applies the method target to the source when the animation ends.
+        // Preserve a completion boundary so the staged family color is published.
+        let has_family_color_completion = matches!(
+            lifecycle.as_ref(),
+            Some(PreparedAnimationLifecycle::Composition { family_colors, .. })
+                if !family_colors.is_empty()
+        );
         let (token, next_segment_sequence) = if definitions.is_empty()
             && projection.family_animations().is_empty()
             && scalar_completions.is_empty()
             && derived_display_plan.is_none()
             && family_replacement.is_none()
+            && !has_family_color_completion
         {
             (None, self.next_segment_sequence)
         } else {

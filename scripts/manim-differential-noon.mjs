@@ -266,11 +266,14 @@ cubic_batch_extension = batch.get_all_points().tolist()
 observations = noon_observations()
 family_paint = observations["family_own_paint"]
 assert observations["family_own_paint_live"] == family_paint
+family_paint_play = observations["family_own_paint_play_live"]
 def color_components(color):
     return (color.red, color.green, color.blue)
 def assert_color(actual, expected):
     assert all(abs(float(left) - float(right)) <= 1e-6
-               for left, right in zip(actual, color_components(expected)))
+               for left, right in zip(actual, color_components(expected))), (
+                   actual, color_components(expected)
+               )
 assert_color(family_paint["plain_default"][0], noon.WHITE)
 assert_color(family_paint["plain_default"][1][0], noon.RED)
 assert_color(family_paint["plain_default"][1][1], noon.BLUE)
@@ -294,6 +297,11 @@ assert family_paint["nested_shared_root_only"][4:] == [True, True]
 assert_color(family_paint["vgroup_save_restore"][0], noon.WHITE)
 assert_color(family_paint["vgroup_save_restore"][1][0], noon.RED)
 assert_color(family_paint["vgroup_save_restore"][1][1], noon.BLUE)
+assert_color(family_paint_play["before"], noon.GREEN)
+assert_color(family_paint_play["target"], noon.YELLOW)
+assert_color(family_paint_play["after"], noon.YELLOW)
+assert_color(family_paint_play["children"][0], noon.RED)
+assert_color(family_paint_play["children"][1], noon.BLUE)
 json.dumps({
     "observations": observations,
     "custom_stride_anchor_gate": custom_stride_gate,

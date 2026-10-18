@@ -1564,6 +1564,28 @@ def _family_own_paint_probe(api):
     }
 
 
+def _family_own_paint_play_probe(api, scene=None):
+    """Observe root-only family color after an ordinary method animation."""
+    family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE), color=api.GREEN)
+    if scene is None:
+        scene = api.Scene()
+    scene.add(family)
+    before = _paint_rgb(family.get_color())
+    animation = family.animate.set_color(api.YELLOW, family=False)
+    target_color = _paint_rgb(animation.target.get_color())
+    scene.play(
+        animation,
+        run_time=1,
+        rate_func=api.linear,
+    )
+    return {
+        "before": before,
+        "target": target_color,
+        "after": _paint_rgb(family.get_color()),
+        "children": [_paint_rgb(member.get_color()) for member in family.submobjects],
+    }
+
+
 def _arc_geometry(api):
     arc = api.Arc(
         radius=1.25,
@@ -2207,6 +2229,12 @@ FIXTURES = [
         "family_own_paint_live",
         lambda: _noon_live_scene_probe(lambda _scene: _family_own_paint_probe(noon)),
         lambda: _family_own_paint_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "family_own_paint_play_live",
+        lambda: _family_own_paint_play_probe(noon),
+        lambda: _family_own_paint_play_probe(manim),
         1e-5,
     ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),

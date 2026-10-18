@@ -12483,6 +12483,51 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_group_method_target_publishes_family_root_color() {
+        let mut context = CanonicalAuthoringScene::default();
+        let leaf = context.scene.square(0.5).unwrap();
+        let source = context.scene.family(&[(&leaf).into()]).unwrap();
+        let target_leaf = leaf.target_editor().unwrap();
+        let target = context.scene.family(&[(&target_leaf).into()]).unwrap();
+        target
+            .set_own_color(
+                noon_core::Color::YELLOW.red.into(),
+                noon_core::Color::YELLOW.green.into(),
+                noon_core::Color::YELLOW.blue.into(),
+                noon_core::Color::YELLOW.alpha.into(),
+            )
+            .unwrap();
+        assert_eq!(target.own_color().unwrap(), noon_core::Color::YELLOW);
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Family(source.clone())],
+                bindings: vec![(ObjectId::new(0), leaf)],
+            })
+            .unwrap();
+        let children = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: source.clone(),
+            target_state: target,
+            method_target: true,
+            options: AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        }];
+
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert_eq!(source.own_color().unwrap(), noon_core::Color::YELLOW);
+    }
+
+    #[test]
     fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
