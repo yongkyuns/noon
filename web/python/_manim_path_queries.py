@@ -24,8 +24,24 @@ def _query(value):
     return query
 
 
+def _reject_staged_custom_stride_proportion(value):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if integer_stride != 4:
+        from _manim_updaters import canonical_callback_phase_active
+
+        if canonical_callback_phase_active():
+            raise NotImplementedError(
+                "custom-stride VMobject proportions are unavailable during staged callbacks"
+            )
+
+
 def point_from_proportion(value, alpha):
     alpha = _ir._finite_number("alpha", alpha)
+    _reject_staged_custom_stride_proportion(value)
     query = _query(value)
     try:
         stride = getattr(value, "n_points_per_cubic_curve", 4)
@@ -103,6 +119,7 @@ def proportion_from_point(value, point):
     else:
         raise ValueError("point must have two or three coordinates")
 
+    _reject_staged_custom_stride_proportion(value)
     query = _query(value)
     try:
         stride = getattr(value, "n_points_per_cubic_curve", 4)

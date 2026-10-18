@@ -1013,6 +1013,30 @@ class PathQueryTests(unittest.TestCase):
             0, 2, 15.5, 0.0, 0.0
         )
 
+    def test_custom_stride_proportions_reject_staged_callbacks_before_host_reads(self):
+        import _manim_updaters as updaters
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value._object = object()
+        value.throw_error_if_no_points = Mock()
+        value._semantic_handle = Mock()
+        value._semantic_handle_fresh = True
+        context = Mock()
+        value._scene = Mock(_canonical_authoring_context=context)
+
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(Mock())
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                value.point_from_proportion(0.5)
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                value.proportion_from_point((15.5, 0.0, 0.0))
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+
+        context.queryMobjectPath.assert_not_called()
+        value.throw_error_if_no_points.assert_not_called()
+
     def test_mutable_stride_proportion_one_returns_the_last_stored_point(self):
         value = identity_only_wrapper(compat.VMobject)
         value.n_points_per_cubic_curve = 2
