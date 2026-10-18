@@ -1507,6 +1507,13 @@
       "source": "parity/manim-v0.21/core-examples/paint_fade.py",
       "expected_duration": 0.2,
       "notes": "Leaf/default/nonrecursive and repeated nested-alias paint fades plus repeated-alias RGB fade_to interpolation with unchanged paint opacity; existing raster policy applies."
+    },
+    {
+      "id": "stroke-caps",
+      "scene": "StrokeCaps",
+      "source": "parity/manim-v0.21/core-examples/stroke_caps.py",
+      "expected_duration": 0.2,
+      "notes": "Static open VMobject strokes for AUTO, ROUND, BUTT, and SQUARE, checking Manim Cairo cap appearance against the product renderer's WebGPU and WebGL2 output."
     }
   ],
   "sample_fractions": [
