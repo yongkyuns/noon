@@ -792,11 +792,59 @@ impl FramePreparer {
         }
     }
 
+    /// Prepare geometry with the target device's optional packed-buffer limit.
+    ///
+    /// Direct Rust consumers do not need to reach the retained text/image
+    /// preparer to install the existing admission guard. This method borrows
+    /// the device only to read its limit; it neither uploads nor retains it.
+    /// Ordinary geometry and other resources still have their own limits.
+    ///
+    /// ```no_run
+    /// # fn example(device: &wgpu::Device, frame: &noon_runtime::FrameState) {
+    /// let mut preparer = noon_render_wgpu::FramePreparer::new();
+    /// let _ = preparer.prepare_for_device(device, frame);
+    /// let _ = preparer.prepare_incremental_for_device(
+    ///     device,
+    ///     frame,
+    ///     &noon_runtime::FrameChanges::default(),
+    /// );
+    /// # }
+    /// ```
+    pub fn prepare_for_device<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        frame: &FrameState,
+    ) -> PreparedFrame<'a> {
+        self.set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        self.prepare(frame)
+    }
+
+    /// Apply a delta with the target device's optional packed-buffer limit.
+    ///
+    /// An unchanged limit leaves the normal incremental path intact. A changed
+    /// limit invalidates derived packing before the delta is prepared, allowing
+    /// ordinary fallback or re-admission without changing semantic geometry.
+    /// Hosts still own GPU resource replacement when changing devices.
+    pub fn prepare_incremental_for_device<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        frame: &FrameState,
+        changes: &FrameChanges,
+    ) -> PreparedFrame<'a> {
+        self.set_packed_path_buffer_limit(device.limits().max_buffer_size);
+        self.prepare_incremental(frame, changes)
+    }
+
+    /// Prepare with the previously installed cap, or no device cap before one
+    /// is installed. Prefer `prepare_for_device` for GPU-bound frames.
     pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
         self.rebuild(frame)
     }
 
     /// Updates cached instance records using the runtime's consumed change set.
+    ///
+    /// This uses the previously installed cap, or no device cap before one
+    /// is installed. Prefer `prepare_incremental_for_device` for GPU-bound frames.
     ///
     /// Structural removals retire packed slots in place. Re-entered objects reactivate
     /// their original packed slot, while tail-appended objects, including new vector

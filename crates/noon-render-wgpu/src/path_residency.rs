@@ -430,7 +430,10 @@ impl FramePreparer {
 
 fn cpu_vector_bytes<T>(values: &Vec<T>) -> (u64, u64) {
     let stride = std::mem::size_of::<T>() as u64;
-    (values.len() as u64 * stride, values.capacity() as u64 * stride)
+    (
+        values.len() as u64 * stride,
+        values.capacity() as u64 * stride,
+    )
 }
 
 fn validate_request(request: &PathMeshPreload<'_>) -> Result<(), noon_geometry::GeometryError> {

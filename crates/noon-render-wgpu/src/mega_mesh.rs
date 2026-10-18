@@ -476,9 +476,8 @@ mod tests {
         );
 
         // Never upload the unbounded witness: it is a deliberate negative.
-        // Installing the exact device limit forces safe derivation and fallback.
-        preparer.set_packed_path_buffer_limit(device.limits().max_buffer_size);
-        let bounded = preparer.prepare_incremental(&frame, &Default::default());
+        // The public device-aware entry point installs admission before packing.
+        let bounded = preparer.prepare_for_device(&device, &frame);
         assert_eq!(bounded.stats.mega_path_count, 0);
         assert_eq!(bounded.stats.unsupported_count, 0);
         assert!(bounded.mega_path_indices.is_empty());
@@ -511,10 +510,38 @@ mod tests {
         queue.submit(Some(encoder.finish()));
         assert_eq!(draws.draw_calls, 1);
 
-        // A sufficient separate device can still select the packed path.
-        preparer.set_packed_path_buffer_limit(wgpu::Limits::default().max_buffer_size);
-        let recovered = preparer.prepare(&frame);
+        // Supplying the same device must not invalidate an otherwise clean frame.
+        let clean = preparer.prepare_incremental_for_device(&device, &frame, &Default::default());
+        assert_eq!(clean.stats.full_rebuilds, 0);
+        assert!(clean.mega_path_instance_dirty_ranges.is_empty());
+        assert!(clean.mega_path_index_dirty_ranges.is_empty());
+        let idle_upload = renderer.upload(&device, &queue, &clean);
+        assert_eq!(idle_upload.bytes_uploaded, 0);
+        assert_eq!(idle_upload.buffer_reallocations, 0);
+
+        // An actual larger-limit device re-admits packing even with an empty
+        // delta. No semantic edit or private setter is needed by the caller.
+        let (larger_device, larger_queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        assert!(larger_device.limits().max_buffer_size > device.limits().max_buffer_size);
+        let recovered =
+            preparer.prepare_incremental_for_device(&larger_device, &frame, &Default::default());
         assert_eq!(recovered.stats.mega_path_count, 1);
+        let mut larger_renderer = crate::GpuRenderer::new(
+            &larger_device,
+            &larger_queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let recovered_upload = larger_renderer.upload(&larger_device, &larger_queue, &recovered);
+        assert!(recovered_upload.bytes_uploaded > 0);
+
+        // Returning to the smaller cap must fall back before the next upload.
+        let bounded_again =
+            preparer.prepare_incremental_for_device(&device, &frame, &Default::default());
+        assert_eq!(bounded_again.stats.mega_path_count, 0);
+        assert_eq!(bounded_again.stats.unsupported_count, 0);
+        assert!(bounded_again.mega_path_indices.is_empty());
+        assert!(bounded_again.mega_path_vertex_instances.is_empty());
+        renderer.upload(&device, &queue, &bounded_again);
     }
 
     #[test]
