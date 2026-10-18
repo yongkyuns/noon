@@ -1303,6 +1303,35 @@ def _path_editing(api):
             custom_stride_query.get_cubic_bezier_tuples_from_points(cubic_tuple_points)
         ),
     }
+    subpath_method_points = [
+        [0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0],
+        [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0],
+        [6, 0, 1], [7, 0, 1], [8, 0, 1], [9, 0, 1],
+        [10, 0, 2],
+    ]
+    if manim_reference:
+        subpath_method_points = np.asarray(subpath_method_points)
+    subpath_method_query = api.VMobject()
+    subpath_method_groups = {
+        "full_dimensions": [
+            as_nested_list(group)
+            for group in subpath_method_query.get_subpaths_from_points(
+                subpath_method_points
+            )
+        ],
+        "two_dimensions": [
+            as_nested_list(group)
+            for group in subpath_method_query.gen_subpaths_from_points_2d(
+                subpath_method_points
+            )
+        ],
+        "custom_stride": [
+            as_nested_list(group)
+            for group in custom_stride_query.get_subpaths_from_points(
+                cubic_tuple_points
+            )
+        ],
+    }
 
     return {
         "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
@@ -1324,6 +1353,7 @@ def _path_editing(api):
         "point_equality": point_equality,
         "subpath_split_indices": subpath_splits,
         "cubic_bezier_tuple_groups": cubic_tuple_groups,
+        "subpath_point_groups": subpath_method_groups,
     }
 
 

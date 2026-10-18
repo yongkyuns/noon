@@ -216,6 +216,14 @@ class VMobject(Mobject):
         from _manim_path_queries import subpath_split_indices
         return subpath_split_indices(self, points, n_dims)
 
+    def get_subpaths_from_points(self, points):
+        from _manim_path_queries import subpaths_from_points
+        return subpaths_from_points(self, points)
+
+    def gen_subpaths_from_points_2d(self, points):
+        from _manim_path_queries import gen_subpaths_from_points_2d
+        return gen_subpaths_from_points_2d(self, points)
+
     def gen_cubic_bezier_tuples_from_points(self, points):
         from _manim_path_queries import gen_cubic_bezier_tuples_from_points
         return gen_cubic_bezier_tuples_from_points(self, points)

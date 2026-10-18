@@ -69,6 +69,7 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringMobjectHandle",
   "cubicBezierPointRanges(",
   "subpathSplitIndices(",
+  "subpathRanges(",
   "export class SemanticExecutionPlayer",
   "seekDirect(",
   "resourceBundleBytes(",
@@ -301,6 +302,7 @@ const expectedTypeSurface = [
   "queryMobjectFillOpacity(handle: WasmAuthoringMobjectHandle): number",
   "queryMobjectStrokeOpacity(handle: WasmAuthoringMobjectHandle): number",
   "subpathSplitIndices(",
+  "subpathRanges(",
   "cubicBezierPointRanges(",
 
   "resumeExecutionPlayer(): SemanticExecutionPlayer",

@@ -1868,6 +1868,31 @@ mod wasm {
             .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = subpathRanges)]
+        pub fn subpath_ranges(
+            &self,
+            points: Vec<f64>,
+            point_count: u32,
+            point_dimensions: u32,
+            compared_dimensions: u32,
+            points_per_curve: f64,
+            absolute_tolerance: f64,
+            drop_short_ranges: bool,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            noon::manim_subpath_ranges(
+                &points,
+                point_count as usize,
+                point_dimensions as usize,
+                compared_dimensions as usize,
+                points_per_curve,
+                absolute_tolerance,
+                drop_short_ranges,
+            )
+            .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+            .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pointsAllClose)]
         pub fn points_allclose(
             &self,

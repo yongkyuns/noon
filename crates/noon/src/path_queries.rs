@@ -759,33 +759,64 @@ pub fn manim_subpath_split_indices(
     compared_dimensions: usize,
     absolute_tolerance: f64,
 ) -> Result<Vec<usize>, AuthoringError> {
+    manim_subpath_ranges(
+        points,
+        point_count,
+        point_dimensions,
+        compared_dimensions,
+        4.0,
+        absolute_tolerance,
+        false,
+    )
+}
+
+/// Return connected cubic subpath ranges at a caller-selected point stride.
+///
+/// When `drop_short_ranges` is true, ranges shorter than one cubic stride are
+/// omitted, matching ManimCE's `_gen_subpaths_from_points` behavior.
+pub fn manim_subpath_ranges(
+    points: &[f64],
+    point_count: usize,
+    point_dimensions: usize,
+    compared_dimensions: usize,
+    points_per_curve: f64,
+    absolute_tolerance: f64,
+    drop_short_ranges: bool,
+) -> Result<Vec<usize>, AuthoringError> {
     if point_dimensions > 0 && point_count.checked_mul(point_dimensions) != Some(points.len()) {
         return Err(AuthoringError::InvalidPointCoordinates(points.len()));
     }
     if point_dimensions == 0 && !points.is_empty() {
         return Err(AuthoringError::InvalidPointCoordinates(points.len()));
     }
-    if point_count < 4 {
+    if points_per_curve.is_nan()
+        || (points_per_curve.is_finite() && points_per_curve.fract() != 0.0)
+        || points_per_curve == 0.0
+    {
+        return Ok(Vec::new());
+    }
+    if points_per_curve > 0.0 && !drop_short_ranges && (point_count as f64) < points_per_curve {
         return Ok(Vec::new());
     }
 
     let compared_dimensions = compared_dimensions.min(point_dimensions);
-    if compared_dimensions == 0 {
-        return Ok(vec![0, point_count]);
-    }
     let mut starts = vec![0];
-    for boundary in (4..point_count).step_by(4) {
-        let end_offset = (boundary - 1) * point_dimensions;
-        let start_offset = boundary * point_dimensions;
-        let previous_end = &points[end_offset..end_offset + compared_dimensions];
-        let next_start = &points[start_offset..start_offset + compared_dimensions];
-        if !manim_subpath_points_close(previous_end, next_start, absolute_tolerance) {
-            starts.push(boundary);
+    if compared_dimensions > 0 && points_per_curve > 0.0 && points_per_curve <= point_count as f64 {
+        let stride = points_per_curve as usize;
+        for boundary in (stride..point_count).step_by(stride) {
+            let end_offset = (boundary - 1) * point_dimensions;
+            let start_offset = boundary * point_dimensions;
+            let previous_end = &points[end_offset..end_offset + compared_dimensions];
+            let next_start = &points[start_offset..start_offset + compared_dimensions];
+            if !manim_subpath_points_close(previous_end, next_start, absolute_tolerance) {
+                starts.push(boundary);
+            }
         }
     }
     starts.push(point_count);
     Ok(starts
         .windows(2)
+        .filter(|range| !drop_short_ranges || (range[1] - range[0]) as f64 >= points_per_curve)
         .flat_map(|range| [range[0], range[1]])
         .collect())
 }
@@ -1103,5 +1134,33 @@ mod point_equality_tests {
             .unwrap(),
             [0, 4, 4, 8]
         );
+    }
+
+    #[test]
+    fn generic_subpath_ranges_honor_stride_dimensions_and_short_run_filtering() {
+        let points = [
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 0.0, 4.0, 0.0,
+            0.0, 5.0, 0.0, 0.0, 6.0, 0.0, 0.0, 6.0, 0.0, 1.0, 7.0, 0.0, 1.0, 8.0, 0.0, 1.0, 9.0,
+            0.0, 1.0, 10.0, 0.0, 2.0,
+        ];
+        assert_eq!(
+            manim_subpath_ranges(&points, 13, 3, 3, 4.0, 1.0e-6, true).unwrap(),
+            [0, 8, 8, 12]
+        );
+        assert_eq!(
+            manim_subpath_ranges(&points, 13, 3, 2, 4.0, 1.0e-6, true).unwrap(),
+            [0, 12]
+        );
+        assert_eq!(
+            manim_subpath_ranges(&points, 13, 3, 3, 3.0, 1.0e-6, false).unwrap(),
+            [0, 3, 3, 6, 6, 9, 9, 12, 12, 13]
+        );
+        assert_eq!(
+            manim_subpath_ranges(&points, 13, 3, 3, f64::NEG_INFINITY, 1.0e-6, true).unwrap(),
+            [0, 13]
+        );
+        assert!(manim_subpath_ranges(&points, 13, 3, 3, 3.5, 1.0e-6, true)
+            .unwrap()
+            .is_empty());
     }
 }

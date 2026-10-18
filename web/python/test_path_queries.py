@@ -56,21 +56,21 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         value.tolerance_for_point_equality = 2e-5
         handle = Mock()
-        handle.subpathSplitIndices.return_value = [0, 4, 4, 8]
+        handle.subpathRanges.return_value = [0, 4, 4, 8]
         points = np.arange(24, dtype=np.float64).reshape((8, 3))
         with patch.object(queries, "_handle_for", return_value=handle):
             ranges = value.get_subpath_split_indices_from_points(points, n_dims=-1)
         self.assertIsInstance(ranges, np.ndarray)
         self.assertEqual(ranges.shape, (2, 2))
         np.testing.assert_array_equal(ranges, [[0, 4], [4, 8]])
-        handle.subpathSplitIndices.assert_called_once_with(
-            points.reshape(-1).tolist(), 8, 3, 2, 2e-5
+        handle.subpathRanges.assert_called_once_with(
+            points.reshape(-1).tolist(), 8, 3, 2, 4.0, 2e-5, False
         )
 
     def test_subpath_split_query_without_numpy_returns_range_lists(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
-        handle.subpathSplitIndices.return_value = [0, 4, 4, 8]
+        handle.subpathRanges.return_value = [0, 4, 4, 8]
         with patch.dict("sys.modules", {"numpy": None}), patch.object(
             queries, "_handle_for", return_value=handle
         ):
@@ -79,9 +79,9 @@ class PathQueryTests(unittest.TestCase):
                 n_dims=3,
             )
         self.assertEqual(ranges, [[0, 4], [4, 8]])
-        handle.subpathSplitIndices.assert_called_once_with(
+        handle.subpathRanges.assert_called_once_with(
             [0., 0., 1., 0., 2., 0., 3., 0., 3., 0., 4., 0., 5., 0., 6., 0.],
-            8, 2, 2, 1e-6,
+            8, 2, 2, 4.0, 1e-6, False,
         )
 
     def test_subpath_split_query_rejects_ragged_or_nonmatrix_points_before_rust(self):
@@ -92,6 +92,66 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 value.get_subpath_split_indices_from_points([0, 1, 2, 3])
         handle.assert_not_called()
+
+    def test_subpath_getters_use_rust_ranges_and_preserve_point_slice_views(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy subpath slice behavior")
+        value = identity_only_wrapper(compat.VMobject)
+        points = np.arange(39, dtype=np.float64).reshape((13, 3))
+        handle = Mock()
+        handle.subpathRanges.side_effect = [[0, 8, 8, 12], [0, 12]]
+        with patch.object(queries, "_handle_for", return_value=handle):
+            subpaths = value.get_subpaths_from_points(points)
+            self.assertEqual(len(subpaths), 2)
+            np.testing.assert_array_equal(subpaths[0], points[:8])
+            self.assertTrue(np.shares_memory(subpaths[0], points))
+
+            generated = value.gen_subpaths_from_points_2d(points)
+            self.assertTrue(hasattr(generated, "__next__"))
+            planar_subpaths = list(generated)
+            self.assertEqual(len(planar_subpaths), 1)
+            np.testing.assert_array_equal(planar_subpaths[0], points[:12])
+            self.assertTrue(np.shares_memory(planar_subpaths[0], points))
+        expected_points = points.reshape(-1).tolist()
+        self.assertEqual(
+            handle.subpathRanges.call_args_list[0].args,
+            (expected_points, 13, 3, 3, 4.0, 1e-6, True),
+        )
+        self.assertEqual(
+            handle.subpathRanges.call_args_list[1].args,
+            (expected_points, 13, 3, 2, 4.0, 1e-6, True),
+        )
+
+    def test_subpath_getters_forward_custom_stride_and_zero_stride_raises(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        handle.subpathRanges.return_value = [0, 6]
+        points = [[index, 0, 0] for index in range(6)]
+        with patch.object(queries, "_handle_for", return_value=handle):
+            value.n_points_per_cubic_curve = 3
+            self.assertEqual(value.get_subpaths_from_points(points), [points[:6]])
+            value.n_points_per_cubic_curve = 0
+            with self.assertRaises(ValueError):
+                value.get_subpaths_from_points(points)
+        handle.subpathRanges.assert_called_once_with(
+            [float(c) for row in points for c in row], 6, 3, 3, 3.0, 1e-6, True
+        )
+
+    def test_subpath_getters_slice_python_lists_when_numpy_is_unavailable(self):
+        value = identity_only_wrapper(compat.VMobject)
+        points = [[index, 0, 0] for index in range(8)]
+        handle = Mock()
+        handle.subpathRanges.side_effect = [[0, 4], [0, 4, 4, 8]]
+        with patch.dict("sys.modules", {"numpy": None}), patch.object(
+            queries, "_handle_for", return_value=handle
+        ):
+            self.assertEqual(value.get_subpaths_from_points(points), [points[:4]])
+            self.assertEqual(
+                list(value.gen_subpaths_from_points_2d(points)),
+                [points[:4], points[4:]],
+            )
 
     def test_cubic_tuple_helpers_use_rust_stride_ranges_and_keep_generator_views(self):
         try:

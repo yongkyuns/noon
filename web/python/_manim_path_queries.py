@@ -134,9 +134,9 @@ def consider_points_equals_2d(value, p0, p1):
     return bool(engine_call(handle.points2dClose, left, right, tolerance))
 
 
-def subpath_split_indices(value, points, n_dims=3):
-    """Return Manim's [start, end) point ranges for connected cubic runs."""
-    n_dims = operator.index(n_dims)
+def _subpath_range_indices(value, points, n_dims, *, compare_2d, drop_short_ranges):
+    if n_dims is not None:
+        n_dims = operator.index(n_dims)
     try:
         import numpy as np
     except ImportError:
@@ -157,27 +157,86 @@ def subpath_split_indices(value, points, n_dims=3):
         point_count, point_dimensions = array.shape
         coordinates = array.reshape(-1).tolist()
 
-    compared_dimensions = slice(None, n_dims).indices(point_dimensions)[1]
     if point_count > 0xFFFFFFFF or point_dimensions > 0xFFFFFFFF:
         raise ValueError("points exceed the supported array size")
+    if compare_2d:
+        compared_dimensions = 2
+    elif n_dims is None:
+        compared_dimensions = point_dimensions
+    else:
+        compared_dimensions = slice(None, n_dims).indices(point_dimensions)[1]
+    points_per_curve = operator.index(
+        getattr(value, "n_points_per_cubic_curve", 4)
+    )
+    if points_per_curve == 0:
+        # Preserve the source's zero-step error before calling the Rust query.
+        range(0, point_count, points_per_curve)
+    try:
+        stride_number = float(points_per_curve)
+    except OverflowError:
+        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
     handle = _handle_for(value)
     if handle is None:
         raise RuntimeError("subpath queries require a shared Rust Mobject handle")
     tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
     indices = engine_call(
-        handle.subpathSplitIndices,
+        handle.subpathRanges,
         coordinates,
         point_count,
         point_dimensions,
         compared_dimensions,
+        stride_number,
         tolerance,
+        drop_short_ranges,
     )
     indices = [int(index) for index in indices]
     if len(indices) % 2:
         raise RuntimeError("Rust subpath query returned an incomplete index range")
+    return np, indices
+
+
+def subpath_split_indices(value, points, n_dims=3):
+    """Return Manim's [start, end) point ranges for connected cubic runs."""
+    np, indices = _subpath_range_indices(
+        value,
+        points,
+        n_dims,
+        compare_2d=False,
+        drop_short_ranges=False,
+    )
     if np is None:
         return [indices[index:index + 2] for index in range(0, len(indices), 2)]
     return np.asarray(indices, dtype=np.int_).reshape((-1, 2))
+
+
+def subpaths_from_points(value, points):
+    """Return Manim's non-short connected point slices as a list."""
+    _, indices = _subpath_range_indices(
+        value,
+        points,
+        None,
+        compare_2d=False,
+        drop_short_ranges=True,
+    )
+    return [
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    ]
+
+
+def gen_subpaths_from_points_2d(value, points):
+    """Yield connected point slices using ManimCE's planar anchor comparison."""
+    _, indices = _subpath_range_indices(
+        value,
+        points,
+        None,
+        compare_2d=True,
+        drop_short_ranges=True,
+    )
+    return (
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    )
 
 
 def gen_cubic_bezier_tuples_from_points(value, points):
