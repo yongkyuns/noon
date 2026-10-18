@@ -56,6 +56,21 @@ class PathEditingTests(unittest.TestCase):
                     context.liveAppendPoints.assert_called_once_with(handle, [4., 5.])
                 handle.reset_mock()
 
+    def test_raw_point_mutations_are_stride_independent(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 5
+        handle = Mock()
+        ffi = types.ModuleType('pyodide.ffi')
+        ffi.to_js = lambda values: values
+        with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
+             patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.set_points([(0, 1), (2, 3), (4, 5)]), value)
+            self.assertIs(value.append_points([(6, 7)]), value)
+        handle.setPoints.assert_called_once_with([0., 1., 2., 3., 4., 5.])
+        handle.appendPoints.assert_called_once_with([6., 7.])
+
     def test_resize_points_uses_resize_function_then_shared_setter(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
