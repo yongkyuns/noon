@@ -122,6 +122,24 @@ custom_stride_live_queries = {
         [float(coordinate) for coordinate in point]
         for point in live_custom_stride.get_nth_curve_points(0)
     ],
+    "curve_function_midpoints": [
+        np.asarray(function(0.5), dtype=float).tolist()
+        for function in live_custom_stride.get_curve_functions()
+    ],
+    "curve_function_lengths": [
+        float(length)
+        for _, length in live_custom_stride.get_curve_functions_with_lengths(
+            sample_points=2
+        )
+    ],
+    "nth_curve_function_midpoint": np.asarray(
+        live_custom_stride.get_nth_curve_function(1)(0.5), dtype=float
+    ).tolist(),
+    "nth_curve_function_length": float(
+        live_custom_stride.get_nth_curve_function_with_length(
+            0, sample_points=2
+        )[1]
+    ),
     "arc_length": float(live_custom_stride.get_arc_length()),
     "point_from_proportion": [
         round(float(value), 7)
@@ -151,6 +169,24 @@ custom_stride_authored_queries = {
         [float(coordinate) for coordinate in point]
         for point in authored_custom_stride.get_nth_curve_points(0)
     ],
+    "curve_function_midpoints": [
+        np.asarray(function(0.5), dtype=float).tolist()
+        for function in authored_custom_stride.get_curve_functions()
+    ],
+    "curve_function_lengths": [
+        float(length)
+        for _, length in authored_custom_stride.get_curve_functions_with_lengths(
+            sample_points=2
+        )
+    ],
+    "nth_curve_function_midpoint": np.asarray(
+        authored_custom_stride.get_nth_curve_function(1)(0.5), dtype=float
+    ).tolist(),
+    "nth_curve_function_length": float(
+        authored_custom_stride.get_nth_curve_function_with_length(
+            0, sample_points=2
+        )[1]
+    ),
     "arc_length": float(authored_custom_stride.get_arc_length()),
     "point_from_proportion": [
         round(float(value), 7)
@@ -194,6 +230,10 @@ json.dumps({
     center: [15, 0],
     num_curves: 2,
     nth_curve_points: [[0, 0], [30, 0]],
+    curve_function_midpoints: [[15, 0, 0], [1.5, 0, 0]],
+    curve_function_lengths: [30, 1],
+    nth_curve_function_midpoint: [1.5, 0, 0],
+    nth_curve_function_length: 30,
     arc_length: 31,
     point_from_proportion: [15.5, 0],
   });
@@ -208,6 +248,10 @@ json.dumps({
       center: product.custom_stride_live_queries.center,
       num_curves: product.custom_stride_live_queries.num_curves,
       nth_curve_points: product.custom_stride_live_queries.nth_curve_points,
+      curve_function_midpoints: product.custom_stride_live_queries.curve_function_midpoints,
+      curve_function_lengths: product.custom_stride_live_queries.curve_function_lengths,
+      nth_curve_function_midpoint: product.custom_stride_live_queries.nth_curve_function_midpoint,
+      nth_curve_function_length: product.custom_stride_live_queries.nth_curve_function_length,
       arc_length: product.custom_stride_live_queries.arc_length,
       point_from_proportion: product.custom_stride_live_queries.point_from_proportion,
       proportion_from_point: product.custom_stride_live_queries.proportion_from_point,
