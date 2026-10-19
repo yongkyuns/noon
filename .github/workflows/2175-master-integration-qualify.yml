@@ -98,6 +98,11 @@ jobs:
             ${{ runner.os }}-cargo-sources-
             ${{ runner.os }}-capture-cargo-sources-
 
+      - name: Install production-pinned wasm-pack
+        uses: taiki-e/install-action@4fa3a6f63407fd8d0f3e30a2ea0a736b1b6fbaed # v2
+        with:
+          tool: wasm-pack@0.15.0
+
       - name: Run required repository full local gate against the integrated source
         shell: bash
         run: |
