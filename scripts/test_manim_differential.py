@@ -9,7 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SOURCE = Path(__file__).with_name("manim-differential.py")
@@ -69,6 +69,35 @@ class DifferentialReportTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["fixtures"][0]["status"], "pass")
         self.assertNotIn("reference_error", report["fixtures"][0])
+
+    def test_circle_probe_retains_errors_and_later_successes(self):
+        receiver = Mock()
+        receiver.shift.return_value = receiver
+        receiver.rotate.return_value = receiver
+        receiver.get_fill_opacity.return_value = 0
+        receiver.get_stroke_opacity.return_value = 1
+        receiver.get_stroke_width.return_value = 4
+
+        def surround(target, **options):
+            if options.get("dim_to_match") == -3:
+                raise AssertionError()
+            return receiver
+
+        receiver.surround.side_effect = surround
+        provider = SimpleNamespace(
+            Circle=Mock(return_value=receiver), Rectangle=Mock(return_value=receiver),
+            Ellipse=Mock(return_value=receiver), Dot=Mock(return_value=receiver),
+            Line=Mock(return_value=receiver), VGroup=Mock(return_value=receiver),
+            RIGHT=1, LEFT=-1, UP=1, DOWN=-1,
+        )
+        observation = {"center": [0, 0], "width": 2, "height": 2}
+        with patch.object(differential, "_object_observation", return_value=observation):
+            result = differential._circle_surround_probe(provider)
+        self.assertEqual(len(result), 26)
+        self.assertEqual(result["negative_width"]["error_type"], "AssertionError")
+        self.assertFalse(result["negative_width"]["returns_self"])
+        self.assertIsNone(result["shared_depth"]["error_type"])
+        self.assertTrue(result["shared_depth"]["returns_self"])
 
 
 if __name__ == "__main__":

@@ -1445,7 +1445,6 @@ json.dumps({
     const diameter = Math.sqrt(20) * 1.2;
     const expected = {
       default: [diameter, diameter], height: [diameter, diameter], depth: [diameter, diameter],
-      negative_width: [diameter, diameter], negative_height: [diameter, diameter], negative_depth: [diameter, diameter],
       stretch: [diameter, diameter / 2], stretch_ignored_dimension: [diameter, diameter / 2],
       negative_buffer: [Math.sqrt(20) / 2, Math.sqrt(20) / 2], zero_buffer: [0, 0],
       ellipse: [diameter, diameter / 2], rotated_stretch: [diameter, diameter / 2],
@@ -1454,8 +1453,24 @@ json.dumps({
       self: [Math.sqrt(8), Math.sqrt(8)], shared_width: [Math.sqrt(85), Math.sqrt(85)],
       shared_height: [Math.sqrt(20), Math.sqrt(20)], shared_depth: [Math.sqrt(20), Math.sqrt(20)],
     };
-    assert.deepEqual(Object.keys(profile).sort(), Object.keys(expected).sort(), `${name}: all cases observed`);
+    const expectedErrors = {
+      negative_width: "AssertionError", negative_height: "AssertionError", negative_depth: "AssertionError",
+      below_range: "AssertionError", above_range: "AssertionError",
+      fractional_dimension: "IndexError", negative_fractional_dimension: "AssertionError",
+      nonindex_dimension: "TypeError",
+    };
+    assert.deepEqual(Object.keys(profile).sort(), [...Object.keys(expected), ...Object.keys(expectedErrors)].sort(),
+      `${name}: every success and error case observed`);
     for (const [caseName, row] of Object.entries(profile)) {
+      if (caseName in expectedErrors) {
+        assert.equal(row.error_type, expectedErrors[caseName], `${name}/${caseName}: pinned error class`);
+        assert.equal(row.returns_self, false, `${name}/${caseName}: operation rejected`);
+        assert.deepEqual(row.after, row.before, `${name}/${caseName}: receiver unchanged`);
+        assert.deepEqual(row.target_after, row.target_before, `${name}/${caseName}: target unchanged`);
+        assert.deepEqual(row.paint_after, row.paint_before, `${name}/${caseName}: paint unchanged`);
+        continue;
+      }
+      assert.equal(row.error_type, null, `${name}/${caseName}: success case must not raise`);
       assert.equal(row.returns_self, true, `${name}/${caseName}: returns receiver`);
       assertPointNear([row.after.width, row.after.height], expected[caseName], `${name}/${caseName}: dimensions`);
       assert.deepEqual(row.paint_after, row.paint_before, `${name}/${caseName}: paint unchanged`);

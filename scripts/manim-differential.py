@@ -2115,9 +2115,17 @@ def _circle_surround_probe(provider: Any, scene: Any | None = None) -> Any:
                     float(receiver.get_stroke_opacity()),
                     float(receiver.get_stroke_width())]
         paint_before = paint()
-        returned = receiver.surround(target, **options)
+        error_type = None
+        try:
+            returned = receiver.surround(target, **options)
+        except Exception as error:
+            # Keep each argument/error case visible without discarding the
+            # remaining success cases in this detached/live profile.
+            returned = None
+            error_type = type(error).__name__
         observations[name] = {
             "returns_self": returned is receiver, "shared": shared,
+            "error_type": error_type,
             "before": before, "after": _object_observation(receiver),
             "target_before": target_before, "target_after": _object_observation(target),
             "paint_before": paint_before, "paint_after": paint(),
@@ -2130,6 +2138,10 @@ def _circle_surround_probe(provider: Any, scene: Any | None = None) -> Any:
         ("default", {}), ("height", {"dim_to_match": 1}),
         ("depth", {"dim_to_match": 2}), ("negative_width", {"dim_to_match": -3}),
         ("negative_height", {"dim_to_match": -2}), ("negative_depth", {"dim_to_match": -1}),
+        ("below_range", {"dim_to_match": -4}), ("above_range", {"dim_to_match": 3}),
+        ("fractional_dimension", {"dim_to_match": 1.0}),
+        ("negative_fractional_dimension", {"dim_to_match": -0.5}),
+        ("nonindex_dimension", {"dim_to_match": object()}),
         ("stretch", {"stretch": True}),
         ("stretch_ignored_dimension", {"stretch": True, "dim_to_match": object()}),
         ("negative_buffer", {"buffer_factor": -0.5}),

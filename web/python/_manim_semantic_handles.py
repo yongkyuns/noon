@@ -1138,14 +1138,16 @@ def _circle_surround(self, mobject, dim_to_match=0, stretch=False, buffer_factor
             or _canonical_phase_context(mobject) is not None):
         raise NotImplementedError("Circle.surround requires a non-staged layout")
     stretch = bool(stretch)
-    # In the pinned implementation stretch ignores dim_to_match entirely.
-    try:
-        dimension = 0 if stretch else operator.index(dim_to_match)
-    except TypeError as error:
-        raise IndexError("Circle surround dimension must be an integer index") from error
-    if not -3 <= dimension < 3:
-        raise IndexError("Circle surround dimension is out of bounds")
-    dimension %= 3
+    # replace(stretch=True) never inspects the dimension. Otherwise Manim's
+    # reduce_across_dimension asserts its range before NumPy indexes the points.
+    dimension = 0
+    if not stretch:
+        assert dim_to_match >= 0
+        assert dim_to_match <= 2
+        try:
+            dimension = operator.index(dim_to_match)
+        except TypeError as error:
+            raise IndexError("Circle surround dimension must be an integer index") from error
     source, target, context = _replacement_anchors(self, mobject, 0)
     if context is None:
         engine_call(source.surroundCircle, target, dimension, stretch, float(buffer_factor))

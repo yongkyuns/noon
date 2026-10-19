@@ -34,10 +34,10 @@ class CircleSurroundTests(unittest.TestCase):
         self.source_anchor = types.SimpleNamespace(surroundCircle=Mock())
         self.target_anchor = object()
 
-    def test_default_and_negative_dimension_delegate_without_geometry_queries(self):
+    def test_nonnegative_dimensions_delegate_without_geometry_queries(self):
         with patch.object(semantic, "_replacement_anchors", return_value=(self.source_anchor, self.target_anchor, None)):
             self.assertIs(self.circle.surround(self.target), self.circle)
-            self.assertIs(self.circle.surround(self.target, -1, buffer_factor=-0.5), self.circle)
+            self.assertIs(self.circle.surround(self.target, 2, buffer_factor=-0.5), self.circle)
         self.assertEqual(self.source_anchor.surroundCircle.call_args_list, [
             unittest.mock.call(self.target_anchor, 0, False, 1.2),
             unittest.mock.call(self.target_anchor, 2, False, -0.5),
@@ -57,11 +57,13 @@ class CircleSurroundTests(unittest.TestCase):
 
     def test_generic_buff_keyword_and_invalid_dimensions_reject_before_rust(self):
         with patch.object(semantic, "_replacement_anchors") as prepare:
-            for dimension in [-4, 3]:
-                with self.assertRaises(IndexError):
+            for dimension in [-4, -3, -2, -1, -0.5, 3, float("nan"), float("inf")]:
+                with self.assertRaises(AssertionError):
                     self.circle.surround(self.target, dimension)
             with self.assertRaises(IndexError):
                 self.circle.surround(self.target, 1.0)
+            with self.assertRaises(TypeError):
+                self.circle.surround(self.target, object())
             with self.assertRaises(TypeError):
                 self.circle.surround(self.target, buff=0.2)
             with self.assertRaises(TypeError):
