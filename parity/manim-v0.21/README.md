@@ -287,5 +287,10 @@ transaction, including live publication. Opacity changes all enabled leaf paint
 channels and each root's observable background alpha, preserving object opacity
 and unrelated objects. Native regressions cover aliases, one revision per edit,
 disabled leaf paint, and invalid-update rollback; the executable family-paint
-pair asserts the root observations. Fresh product and pinned two-sided checks
-are pending. Recursive root fade and staged callback root updates remain open.
+pair asserts the root observations. All 258 release-WASM/Pyodide semantic
+fixtures pass, including the detached/live setter profiles. The family-paint
+pair produces identical nonblank pixels on WebGPU and WebGL2 (1,970 visible
+pixels each); the rendered result was inspected. The local fast gate passes
+3,449 library tests / 17 configured ignores; 93 family/paint tests and the native
+example also pass. Pinned ManimCE qualification, recursive root fade, and staged
+callback root updates remain open.
