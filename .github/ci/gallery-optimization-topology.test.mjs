@@ -44,6 +44,26 @@ test("showcase backends share one authenticated producer artifact", async () => 
   assert.match(native, /cargo test -p noon-runtime replay::family_tests/);
 });
 
+test("WebKit browser and gallery jobs retain process stderr without weakening qualification", async () => {
+  const yaml = await readFile(new URL("playground-cross-browser.yml", workflowDir), "utf8");
+  for (const name of ["browser", "gallery"]) {
+    const job = yaml.split(`\n  ${name}:\n`)[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+    assert.ok(job, `missing ${name} qualification`);
+    assert.ok(job.includes("      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}"));
+    assert.doesNotMatch(job, /continue-on-error:/);
+  }
+});
+
+test("gallery and pointer workflows qualify shared failure diagnostics and resource reuse edits", async () => {
+  for (const name of ["playground-cross-browser.yml", "playground-playback-controls.yml"]) {
+    const yaml = await readFile(new URL(name, workflowDir), "utf8");
+    for (const script of ["playground-browser-failure-evidence.mjs", "pyodide-resource-cache.mjs"]) {
+      assert.equal(yaml.split(`      - "scripts/${script}"\n`).length - 1, 2,
+        `${name} must select ${script} for both push and pull_request`);
+    }
+  }
+});
+
 test("cross-browser matrix covers all browsers using exactly three gallery shards", async () => {
   const yaml = await readFile(new URL("playground-cross-browser.yml", workflowDir), "utf8");
   assert.match(yaml, /^  gallery:$/m);

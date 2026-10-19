@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { waitForBrowserObservation } from "../scripts/playground-browser-support
 import { assertNonreplayableShowcase, readLiveState } from "../scripts/showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "./showcase-gallery.js";
 import test from "node:test";
+import { createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
 
 const sourceUrl = new URL("../scripts/playground-gallery-selection-smoke.mjs", import.meta.url).href;
 const showcaseManifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
@@ -16,7 +18,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, bootstrapFailure = false, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -116,9 +118,16 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       return captures[capture++];
     },
   };
-  const page = {
-    setDefaultTimeout() {}, on() {},
+  const browserContext = new EventEmitter();
+  const page = Object.assign(new EventEmitter(), {
+    setDefaultTimeout() {},
     goto: async (url) => {
+      if (bootstrapFailure) {
+        browserContext.emit("requestfailed", {
+          url: () => "https://example.com/runtime.wasm", failure: () => ({ errorText: "connection lost" }),
+        });
+        throw new Error("original bootstrap failure");
+      }
       showcase = String(url).includes("catalog=showcase");
       gallery.selectedExampleId = showcase
         ? String(url).match(/example=([^&]+)/)?.[1] ?? "showcase-pointer-selection"
@@ -173,7 +182,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       events.push(`touch:${x}:${y}`);
       if (!showcase || x > 100) frame += 1;
     } },
-  };
+  });
   let error;
   try {
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
@@ -201,15 +210,16 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       PNG: { sync: { read: (bytes) => decoded.get(bytes) } },
       playwright: Object.fromEntries(["chromium", "firefox", "webkit"].map((name) => [name, { launch: async (options) => {
         launchOptions = options;
-        return {
-          newContext: async (options) => { contextOptions = options; return { newPage: async () => page }; },
+        return Object.assign(new EventEmitter(), {
+          newContext: async (options) => { contextOptions = options; browserContext.newPage = async () => page; return browserContext; },
           close: async () => events.push("browser:close"),
-        };
+        });
       } }])),
       disableAuthoringJspi: async () => {},
       waitForBrowserObservation,
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
-      createPyodideResourceCache: () => ({ install: async () => {} }),
+      createPyodideResourceCache: () => ({ install: async () => {}, stats: () => ({ upstreamFailures: Number(bootstrapFailure) }) }),
+      createBrowserFailureTrace,
       layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
       replayViewport: async (_canvas, size, { deviceScaleFactor }) => ({
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
@@ -251,6 +261,18 @@ test("successful legacy clear and source-declared indication retain their captur
   assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
+});
+
+test("bootstrap failure retains request and cache evidence without replacing the original error", async () => {
+  const result = await runSmoke({ bootstrapFailure: true });
+  assert.equal(result.error?.message, "original bootstrap failure");
+  const report = JSON.parse(result.writes.get("result.json"));
+  assert.match(report.error, /original bootstrap failure/);
+  assert.deepEqual(report.resourceCache, { upstreamFailures: 1 });
+  assert.equal(report.failureTrace.events.at(-1).kind, "request-failed");
+  assert.equal(report.failureTrace.events.at(-1).url, "https://example.com/runtime.wasm");
+  assert.equal(result.events.filter(event => event === "passed").length, 0);
+  assert.equal(result.events.filter(event => event === "browser:close").length, 1);
 });
 
 test("default routing preserves desktop Chromium mouse input and 960 by 540 canvas", async () => {

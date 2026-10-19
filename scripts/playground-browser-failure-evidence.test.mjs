@@ -89,6 +89,36 @@ test("events are bounded, and snapshots cannot mutate the retained trace", () =>
   assert.equal(trace.snapshot().events[0].i, 27);
 });
 
+test("network and worker failures remain bounded and detach only owned listeners", () => {
+  const trace = createBrowserFailureTrace({ maxEvents: 3, now: () => 42 });
+  const browser = new EventEmitter(), context = new EventEmitter(), page = new EventEmitter();
+  const worker = new EventEmitter();
+  worker.url = () => "https://example.com/python-worker.js";
+  const unrelated = () => {};
+  context.on("requestfailed", unrelated);
+  worker.on("close", unrelated);
+  const detach = trace.attach(browser, context, page);
+  page.emit("worker", worker);
+  context.emit("response", { status: () => 200, url: () => "ok" });
+  assert.equal(trace.snapshot().events.length, 1, "successful responses add no recurring trace work");
+  context.emit("requestfailed", { url: () => "x".repeat(900), failure: () => ({ errorText: "e".repeat(900) }) });
+  context.emit("response", { status: () => 503, url: () => "https://example.com/runtime.wasm" });
+  worker.emit("close");
+  assert.deepEqual(worker.listeners("close"), [unrelated], "closed workers are not retained until case cleanup");
+  const events = trace.snapshot().events;
+  assert.deepEqual(events.map(event => event.kind), ["request-failed", "http-error", "worker-close"]);
+  assert.equal(events[0].url.length, 500);
+  assert.equal(events[0].error.length, 300);
+  assert.equal(events[1].status, 503);
+  assert.equal(events[2].url, worker.url());
+  detach(); detach();
+  assert.deepEqual(context.listeners("requestfailed"), [unrelated]);
+  assert.deepEqual(worker.listeners("close"), [unrelated]);
+  assert.equal(page.listenerCount("worker"), 0);
+  context.emit("requestfailed"); worker.emit("close");
+  assert.deepEqual(trace.snapshot().events, events);
+});
+
 test("invalid trace configuration and phase are rejected", () => {
   for (const maxEvents of [-1, 0, 129, 1.5]) assert.throws(() => createBrowserFailureTrace({ maxEvents }));
   const trace = createBrowserFailureTrace();
