@@ -1003,6 +1003,15 @@ json.dumps({
     ["generate_points"],
     ["init_colors", true],
   ], "mobject_lifecycle_hooks: construction dispatches base hooks in order");
+  const alwaysBuilder = observations.always_builder;
+  assert.equal(alwaysBuilder.returns_builder, true,
+    "always_builder: chained calls return the builder");
+  assert.equal(alwaysBuilder.immediate_count, 2,
+    "always_builder: method calls run immediately");
+  assert.equal(alwaysBuilder.updater_count, 1,
+    "always_builder: one updater is registered per method call");
+  assert.equal(alwaysBuilder.after_updater_count, 4,
+    "always_builder: registered method runs on later updates");
   const setAttributes = observations.mobject_set_attributes;
   assert.equal(setAttributes.empty_set_returns_self, true,
     "mobject_set_attributes: empty set returns the receiver");

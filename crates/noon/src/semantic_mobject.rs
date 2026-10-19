@@ -1414,6 +1414,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke_width: 0.04,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
+        // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
         stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
     }

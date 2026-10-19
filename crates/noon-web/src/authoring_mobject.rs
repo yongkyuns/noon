@@ -3647,7 +3647,7 @@ mod tests {
             StrokeWidthMode::ScreenSpace
         );
         assert_eq!(circle_state.style.stroke_join, StrokeJoin::Miter);
-        assert_eq!(circle_state.style.stroke_cap, StrokeCap::Butt);
+        assert_eq!(circle_state.style.stroke_cap, StrokeCap::Auto);
 
         let line = Mobject::manim_line(std::rc::Rc::clone(&authoring_store), -2.0, 1.0, 3.0, -1.0)
             .unwrap();

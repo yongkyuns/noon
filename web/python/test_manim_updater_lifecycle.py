@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from noon import Mobject
 import _manim_updaters as updaters
 
 
@@ -45,8 +46,62 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.mobject._scene = self.scene
         updaters.prepare_canonical_callbacks(self.scene, self.context)
 
-    def test_immediate_updater_is_rejected_before_registration_for_rust_handles(self):
+    def test_always_builder_invokes_methods_now_and_registers_each_as_updater(self):
+        mobject = Mobject.__new__(Mobject)
+        events = []
+        registered = []
+
+        def shift(distance, *, axis):
+            events.append(("shift", distance, axis))
+            return mobject
+
+        def scale(factor):
+            events.append(("scale", factor))
+            return mobject
+
+        def record_updater(callback, index=None, call_updater=False):
+            registered.append(callback)
+            if call_updater:
+                callback(mobject)
+            return mobject
+
+        mobject.shift = shift
+        mobject.scale = scale
+        mobject.add_updater = record_updater
+
+        builder = mobject.always
+        self.assertIs(builder.shift(2.0, axis="x"), builder)
+        self.assertIs(builder.scale(0.5), builder)
+
+        self.assertEqual(events, [("shift", 2.0, "x"), ("scale", 0.5)])
+        self.assertEqual(len(registered), 2)
+        for callback in registered:
+            callback(mobject)
+        self.assertEqual(
+            events,
+            [
+                ("shift", 2.0, "x"),
+                ("scale", 0.5),
+                ("shift", 2.0, "x"),
+                ("scale", 0.5),
+            ],
+        )
+
+    def test_immediate_updater_runs_for_detached_rust_handles(self):
+        events = []
+        callback = lambda mobject: events.append(mobject)
+
+        result = updaters.add_updater(
+            self.mobject, callback, call_updater=True
+        )
+
+        self.assertIs(result, self.mobject)
+        self.assertEqual(events, [self.mobject])
+        self.assertEqual(updaters.get_updaters(self.mobject), [callback])
+
+    def test_immediate_updater_is_rejected_before_registration_for_live_rust_handles(self):
         callback = lambda mobject: None
+        self.bind()
 
         with self.assertRaisesRegex(
             NotImplementedError,

@@ -1039,6 +1039,12 @@ class Mobject:
         from _manim_animate import _AlignedAnimationBuilder
         return _AlignedAnimationBuilder(self)
 
+    @property
+    def always(self):
+        """Build immediate, repeatedly invoked updater calls like ManimCE."""
+        from _manim_updaters import _UpdaterBuilder
+        return _UpdaterBuilder(self)
+
 
     def add_updater(
         self,

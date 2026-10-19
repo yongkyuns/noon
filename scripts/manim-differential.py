@@ -327,6 +327,28 @@ def _time_based_updaters_probe(api) -> Any:
     }
 
 
+def _always_builder_probe(api) -> Any:
+    mobject = api.Mobject()
+    mobject.always_count = 0
+
+    def increment(amount):
+        mobject.always_count += amount
+        return mobject
+
+    mobject.increment = increment
+    builder = mobject.always
+    returned = builder.increment(2)
+    immediate_count = mobject.always_count
+    callbacks = mobject.get_updaters()
+    callbacks[0](mobject)
+    return {
+        "returns_builder": returned is builder,
+        "immediate_count": immediate_count,
+        "updater_count": len(callbacks),
+        "after_updater_count": mobject.always_count,
+    }
+
+
 def _match_updaters_probe(api) -> Any:
     target = api.Group(api.Dot(), api.Dot())
     source = api.Group(api.Dot())
@@ -4712,6 +4734,8 @@ FIXTURES = [
             lambda: _family_updaters_probe(manim)),
     Fixture("time_based_updaters", lambda: _time_based_updaters_probe(noon),
             lambda: _time_based_updaters_probe(manim)),
+    Fixture("always_builder", lambda: _always_builder_probe(noon),
+            lambda: _always_builder_probe(manim)),
     Fixture("match_updaters", lambda: _match_updaters_probe(noon),
             lambda: _match_updaters_probe(manim)),
     Fixture("mobject_update", lambda: _mobject_update_probe(noon),

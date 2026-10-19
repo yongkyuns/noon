@@ -899,7 +899,6 @@ mod tests {
                     stroke_color: Some(Color::BLUE),
                     stroke_width: Some(4.0),
                     stroke_opacity: Some(0.45),
-                    ..StyleUpdate::default()
                 },
                 Some(Color::BLUE),
                 Some(0.06),

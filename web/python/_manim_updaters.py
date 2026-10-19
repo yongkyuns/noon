@@ -286,7 +286,11 @@ def add_updater(
 ) -> _base.Mobject:
     if not callable(update_function):
         raise TypeError("updater must be callable")
-    if call_updater and getattr(self, "_semantic_handle", None) is not None:
+    if (
+        call_updater
+        and getattr(self, "_semantic_handle", None) is not None
+        and getattr(self, "_scene", None) is not None
+    ):
         raise NotImplementedError(
             "call_updater=True is not supported for canonical callbacks until "
             "immediate invocation has one atomic shared-semantic operation"
@@ -329,6 +333,23 @@ def add_updater(
     if call_updater:
         _invoke(update_function, self, 0.0)
     return self
+
+
+class _UpdaterBuilder:
+    """Syntactic sugar for immediate method calls that also become updaters."""
+
+    def __init__(self, mobject: _base.Mobject) -> None:
+        self._mobject = mobject
+
+    def __getattr__(self, name: str, /) -> Callable[..., _UpdaterBuilder]:
+        def add_method_updater(*method_args: Any, **method_kwargs: Any) -> _UpdaterBuilder:
+            self._mobject.add_updater(
+                lambda mobject: getattr(mobject, name)(*method_args, **method_kwargs),
+                call_updater=True,
+            )
+            return self
+
+        return add_method_updater
 
 
 def remove_updater(
