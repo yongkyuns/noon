@@ -138,3 +138,12 @@ queries remain unqualified. The nested-family shift fixture passes on WebGPU and
 WebGL2 with duration delta 0, 0.0627% differing pixels, MAE 0.008777, and
 maximum channel error 51. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1604-L1752.
+
+`Mobject.apply_function_to_position(function)` maps the object's center, then
+moves it through the shared Rust placement path; the submobject variant applies
+that call to each direct child in order. Direct and live nested-family fixtures
+match pinned ManimCE in the 181/181 suite. NumPy receives a float64 Point3D when
+available; without NumPy, Noon passes an equivalent zero-Z tuple. The Cairo
+raster fixture passes on WebGPU and WebGL2 with duration delta 0, 0.0735%
+differing pixels, MAE 0.011022, and max channel error 47. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1480.

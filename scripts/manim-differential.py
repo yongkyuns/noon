@@ -927,6 +927,42 @@ def _noon_family_frame_methods_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _family_frame_methods(noon, scene))
 
 
+def _family_position_function_methods(provider: Any, scene: Any | None = None) -> Any:
+    left = provider.Circle(radius=0.4, color=provider.RED).shift(provider.LEFT)
+    right = provider.Square(side_length=0.8, color=provider.BLUE).shift(provider.RIGHT)
+    nested = provider.Group(right)
+    family = provider.Group(left, nested)
+    if scene is not None:
+        scene.add(family)
+
+    def translate(point):
+        return (point[0] + 0.5, point[1] - 0.25, point[2])
+
+    root_result = family.apply_function_to_position(translate)
+    family.apply_function_to_submobject_positions(translate)
+    return {
+        "root_returns_self": root_result is family,
+        "left": _object_observation(left),
+        "nested": _object_observation(nested),
+        "right": _object_observation(right),
+        "family": _object_observation(family),
+    }
+
+
+def _noon_family_position_function_methods() -> Any:
+    return _family_position_function_methods(noon)
+
+
+def _manim_family_position_function_methods() -> Any:
+    return _family_position_function_methods(manim)
+
+
+def _noon_family_position_function_methods_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_position_function_methods(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -3940,6 +3976,8 @@ FIXTURES = [
     Fixture("family_space_out_submobjects_live", _noon_family_space_out_submobjects_live, _manim_family_space_out_submobjects),
     Fixture("family_frame_methods", _noon_family_frame_methods, _manim_family_frame_methods),
     Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
+    Fixture("family_position_function_methods", _noon_family_position_function_methods, _manim_family_position_function_methods),
+    Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

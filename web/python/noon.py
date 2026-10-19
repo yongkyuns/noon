@@ -663,6 +663,32 @@ class Mobject:
         )
         return self.shift(shift)
 
+    def apply_function_to_position(
+        self,
+        function: Callable[[Any], Any],
+    ) -> Self:
+        """Map the Rust-backed center and move this object to the result."""
+        center = self.get_center()
+        try:
+            import numpy as np
+        except ModuleNotFoundError as error:
+            if error.name != "numpy":
+                raise
+            point = (center.x, center.y, 0.0)
+        else:
+            point = np.asarray((center.x, center.y, 0.0), dtype=np.float64)
+        self.move_to(function(point))
+        return self
+
+    def apply_function_to_submobject_positions(
+        self,
+        function: Callable[[Any], Any],
+    ) -> Self:
+        """Map each direct child's center using its Rust-backed placement."""
+        for submobject in getattr(self, "submobjects", ()):
+            submobject.apply_function_to_position(function)
+        return self
+
     def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_x(self, x, direction)
 

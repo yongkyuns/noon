@@ -858,6 +858,13 @@
       "notes": "Shift a nested family back within the default frame using ordered Rust-backed edge placement."
     },
     {
+      "id": "family-position-function-methods",
+      "scene": "OrdinaryFamilyPositionFunctionMethods",
+      "source": "parity/manim-v0.21/core-examples/family_position_function_methods.py",
+      "expected_duration": 0.2,
+      "notes": "Map the root and direct-child centers through user functions and apply each result through shared Rust placement."
+    },
+    {
       "id": "family-grid-options",
       "scene": "OrdinaryFamilyGrid",
       "source": "parity/manim-v0.21/core-examples/family_grid_options.py",
