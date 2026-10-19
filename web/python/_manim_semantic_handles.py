@@ -103,12 +103,11 @@ def _live_mutation_context(value: object):
         context = getattr(scene, "_canonical_authoring_context", None)
     if context is None:
         return None
-    ownership = str(engine_call(context.liveExecutionOwnership))
     # Returning the player keeps its runtime alive for the next source operation.
     # Mutations and target creation must publish through that same session too.
     # A transferred runtime retains this context so its typed call rejects before
     # changing the shared store while another endpoint owns the player.
-    return context if ownership in {"active", "transferred", "returned"} else None
+    return context if engine_call(context.requiresLiveMutationRouting) else None
 
 
 def _typed_manim_observation(

@@ -63,6 +63,9 @@ class ManimNumberWrapperTests(unittest.TestCase):
             assert [entry[0] for entry in calls if entry[0] in {"set", "increment"}] == ["set", "increment"]
 
             class Context:
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "returned"
                 def liveSetColor(self, *args): calls.append(("live-color", args))
                 def liveSetObjectOpacity(self, *args): calls.append(("live-opacity", args))
@@ -97,6 +100,9 @@ class ManimNumberWrapperTests(unittest.TestCase):
             ]
 
             class ColdContext:
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "unstarted"
 
             cold_context = ColdContext()

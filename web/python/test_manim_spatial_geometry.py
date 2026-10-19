@@ -38,7 +38,7 @@ def _family_surface(handle):
 
 class SpatialGeometryAdapterTests(unittest.TestCase):
     def setUp(self):
-        self.mesh = Mock()
+        self.mesh = Mock(_canonical_live_target_context=None, _scene=None, _object=None)
         self.mesh._semantic_handle = object()
 
     def test_exports_are_bounded_mesh_wrappers(self):
@@ -202,6 +202,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         context = Mock()
         context.createMeshFamily.side_effect = typed
         context.liveExecutionOwnership.return_value = "active"
+        context.requiresLiveMutationRouting.return_value = True
         with patch.object(native, "_surface_plan", return_value=plan), \
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
@@ -262,6 +263,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface = _family_surface(handle)
         context = Mock()
         context.liveExecutionOwnership.return_value = "active"
+        context.requiresLiveMutationRouting.return_value = True
         surface.submobjects[0]._scene = SimpleNamespace(
             _canonical_authoring_context=context,
         )
@@ -303,6 +305,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         import _noon_spatial as native
         context = Mock()
         context.liveExecutionOwnership.return_value = "active"
+        context.requiresLiveMutationRouting.return_value = True
         handle = _family_handle()
         surface = _family_surface(handle)
         surface.submobjects[0]._scene = SimpleNamespace(
@@ -339,6 +342,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
 
         context = Mock()
         context.liveExecutionOwnership.return_value = "active"
+        context.requiresLiveMutationRouting.return_value = True
         surface._canonical_live_target_context = None
         surface._scene = SimpleNamespace(_canonical_authoring_context=context)
         surface._object = SimpleNamespace(id=42)
@@ -721,6 +725,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
 
         context = Mock()
         context.liveExecutionOwnership.return_value = "active"
+        context.requiresLiveMutationRouting.return_value = True
         context.createMeshFamily.return_value = family
         with patch.object(native, "_surface_plan", side_effect=make_plan), \
              patch.object(native, "_mesh_family_options", object()), \
