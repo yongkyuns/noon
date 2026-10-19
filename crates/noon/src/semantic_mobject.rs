@@ -1162,6 +1162,9 @@ pub(crate) fn stage_state_changes(
     if previous.style != next.style {
         transaction.replace_style(target, next.style.clone());
     }
+    if previous.sheen_direction != next.sheen_direction {
+        transaction.set_sheen_direction(target, next.sheen_direction);
+    }
 }
 
 pub(crate) fn state_center(

@@ -396,6 +396,30 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn sheen_direction(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::SemanticSheenDirection> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::sheen_direction),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Object { state, .. }) => {
+                    Some(state.sheen_direction)
+                }
+                PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject {
+                    ..
+                })
+                | PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::SemanticSheenDirection::DEFAULT)
+                }
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,
@@ -758,6 +782,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::FamilyColor(object)
         | SemanticMutationKey::FamilyStyle(object)
+        | SemanticMutationKey::SheenDirection(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
@@ -823,6 +848,9 @@ pub(super) fn duplicate_mutation_error(
         }
         SemanticMutationKey::FamilyStyle(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateFamilyStyle { index, node }
+        }
+        SemanticMutationKey::SheenDirection(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateSheenDirection { index, node }
         }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }

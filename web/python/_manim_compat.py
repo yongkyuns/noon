@@ -496,12 +496,8 @@ class VMobject(Mobject):
         return 0.0
 
     def get_sheen_direction(self):
-        default_direction = (-1.0, 1.0, 0.0)
-        try:
-            import numpy as np
-        except ImportError:
-            return list(default_direction)
-        return np.asarray(default_direction, dtype=np.float64)
+        from _manim_semantic_handles import _get_sheen_direction
+        return _get_sheen_direction(self)
 
     def get_gradient_start_and_end_points(self):
         from _manim_semantic_handles import _get_gradient_start_and_end_points

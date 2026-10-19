@@ -1436,6 +1436,27 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_sheen_direction(
+        &mut self,
+        source: &noon::MobjectTarget<'_>,
+        direction: noon_core::SemanticSheenDirection,
+        family: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_sheen_direction(source, direction, family))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_rotate_sheen_direction(
+        &mut self,
+        source: &noon::MobjectTarget<'_>,
+        angle: f64,
+        axis: noon_core::SemanticVec3,
+        family: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.rotate_sheen_direction(source, angle, axis, family))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_style(
         &mut self,
         source: &noon::MobjectFamily,

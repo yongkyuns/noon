@@ -42,6 +42,41 @@ impl SemanticVec3 {
     }
 }
 
+/// A Manim VMobject sheen direction, preserving whether the source supplied a
+/// 2D or 3D vector. The direction is authored metadata even while sheen paint
+/// itself is unavailable to the renderer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticSheenDirection {
+    pub value: SemanticVec3,
+    pub dimensions: u8,
+}
+
+impl SemanticSheenDirection {
+    pub const DEFAULT: Self = Self {
+        value: SemanticVec3::new(-1.0, 1.0, 0.0),
+        dimensions: 3,
+    };
+
+    pub const fn new(value: SemanticVec3, dimensions: u8) -> Self {
+        Self { value, dimensions }
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.value.is_finite() && matches!(self.dimensions, 2 | 3)
+    }
+
+    pub fn components(self) -> Vec<f64> {
+        let components = [self.value.x, self.value.y, self.value.z];
+        components[..self.dimensions as usize].to_vec()
+    }
+}
+
+impl Default for SemanticSheenDirection {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SemanticTransform2_5D {
     pub translation: SemanticVec3,
@@ -351,6 +386,7 @@ pub struct SemanticFamilyState {
     pub own_background_stroke_color: crate::Color,
     pub own_background_stroke_width: f64,
     pub own_background_stroke_opacity: f64,
+    pub own_sheen_direction: SemanticSheenDirection,
 }
 impl Default for SemanticFamilyState {
     fn default() -> Self {
@@ -361,6 +397,7 @@ impl Default for SemanticFamilyState {
             own_background_stroke_color: crate::Color::BLACK,
             own_background_stroke_width: 0.0,
             own_background_stroke_opacity: 1.0,
+            own_sheen_direction: SemanticSheenDirection::DEFAULT,
         }
     }
 }

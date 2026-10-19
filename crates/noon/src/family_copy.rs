@@ -171,6 +171,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             family_background_stroke_color,
             family_background_stroke_width,
             family_background_stroke_opacity,
+            family_sheen_direction,
             graph_declaration,
         ) = {
             let store = store.borrow();
@@ -186,10 +187,11 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                     Some(presentation.own_background_stroke_color),
                     Some(presentation.own_background_stroke_width),
                     Some(presentation.own_background_stroke_opacity),
+                    Some(presentation.own_sheen_direction),
                     node.graph_declaration().cloned(),
                 ),
                 SemanticNodeKind::AuthoringObject => {
-                    (None, None, None, None, None, None, None, None)
+                    (None, None, None, None, None, None, None, None, None)
                 }
                 _ => {
                     return Err(AuthoringError::from(
@@ -253,6 +255,9 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                 Some(background_stroke_width),
                 Some(background_stroke_opacity),
             );
+        }
+        if let Some(direction) = family_sheen_direction {
+            transaction.set_sheen_direction(pending, direction);
         }
         copied.insert(id, pending);
     }

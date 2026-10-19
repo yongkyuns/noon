@@ -385,6 +385,10 @@ pub struct SemanticObjectState {
     pub content: SemanticObjectContent,
     pub transform: SemanticTransform,
     pub style: SemanticStyle,
+    /// Current Manim sheen direction; the renderer may ignore it while
+    /// `sheen_factor` remains zero, but getters and future style operations
+    /// must observe the authored value.
+    pub sheen_direction: crate::SemanticSheenDirection,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
     // Numeric inputs are only present on DecimalNumber objects. Keep ordinary
@@ -461,6 +465,7 @@ impl SemanticObjectState {
             content: content.into(),
             transform: SemanticTransform::default(),
             style: SemanticStyle::default(),
+            sheen_direction: crate::SemanticSheenDirection::DEFAULT,
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
             decimal_number: None,
@@ -484,6 +489,7 @@ impl SemanticObjectState {
             content: target.content,
             transform: target.transform,
             style: target.style.clone(),
+            sheen_direction: target.sheen_direction,
             presentation: self.presentation,
             role: self.role,
             // Manim become replaces geometry and paint, not the receiver's

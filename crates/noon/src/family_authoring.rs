@@ -6,8 +6,8 @@ pub(crate) use path_admission::publish_path_family_with;
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
-    Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty, SemanticStore,
-    SemanticVec3,
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
+    SemanticSheenDirection, SemanticStore, SemanticVec3,
 };
 use std::{
     cell::RefCell,
@@ -175,6 +175,99 @@ impl MobjectTarget<'_> {
             .map_err(AuthoringError::from)
     }
 
+    pub fn sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
+        self.validate()?;
+        self.integration_store()
+            .borrow()
+            .node(self.node_id())
+            .and_then(|node| node.sheen_direction())
+            .ok_or(AuthoringError::NonFiniteDirection)
+    }
+
+    pub fn set_sheen_direction(
+        &self,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        self.sheen_direction_transaction(direction, family)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn sheen_direction_transaction(
+        &self,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        if !direction.is_valid() {
+            return Err(AuthoringError::NonFiniteDirection);
+        }
+        let store = self.integration_store().borrow();
+        let nodes = if family {
+            store
+                .ordered_last_occurrence_authoring_nodes(self.node_id())
+                .map_err(AuthoringError::from)?
+        } else {
+            vec![self.node_id()]
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        for node in nodes {
+            transaction.set_sheen_direction(node, direction);
+        }
+        Ok(transaction)
+    }
+
+    pub fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        self.rotate_sheen_direction_transaction(angle, axis, family)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn rotate_sheen_direction_transaction(
+        &self,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        if !angle.is_finite() {
+            return Err(AuthoringError::NonFiniteDirection);
+        }
+        let rotation = noon_core::SemanticRotation3D::from_axis_angle(axis, angle)
+            .ok_or(AuthoringError::NonFiniteDirection)?;
+        let store = self.integration_store().borrow();
+        let nodes = if family {
+            store
+                .ordered_last_occurrence_authoring_nodes(self.node_id())
+                .map_err(AuthoringError::from)?
+        } else {
+            vec![self.node_id()]
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        for node in nodes {
+            let direction = store
+                .node(node)
+                .and_then(|node| node.sheen_direction())
+                .ok_or(AuthoringError::NonFiniteDirection)?;
+            if !direction.is_valid() {
+                return Err(AuthoringError::NonFiniteDirection);
+            }
+            let rotated = rotation
+                .rotate_vector(direction.value)
+                .ok_or(AuthoringError::NonFiniteDirection)?;
+            transaction.set_sheen_direction(node, SemanticSheenDirection::new(rotated, 3));
+        }
+        Ok(transaction)
+    }
+
     /// Validate this target and return its root identity in the expected store.
     pub fn require_store(
         &self,
@@ -206,6 +299,52 @@ impl MobjectTarget<'_> {
             Self::Object(member) => member.validate(),
             Self::Family(member) => member.validate(),
         }
+    }
+}
+
+impl crate::Mobject {
+    pub fn sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
+        MobjectTarget::from(self).sheen_direction()
+    }
+
+    pub fn set_sheen_direction(
+        &self,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).set_sheen_direction(direction, family)
+    }
+
+    pub fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).rotate_sheen_direction(angle, axis, family)
+    }
+}
+
+impl MobjectFamily {
+    pub fn own_sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
+        MobjectTarget::from(self).sheen_direction()
+    }
+
+    pub fn set_sheen_direction(
+        &self,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).set_sheen_direction(direction, family)
+    }
+
+    pub fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).rotate_sheen_direction(angle, axis, family)
     }
 }
 
@@ -465,6 +604,108 @@ pub(crate) fn prepare_subset_display_transaction(
 mod tests {
     use super::*;
     use crate::Scene;
+
+    #[test]
+    fn sheen_direction_preserves_dimensions_family_scope_and_rotation_atomically() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let outer = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
+
+        let up = SemanticSheenDirection::new(SemanticVec3::new(0.0, 1.0, 0.0), 3);
+        outer.set_sheen_direction(up, true).unwrap();
+        assert_eq!(outer.own_sheen_direction().unwrap(), up);
+        assert_eq!(nested.own_sheen_direction().unwrap(), up);
+        assert_eq!(first.sheen_direction().unwrap(), up);
+        assert_eq!(second.sheen_direction().unwrap(), up);
+
+        let root_only = SemanticSheenDirection::new(SemanticVec3::new(1.0, 0.0, 0.0), 2);
+        outer.set_sheen_direction(root_only, false).unwrap();
+        assert_eq!(outer.own_sheen_direction().unwrap(), root_only);
+        assert_eq!(
+            outer.own_sheen_direction().unwrap().components(),
+            vec![1.0, 0.0]
+        );
+        assert_eq!(first.sheen_direction().unwrap(), up);
+
+        let before_invalid = scene.integration_store().borrow().scene_revision();
+        let invalid = SemanticSheenDirection::new(SemanticVec3::new(f64::NAN, 0.0, 0.0), 3);
+        assert!(outer.set_sheen_direction(invalid, true).is_err());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_invalid
+        );
+        assert_eq!(outer.own_sheen_direction().unwrap(), root_only);
+        assert_eq!(first.sheen_direction().unwrap(), up);
+
+        outer
+            .rotate_sheen_direction(
+                std::f64::consts::FRAC_PI_2,
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                true,
+            )
+            .unwrap();
+        let rotated_root = outer.own_sheen_direction().unwrap();
+        assert_eq!(rotated_root.dimensions, 3);
+        assert!(rotated_root.value.x.abs() < 1e-12);
+        assert!((rotated_root.value.y - 1.0).abs() < 1e-12);
+        let rotated_leaf = first.sheen_direction().unwrap();
+        assert_eq!(rotated_leaf.dimensions, 3);
+        assert!((rotated_leaf.value.x + 1.0).abs() < 1e-12);
+        assert!(rotated_leaf.value.y.abs() < 1e-12);
+    }
+
+    #[test]
+    fn copy_and_become_preserve_object_and_family_sheen_directions() {
+        let mut scene = Scene::new();
+        let source_a = scene.circle(0.2).unwrap();
+        let source_b = scene.square(0.4).unwrap();
+        let source_nested = scene
+            .family(&[(&source_a).into(), (&source_b).into()])
+            .unwrap();
+        let source = scene
+            .family(&[(&source_a).into(), (&source_nested).into()])
+            .unwrap();
+        let source_direction = SemanticSheenDirection::new(SemanticVec3::new(0.0, 1.0, 0.0), 3);
+        source.set_sheen_direction(source_direction, true).unwrap();
+
+        let copied = source.copy_family().unwrap();
+        assert_eq!(
+            copied.root().own_sheen_direction().unwrap(),
+            source_direction
+        );
+        assert_eq!(
+            copied
+                .mobject(&source_a)
+                .unwrap()
+                .sheen_direction()
+                .unwrap(),
+            source_direction
+        );
+
+        let target_a = scene.circle(0.3).unwrap();
+        let target_b = scene.square(0.5).unwrap();
+        let target_nested = scene
+            .family(&[(&target_a).into(), (&target_b).into()])
+            .unwrap();
+        let target = scene
+            .family(&[(&target_a).into(), (&target_nested).into()])
+            .unwrap();
+        let root_direction = SemanticSheenDirection::new(SemanticVec3::new(1.0, 0.0, 0.0), 3);
+        let a_direction = SemanticSheenDirection::new(SemanticVec3::new(0.0, -1.0, 0.0), 3);
+        let b_direction = SemanticSheenDirection::new(SemanticVec3::new(1.0, 1.0, 0.0), 3);
+        target.set_sheen_direction(root_direction, false).unwrap();
+        target_a.set_sheen_direction(a_direction, false).unwrap();
+        target_b.set_sheen_direction(b_direction, false).unwrap();
+
+        source
+            .become_family(&target, crate::ManimBecomeOptions::default())
+            .unwrap();
+        assert_eq!(source.own_sheen_direction().unwrap(), root_direction);
+        assert_eq!(source_a.sheen_direction().unwrap(), a_direction);
+        assert_eq!(source_b.sheen_direction().unwrap(), b_direction);
+    }
 
     #[test]
     fn ordinary_family_arrange_uses_shared_bounds_and_one_transaction() {

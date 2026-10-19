@@ -1579,6 +1579,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });
                 }
+                SemanticMutation::SetSheenDirection { node, direction } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted authoring node")
+                        .set_sheen_direction(direction);
+                    written_slots.insert(node);
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
                     store

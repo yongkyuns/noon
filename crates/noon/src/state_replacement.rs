@@ -193,6 +193,18 @@ fn stage_paired_family_styles(
             Some(background_stroke_opacity),
         );
     }
+    for (source, target) in store
+        .ordered_family_root_pairs(source, target)
+        .map_err(AuthoringError::from)?
+    {
+        let direction = store
+            .node(target)
+            .and_then(noon_core::SemanticNode::sheen_direction)
+            .ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
+            })?;
+        transaction.set_sheen_direction(source, direction);
+    }
     Ok(())
 }
 
@@ -265,6 +277,7 @@ enum PersistentTargetNode {
         own_background_stroke_color: crate::Color,
         own_background_stroke_width: f64,
         own_background_stroke_opacity: f64,
+        own_sheen_direction: noon_core::SemanticSheenDirection,
     },
 }
 
@@ -328,6 +341,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 own_background_stroke_color: state.own_background_stroke_color,
                 own_background_stroke_width: state.own_background_stroke_width,
                 own_background_stroke_opacity: state.own_background_stroke_opacity,
+                own_sheen_direction: state.own_sheen_direction,
             }),
             _ => Err(AuthoringError::from(
                 noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
@@ -415,6 +429,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 own_background_stroke_color,
                 own_background_stroke_width,
                 own_background_stroke_opacity,
+                own_sheen_direction,
             } => {
                 let (receiver, reused, prototype_members) = if let Some(source) = reusable {
                     self.source_to_target.insert(source, target);
@@ -453,6 +468,8 @@ impl<'a> PersistentFamilyReconcile<'a> {
                         Some(own_background_stroke_width),
                         Some(own_background_stroke_opacity),
                     );
+                self.transaction
+                    .set_sheen_direction(receiver, own_sheen_direction);
                 // Publish the mapping before descending so aliases in the target
                 // DAG converge on exactly one receiver-owned identity.
                 self.target_to_receiver.insert(target, receiver);

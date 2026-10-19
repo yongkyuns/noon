@@ -163,6 +163,10 @@ pub enum SemanticMutation {
         background_stroke_width: Option<f64>,
         background_stroke_opacity: Option<f64>,
     },
+    SetSheenDirection {
+        node: SemanticTransactionNodeRef,
+        direction: crate::SemanticSheenDirection,
+    },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
@@ -246,6 +250,7 @@ impl SemanticMutation {
         match self {
             Self::SetFamilyColor { node: object, .. }
             | Self::SetFamilyStyle { node: object, .. }
+            | Self::SetSheenDirection { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -332,6 +337,7 @@ impl SemanticMutation {
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
             Self::SetFamilyColor { node: object, .. }
             | Self::SetFamilyStyle { node: object, .. }
+            | Self::SetSheenDirection { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -405,6 +411,9 @@ impl SemanticMutation {
             }
             Self::SetFamilyColor { node, .. } => Some(SemanticMutationKey::FamilyColor(*node)),
             Self::SetFamilyStyle { node, .. } => Some(SemanticMutationKey::FamilyStyle(*node)),
+            Self::SetSheenDirection { node, .. } => {
+                Some(SemanticMutationKey::SheenDirection(*node))
+            }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -462,6 +471,7 @@ pub(super) enum SemanticMutationKey {
     ObjectStyle(SemanticTransactionNodeRef),
     FamilyColor(SemanticTransactionNodeRef),
     FamilyStyle(SemanticTransactionNodeRef),
+    SheenDirection(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
@@ -1100,6 +1110,19 @@ impl SemanticMutationTransaction {
             background_stroke_color,
             background_stroke_width,
             background_stroke_opacity,
+        });
+        self
+    }
+
+    /// Set a semantic object's or family root's authored sheen direction.
+    pub fn set_sheen_direction(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        direction: crate::SemanticSheenDirection,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetSheenDirection {
+            node: node.into(),
+            direction,
         });
         self
     }
@@ -2177,6 +2200,7 @@ impl SemanticMutationTransaction {
             HashMap::new();
         let mut staged_family_colors = HashMap::new();
         let mut staged_family_styles = HashMap::new();
+        let mut staged_sheen_directions = HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
@@ -2915,6 +2939,19 @@ impl SemanticMutationTransaction {
                     );
                     staged_family_styles.insert(*node, style.clone());
                     staged_family_colors.insert(*node, next_color);
+                }
+                SemanticMutation::SetSheenDirection { node, direction } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    if !direction.is_valid() {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    let previous = staged_sheen_directions
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.sheen_direction(*node))
+                        .expect("validated authoring node sheen direction");
+                    changed.push(previous != *direction);
+                    staged_sheen_directions.insert(*node, *direction);
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -4140,6 +4177,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         node: SemanticNodeId,
     },
+    DuplicateSheenDirection {
+        index: usize,
+        node: SemanticNodeId,
+    },
     DuplicateZIndex {
         index: usize,
         node: SemanticNodeId,
@@ -4719,6 +4760,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             ),
             Self::DuplicateFamilyColor { index, node } => write!(formatter, "mutation {index} duplicates family own color for {node:?}"),
             Self::DuplicateFamilyStyle { index, node } => write!(formatter, "mutation {index} duplicates family own style for {node:?}"),
+            Self::DuplicateSheenDirection { index, node } => write!(formatter, "mutation {index} duplicates sheen direction for {node:?}"),
             Self::DuplicateZIndex { index, node } => write!(
                 formatter,
                 "mutation {index} duplicates z-index for {node:?}"

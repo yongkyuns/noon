@@ -485,6 +485,15 @@ impl SemanticNode {
             _ => None,
         }
     }
+    pub fn sheen_direction(&self) -> Option<crate::SemanticSheenDirection> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_sheen_direction),
+            SemanticNodeKind::AuthoringObject => self
+                .semantic_object_state()
+                .map(|state| state.sheen_direction),
+            _ => None,
+        }
+    }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
             unreachable!("preflighted family color");
@@ -519,6 +528,19 @@ impl SemanticNode {
         }
         if let Some(opacity) = opacity {
             state.own_background_stroke_opacity = opacity;
+        }
+    }
+
+    pub(crate) fn set_sheen_direction(&mut self, direction: crate::SemanticSheenDirection) {
+        match &mut self.kind {
+            SemanticNodeKind::Family(state) => state.own_sheen_direction = direction,
+            SemanticNodeKind::AuthoringObject => {
+                self.object_state
+                    .as_mut()
+                    .expect("preflighted authoring object")
+                    .sheen_direction = direction;
+            }
+            _ => unreachable!("preflighted authoring node"),
         }
     }
 

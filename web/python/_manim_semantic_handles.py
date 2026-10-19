@@ -1608,37 +1608,78 @@ def _get_background_stroke_opacity(self):
     return _get_background_stroke_style(self)[2]
 
 
-def _set_sheen_direction(self, direction, family=True):
-    del family
+def _sheen_direction_components(direction):
     if hasattr(direction, "tolist"):
         direction = direction.tolist()
     elif not isinstance(direction, (list, tuple)):
         try:
             direction = tuple(direction)
         except TypeError:
-            raise NotImplementedError(
-                "sheen direction requires shared gradient paint"
-            ) from None
-    if isinstance(direction, (list, tuple)) and len(direction) == 2:
-        direction = (*direction, 0.0)
-    if not isinstance(direction, (list, tuple)) or len(direction) != 3:
-        raise NotImplementedError("sheen direction requires shared gradient paint")
+            raise TypeError("sheen direction must be a 2D or 3D vector") from None
+    if not isinstance(direction, (list, tuple)) or len(direction) not in (2, 3):
+        raise ValueError("sheen direction must contain two or three components")
+    dimensions = len(direction)
     values = tuple(
         _ir._finite_number(f"sheen direction[{index}]", value)
         for index, value in enumerate(direction)
     )
-    if values != (-1.0, 1.0, 0.0):
-        raise NotImplementedError("non-default sheen direction requires shared gradient paint")
+    if dimensions == 2:
+        values = (*values, 0.0)
+    return values, dimensions
+
+
+def _sheen_rotation_axis(axis):
+    values, _dimensions = _sheen_direction_components(axis)
+    return values
+
+
+def _check_sheen_callback_write(self):
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(self) is not None
+    ):
+        raise NotImplementedError(
+            "sheen direction updates in staged callbacks require staged metadata publication"
+        )
+
+
+def _set_sheen_direction(self, direction, family=True):
+    values, dimensions = _sheen_direction_components(direction)
+    _check_sheen_callback_write(self)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("sheen direction updates require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.setSheenDirection, *values, dimensions, bool(family))
+        else:
+            engine_call(
+                context.liveSetFamilySheenDirection,
+                target,
+                *values,
+                dimensions,
+                bool(family),
+            )
+    elif context is None:
+        engine_call(target.setSheenDirection, *values, dimensions, bool(family))
+    else:
+        engine_call(
+            context.liveSetMobjectSheenDirection,
+            target,
+            *values,
+            dimensions,
+            bool(family),
+        )
     return self
 
 
 def _set_sheen(self, factor, direction=None, family=True):
-    del family
     value = _ir._finite_number("sheen factor", factor)
     if value != 0.0:
         raise NotImplementedError("2D sheen requires shared gradient paint")
     if direction is not None:
-        return _set_sheen_direction(self, direction)
+        return _set_sheen_direction(self, direction, family)
     return self
 
 
@@ -1674,11 +1715,51 @@ def _get_cap_style(self):
 
 
 def _rotate_sheen_direction(self, angle, axis, family=True):
-    del axis, family
     value = _ir._finite_number("sheen rotation angle", angle)
-    if value != 0.0:
-        raise NotImplementedError("nonzero sheen rotation requires shared gradient paint")
+    if value == 0.0:
+        return self
+    axis = _sheen_rotation_axis(axis)
+    _check_sheen_callback_write(self)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("sheen direction updates require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.rotateSheenDirection, value, *axis, bool(family))
+        else:
+            engine_call(
+                context.liveRotateFamilySheenDirection,
+                target,
+                value,
+                *axis,
+                bool(family),
+            )
+    elif context is None:
+        engine_call(target.rotateSheenDirection, value, *axis, bool(family))
+    else:
+        engine_call(
+            context.liveRotateMobjectSheenDirection,
+            target,
+            value,
+            *axis,
+            bool(family),
+        )
     return self
+
+
+def _get_sheen_direction(self):
+    target, _context, suffix = _style_target(self)
+    if target is None:
+        values = (-1.0, 1.0, 0.0)
+    elif suffix == "Family":
+        values = engine_call(target.ownSheenDirection)
+    else:
+        values = engine_call(target.sheenDirection)
+    try:
+        import numpy as np
+    except ImportError:
+        return list(values)
+    return np.asarray(values, dtype=np.float64)
 
 
 def _get_gradient_start_and_end_points(self):

@@ -38,8 +38,8 @@ use noon_core::{
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticSubsetDisplayMode, SemanticVec3,
-    Style, Transform2D,
+    SemanticSheenDirection, SemanticSignalValue, SemanticStore, SemanticStyle,
+    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -2974,6 +2974,33 @@ impl<'a> LiveSession<'a> {
         self.edit_family_style(family, |style| update.apply(style))
     }
 
+    /// Publish a sheen-direction update on one object or its full semantic
+    /// family through one Rust transaction.
+    pub fn set_sheen_direction(
+        &mut self,
+        target: &MobjectTarget<'_>,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        target.require_store(&self.store)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(target.sheen_direction_transaction(direction, family)?)
+    }
+
+    /// Rotate every selected authored direction and publish the family
+    /// atomically after all axes and current values validate.
+    pub fn rotate_sheen_direction(
+        &mut self,
+        target: &MobjectTarget<'_>,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        target.require_store(&self.store)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(target.rotate_sheen_direction_transaction(angle, axis, family)?)
+    }
+
     /// Publish authored paint changes on the non-rendered family root only.
     pub fn set_family_own_style(
         &mut self,
@@ -3375,8 +3402,45 @@ mod tests {
     use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticObjectRole, SemanticPaint,
-        SemanticVec3,
+        SemanticSheenDirection, SemanticVec3,
     };
+
+    #[test]
+    fn live_sheen_direction_uses_one_validated_publication_and_keeps_render_frame() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let frame = session.frame().clone();
+        let mut live = scene.live(&mut session);
+        let target = MobjectTarget::from(&family);
+        let publication_before = live.session.publication_context();
+        let up = SemanticSheenDirection::new(SemanticVec3::new(0.0, 1.0, 0.0), 3);
+
+        live.set_sheen_direction(&target, up, true).unwrap();
+        assert_eq!(live.authored(&first).unwrap().sheen_direction, up);
+        assert_eq!(family.own_sheen_direction().unwrap(), up);
+        let published = live.session.publication_context();
+        assert_ne!(published, publication_before);
+        live.session.take_frame_changes();
+
+        let root_only = SemanticSheenDirection::new(SemanticVec3::new(1.0, 0.0, 0.0), 2);
+        live.set_sheen_direction(&target, root_only, false).unwrap();
+        assert_eq!(family.own_sheen_direction().unwrap(), root_only);
+        assert_eq!(live.authored(&first).unwrap().sheen_direction, up);
+        let after_valid = live.session.publication_context();
+        assert!(live
+            .set_sheen_direction(
+                &target,
+                SemanticSheenDirection::new(SemanticVec3::new(f64::NAN, 0.0, 0.0), 3),
+                true,
+            )
+            .is_err());
+        assert_eq!(live.session.publication_context(), after_valid);
+        assert_eq!(live.session.frame(), &frame);
+    }
 
     #[test]
     fn leaf_fade_agrees_before_and_after_publication_and_rejects_invalid_edits_atomically() {

@@ -85,12 +85,87 @@ class StyleOperationsTests(unittest.TestCase):
         obj = identity_only_wrapper(compat.Circle)
         self.assertIs(obj.set_stroke(background=True), obj)
         self.assertIs(obj.set_background_stroke(), obj)
-        self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
-        self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
+        sheen_target = SimpleNamespace(setSheenDirection=Mock())
+        with patch.object(handles, "_style_target", return_value=(sheen_target, None, "")):
+            self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
+            self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
+        self.assertEqual(sheen_target.setSheenDirection.call_count, 2)
         self.assertIs(obj.rotate_sheen_direction(0.0), obj)
         group = identity_only_wrapper(compat.VGroup)
         self.assertIs(group.rotate_sheen_direction(0.0), group)
         self.assertIsNone(group.get_background_image())
+
+    def test_sheen_direction_mutators_use_shared_rust_detached_and_live_routes(self):
+        obj = identity_only_wrapper(compat.VMobject)
+        detached = SimpleNamespace(
+            setSheenDirection=Mock(),
+            rotateSheenDirection=Mock(),
+            sheenDirection=Mock(return_value=[0.25, -0.5]),
+        )
+        with patch.object(handles, "_style_target", return_value=(detached, None, "")):
+            self.assertIs(obj.set_sheen_direction([0, 1]), obj)
+            detached.setSheenDirection.assert_called_once_with(0.0, 1.0, 0.0, 2, True)
+            self.assertIs(obj.set_sheen_direction((1, 2, 3), family=False), obj)
+            detached.setSheenDirection.assert_called_with(1.0, 2.0, 3.0, 3, False)
+            self.assertIs(obj.rotate_sheen_direction(0.5, axis=(0, 0, 1)), obj)
+            detached.rotateSheenDirection.assert_called_once_with(0.5, 0.0, 0.0, 1.0, True)
+            direction = obj.get_sheen_direction()
+        self.assertEqual(direction.tolist() if hasattr(direction, "tolist") else direction,
+                         [0.25, -0.5])
+
+        group = identity_only_wrapper(compat.VGroup)
+        family = SimpleNamespace(
+            setSheenDirection=Mock(),
+            rotateSheenDirection=Mock(),
+            ownSheenDirection=Mock(return_value=[1.0, 0.0, 0.0]),
+        )
+        with patch.object(handles, "_style_target", return_value=(family, None, "Family")):
+            self.assertIs(group.set_sheen(0.0, compat._base.DOWN, family=False), group)
+            family.setSheenDirection.assert_called_once_with(0.0, -1.0, 0.0, 2, False)
+            self.assertIs(group.rotate_sheen_direction(1.0, axis=(0, 1), family=True), group)
+            family.rotateSheenDirection.assert_called_once_with(1.0, 0.0, 1.0, 0.0, True)
+            self.assertEqual(list(group.get_sheen_direction()), [1.0, 0.0, 0.0])
+
+        live = SimpleNamespace(liveSetMobjectSheenDirection=Mock(),
+                               liveRotateMobjectSheenDirection=Mock())
+        with patch.object(handles, "_style_target", return_value=(detached, live, "")):
+            self.assertIs(obj.set_sheen_direction(compat._base.RIGHT), obj)
+            self.assertIs(obj.rotate_sheen_direction(0.25), obj)
+        live.liveSetMobjectSheenDirection.assert_called_once_with(
+            detached, 1.0, 0.0, 0.0, 2, True
+        )
+        live.liveRotateMobjectSheenDirection.assert_called_once_with(
+            detached, 0.25, 0.0, 0.0, 1.0, True
+        )
+
+        family_live = SimpleNamespace(liveSetFamilySheenDirection=Mock(),
+                                      liveRotateFamilySheenDirection=Mock())
+        with patch.object(handles, "_style_target", return_value=(family, family_live, "Family")):
+            self.assertIs(group.set_sheen_direction(compat._base.UP, family=False), group)
+            self.assertIs(group.rotate_sheen_direction(-0.5, family=False), group)
+        family_live.liveSetFamilySheenDirection.assert_called_once_with(
+            family, 0.0, 1.0, 0.0, 2, False
+        )
+        family_live.liveRotateFamilySheenDirection.assert_called_once_with(
+            family, -0.5, 0.0, 0.0, 1.0, False
+        )
+
+    def test_sheen_direction_staged_writes_and_invalid_values_do_not_dispatch(self):
+        obj = identity_only_wrapper(compat.VMobject)
+        target = SimpleNamespace(setSheenDirection=Mock(), rotateSheenDirection=Mock())
+        with patch.object(handles, "_style_target", return_value=(target, None, "")):
+            with self.assertRaises(ValueError):
+                obj.set_sheen_direction((float("nan"), 0.0, 0.0))
+            with self.assertRaises(ValueError):
+                obj.rotate_sheen_direction(float("inf"))
+            with patch.object(handles, "_check_sheen_callback_write",
+                              side_effect=NotImplementedError("staged")):
+                with self.assertRaises(NotImplementedError):
+                    obj.set_sheen_direction(compat._base.UP)
+                with self.assertRaises(NotImplementedError):
+                    obj.rotate_sheen_direction(0.5)
+        target.setSheenDirection.assert_not_called()
+        target.rotateSheenDirection.assert_not_called()
 
     def test_cap_style_constructor_and_mutations_use_shared_rust_state(self):
         cap = compat._base.CapStyleType
@@ -179,8 +254,6 @@ class StyleOperationsTests(unittest.TestCase):
             lambda: obj.set_stroke(color=compat._base.RED, width=2, background=True),
             lambda: obj.set_background_stroke(color=compat._base.RED, width=2),
             lambda: obj.set_sheen(0.5),
-            lambda: obj.set_sheen_direction(compat._base.UP),
-            lambda: obj.rotate_sheen_direction(0.5),
         )
         for operation in unsupported:
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):

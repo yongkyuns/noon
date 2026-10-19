@@ -2763,8 +2763,8 @@ def _style_query_probe(api):
         source.set_stroke(background=True) is source,
         source.set_background_stroke() is source,
         source.set_cap_style(api.CapStyleType.AUTO) is source,
-        source.set_sheen(0.0, api.UL) is source,
-        source.set_sheen_direction(api.UL) is source,
+        source.set_sheen(0.0, (-1.0, 1.0, 0.0)) is source,
+        source.set_sheen_direction((-1.0, 1.0, 0.0)) is source,
         source.rotate_sheen_direction(0.0) is source,
     ]
 
@@ -2838,6 +2838,46 @@ def _inactive_sheen_direction_style_probe(api):
         "omitted_factor": observe(omitted_factor, omitted_result),
         "zero_factor": observe(zero_factor, zero_result),
     }
+
+
+def _sheen_direction_probe(api, scene=None):
+    first = api.VMobject()
+    second = api.VMobject()
+    nested = api.VGroup(first, second)
+    root = api.VGroup(first, nested)
+    if scene is not None:
+        scene.add(root)
+
+    def direction(value):
+        return [float(component) for component in value.get_sheen_direction()]
+
+    recursive_result = root.set_sheen_direction((0.0, 1.0, 0.0), family=True)
+    recursive = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "second": direction(second),
+        "alias_identity": root.submobjects[0] is root.submobjects[1].submobjects[0],
+        "returns_self": recursive_result is root,
+    }
+    root_only_result = root.set_sheen_direction([1.0, 0.0], family=False)
+    root_only = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "returns_self": root_only_result is root,
+    }
+    rotate_result = root.rotate_sheen_direction(
+        api.PI / 2, axis=(0.0, 0.0, 1.0), family=True
+    )
+    rotated = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "second": direction(second),
+        "returns_self": rotate_result is root,
+    }
+    return {"recursive": recursive, "root_only": root_only, "rotated": rotated}
 
 
 def _gradient_start_end_probe(api):
@@ -3403,6 +3443,14 @@ FIXTURES = [
     Fixture("inactive_sheen_direction_style",
             lambda: _inactive_sheen_direction_style_probe(noon),
             lambda: _inactive_sheen_direction_style_probe(manim)),
+    Fixture("sheen_direction",
+            lambda: _sheen_direction_probe(noon),
+            lambda: _sheen_direction_probe(manim), 1e-5),
+    Fixture("sheen_direction_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _sheen_direction_probe(noon, scene)
+            ),
+            lambda: _sheen_direction_probe(manim), 1e-5),
 
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
@@ -3512,9 +3560,8 @@ UNSUPPORTED = {
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
-    "background_stroke_and_sheen": "Default background-stroke behavior is supported for leaves. VGroup root-only family=False background color, width, and opacity are retained in shared Rust metadata, but non-default leaf/recursive background paint, staged callback reads/writes, and sheen gradients still require shared style/renderer channels.",
+    "background_stroke_and_sheen": "Default background-stroke behavior is supported for leaves. VGroup root-only family=False background color, width, and opacity are retained in shared Rust metadata, but non-default leaf/recursive background paint, staged callback reads/writes, and nonzero sheen factors/gradient rendering still require shared style/renderer channels. Sheen direction set/query/rotation metadata is covered by detached and live differential fixtures.",
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
-    "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
     "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style/set_background_stroke(family=False) in detached/live fixtures. Root background color, width, and opacity publish atomically with foreground style and leave children unchanged; copy and become retain the metadata. The family root has no points, so this retained background-stroke profile has no raster effect. Staged callback reads/writes, recursive leaf background-stroke paint, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
 }

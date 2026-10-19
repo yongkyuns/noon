@@ -1209,6 +1209,50 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = ownSheenDirection)]
+        pub fn own_sheen_direction(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .sheen_direction()
+                .map(|direction| direction.components())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setSheenDirection)]
+        pub fn set_sheen_direction(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+            dimensions: u32,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            let direction = noon_core::SemanticSheenDirection::new(
+                noon_core::SemanticVec3::new(x, y, z),
+                dimensions as u8,
+            );
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .set_sheen_direction(direction, family)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = rotateSheenDirection)]
+        pub fn rotate_sheen_direction(
+            &self,
+            angle: f64,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .rotate_sheen_direction(
+                    angle,
+                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    family,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimColor)]
         pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
             self.semantic_family()?
@@ -2423,6 +2467,50 @@ mod wasm {
             self.handle
                 .stroke_cap()
                 .map(|cap| cap.as_str().to_owned())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = sheenDirection)]
+        pub fn sheen_direction(&self) -> Result<Vec<f64>, JsValue> {
+            self.handle
+                .sheen_direction()
+                .map(|direction| direction.components())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setSheenDirection)]
+        pub fn set_sheen_direction(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+            dimensions: u32,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            let direction = noon_core::SemanticSheenDirection::new(
+                noon_core::SemanticVec3::new(x, y, z),
+                dimensions as u8,
+            );
+            noon::MobjectTarget::from(&self.handle)
+                .set_sheen_direction(direction, family)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = rotateSheenDirection)]
+        pub fn rotate_sheen_direction(
+            &self,
+            angle: f64,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .rotate_sheen_direction(
+                    angle,
+                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    family,
+                )
                 .map_err(js_error)
         }
 

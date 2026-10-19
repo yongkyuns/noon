@@ -480,6 +480,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
                 | SemanticMutation::ReplaceStyle { .. }
+                | SemanticMutation::SetSheenDirection { .. }
                 | SemanticMutation::SetFamilyColor { .. }
                 | SemanticMutation::SetFamilyStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
@@ -1256,6 +1257,7 @@ fn lower_semantic_publication(
             // commits coherently but has no renderable object value projection.
             SemanticMutation::SetFamilyColor { .. }
             | SemanticMutation::SetFamilyStyle { .. }
+            | SemanticMutation::SetSheenDirection { .. }
             | SemanticMutation::SetBarMetadata { .. }
             | SemanticMutation::SetAngleValue { .. }
             | SemanticMutation::UpdateEffect { .. } => {}

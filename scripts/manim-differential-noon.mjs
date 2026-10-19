@@ -353,8 +353,8 @@ style_mutator_returns_self = [
     point_owner.set_stroke(background=True) is point_owner,
     point_owner.set_background_stroke() is point_owner,
     point_owner.set_cap_style(noon.CapStyleType.AUTO) is point_owner,
-    point_owner.set_sheen(0.0, noon.UL) is point_owner,
-    point_owner.set_sheen_direction(noon.UL) is point_owner,
+    point_owner.set_sheen(0.0, (-1.0, 1.0, 0.0)) is point_owner,
+    point_owner.set_sheen_direction((-1.0, 1.0, 0.0)) is point_owner,
     point_owner.rotate_sheen_direction(0.0) is point_owner,
 ]
 def rejected_without_style_change(operation):
@@ -370,12 +370,6 @@ style_mutator_rejections = {
     ),
     "sheen_factor": rejected_without_style_change(
         lambda: point_owner.set_sheen(0.5)
-    ),
-    "sheen_direction": rejected_without_style_change(
-        lambda: point_owner.set_sheen_direction(noon.RIGHT)
-    ),
-    "sheen_rotation": rejected_without_style_change(
-        lambda: point_owner.rotate_sheen_direction(0.5)
     ),
     "cap_style": rejected_without_style_change(
         lambda: point_owner.set_cap_style(noon.CapStyleType.ROUND)
@@ -466,6 +460,12 @@ curves = np.array([
 batch.add_cubic_bezier_curves(curves)
 cubic_batch_extension = batch.get_all_points().tolist()
 observations = noon_observations()
+sheen_direction_mismatch = _compare(
+    observations["sheen_direction"],
+    observations["sheen_direction_live"],
+    1e-5,
+)
+assert not sheen_direction_mismatch, sheen_direction_mismatch
 plain_group_restore_extension = _plain_group_restore_extension_probe(noon)
 expectedFamilyPointCounts = {
     "group": {
@@ -799,7 +799,6 @@ json.dumps({
     assert.deepEqual(style.background_stroke_width, 0);
     assert.deepEqual(style.background_stroke_opacity, 1);
     assert.deepEqual(style.sheen_factor, 0);
-    assert.deepEqual(style.sheen_direction, [-1, 1, 0]);
     assert.equal(style.background_image, null);
     assert.deepEqual(style.simple.fill_opacity, 0.35);
     assert.deepEqual(style.simple.stroke_opacity, 0.6);
@@ -813,12 +812,12 @@ json.dumps({
       assert.ok(actual.every((value, index) => Math.abs(value - expected[index]) <= 1e-6));
     }
   }
+  assert.deepEqual(product.style_queries.source.sheen_direction, [-1, 1, 0]);
+  assert.deepEqual(product.style_queries.round_trip.sheen_direction, [-1, 1, 0]);
   assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true, true, true]);
   assert.deepEqual(product.style_mutator_rejections, {
     background_stroke: true,
     sheen_factor: true,
-    sheen_direction: true,
-    sheen_rotation: true,
     cap_style: false,
   });
   const {
