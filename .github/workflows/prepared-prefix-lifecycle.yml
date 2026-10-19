@@ -1,0 +1,34 @@
+name: Prepared prefix lifecycle qualification
+on:
+  push:
+    branches: [experimental/prepared-prefix-lifecycle]
+permissions:
+  contents: read
+concurrency:
+  group: prepared-prefix-lifecycle
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Retain source for exact candidate inspection
+        run: |
+          set -euo pipefail
+          mkdir -p prefix-lifecycle-artifacts
+          git rev-parse HEAD > prefix-lifecycle-artifacts/commit.txt
+          git archive --format=tar.gz HEAD > prefix-lifecycle-artifacts/source.tar.gz
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: prepared-prefix-lifecycle
+          path: prefix-lifecycle-artifacts
+          retention-days: 7
+          if-no-files-found: error
