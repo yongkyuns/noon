@@ -1531,6 +1531,44 @@ def _noon_mobject_add_background_rectangle_live() -> Any:
     )
 
 
+def _mobject_match_z(provider: Any, scene: Any | None = None) -> Any:
+    receiver = provider.Circle(radius=0.3).shift(
+        provider.LEFT * 1.25 + provider.UP * 0.4
+    )
+    target = provider.Square(side_length=0.6).shift(
+        provider.RIGHT * 1.5 + provider.DOWN * 0.25
+    )
+    if scene is not None:
+        scene.add(receiver, target)
+
+    before = _object_observation(receiver)
+    matched = receiver.match_z(target, direction=provider.UP + provider.LEFT)
+    after_match = _object_observation(receiver)
+    set_result = receiver.set_coord(0.0, 2)
+    after_set = _object_observation(receiver)
+    return {
+        "match_returns_self": matched is receiver,
+        "set_returns_self": set_result is receiver,
+        "before": before,
+        "after_match": after_match,
+        "after_set": after_set,
+        "receiver_z": float(receiver.get_z()),
+        "target_z": float(target.get_z()),
+    }
+
+
+def _noon_mobject_match_z() -> Any:
+    return _mobject_match_z(noon)
+
+
+def _manim_mobject_match_z() -> Any:
+    return _mobject_match_z(manim)
+
+
+def _noon_mobject_match_z_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _mobject_match_z(noon, scene))
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4598,6 +4636,14 @@ FIXTURES = [
     Fixture("mobject_add_background_rectangle_live",
             _noon_mobject_add_background_rectangle_live,
             _manim_mobject_add_background_rectangle,
+            1e-5),
+    Fixture("mobject_match_z",
+            _noon_mobject_match_z,
+            _manim_mobject_match_z,
+            1e-5),
+    Fixture("mobject_match_z_live",
+            _noon_mobject_match_z_live,
+            _manim_mobject_match_z,
             1e-5),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),

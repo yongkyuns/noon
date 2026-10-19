@@ -888,6 +888,9 @@ class Mobject:
     def match_y(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
         return self.match_coord(mobject, 1, direction)
 
+    def match_z(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 2, direction)
+
     @property
     def z_index(self) -> float:
         return _semantic_operations()._get_z_index(self)

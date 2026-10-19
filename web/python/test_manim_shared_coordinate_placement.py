@@ -124,9 +124,9 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
             try:
                 source.set_coord(1.0, 2)
             except NotImplementedError as error:
-                assert "only x/y" in str(error)
+                assert "only planar z=0" in str(error)
             else:
-                raise AssertionError("2D set_coord unexpectedly accepted z")
+                raise AssertionError("planar set_coord unexpectedly accepted nonzero z")
 
             before = dict(source.transform["translation"])
             try:

@@ -31,6 +31,10 @@ def _coordinate_mask(dim: int) -> tuple[float, float, float]:
         return (1.0, 0.0, 0.0)
     if dim == 1:
         return (0.0, 1.0, 0.0)
+    if dim == 2:
+        # The planar placement adapter has no z component; keep the shared
+        # move-to path while making a z-only alignment an identity operation.
+        return (0.0, 0.0, 0.0)
     raise NotImplementedError("Noon's shared 2D coordinate placement supports only x/y")
 
 
@@ -44,6 +48,8 @@ def _set_coord(
 
     coordinate = _shared._ir._finite_number("value", value)
     mask = _coordinate_mask(dim)
+    if dim == 2:
+        return self.set_z(coordinate)
     point = _base.Vec2(coordinate if dim == 0 else 0.0, coordinate if dim == 1 else 0.0)
     return self.move_to(
         point,

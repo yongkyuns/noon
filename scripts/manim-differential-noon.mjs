@@ -1076,6 +1076,17 @@ json.dumps({
     assert.ok(Math.abs(profile.fill_opacity - 0.4) <= 1e-5,
       `${name}: applies the requested fill opacity`);
   }
+  for (const name of ["mobject_match_z", "mobject_match_z_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.match_returns_self, true, `${name}: match_z returns the receiver`);
+    assert.equal(profile.set_returns_self, true, `${name}: set_coord returns the receiver`);
+    assert.deepEqual(profile.after_match, profile.before,
+      `${name}: matching planar z does not move or resize the receiver`);
+    assert.deepEqual(profile.after_set, profile.before,
+      `${name}: setting planar z to zero does not move or resize the receiver`);
+    assert.equal(profile.receiver_z, 0, `${name}: receiver remains on the plane`);
+    assert.equal(profile.target_z, 0, `${name}: target remains on the plane`);
+  }
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
