@@ -4,6 +4,16 @@ import test from "node:test";
 
 const workflowDir = new URL("../workflows/", import.meta.url);
 
+test("WebKit browser and gallery jobs retain process stderr without weakening qualification", async () => {
+  const yaml = await readFile(new URL("playground-cross-browser.yml", workflowDir), "utf8");
+  for (const name of ["browser", "gallery"]) {
+    const job = yaml.split(`\n  ${name}:\n`)[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+    assert.ok(job, `missing ${name} qualification`);
+    assert.ok(job.includes("      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}"));
+    assert.doesNotMatch(job, /continue-on-error:/);
+  }
+});
+
 test("gallery and pointer workflows qualify shared failure diagnostics and resource reuse edits", async () => {
   for (const name of ["playground-cross-browser.yml", "playground-playback-controls.yml"]) {
     const yaml = await readFile(new URL(name, workflowDir), "utf8");

@@ -127,6 +127,8 @@ jobs:
     name: ${{ matrix.browser }} / ${{ matrix.profile }}
     runs-on: ${{ matrix.os }}
     needs: build
+    env:
+      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -259,6 +261,8 @@ jobs:
     name: Gallery ${{ matrix.browser }} / shard ${{ matrix.shard }}
     runs-on: ${{ matrix.os }}
     needs: build
+    env:
+      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}
     strategy:
       fail-fast: false
       matrix:
