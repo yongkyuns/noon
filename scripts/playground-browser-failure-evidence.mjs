@@ -46,15 +46,30 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     record("phase", facts);
   };
   const attach = (browser, context, page) => {
-    const subscriptions = [];
+    const subscriptions = new Set();
     const on = (target, event, listener) => {
       target.on(event, listener);
-      subscriptions.push([target, event, listener]);
+      const subscription = [target, event, listener];
+      subscriptions.add(subscription);
+      return () => { target.off(event, listener); subscriptions.delete(subscription); };
     };
     on(browser, "disconnected", () => record("browser-disconnected"));
     on(context, "close", () => record("context-close"));
     on(page, "crash", () => record("page-crash"));
     on(page, "close", () => record("page-close"));
+    on(context, "requestfailed", request => record("request-failed", {
+      url: short(request.url(), 500), error: short(request.failure()?.errorText),
+    }));
+    on(context, "response", response => {
+      if (response.status() >= 400) record("http-error", {
+        url: short(response.url(), 500), status: response.status(),
+      });
+    });
+    on(page, "worker", worker => {
+      const url = short(worker.url(), 500);
+      record("worker-created", { url });
+      const detach = on(worker, "close", () => { record("worker-close", { url }); detach(); });
+    });
     on(page, "framenavigated", frame => {
       try {
         if (frame === page.mainFrame()) record("main-frame-navigation", { url: short(frame.url()) });
@@ -64,7 +79,7 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     // listeners so completed cases neither retain pages nor accumulate events.
     return () => {
       for (const [target, event, listener] of subscriptions) target.off(event, listener);
-      subscriptions.length = 0;
+      subscriptions.clear();
     };
   };
   return Object.freeze({ setPhase, record, attach, snapshot: () => ({
