@@ -1586,6 +1586,13 @@
       "source": "parity/manim-v0.21/core-examples/stroke_caps.py",
       "expected_duration": 0.2,
       "notes": "Static open VMobject strokes for AUTO, ROUND, BUTT, and SQUARE, checking Manim Cairo cap appearance against the product renderer's WebGPU and WebGL2 output."
+    },
+    {
+      "id": "put-start-and-end-on",
+      "scene": "PutStartAndEndOn",
+      "source": "parity/manim-v0.21/core-examples/put_start_and_end_on.py",
+      "expected_duration": 0.2,
+      "notes": "Two transformed planar paths are mapped to new endpoint pairs; the unchanged raster policy checks shared Rust scale/rotation/translation output."
     }
   ],
   "sample_fractions": [

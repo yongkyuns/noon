@@ -22,6 +22,7 @@ import math
 import os
 import random
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -961,6 +962,46 @@ def _noon_family_position_function_methods_live() -> Any:
     return _noon_live_scene_probe(
         lambda scene: _family_position_function_methods(noon, scene)
     )
+
+
+def _put_start_and_end_on(provider: Any, scene: Any | None = None) -> Any:
+    segment = provider.Line((-1.5, -0.5, 0), (0.5, 1, 0), color=provider.BLUE)
+    segment.scale(0.75, about_point=(-1.5, -0.5, 0))
+    segment.rotate(0.2, about_point=(0, 0, 0))
+    horizontal = provider.Line((-0.5, 0.75, 0), (0.75, -0.25, 0), color=provider.RED)
+    degenerate = provider.VMobject().set_points_as_corners([(0, 0, 0), (0, 0, 0)])
+    if scene is not None:
+        scene.add(segment, horizontal, degenerate)
+
+    returned = segment.put_start_and_end_on((1, -1, 0), (-0.5, 1.5, 0))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        horizontal_returned = horizontal.put_start_and_end_on((2, 1, 0), (4, 1, 0))
+        degenerate_returned = degenerate.put_start_and_end_on((3, -2, 0), (4, 1, 0))
+    return {
+        "returns_self": returned is segment,
+        "start": _point_observation(segment.get_start()),
+        "end": _point_observation(segment.get_end()),
+        "horizontal_returns_self": horizontal_returned is horizontal,
+        "horizontal_start": _point_observation(horizontal.get_start()),
+        "horizontal_end": _point_observation(horizontal.get_end()),
+        "degenerate_returns_self": degenerate_returned is degenerate,
+        "degenerate_start": _point_observation(degenerate.get_start()),
+        "degenerate_end": _point_observation(degenerate.get_end()),
+        "warnings": [str(warning.message) for warning in caught],
+    }
+
+
+def _noon_put_start_and_end_on() -> Any:
+    return _put_start_and_end_on(noon)
+
+
+def _manim_put_start_and_end_on() -> Any:
+    return _put_start_and_end_on(manim)
+
+
+def _noon_put_start_and_end_on_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _put_start_and_end_on(noon, scene))
 
 
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
@@ -3978,6 +4019,8 @@ FIXTURES = [
     Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
     Fixture("family_position_function_methods", _noon_family_position_function_methods, _manim_family_position_function_methods),
     Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
+    Fixture("put_start_and_end_on", _noon_put_start_and_end_on, _manim_put_start_and_end_on),
+    Fixture("put_start_and_end_on_live", _noon_put_start_and_end_on_live, _manim_put_start_and_end_on),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

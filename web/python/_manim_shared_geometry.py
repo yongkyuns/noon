@@ -6,10 +6,12 @@ and argument conversion.
 
 from __future__ import annotations
 
-from _noon_errors import engine_call
-
+import math
 import operator
+import warnings
 from typing import Any
+
+from _noon_errors import engine_call
 
 import noon as _base
 import _manim_compat as _compat
@@ -83,6 +85,40 @@ def _match_coord(
         aligned_edge=direction,
         coor_mask=_coordinate_mask(dim),
     )
+
+
+def _put_start_and_end_on(
+    self: _base.Mobject,
+    start: object,
+    end: object,
+) -> _base.Mobject:
+    """Place a planar path's endpoints using shared Rust affine operations."""
+
+    target_start = _base._as_vec2(start)
+    target_end = _base._as_vec2(end)
+    current_start, current_end = self.get_start_and_end()
+    current_start = _base._as_vec2(current_start)
+    current_end = _base._as_vec2(current_end)
+    current_vector = current_end - current_start
+
+    if current_vector.x == 0.0 and current_vector.y == 0.0:
+        warnings.warn(
+            "put_start_and_end_on has been called on a closed loop or zero-length mobject. "
+            f"{type(self).__name__} will be shifted to start point instead.",
+            stacklevel=3,
+        )
+        self.shift(target_start - current_start)
+        return self
+
+    target_vector = target_end - target_start
+    angle = math.atan2(
+        current_vector.x * target_vector.y - current_vector.y * target_vector.x,
+        current_vector.x * target_vector.x + current_vector.y * target_vector.y,
+    )
+    self.scale(target_vector.length() / current_vector.length(), about_point=current_start)
+    self.rotate(angle, about_point=current_start)
+    self.shift(target_start - current_start)
+    return self
 
 
 def _dot_init(

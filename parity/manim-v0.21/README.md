@@ -147,3 +147,14 @@ available; without NumPy, Noon passes an equivalent zero-Z tuple. The Cairo
 raster fixture passes on WebGPU and WebGL2 with duration delta 0, 0.0735%
 differing pixels, MAE 0.011022, and max channel error 47. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1480.
+
+`Mobject.put_start_and_end_on(start, end)` maps planar point-owning paths by
+scaling about the original start, rotating through the signed planar angle, and
+shifting to the requested start, with each geometry edit delegated to shared
+Rust operations. Detached and scene-bound product probes match pinned ManimCE
+for transformed lines and an exact-zero VMobject, including receiver identity
+and Manim's warning-and-shift fallback (183/183 semantic fixtures). Nonzero-z
+placement remains unsupported. The Cairo raster fixture passes on WebGPU and
+WebGL2 with duration delta 0, 0.0766% differing pixels, MAE 0.010016, and
+maximum channel error 44. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1948.
