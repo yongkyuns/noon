@@ -72,6 +72,12 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
+    /// Empty semantic reactive scaffolding is not externally driven behavior.
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.state.signal_count() == 0 && self.targets.is_empty()
+    }
+
     pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
         self.target_lookup
             .contains_key(&binding_key(object, property))

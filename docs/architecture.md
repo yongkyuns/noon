@@ -686,6 +686,29 @@ full lifecycle contract. #1661 separately addresses wait-time observation. These
 issues carry dated evidence and repair status; their existence is not a claim
 that every history domain has been implemented or qualified.
 
+### Experimental completed-prefix delivery
+
+The opt-in `prepared-prefix` experiment keeps the producer's sole Semantic Scene
+and uses the existing runtime evaluator in an independent derived history reader.
+After one explicit execution bootstrap, completed extensions transfer only new
+compiler-owned row/track revisions. Appending future history does not advance the
+reader or replace its displayed frame. Source-owner segment/callback admission
+precedes extraction; a tokenless wait needs its actual continuation boundary too.
+The advertised interval is half-open `[start, prepared_frontier)`, since further
+source statements may still mutate the frontier's exact timestamp. Only one
+ordered, scope-bound stream may extend a reader; budgets and failures preserve
+already-published history. New suffix conversion uses a sparse reverse overlay,
+not a copy of the source scene or a rewind of either execution cursor.
+
+This initial slice admits fixed membership/content and ordinary property tracks.
+An empty reactive runtime installed by semantic lowering is admissible; actual
+signals or bindings, including later enrollment, require their own history policy.
+Structural/resource extension, family channels, reactive/native input, host
+callbacks, terminal endpoint publication and a realtime producer/player shell
+remain outside admission. It is disabled by default and does not change gallery
+presentation or establish physical-device performance. Implementation and
+qualification remain in #2211; this is not another scene or rendering authority.
+
 ### Identity generations, revisions, versions and sequences
 
 Identity validity, authored/execution revisioning, effective publication, external event ordering, and GPU lifetime are distinct domains. They must not collapse into one ambiguous global generation counter:

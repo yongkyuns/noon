@@ -120,3 +120,6 @@ impl ExecutionSession {
         }
     }
 }
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;

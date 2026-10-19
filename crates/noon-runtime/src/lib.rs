@@ -5186,3 +5186,6 @@ mod tests {
         assert!(!changes.is_structural());
     }
 }
+
+#[cfg(feature = "prepared-prefix")]
+pub use replay::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};
