@@ -125,7 +125,9 @@ fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
     let mut live = scene.live(&mut session);
     let before_revision = scene.revision();
     let result = live.fade_family(&family, 0.25).unwrap();
-    assert_eq!(result.impacts().len(), 2);
+    assert_eq!(result.impacts().len(), 4);
+    assert_eq!(family.own_style().unwrap().stroke_opacity, 0.75);
+    assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.75);
     assert_eq!(scene.revision(), before_revision.checked_next().unwrap());
     let faded_a = live.effective(&a).unwrap();
     let faded_b = live.effective(&b).unwrap();

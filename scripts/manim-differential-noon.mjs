@@ -1124,6 +1124,45 @@ json.dumps({
       }
     }
   }
+  const assertFadedStyle = (actual, before, factor, message) => assertStyleNear(actual, {
+    ...before,
+    fill_opacity: before.fill_opacity * factor,
+    stroke_opacity: before.stroke_opacity * factor,
+    background_stroke_opacity: before.background_stroke_opacity * factor,
+  }, message);
+  for (const name of ["recursive_family_fade", "recursive_family_fade_live"]) {
+    const profile = observations[name];
+    assert.deepEqual(profile.returns, [true, true, true]);
+    for (const [member, factors] of [["roots", [0.5, 0.5, 0.25]], ["leaves", [0.25, 0.5]]]) {
+      for (let index = 0; index < factors.length; index += 1) {
+        const factor = factors[index];
+        assertFadedStyle(profile.after_first[member][index], profile.before[member][index], factor,
+          `${name}: first ${member} ${index} fade counts alias paths`);
+        assertStyleNear(profile.after_zero[member][index], profile.after_first[member][index],
+          `${name}: zero darkness preserves ${member} ${index}`);
+        assertFadedStyle(profile.after_second[member][index], profile.before[member][index], factor ** 2,
+          `${name}: repeated ${member} ${index} fade composes`);
+      }
+    }
+    assert.equal(profile.empty_returned, true);
+    assertFadedStyle(profile.empty, profile.empty_before, 0.5,
+      `${name}: empty family root retains observable fade`);
+    assert.equal(profile.plain.returned_self, true);
+    assert.deepEqual(profile.plain.color_after, profile.plain.color_before,
+      `${name}: plain Group own color stays unchanged`);
+    assertFadedStyle(profile.plain.after, profile.plain.before, 0.25,
+      `${name}: plain Group recursion reaches aliased VGroup roots`);
+    assertStyleNear(profile.unrelated_after, profile.unrelated_before,
+      `${name}: unrelated paint stays unchanged`);
+  }
+  for (const phase of ["after_first", "after_zero", "after_second"]) {
+    for (const member of ["roots", "leaves"]) {
+      const direct = observations.recursive_family_fade[phase][member];
+      const live = observations.recursive_family_fade_live[phase][member];
+      direct.forEach((style, index) => assertStyleNear(live[index], style,
+        `recursive fade ${phase} ${member} ${index}: authored/live agreement`));
+    }
+  }
   for (const name of ["vmobject_init_colors", "vmobject_init_colors_live"]) {
     const profile = observations[name];
     assert.equal(profile.propagated.returned_self, true,

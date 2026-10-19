@@ -5,7 +5,7 @@ use crate::{
         edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
         edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
-        edit_stroke_width, interpolate_manim_color, interpolate_manim_scalar,
+        edit_stroke_width, fade_factor, interpolate_manim_color, interpolate_manim_scalar,
         interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
@@ -792,14 +792,29 @@ impl MobjectFamily {
         self.validate()?;
         edit_fade(&mut SemanticStyle::default(), darkness)?;
         let store = self.integration_store().borrow();
-        let leaves = store.ordered_leaf_multiplicities(self.node_id())?;
+        let nodes = store.ordered_authoring_multiplicities(self.node_id())?;
         let mut transaction = SemanticMutationTransaction::new();
-        for (leaf, occurrences) in leaves {
-            let previous = &store.semantic_object_state_checked(leaf)?.style;
+        for (node, occurrences) in nodes {
+            let entry = store.node(node).expect("validated family member");
+            if let Some(previous) = entry.family_style() {
+                let mut next = previous.clone();
+                edit_fade_occurrences(&mut next, darkness, occurrences)?;
+                let background_opacity = entry
+                    .family_background_stroke_opacity()
+                    .expect("family background opacity")
+                    * fade_factor(darkness, occurrences)?;
+                transaction.set_family_style_with_background_stroke_opacity(
+                    node,
+                    next,
+                    background_opacity,
+                );
+                continue;
+            }
+            let previous = &store.semantic_object_state_checked(node)?.style;
             let mut next = previous.clone();
             edit_fade_occurrences(&mut next, darkness, occurrences)?;
             if next != *previous {
-                transaction.replace_style(leaf, next);
+                transaction.replace_style(node, next);
             }
         }
         Ok(transaction)

@@ -3586,6 +3586,61 @@ def _recursive_family_paint_probe(api, scene=None):
     }
 
 
+def _recursive_family_fade_probe(api, scene=None):
+    first = api.Square(side_length=1)
+    second = api.Circle(radius=0.5)
+    shared = api.VGroup(first)
+    nested = api.VGroup(shared, second)
+    family = api.VGroup(nested, shared)
+    family.set_style(
+        fill_color=api.RED, fill_opacity=0.8,
+        stroke_color=api.BLUE, stroke_opacity=0.4,
+        background_stroke_color=api.GREEN, background_stroke_width=3,
+        background_stroke_opacity=0.6,
+    )
+    unrelated = api.Square(side_length=0.4).set_fill(api.PURPLE, opacity=0.2)
+    empty = api.VGroup()
+    plain_vector = api.VGroup(api.Square(side_length=0.3))
+    plain_vector.set_style(fill_opacity=0.8, stroke_opacity=0.4,
+                           background_stroke_opacity=0.6)
+    plain = api.Group(plain_vector, api.Group(plain_vector), color=api.PURPLE)
+    if scene is not None:
+        scene.add(family, unrelated, empty, plain)
+
+    def observe():
+        return {
+            "roots": [_solid_paint_observation(value) for value in (family, nested, shared)],
+            "leaves": [_solid_paint_observation(value) for value in (first, second)],
+        }
+
+    before = observe()
+    unrelated_before = _solid_paint_observation(unrelated)
+    returned = [family.fade(0.5) is family]
+    after_first = observe()
+    returned.append(family.fade(0) is family)
+    after_zero = observe()
+    returned.append(family.fade(0.5) is family)
+    after_second = observe()
+    empty_before = _solid_paint_observation(empty)
+    empty_returned = empty.fade(0.5) is empty
+    plain_color = _paint_rgb(plain.get_color())
+    plain_before = _solid_paint_observation(plain_vector)
+    plain_returned = plain.fade(0.5) is plain
+    return {
+        "returns": returned, "before": before,
+        "after_first": after_first, "after_zero": after_zero, "after_second": after_second,
+        "empty_returned": empty_returned, "empty_before": empty_before,
+        "empty": _solid_paint_observation(empty),
+        "plain": {
+            "returned_self": plain_returned,
+            "color_before": plain_color, "color_after": _paint_rgb(plain.get_color()),
+            "before": plain_before, "after": _solid_paint_observation(plain_vector),
+        },
+        "unrelated_before": unrelated_before,
+        "unrelated_after": _solid_paint_observation(unrelated),
+    }
+
+
 def _family_own_paint_probe(api):
     def rgb(mobject):
         return _paint_rgb(mobject.get_color())
@@ -5559,6 +5614,12 @@ FIXTURES = [
             lambda: _noon_live_scene_probe(
                 lambda scene: _recursive_family_paint_probe(noon, scene)
             ), lambda: _recursive_family_paint_probe(manim), 1e-5),
+    Fixture("recursive_family_fade", lambda: _recursive_family_fade_probe(noon),
+            lambda: _recursive_family_fade_probe(manim), 1e-5),
+    Fixture("recursive_family_fade_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _recursive_family_fade_probe(noon, scene)
+            ), lambda: _recursive_family_fade_probe(manim), 1e-5),
     Fixture("cap_style", lambda: _cap_style_probe(noon), lambda: _cap_style_probe(manim)),
     Fixture("cap_style_live",
             lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),

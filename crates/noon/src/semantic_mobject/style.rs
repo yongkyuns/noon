@@ -447,11 +447,7 @@ pub(crate) fn edit_fade_to_occurrences<S: PaintStyleEdit>(
     )
 }
 
-pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
-    style: &mut S,
-    darkness: f64,
-    mut occurrences: u64,
-) -> Result<(), AuthoringError> {
+pub(crate) fn fade_factor(darkness: f64, mut occurrences: u64) -> Result<f64, AuthoringError> {
     let mut power = 1.0 - unit_opacity("darkness", darkness)?;
     // Preserve tiny nonzero factors without subtracting the result from one.
     // Bounded exponentiation also avoids expanding a shared family DAG.
@@ -463,6 +459,15 @@ pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
         power *= power;
         occurrences >>= 1;
     }
+    Ok(factor)
+}
+
+pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
+    style: &mut S,
+    darkness: f64,
+    occurrences: u64,
+) -> Result<(), AuthoringError> {
+    let factor = fade_factor(darkness, occurrences)?;
     if style.has_fill() {
         style.scale_fill_opacity(factor);
     }

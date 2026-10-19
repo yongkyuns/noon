@@ -58,6 +58,16 @@ pub fn session() -> Result<ExecutionSession, String> {
         }
         live.fade(&a, 0.5).map_err(|e| e.to_string())?;
         live.fade_family(&family, 0.5).map_err(|e| e.to_string())?;
+        for root in [&family, &nested] {
+            let style = root.own_style().map_err(|error| error.to_string())?;
+            assert_eq!(style.fill_opacity, 0.25);
+            assert_eq!(style.stroke_opacity, 0.25);
+            assert_eq!(
+                root.own_background_stroke_opacity()
+                    .map_err(|e| e.to_string())?,
+                0.25
+            );
+        }
         for (object, opacity) in [(&a, 0.0625), (&b, 0.25)] {
             let effective = live.effective(object).map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), opacity);

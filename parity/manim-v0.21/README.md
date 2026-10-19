@@ -294,3 +294,12 @@ pixels each); the rendered result was inspected. The local fast gate passes
 3,449 library tests / 17 configured ignores; 93 family/paint tests and the native
 example also pass. Pinned ManimCE qualification, recursive root fade, and staged
 callback root updates remain open.
+
+For finite darkness in [0, 1], recursive `VGroup.fade()` now updates non-rendered
+root paint as well as leaf paint. Shared Rust computes membership-path counts
+without expanding aliased family paths, applies the same bounded fade factor to
+all three channels, and publishes each unique node once. Native tests cover
+aliased roots, empty families, live publication, rollback, zero-darkness no-op,
+and geometry/object-opacity preservation. Fresh browser and pinned ManimCE
+qualification are pending; staged root callbacks and extrapolated darkness
+remain unqualified.

@@ -29,6 +29,10 @@ class OrdinaryFamilyPaint(Scene):
             assert member.get_stroke_opacity() == 0.5
         a.fade(0.5, family=False)
         family.fade(0.5)
+        for root in (family, nested):
+            assert root.get_fill_opacity() == 0.25
+            assert root.get_stroke_opacity() == 0.25
+            assert root.get_stroke_opacity(background=True) == 0.25
         assert a.get_fill_opacity() == a.get_stroke_opacity() == 0.0625
         assert b.get_fill_opacity() == b.get_stroke_opacity() == 0.25
         family.fade_to(Color(1, 0, 0), 0.5)

@@ -227,6 +227,23 @@ impl SemanticStore {
         &self,
         root: SemanticNodeId,
     ) -> Result<Vec<(SemanticNodeId, u64)>, SemanticStoreError> {
+        self.ordered_node_multiplicities(root, false)
+    }
+
+    /// Include non-rendered family roots in the same bounded membership-path
+    /// count used for leaves. Each node is emitted once at its first occurrence.
+    pub fn ordered_authoring_multiplicities(
+        &self,
+        root: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, u64)>, SemanticStoreError> {
+        self.ordered_node_multiplicities(root, true)
+    }
+
+    fn ordered_node_multiplicities(
+        &self,
+        root: SemanticNodeId,
+        include_families: bool,
+    ) -> Result<Vec<(SemanticNodeId, u64)>, SemanticStoreError> {
         fn postorder(
             store: &SemanticStore,
             node: SemanticNodeId,
@@ -247,7 +264,7 @@ impl SemanticStore {
             order.push(node);
             Ok(())
         }
-        let leaves = self.ordered_leaf_nodes(root)?;
+        let nodes = self.ordered_nodes(root, include_families, false)?;
         let mut order = Vec::new();
         postorder(self, root, &mut HashSet::new(), &mut order)?;
         let mut counts = HashMap::from([(root, 1u64)]);
@@ -265,7 +282,7 @@ impl SemanticStore {
                 }
             }
         }
-        Ok(leaves
+        Ok(nodes
             .into_iter()
             .map(|node| (node, counts[&node]))
             .collect())
@@ -372,6 +389,10 @@ mod tests {
         store.add_member(root, nested).unwrap();
         store.add_member(root, a).unwrap();
         assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![a, b]);
+        assert_eq!(
+            store.ordered_authoring_multiplicities(root).unwrap(),
+            vec![(root, 1), (nested, 1), (a, 2), (b, 1)]
+        );
         assert_eq!(
             store.ordered_last_occurrence_leaf_nodes(root).unwrap(),
             vec![b, a]
@@ -553,9 +574,39 @@ mod tests {
                     store.ordered_leaf_multiplicities(next),
                     Err(SemanticStoreError::FamilyMultiplicityOverflow(next))
                 );
+                assert_eq!(
+                    store.ordered_authoring_multiplicities(next),
+                    Err(SemanticStoreError::FamilyMultiplicityOverflow(next))
+                );
             }
             previous = next;
         }
+    }
+
+    #[test]
+    fn root_multiplicities_count_shared_family_paths_and_keep_empty_roots() {
+        let mut store = SemanticStore::new();
+        let leaf = store.insert_authoring_object();
+        let shared = store.insert_family();
+        let branch = store.insert_family();
+        let root = store.insert_family();
+        let empty = store.insert_family();
+        store.add_member(shared, leaf).unwrap();
+        store.add_member(branch, shared).unwrap();
+        store.add_member(root, branch).unwrap();
+        store.add_member(root, shared).unwrap();
+        assert_eq!(
+            store.ordered_authoring_multiplicities(root).unwrap(),
+            vec![(root, 1), (branch, 1), (shared, 2), (leaf, 2)]
+        );
+        assert_eq!(
+            store.ordered_leaf_multiplicities(root).unwrap(),
+            vec![(leaf, 2)]
+        );
+        assert_eq!(
+            store.ordered_authoring_multiplicities(empty).unwrap(),
+            vec![(empty, 1)]
+        );
     }
 
     #[test]

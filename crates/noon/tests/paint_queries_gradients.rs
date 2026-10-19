@@ -472,3 +472,92 @@ fn recursive_opacity_preserves_disabled_leaf_paint_and_composite_opacity() {
     assert_eq!(family.own_style().unwrap().stroke_opacity, 0.3);
     assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.3);
 }
+
+#[test]
+fn recursive_fade_includes_aliased_roots_and_live_publication() {
+    fn assert_root(root: &noon::MobjectFamily, factor: f64) {
+        let style = root.own_style().unwrap();
+        assert!((style.fill_opacity - 0.8 * factor).abs() < 1e-12);
+        assert!((style.stroke_opacity - 0.4 * factor).abs() < 1e-12);
+        assert!((root.own_background_stroke_opacity().unwrap() - 0.6 * factor).abs() < 1e-12);
+    }
+
+    let mut scene = Scene::new();
+    let mut a = scene.square(1.0).unwrap();
+    let b = scene.circle(0.4).unwrap();
+    a.set_object_opacity(0.7).unwrap();
+    let content = (a.state().unwrap().content, b.state().unwrap().content);
+    let shared = scene.family(&[(&a).into()]).unwrap();
+    let nested = scene.family(&[(&shared).into(), (&b).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&shared).into()]).unwrap();
+    root.set_style(StyleUpdate {
+        fill_color: Some(Color::RED),
+        fill_opacity: Some(0.8),
+        stroke_color: Some(Color::BLUE),
+        stroke_opacity: Some(0.4),
+        background_stroke_color: Some(Color::GREEN),
+        background_stroke_opacity: Some(0.6),
+        background_stroke_width: Some(0.06),
+        ..StyleUpdate::default()
+    })
+    .unwrap();
+    let before = scene.revision();
+    root.fade(0.5).unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    for family in [&root, &nested] {
+        assert_root(family, 0.5);
+    }
+    assert_root(&shared, 0.25);
+    assert!((a.fill_opacity().unwrap() - 0.2).abs() < 1e-7);
+    assert!((b.fill_opacity().unwrap() - 0.4).abs() < 1e-7);
+
+    scene.add_many(&[(&root).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let before = scene.revision();
+    let result = live.fade_family(&root, 0.5).unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(result.impacts().len(), 5);
+    for family in [&root, &nested] {
+        assert_root(family, 0.25);
+    }
+    assert_root(&shared, 0.0625);
+    let effective = live.effective(&a).unwrap();
+    assert!((effective.fill_opacity() - 0.05).abs() < 1e-7);
+    assert!((effective.stroke_opacity() - 0.025).abs() < 1e-7);
+    assert!((effective.style.background_stroke.unwrap().alpha - 0.0375).abs() < 1e-7);
+    assert_eq!(effective.style.opacity, 0.7);
+    assert_eq!(
+        (a.state().unwrap().content, b.state().unwrap().content),
+        content
+    );
+    let before = (
+        scene.revision(),
+        root.own_style().unwrap(),
+        shared.own_style().unwrap(),
+    );
+    assert!(live.fade_family(&root, f64::NAN).is_err());
+    live.fade_family(&root, 0.0).unwrap();
+    assert_eq!(
+        (
+            scene.revision(),
+            root.own_style().unwrap(),
+            shared.own_style().unwrap()
+        ),
+        before
+    );
+}
+
+#[test]
+fn fading_an_empty_family_changes_only_its_root_paint() {
+    let mut scene = Scene::new();
+    let root = scene.family(&[]).unwrap();
+    root.fade(0.5).unwrap();
+    assert_eq!(root.own_style().unwrap().fill_opacity, 0.0);
+    assert_eq!(root.own_style().unwrap().stroke_opacity, 0.5);
+    assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.5);
+    let leaf = scene.square(1.0).unwrap();
+    let before = leaf.state().unwrap();
+    root.add((&leaf).into()).unwrap();
+    assert_eq!(leaf.state().unwrap(), before);
+}

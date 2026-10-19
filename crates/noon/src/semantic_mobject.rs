@@ -26,8 +26,8 @@ pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fade_occurrences,
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
-    edit_stroke_width, manim_color_from_effective, opaque_paint_color, parse_stroke_cap,
-    validate_fade_to_inputs, PaintStyleEdit,
+    edit_stroke_width, fade_factor, manim_color_from_effective, opaque_paint_color,
+    parse_stroke_cap, validate_fade_to_inputs, PaintStyleEdit,
 };
 use style::{parse_stroke_join, parse_stroke_width_mode};
 
