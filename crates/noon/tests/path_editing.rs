@@ -1081,6 +1081,80 @@ fn append_vectorized_mobject_uses_mutable_destination_stride_and_preserves_raw_p
 }
 
 #[test]
+fn default_close_matches_default_manim_samples_authored_and_live() {
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-3., -1.))
+        .line_to(Vec2::new(-2., 0.))
+        .quadratic_to(Vec2::new(-1., 2.), Vec2::ZERO)
+        .move_to(Vec2::new(1., -1.))
+        .cubic_to(Vec2::new(1., 2.), Vec2::new(3., 2.), Vec2::new(3., -1.));
+    let samples = [0., 1. / 3., 2. / 3., 1.];
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let mut default = scene
+            .geometry(ManimGeometryOptions::path(path.clone()).unwrap())
+            .unwrap();
+        let mut explicit = scene
+            .geometry(ManimGeometryOptions::path(path.clone()).unwrap())
+            .unwrap();
+        scene
+            .add_many(&[(&default).into(), (&explicit).into()])
+            .unwrap();
+        let (actual, expected) = if live_mode {
+            let mut execution = scene.execution_session().unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut execution,
+                noon::integration::BorrowedPathEdit::Close { object: &default },
+            )
+            .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut execution,
+                noon::integration::BorrowedPathEdit::CloseWithStride {
+                    object: &explicit,
+                    stride: 4,
+                    tolerance: 1e-6,
+                    bezier_t_values: &samples,
+                },
+            )
+            .unwrap();
+            (
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &execution,
+                    &default,
+                )
+                .unwrap()
+                .points()
+                .unwrap(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &execution,
+                    &explicit,
+                )
+                .unwrap()
+                .points()
+                .unwrap(),
+            )
+        } else {
+            default.close_path().unwrap();
+            explicit.close_path_with_stride(4, 1e-6, &samples).unwrap();
+            (
+                default.path_query().unwrap().points().unwrap(),
+                explicit.path_query().unwrap().points().unwrap(),
+            )
+        };
+        assert_eq!(
+            actual, expected,
+            "default closing differs, live={live_mode}"
+        );
+    }
+}
+
+#[test]
 fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_live() {
     let samples = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
     for point_count in [10, 11] {

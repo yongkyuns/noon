@@ -1399,7 +1399,7 @@ impl PathEdit<'_> {
             let points = manim_points_for_path(&path)?;
             path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
         } else {
-            let (first, last) = path.endpoints().ok_or(AuthoringError::PathQuery(
+            path.endpoints().ok_or(AuthoringError::PathQuery(
                 noon_geometry::PathProportionError::EmptyPath,
             ))?;
             path = match self {
@@ -1415,28 +1415,10 @@ impl PathEdit<'_> {
                     path.open_last_subpath().cubic_to(c1, c2, to)
                 }
                 Self::Close => {
-                    if (last - first).length() < 1e-6 {
-                        path
-                    } else {
-                        // Only complete curves define Manim's subpaths; a
-                        // dangling MoveTo does not hide the previous subpath.
-                        let mut current_start = None;
-                        let mut completed_start = None;
-                        for command in path.commands() {
-                            match *command {
-                                noon_core::PathCommand::MoveTo { to } => current_start = Some(to),
-                                _ => completed_start = current_start,
-                            }
-                        }
-                        let start = completed_start.unwrap_or(last);
-                        let close_contour = current_start == Some(start);
-                        path = path.open_last_subpath().line_to(start);
-                        if close_contour {
-                            path.close()
-                        } else {
-                            path
-                        }
-                    }
+                    // The default native operation and Python's constructor
+                    // defaults must publish the same cubic geometry, including
+                    // endpoint rounding and the closing join.
+                    return close_path_with_stride(path, 4, 1e-6, &[0., 1. / 3., 2. / 3., 1.]);
                 }
                 Self::Corners(_)
                 | Self::CornersWithSamples { .. }
