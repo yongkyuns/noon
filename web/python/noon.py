@@ -674,8 +674,25 @@ class Mobject:
     def shuffle_submobjects(self, *args: Any, **kwargs: Any) -> Self:
         return self.shuffle(*args, **kwargs)
 
-    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+    def arrange(
+        self,
+        direction: object = RIGHT,
+        buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+        center: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        """Apply Manim's leaf-object arrangement behavior.
+
+        Family wrappers override this with shared Rust layout. A point-owning
+        leaf has no direct children, so its only arrangement effect is the
+        optional shared move to the origin.
+        """
+        if center:
+            self.center()
         return self
+
+    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.arrange(*args, **kwargs)
 
     def has_points(self) -> bool:
         return self.get_num_points() > 0

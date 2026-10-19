@@ -223,7 +223,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
     def test_group_arrange_submobjects_forwards_to_dynamic_shared_arrange(self):
         import inspect
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
         import _manim_compat as compat
         from _typed_geometry_test_support import identity_only_wrapper
 
@@ -237,7 +237,9 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         self.assertEqual(tuple(signature.parameters), ("self", "args", "kwargs"))
         self.assertEqual(signature.return_annotation, "Self")
         plain = object.__new__(compat.Mobject)
-        self.assertIs(plain.arrange_submobjects(), plain)
+        with patch.object(compat.Mobject, "center", return_value=plain) as center:
+            self.assertIs(plain.arrange_submobjects(), plain)
+        center.assert_called_once_with()
 
     def test_space_out_submobjects_scales_root_then_direct_children(self):
         from unittest.mock import Mock
