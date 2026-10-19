@@ -27,6 +27,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   # in the required web build so contradictory or growing Python semantic debt cannot land.
   python3 scripts/semantic_ownership_check.py
   python3 scripts/test_semantic_ownership_check.py
+  python3 scripts/test_manim_differential.py
 
   # Keep top-level browser modules and tests self-registering with the required web build.
   # This prevents a new JavaScript file or regression test from silently escaping syntax

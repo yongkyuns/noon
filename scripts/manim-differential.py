@@ -1415,7 +1415,7 @@ def _get_pieces_probe(provider: Any, scene: Any | None = None) -> Any:
         stroke_width=6.0,
     )
     source.set_fill(provider.RED, opacity=0.25)
-    source.rotate(0.2, about_point=(0.0, 0.0)).shift(provider.UP * 0.4)
+    source.rotate(0.2, about_point=(0.0, 0.0, 0.0)).shift(provider.UP * 0.4)
     if scene is not None:
         scene.add(source)
 
@@ -6003,9 +6003,19 @@ def main() -> int:
     failures = 0
     for fixture in FIXTURES:
         noon_value = observations[fixture.name]
-        manim_value = fixture.manim_probe()
-        differences = _compare(noon_value, manim_value, fixture.tolerance)
-        status = "pass" if not differences else "mismatch"
+        reference_error = None
+        try:
+            manim_value = fixture.manim_probe()
+        except Exception as error:
+            # Preserve every fixture's evidence even if one reference probe is
+            # malformed. An error still fails the command and cannot count as parity.
+            manim_value = None
+            reference_error = {"type": type(error).__name__, "message": str(error)}
+            differences = [f"reference probe raised {type(error).__name__}: {error}"]
+            status = "error"
+        else:
+            differences = _compare(noon_value, manim_value, fixture.tolerance)
+            status = "pass" if not differences else "mismatch"
         failures += bool(differences)
         results.append(
             {
@@ -6016,6 +6026,8 @@ def main() -> int:
                 "differences": differences,
             }
         )
+        if reference_error is not None:
+            results[-1]["reference_error"] = reference_error
 
     payload = {
         "manim_version": manim.__version__,
