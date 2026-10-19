@@ -986,6 +986,8 @@ json.dumps({
       + "_animation_override_registry.<locals>.first_override and "
       + "_animation_override_registry.<locals>.second_override.",
   ], "animation_override_registry: duplicate registrations match Manim diagnostics");
+  assert.equal(animationOverrideRegistry.decorator_preserves_function, true,
+    "animation_override_registry: override_animation returns the original method");
   assert.equal(animationOverrideRegistry.intrinsic_discovered, true,
     "animation_override_registry: marked methods are discovered");
   assert.equal(animationOverrideRegistry.intrinsic_inherited, true,

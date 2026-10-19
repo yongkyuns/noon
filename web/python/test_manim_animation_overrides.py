@@ -4,6 +4,11 @@ import noon
 
 
 class ManimAnimationOverrideTests(unittest.TestCase):
+    def test_override_animation_is_available_from_star_import(self):
+        namespace = {}
+        exec("from noon import *", namespace)
+        self.assertIs(namespace["override_animation"], noon.override_animation)
+
     def test_registration_lookup_duplicate_error_and_subclass_isolation(self):
         class Animation:
             pass
@@ -43,7 +48,10 @@ class ManimAnimationOverrideTests(unittest.TestCase):
         def intrinsic_override(self):
             return self
 
-        intrinsic_override._override_animation = Animation
+        undecorated_override = intrinsic_override
+        intrinsic_override = noon.override_animation(Animation)(intrinsic_override)
+        self.assertIs(intrinsic_override, undecorated_override)
+        self.assertIs(intrinsic_override._override_animation, Animation)
 
         Intrinsic = type(
             "Intrinsic",

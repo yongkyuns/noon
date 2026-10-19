@@ -1258,7 +1258,8 @@ def _animation_override_registry(provider: Any) -> Any:
     def intrinsic_override(self):
         return self
 
-    intrinsic_override._override_animation = Animation
+    undecorated_override = intrinsic_override
+    intrinsic_override = provider.override_animation(Animation)(intrinsic_override)
     Intrinsic = type("Intrinsic", (provider.Mobject,), {
         "intrinsic_override": intrinsic_override,
     })
@@ -1268,6 +1269,7 @@ def _animation_override_registry(provider: Any) -> Any:
         "registered": registered is first_override,
         "child_isolated": Child.animation_override_for(Animation) is None,
         "duplicate_error": duplicate_error,
+        "decorator_preserves_function": intrinsic_override is undecorated_override,
         "intrinsic_discovered": (
             Intrinsic.animation_override_for(Animation)
             is Intrinsic.intrinsic_override

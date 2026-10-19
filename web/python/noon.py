@@ -255,6 +255,17 @@ def _callback_operations():
     return _manim_updaters
 
 
+def override_animation(
+    animation_class: type[Any],
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Mark a Mobject method as an override for the supplied animation class."""
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        setattr(func, "_override_animation", animation_class)
+        return func
+
+    return decorator
+
+
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
@@ -1650,6 +1661,7 @@ __all__ = [
     "NoonCallbackError",
     "NoonOwnershipError",
     "MultiAnimationOverrideException",
+    "override_animation",
 
     "BLACK",
     "BLUE",
