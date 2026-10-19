@@ -72,7 +72,7 @@ import sys, json
 sys.path.insert(0, "/tmp")
 from noon_differential import _compare, noon_observations, _plain_group_restore_extension_probe
 import noon
-from _manim_compat import VMobject
+from _manim_compat import VMobject, VGroup
 import numpy as np
 value = VMobject()
 value.n_points_per_cubic_curve = 2
@@ -406,6 +406,28 @@ style_mutator_rejections = {
     "cap_style": rejected_without_style_change(
         lambda: point_owner.set_cap_style(noon.CapStyleType.ROUND)
     ),
+}
+def rejected_3d_operation(operation):
+    try:
+        operation()
+    except NotImplementedError:
+        return True
+    return False
+shade_candidate = VMobject()
+shade_child = VMobject()
+shade_family = VGroup(shade_child)
+shade_in_3d_disposition = {
+    "constructor": rejected_3d_operation(lambda: VMobject(shade_in_3d=True)),
+    "vgroup_constructor": rejected_3d_operation(lambda: VGroup(shade_in_3d=True)),
+    "setter": rejected_3d_operation(lambda: shade_candidate.set_shade_in_3d(True)),
+    "grouping": rejected_3d_operation(
+        lambda: shade_family.set_shade_in_3d(False, z_index_as_group=True)
+    ),
+    "states_after_rejection": [
+        shade_candidate.shade_in_3d,
+        shade_family.shade_in_3d,
+        shade_child.shade_in_3d,
+    ],
 }
 round_trip_style = VMobject()
 round_trip_style.set_style(**point_owner.get_style())
@@ -751,6 +773,7 @@ json.dumps({
     "gradient_start_end": gradient_start_end,
     "style_mutator_returns_self": style_mutator_returns_self,
     "style_mutator_rejections": style_mutator_rejections,
+    "shade_in_3d_disposition": shade_in_3d_disposition,
     "custom_stride_direction_live": live_direction.get_direction(),
     "custom_stride_direction_authored": authored_direction.get_direction(),
     "custom_stride_negative_direction_live": live_direction_negative.get_direction(),
@@ -893,6 +916,13 @@ json.dumps({
     background_stroke: true,
     sheen_factor: true,
     cap_style: false,
+  });
+  assert.deepEqual(product.shade_in_3d_disposition, {
+    constructor: true,
+    vgroup_constructor: true,
+    setter: true,
+    grouping: true,
+    states_after_rejection: [false, false, false],
   });
   const {
     proportion_from_point,

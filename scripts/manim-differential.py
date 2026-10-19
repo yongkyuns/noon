@@ -4641,6 +4641,23 @@ def _cap_style_probe(api, scene=None):
     }
 
 
+def _shade_in_3d_probe(api, scene=None):
+    default_value = api.VMobject()
+    constructed = api.VMobject(shade_in_3d=False)
+    child = api.VMobject()
+    family = api.VGroup(child, shade_in_3d=False)
+    if scene is not None:
+        scene.add(default_value, constructed, family)
+    return {
+        "default": default_value.shade_in_3d,
+        "constructed": constructed.shade_in_3d,
+        "set_returns_self": default_value.set_shade_in_3d(False) is default_value,
+        "family_set_returns_self": family.set_shade_in_3d(False) is family,
+        "family_root": family.shade_in_3d,
+        "child_unchanged": child.shade_in_3d is False,
+    }
+
+
 def _style_query_probe(api):
     source = api.VMobject(
         fill_color=api.GREEN,
@@ -5271,6 +5288,14 @@ FIXTURES = [
     Fixture("cap_style_live",
             lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),
             lambda: _cap_style_probe(manim)),
+    Fixture("shade_in_3d",
+            lambda: _shade_in_3d_probe(noon),
+            lambda: _shade_in_3d_probe(manim)),
+    Fixture("shade_in_3d_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _shade_in_3d_probe(noon, scene)
+            ),
+            lambda: _shade_in_3d_probe(manim)),
     Fixture(
         "plain_group_fade_family_false",
         lambda: _plain_group_nonrecursive_fade_probe(noon),
@@ -5644,6 +5669,7 @@ UNSUPPORTED = {
     "always_builder_live": "The detached always-builder profile is common-success tested. Adding an always-builder updater to a scene-owned target after live execution bootstrap is explicitly unsupported: the canonical Rust callback graph requires preorder enrollment before playback. The product probe records the enrollment failure; callback staging/enrollment remains open under #2011.",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
+    "vmobject_shade_in_3d": "VMobject and VGroup accept the pinned planar default shade_in_3d=False, expose the false state, and preserve set_shade_in_3d(False) identity in detached/live fixtures. Enabling 3D vector shading or z_index_as_group is rejected before mutation because spatial shading and group-z-index semantics are not backed by shared renderer/runtime state. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L119-L149 and #L735-L742.",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
     "background_stroke_and_sheen": "Default background-stroke behavior is supported for leaves. VGroup root-only family=False background color, width, and opacity are retained in shared Rust metadata, but non-default leaf/recursive background paint, staged callback reads/writes, and nonzero sheen factors/gradient rendering still require shared style/renderer channels. Sheen direction set/query/rotation metadata is covered by detached and live differential fixtures.",
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",

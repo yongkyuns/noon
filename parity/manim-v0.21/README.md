@@ -217,3 +217,12 @@ of the default width dimension and `stretch=True`. They check receiver identity,
 target-center alignment, and the expected aspect-ratio behavior. The paired
 ManimCE probes are included in the hosted differential. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1777-L1792.
+
+`VMobject(shade_in_3d=False)` and the equivalent `VGroup` constructor profile
+are supported without adding Python-side shading state. `set_shade_in_3d(False)`
+preserves receiver identity in detached and active-live product fixtures. The
+actual Pyodide probe confirms that enabling 3D shading or `z_index_as_group`
+rejects before mutation; these branches need shared spatial-renderer semantics.
+The pinned ManimCE comparator is enrolled for hosted qualification because the
+reference package is unavailable in this checkout. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L119-L149 and #L735-L742.

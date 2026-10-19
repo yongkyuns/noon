@@ -157,6 +157,16 @@ class VMobject(Mobject):
         _set_cap_style(self, value)
 
     @property
+    def shade_in_3d(self):
+        """Whether 3D vector shading is enabled (the supported profile is planar)."""
+        return False
+
+    @shade_in_3d.setter
+    def shade_in_3d(self, value):
+        if value is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
+
+    @property
     def n_points_per_curve(self) -> int:
         """The current cubic stride, matching Manim's mutable instance value."""
         return self.n_points_per_cubic_curve
@@ -177,7 +187,9 @@ class VMobject(Mobject):
         point.match_style(self)
         return point
 
-    def __init__(self, *, color=_base.WHITE, **kwargs):
+    def __init__(self, *, color=_base.WHITE, shade_in_3d=False, **kwargs):
+        if shade_in_3d is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
         # These Python-facing VMobject query settings are part of Manim's
         # constructor contract. Keep them on the wrapper because the shared
         # Rust path remains the authority for geometry and query results.
@@ -551,6 +563,13 @@ class VMobject(Mobject):
     def set_cap_style(self, cap_style):
         from _manim_semantic_handles import _set_cap_style
         return _set_cap_style(self, cap_style)
+
+    def set_shade_in_3d(self, value=True, z_index_as_group=False):
+        if value is not False or z_index_as_group:
+            raise NotImplementedError(
+                "3D shading and z-index grouping require spatial renderer support"
+            )
+        return self
 
     def set_sheen_direction(self, direction, family=True):
         from _manim_semantic_handles import _set_sheen_direction
@@ -1078,6 +1097,7 @@ class VGroup(Group):
     # The family wrapper reuses vector-class geometry queries without duplicating them.
     # Paint getters stay on VMobject until the family root has authoritative own-style state.
     cap_style = VMobject.cap_style
+    shade_in_3d = VMobject.shade_in_3d
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
     get_points_defining_boundary = VMobject.get_points_defining_boundary
@@ -1087,6 +1107,7 @@ class VGroup(Group):
     get_sheen_direction = VMobject.get_sheen_direction
     set_background_stroke = VMobject.set_background_stroke
     set_cap_style = VMobject.set_cap_style
+    set_shade_in_3d = VMobject.set_shade_in_3d
     color_using_background_image = VMobject.color_using_background_image
     match_background_image = VMobject.match_background_image
     set_sheen_direction = VMobject.set_sheen_direction
@@ -1103,6 +1124,11 @@ class VGroup(Group):
     get_stroke_colors = VMobject.get_stroke_colors
     get_stroke_opacities = VMobject.get_stroke_opacities
     get_stroke_width = VMobject.get_stroke_width
+
+    def __init__(self, *mobjects, z_index=0, color=_base.WHITE, shade_in_3d=False):
+        if shade_in_3d is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
+        super().__init__(*mobjects, z_index=z_index, color=color)
 
     def get_point_mobject(self, center=None):
         if center is None:

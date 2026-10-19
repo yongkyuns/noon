@@ -9,6 +9,54 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
+    def test_planar_shading_profile_is_shared_without_python_state(self):
+        self.assertEqual(
+            list(inspect.signature(compat.VMobject.set_shade_in_3d).parameters),
+            ["self", "value", "z_index_as_group"],
+        )
+        self.assertEqual(
+            list(inspect.signature(compat.VGroup.__init__).parameters),
+            ["self", "mobjects", "z_index", "color", "shade_in_3d"],
+        )
+        self.assertIs(compat.VGroup.shade_in_3d, compat.VMobject.shade_in_3d)
+        self.assertIs(compat.VGroup.set_shade_in_3d, compat.VMobject.set_shade_in_3d)
+
+        with patch.object(handles, "_empty_path_init") as initialize_path:
+            vector = compat.VMobject(shade_in_3d=False)
+        initialize_path.assert_called_once()
+        self.assertIs(vector.shade_in_3d, False)
+        self.assertIs(vector.set_shade_in_3d(False), vector)
+        vector.shade_in_3d = False
+        self.assertIs(vector.shade_in_3d, False)
+
+        with patch.object(handles, "_group_init") as initialize_group:
+            family = compat.VGroup(shade_in_3d=False)
+        initialize_group.assert_called_once()
+        self.assertIs(family.shade_in_3d, False)
+        self.assertIs(family.set_shade_in_3d(False), family)
+
+    def test_unsupported_3d_shading_rejects_before_initialization(self):
+        with patch.object(handles, "_empty_path_init") as initialize_path:
+            with self.assertRaisesRegex(NotImplementedError, "3D-shaded"):
+                compat.VMobject(shade_in_3d=True)
+        initialize_path.assert_not_called()
+
+        vector = identity_only_wrapper(compat.VMobject)
+        family = identity_only_wrapper(compat.VGroup)
+        for operation in (
+            lambda: setattr(vector, "shade_in_3d", True),
+            lambda: vector.set_shade_in_3d(True),
+            lambda: vector.set_shade_in_3d(False, z_index_as_group=True),
+            lambda: family.set_shade_in_3d(True),
+        ):
+            with self.assertRaises(NotImplementedError):
+                operation()
+
+        with patch.object(handles, "_group_init") as initialize_group:
+            with self.assertRaisesRegex(NotImplementedError, "3D-shaded"):
+                compat.VGroup(shade_in_3d=True)
+        initialize_group.assert_not_called()
+
     def test_vgroup_fill_and_opacity_expose_family_and_root_only_dispatch(self):
         self.assertEqual(list(inspect.signature(compat.VGroup.set_fill).parameters), [
             "self", "color", "opacity", "family",
