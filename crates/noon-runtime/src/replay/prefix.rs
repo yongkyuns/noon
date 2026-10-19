@@ -3,7 +3,8 @@
 //! The reader accepts future revisions without seeking to the producer frontier.
 use super::{ReplayError, ReplayLimits, ReplayStats, Revision};
 use crate::{EvaluationError, FrameState, RendererPublication, RuntimeIdentity, SceneInstance};
-use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
+use noon_compile::{CompiledFamilyAnimation, CompiledObject, CompiledResourceError, CompiledResources, ExecutionPatch};
+use noon_core::{continuous_time_map_interval, RateFunction, TrackTiming};
 use std::sync::Arc;
 
 mod storage;
@@ -57,6 +58,8 @@ pub struct PrefixBatchStats {
     pub new_object_slots: usize,
     /// Unique immutable resource entries delivered, not resource bytes.
     pub resource_payloads: usize,
+    /// Immutable family plans appended through the existing timeline scheduler.
+    pub family_plans: usize,
 }
 
 /// Source-bound cursor only. Does not own a Semantic Scene or another evaluator.
@@ -71,6 +74,7 @@ pub struct PrefixPublisher {
     frontier: f64,
     object_slots: usize,
     resources: CompiledResources,
+    family_count: usize,
 }
 
 /// An owned, ordered extension of one read-only historical projection.
@@ -87,6 +91,8 @@ pub struct PrefixBatch {
     from_object_slots: usize,
     new_objects: Vec<CompiledObject>,
     resources: CompiledResources,
+    from_family_count: usize,
+    family_plans: Vec<CompiledFamilyAnimation>,
 }
 impl PrefixBatch {
     /// Reserve explicitly before append when additional object storage is needed.
@@ -154,7 +160,10 @@ impl PrefixReader {
         {
             return Err(PrefixError::UnexpectedBatch);
         }
-        if batch.from_object_slots != self.runtime.compiled.objects().len() {
+        if batch.from_object_slots != self.runtime.compiled.objects().len()
+            || batch.from_family_count != self.runtime.compiled.family_animations().len()
+            || batch.family_plans.len() != batch.stats.family_plans
+        {
             return Err(PrefixError::UnexpectedBatch);
         }
         let required = batch.required_object_capacity();
@@ -167,6 +176,41 @@ impl PrefixReader {
             .compiled
             .resources()
             .preflight_merge(&batch.resources)?;
+        // Every plan was produced by the original compiled source, but validate
+        // its *reader-local* target and clock BEFORE publishing any payload.
+        // The first family-plan slice requires pre-existing live target slots.
+        let mut family_intervals = Vec::with_capacity(batch.family_plans.len());
+        for family in &batch.family_plans {
+            if self.runtime.compiled.object_index(family.target).is_none()
+                || family.spec.validate().is_err()
+                || family.time_map.validate().is_err()
+            {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+            let timing = TrackTiming::new(
+                family.spec.start_time, family.spec.duration, RateFunction::Linear,
+            );
+            let (start, end) = continuous_time_map_interval(timing, &family.time_map)
+                .ok_or(ReplayError::UnsupportedDomain)?;
+            if start < batch.from_frontier
+                || !family.plan.leaves().iter().all(|leaf| {
+                    self.runtime.compiled.object_index(leaf.span().object).is_some()
+                })
+            {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+            family_intervals.push((start, end));
+        }
+        if self
+            .runtime
+            .compiled
+            .family_animation_plans()
+            .len()
+            .checked_add(batch.family_plans.len())
+            .is_none_or(|size| size > u32::MAX as usize)
+        {
+            return Err(ReplayError::RetentionLimit.into());
+        }
         let history = self
             .runtime
             .replay_history
@@ -193,6 +237,19 @@ impl PrefixReader {
         self.runtime
             .compiled
             .install_prefix_tombstones(batch.new_objects);
+        // No frame sampling, projection rewind, new scheduling authority, or
+        // player seek occurs here. The existing scheduler observes the newly
+        // appended time-qualified plan on the next ordinary playback seek/tick.
+        for (family, (start, end)) in batch.family_plans.into_iter().zip(family_intervals) {
+            let index = self.runtime.compiled.family_animations().len();
+            self.runtime
+                .compiled
+                .apply_execution_patch(&ExecutionPatch::AddFamilyAnimation(family))
+                .expect("prevalidated immutable source family plan");
+            self.runtime
+                .timeline_scheduler
+                .append_family_animation(index, start, end);
+        }
         history.revisions.extend(batch.revisions);
         history.stats.revisions_retained = count;
         history.stats.payloads_retained = payloads;
@@ -239,6 +296,7 @@ impl SceneInstance {
             frontier: self.frame.time,
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
+            family_count: self.compiled.family_animations().len(),
         };
         let mut runtime = self.clone();
         let copied = runtime
@@ -344,12 +402,55 @@ impl SceneInstance {
         let resources = self
             .compiled
             .prefix_resource_delta(&forward, &publisher.resources)?;
+        // One typed inverse family marker maps to exactly one source-ordered
+        // immutable channel/plan pair. Never infer a plan from an arbitrary
+        // empty row revision or invented host completion.
+        let mut next_family = publisher.family_count;
+        let mut family_plans = Vec::new();
+        for revision in suffix {
+            let is_family = revision.inverse.as_ref()
+                .is_some_and(|saved| saved.is_prefix_family_append());
+            if !is_family {
+                continue;
+            }
+            let channel = self.compiled.family_animations()
+                .get(next_family).ok_or(PrefixError::SourceChanged)?;
+            let plan = self.compiled.family_animation_plans()
+                .get(next_family).ok_or(PrefixError::SourceChanged)?;
+            if channel.plan_index as usize != next_family {
+                return Err(PrefixError::SourceChanged);
+            }
+            let timing = TrackTiming::new(
+                channel.spec.start_time, channel.spec.duration, RateFunction::Linear,
+            );
+            let (start, _) = continuous_time_map_interval(timing, &channel.time_map)
+                .ok_or(ReplayError::UnsupportedDomain)?;
+            if start < revision.time || start < publisher.frontier {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+            family_plans.push(CompiledFamilyAnimation {
+                target: channel.target, plan: plan.clone(), spec: channel.spec,
+                time_map: channel.time_map.clone(),
+            });
+            next_family += 1;
+        }
+        if next_family != self.compiled.family_animations().len() {
+            return Err(PrefixError::SourceChanged);
+        }
+
         stats.new_object_slots = new_objects.len();
         stats.resource_payloads = resources.prefix_payload_count();
+        stats.family_plans = family_plans.len();
+        let family_payloads = family_plans.iter().try_fold(0usize, |total, animation| {
+            animation.plan.leaves().iter().try_fold(total.saturating_add(1), |subtotal, leaf| {
+                subtotal.checked_add(leaf.members().member_count() as usize)
+            })
+        }).ok_or(ReplayError::RetentionLimit)?;
         stats.payloads = stats
             .payloads
             .checked_add(stats.new_object_slots)
             .and_then(|cost| cost.checked_add(stats.resource_payloads))
+            .and_then(|cost| cost.checked_add(family_payloads))
             .ok_or(ReplayError::RetentionLimit)?;
         if stats.payloads > history.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
@@ -372,11 +473,14 @@ impl SceneInstance {
             from_object_slots: publisher.object_slots,
             new_objects,
             resources,
+            from_family_count: publisher.family_count,
+            family_plans,
         };
         publisher
             .resources
             .extend_prefix_knowledge(&batch.resources);
         publisher.object_slots = self.compiled.objects().len();
+        publisher.family_count = self.compiled.family_animations().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;
         Ok(batch)
