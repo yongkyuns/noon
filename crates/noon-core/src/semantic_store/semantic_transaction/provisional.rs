@@ -433,6 +433,35 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn ensure_membership_owner(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        let owns_members = match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .is_some_and(crate::SemanticNode::can_own_members),
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Family { .. }
+                            | SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
+                )
+            }
+        };
+        if owns_members {
+            Ok(())
+        } else {
+            self.ensure_family(node, index)
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,

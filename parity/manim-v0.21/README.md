@@ -362,3 +362,24 @@ image groups using the same Rust layout extents, without requiring vector-path
 point access. Hosted pinned qualification remains pending. Spatial geometry, staged callbacks,
 Boolean/custom index behavior and other untested input profiles remain unqualified;
 Mobject and the overall core-method case remain partial.
+
+### Ordinary object membership foundation
+
+The shared semantic store and existing typed mutation transaction can give an
+ordinary point-owning object ordered children while retaining its own content
+and semantic identity. Initial lowering and live publication emit the object's
+own draw before its descendants, deduplicate aliases, and preserve surviving
+aliases on removal. Root-relative ordering, callback traversal, graph discovery,
+spatial-anchor membership and family correspondence use that same hierarchy.
+Cycle rejection and pending object/child creation use the existing atomic
+transaction path. Family-specific metadata and declarations remain typed to
+family nodes.
+
+`object_membership.rs` exercises this engine foundation through the ordinary
+native and direct Rust/WASM execution session. This does not qualify Python
+`Mobject.add`, `insert`, `add_to_back`, `remove`,
+`push_self_into_submobjects` or `add_n_more_submobjects`. Shared high-level
+copy, affine, path, style and target-state behavior over point-owning roots must
+be completed before exposing those methods, followed by pinned-source,
+effective-state, replay and cross-language raster qualification. Owner #2011
+and case #2009 remain open; no API-ledger status is promoted by this foundation.

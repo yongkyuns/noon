@@ -1004,7 +1004,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .store
                     .node(family)
                     .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
-                if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                if !node.can_own_members() {
                     return Err(SemanticTransactionReadError::NotFamily(family.into()));
                 }
                 Ok(self
@@ -1016,19 +1016,20 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .collect())
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
-                Some(SemanticNodeCreation::Family { .. }) => Ok(self
+                Some(
+                    SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Object { .. }
+                    | SemanticNodeCreation::PendingPathObject { .. },
+                ) => Ok(self
                     .preflight
                     .family_edges
                     .members_for_read(self.store, family)
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(
-                    SemanticNodeCreation::Object { .. }
-                    | SemanticNodeCreation::PendingPathObject { .. }
-                    | SemanticNodeCreation::Effect { .. }
-                    | SemanticNodeCreation::Signal { .. },
-                ) => Err(SemanticTransactionReadError::NotFamily(family)),
+                Some(SemanticNodeCreation::Effect { .. } | SemanticNodeCreation::Signal { .. }) => {
+                    Err(SemanticTransactionReadError::NotFamily(family))
+                }
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
@@ -1219,7 +1220,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .store
             .node(family)
             .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+        if !node.can_own_members() {
             return Err(SemanticTransactionReadError::NotFamily(family.into()));
         }
         Ok(())

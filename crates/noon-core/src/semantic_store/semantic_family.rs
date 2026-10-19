@@ -126,26 +126,6 @@ impl SemanticStore {
             match (source_node.kind(), target_node.kind()) {
                 (SemanticNodeKind::Family(_), SemanticNodeKind::Family(_)) => {
                     families.push((source, target));
-                    if source_node.member_count() != target_node.member_count() {
-                        return Err(SemanticFamilyPairingError::TopologyMismatch {
-                            source,
-                            target,
-                        });
-                    }
-                    for (source_member, target_member) in
-                        source_node.members_iter().zip(target_node.members_iter())
-                    {
-                        pair(
-                            store,
-                            source_member,
-                            target_member,
-                            source_aliases,
-                            target_aliases,
-                            leaves,
-                            families,
-                        )?;
-                    }
-                    Ok(())
                 }
                 (SemanticNodeKind::AuthoringObject, SemanticNodeKind::AuthoringObject) => {
                     if source_node.semantic_object_state().is_none() {
@@ -155,11 +135,10 @@ impl SemanticStore {
                         return Err(SemanticFamilyPairingError::UnsupportedLeaf(target));
                     }
                     leaves.push((source, target));
-                    Ok(())
                 }
                 (SemanticNodeKind::Family(_), _)
                 | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family(_)) => {
-                    Err(SemanticFamilyPairingError::TopologyMismatch { source, target })
+                    return Err(SemanticFamilyPairingError::TopologyMismatch { source, target });
                 }
                 (SemanticNodeKind::Effect(_), _)
                 | (_, SemanticNodeKind::Effect(_))
@@ -175,9 +154,26 @@ impl SemanticStore {
                     } else {
                         target
                     };
-                    Err(SemanticFamilyPairingError::UnsupportedLeaf(unsupported))
+                    return Err(SemanticFamilyPairingError::UnsupportedLeaf(unsupported));
                 }
             }
+            if source_node.member_count() != target_node.member_count() {
+                return Err(SemanticFamilyPairingError::TopologyMismatch { source, target });
+            }
+            for (source_member, target_member) in
+                source_node.members_iter().zip(target_node.members_iter())
+            {
+                pair(
+                    store,
+                    source_member,
+                    target_member,
+                    source_aliases,
+                    target_aliases,
+                    leaves,
+                    families,
+                )?;
+            }
+            Ok(())
         }
 
         let mut leaves = Vec::new();
@@ -196,8 +192,9 @@ impl SemanticStore {
 
     /// Return render/animation leaves below `root` in authoritative semantic order.
     ///
-    /// A non-family object is its own leaf. Families are flattened depth-first in
-    /// member order. Shared descendants are emitted once at their first occurrence,
+    /// An object's own content precedes its ordered children. Families contribute
+    /// their descendants without a draw of their own. Shared nodes are emitted
+    /// once at their first occurrence,
     /// instead of animating aliases multiple times. Manim's public family query
     /// retains the last occurrence; use `ordered_last_occurrence_leaf_nodes` for
     /// that distinct ordering contract.
@@ -256,7 +253,7 @@ impl SemanticStore {
             if !seen.insert(node) {
                 return Ok(());
             }
-            if matches!(entry.kind(), SemanticNodeKind::Family(_)) {
+            if entry.can_own_members() {
                 for member in entry.members() {
                     postorder(store, member, seen, order)?;
                 }
@@ -272,7 +269,7 @@ impl SemanticStore {
             let entry = self
                 .node(node)
                 .ok_or(SemanticStoreError::UnknownNode(node))?;
-            if matches!(entry.kind(), SemanticNodeKind::Family(_)) {
+            if entry.can_own_members() {
                 let count = counts[&node];
                 for member in entry.members() {
                     let accumulated = counts.entry(member).or_default();
@@ -325,11 +322,10 @@ impl SemanticStore {
                 return Ok(());
             }
             match node.kind() {
-                SemanticNodeKind::AuthoringObject => {
-                    leaves.push(node_id);
-                }
-                SemanticNodeKind::Family(_) => {
-                    if include_families && !keep_last {
+                SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_) => {
+                    let emit = include_families
+                        || matches!(node.kind(), SemanticNodeKind::AuthoringObject);
+                    if emit && !keep_last {
                         leaves.push(node_id);
                     }
                     let mut members = node.members();
@@ -339,7 +335,7 @@ impl SemanticStore {
                     for member in members {
                         collect(store, member, seen, leaves, include_families, keep_last)?;
                     }
-                    if include_families && keep_last {
+                    if emit && keep_last {
                         leaves.push(node_id);
                     }
                 }
@@ -376,6 +372,70 @@ mod tests {
     use crate::{SemanticObjectState, StoredGeometry};
 
     use super::*;
+
+    #[test]
+    fn point_owning_roots_keep_their_content_and_ordered_descendants() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_authoring_object();
+        let nested = store.insert_family();
+        let a = store.insert_authoring_object();
+        let b = store.insert_authoring_object();
+        store.add_member(nested, a).unwrap();
+        store.add_member(nested, b).unwrap();
+        store.add_member(root, nested).unwrap();
+        store.add_member(root, a).unwrap();
+        assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![root, a, b]);
+        assert_eq!(
+            store.ordered_last_occurrence_leaf_nodes(root).unwrap(),
+            vec![root, b, a]
+        );
+        assert_eq!(
+            store.ordered_authoring_nodes(root).unwrap(),
+            vec![root, nested, a, b]
+        );
+        assert_eq!(
+            store.ordered_last_occurrence_authoring_nodes(root).unwrap(),
+            vec![root, nested, b, a]
+        );
+        assert_eq!(
+            store.ordered_leaf_multiplicities(root).unwrap(),
+            vec![(root, 1), (a, 2), (b, 1)]
+        );
+        assert!(store.add_member(a, root).is_err());
+        assert_eq!(store.node(root).unwrap().members(), vec![nested, a]);
+        store.reorder_member(root, a, Some(nested)).unwrap();
+        assert_eq!(store.node(root).unwrap().members(), vec![a, nested]);
+        assert!(store.remove_member(root, a).unwrap());
+        assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![root, a, b]);
+    }
+
+    #[test]
+    fn pending_point_owning_roots_publish_members_and_payload_atomically() {
+        use crate::{SemanticMutationTransaction, SemanticNodeCreation};
+        let mut store = SemanticStore::new();
+        let mut transaction = SemanticMutationTransaction::new();
+        let state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        let root = transaction.create_node(SemanticNodeCreation::object(state.clone()));
+        let child = transaction.create_node(SemanticNodeCreation::object(state.clone()));
+        transaction.add_member(root, child);
+        let prepared = transaction.prepare(&mut store).unwrap();
+        assert_eq!(prepared.family_members(root).unwrap(), vec![child.into()]);
+        assert_eq!(prepared.proposed_object_state(root).unwrap(), state);
+        let result = prepared.commit();
+        let root = result.resolve(root).unwrap();
+        let child = result.resolve(child).unwrap();
+        assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![root, child]);
+        assert_eq!(store.node(child).unwrap().parents(), &[root]);
+
+        let before = store.len();
+        let mut invalid = SemanticMutationTransaction::new();
+        let pending = invalid.create_node(SemanticNodeCreation::object(state));
+        invalid.add_member(child, pending).add_member(pending, root);
+        assert!(invalid.apply(&mut store).is_err());
+        assert_eq!(store.len(), before);
+        assert_eq!(store.node(child).unwrap().members(), Vec::new());
+        assert_eq!(store.node(root).unwrap().members(), vec![child]);
+    }
 
     #[test]
     fn last_occurrence_order_preserves_roots_and_late_shared_leaf_position() {
@@ -640,6 +700,36 @@ mod tests {
         assert_eq!(
             store.ordered_family_leaf_pairs(source, target).unwrap(),
             vec![(source_first, target_first), (source_second, target_second)]
+        );
+    }
+
+    #[test]
+    fn family_pairing_includes_point_owning_roots_and_validates_their_children() {
+        let mut store = SemanticStore::new();
+        let objects = (0..4)
+            .map(|_| {
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }))
+            })
+            .collect::<Vec<_>>();
+        let source = store.insert_family();
+        let target = store.insert_family();
+        store.add_member(source, objects[0]).unwrap();
+        store.add_member(target, objects[2]).unwrap();
+        store.add_member(objects[0], objects[1]).unwrap();
+        store.add_member(objects[2], objects[3]).unwrap();
+        assert_eq!(
+            store.ordered_family_leaf_pairs(source, target).unwrap(),
+            [(objects[0], objects[2]), (objects[1], objects[3])]
+        );
+        store.remove_member(objects[2], objects[3]).unwrap();
+        assert_eq!(
+            store.ordered_family_leaf_pairs(source, target),
+            Err(SemanticFamilyPairingError::TopologyMismatch {
+                source: objects[0],
+                target: objects[2],
+            })
         );
     }
 

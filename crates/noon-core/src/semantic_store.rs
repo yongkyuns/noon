@@ -584,6 +584,15 @@ impl SemanticNode {
         &self.parents
     }
 
+    /// Whether this node can own ordered Mobject membership edges.
+    /// Point-owning objects retain their own payload alongside their children.
+    pub fn can_own_members(&self) -> bool {
+        matches!(
+            self.kind,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_)
+        )
+    }
+
     /// Snapshot direct members in deterministic family order.
     ///
     /// The allocation is query-only; mutation storage remains linked and local.
@@ -1556,7 +1565,7 @@ impl SemanticStore {
         let family = self
             .node(family_id)
             .ok_or(SemanticStoreError::UnknownNode(family_id))?;
-        if !matches!(family.kind(), SemanticNodeKind::Family(_)) {
+        if !family.can_own_members() {
             return Err(SemanticStoreError::NotFamily(family_id));
         }
         if self.node(member).is_none() {
@@ -1574,10 +1583,7 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<(), SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -1634,10 +1640,7 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<bool, SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -1677,10 +1680,7 @@ impl SemanticStore {
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
     ) -> Result<bool, SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {

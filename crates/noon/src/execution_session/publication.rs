@@ -848,3 +848,6 @@ impl ExecutionSession {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod object_membership_tests;

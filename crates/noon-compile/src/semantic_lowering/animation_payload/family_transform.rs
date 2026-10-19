@@ -208,7 +208,20 @@ impl CorrespondenceBuilder<'_> {
             (SemanticNodeKind::AuthoringObject, SemanticNodeKind::AuthoringObject) => {
                 self.require_object(source)?;
                 self.require_object(target)?;
-                self.push_leaf(source, target, source_padding, target_padding)
+                self.push_leaf(source, target, source_padding, target_padding)?;
+                let source_members = self.family_members(source)?;
+                let target_members = self.family_members(target)?;
+                if source_members.is_empty() && target_members.is_empty() {
+                    return Ok(());
+                }
+                self.align_sequences(
+                    source,
+                    target,
+                    &source_members,
+                    &target_members,
+                    source_padding,
+                    target_padding,
+                )
             }
             (SemanticNodeKind::Family(_), SemanticNodeKind::Family(_)) => {
                 let source_members = self.family_members(source)?;
@@ -265,9 +278,10 @@ impl CorrespondenceBuilder<'_> {
         node: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, FamilyTransformCorrespondenceError> {
         self.store
-            .semantic_family_members_checked(node)
-            .map(|members| members.to_vec())
-            .map_err(|_| FamilyTransformCorrespondenceError::InvalidFamily(node))
+            .node(node)
+            .filter(|node| node.can_own_members())
+            .map(|node| node.members())
+            .ok_or(FamilyTransformCorrespondenceError::InvalidFamily(node))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -364,6 +378,35 @@ mod tests {
             store.add_member(family, member).unwrap();
         }
         family
+    }
+
+    #[test]
+    fn correspondence_keeps_point_owning_roots_and_their_children() {
+        let mut store = SemanticStore::new();
+        let s0 = object(&mut store);
+        let s1 = object(&mut store);
+        let t0 = object(&mut store);
+        let t1 = object(&mut store);
+        store.add_member(s0, s1).unwrap();
+        store.add_member(t0, t1).unwrap();
+        let source = family(&mut store, &[s0]);
+        let target = family(&mut store, &[t0]);
+        let plan = derive_family_transform_correspondence(&store, source, target).unwrap();
+        assert_eq!(
+            plan.occurrences()
+                .iter()
+                .map(|entry| (entry.source(), entry.target()))
+                .collect::<Vec<_>>(),
+            [(s0, t0), (s1, t1)]
+        );
+        store.remove_member(t0, t1).unwrap();
+        assert_eq!(
+            derive_family_transform_correspondence(&store, source, target),
+            Err(FamilyTransformCorrespondenceError::EmptyAlignment {
+                source: s0,
+                target: t0
+            })
+        );
     }
 
     #[test]
