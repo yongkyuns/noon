@@ -13,6 +13,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
         self.group = object.__new__(noon.VGroup)
         self.group._semantic_family_handle = object()
         self.anchor = types.SimpleNamespace(
+            dimensionLength=lambda dim: 1.0,
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )
 
@@ -50,7 +51,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
     def test_live_group_coordinates_and_dimensions_use_published_context(self):
         context = types.SimpleNamespace(
             liveMoveFamilyToPoint=lambda *args: self.calls.append(("move", args)),
-            queryFamilyLengthOverDim=lambda *args: self.calls.append(("length", args)) or 1.0,
+            queryLayoutDimensionLength=lambda *args: self.calls.append(("length", args)) or 1.0,
             liveRescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )
         with patch.object(semantic, "_group_live_layout_context", return_value=context), \
@@ -59,7 +60,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
             self.group.height = 3
         self.assertEqual(self.calls, [
             ("move", (self.group._semantic_family_handle, 5.0, 0.0, -1.0, 0.0, 1.0, 0.0)),
-            ("length", (self.group._semantic_family_handle, 1)),
+            ("length", (self.anchor, 1)),
             ("fit", (self.anchor, 3.0, 1, False, 0., 0., False)),
         ])
 

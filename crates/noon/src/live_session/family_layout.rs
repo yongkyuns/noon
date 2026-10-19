@@ -4,6 +4,16 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
+    /// Observe a fitting extent from this session's coherent layout snapshot.
+    pub fn dimension_length(
+        &self,
+        source: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+    ) -> Result<f64, LiveSessionError> {
+        let (_, bounds) = self.anchor_layout_members(source)?;
+        Ok(dimension.length(bounds))
+    }
+
     /// Place and fit from one effective snapshot, then publish one local edit.
     pub fn next_layout_to_edge_in_frame(
         &mut self,

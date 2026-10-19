@@ -2076,8 +2076,11 @@ def _generic_dimension_fitting(provider: Any, scene: Any | None = None) -> Any:
     record("match_depth_lazy_pivot", rectangle(), lambda source, target: source.match_dim_size(
         target, 2, about_edge=object()), rectangle().scale(3))
     leaf = rectangle()
+    def fit_aliased_family(source, _):
+        assert source.length_over_dim(2) == 0
+        return source.rescale_to_fit(float("nan"), 2)
     record("aliased_family_depth", provider.VGroup(leaf, leaf),
-           lambda source, _: source.rescale_to_fit(float("nan"), 2))
+           fit_aliased_family)
     record("zero_width_lazy_arguments", provider.Line((2, -1, 0), (2, 3, 0)),
            lambda source, _: source.rescale_to_fit(object(), 0, about_point=object()))
     record("zero_height_lazy_arguments", provider.Line((-1, 2, 0), (3, 2, 0)),
@@ -2102,6 +2105,35 @@ def _manim_generic_dimension_fitting() -> Any:
 
 def _noon_generic_dimension_fitting_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _generic_dimension_fitting(noon, scene))
+
+
+def _resource_dimension_fitting(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+    observations = {}
+    for family in (False, True):
+        image = provider.ImageMobject(np.full((2, 4, 4), 255, dtype=np.uint8))
+        source = provider.Group(image, image) if family else image
+        if scene is not None:
+            scene.add(source)
+        fitted = source.rescale_to_fit(4, 0)
+        depth_fitted = source.rescale_to_fit(object(), 2, about_point=object())
+        observations["family" if family else "image"] = {
+            "returns_self": fitted is source and depth_fitted is source,
+            "width": float(source.width), "height": float(source.height),
+        }
+    return observations
+
+
+def _noon_resource_dimension_fitting() -> Any:
+    return _resource_dimension_fitting(noon)
+
+
+def _manim_resource_dimension_fitting() -> Any:
+    return _resource_dimension_fitting(manim)
+
+
+def _noon_resource_dimension_fitting_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _resource_dimension_fitting(noon, scene))
 
 
 def _mobject_z_index_by_z(provider: Any) -> Any:
@@ -6009,6 +6041,10 @@ FIXTURES = [
             _manim_generic_dimension_fitting, 1e-5),
     Fixture("generic_dimension_fitting_live", _noon_generic_dimension_fitting_live,
             _manim_generic_dimension_fitting, 1e-5),
+    Fixture("resource_dimension_fitting", _noon_resource_dimension_fitting,
+            _manim_resource_dimension_fitting, 1e-5),
+    Fixture("resource_dimension_fitting_live", _noon_resource_dimension_fitting_live,
+            _manim_resource_dimension_fitting, 1e-5),
     Fixture("mobject_z_index_by_z",
             _noon_mobject_z_index_by_z,
             _manim_mobject_z_index_by_z),

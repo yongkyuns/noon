@@ -791,6 +791,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = dimensionLength)]
+        pub fn dimension_length(&self, dimension: u32) -> Result<f64, JsValue> {
+            self.anchor
+                .dimension_length(dimension.try_into().map_err(js_error)?)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = rescaleToFit)]
         #[allow(clippy::too_many_arguments)]
         pub fn rescale_to_fit(

@@ -21,6 +21,9 @@ fn options() -> ImageMobjectOptions {
 fn image_sizing_layout_copy_and_compilation_share_pixels() -> TestResult {
     let mut scene = Scene::new();
     let a = scene.image(options())?;
+    let anchor = LayoutAnchor::from(&a);
+    assert_eq!(anchor.dimension_length(LayoutDimension::Width)?, a.width()?);
+    assert_eq!(anchor.dimension_length(LayoutDimension::Depth)?, 0.0);
     assert!((a.height()? - 2.0 / 1080.0 * 8.0).abs() < 1e-12);
     assert_eq!(a.image_dimensions()?, (2, 2));
     assert_eq!(a.image_sampling()?, RasterImageSampling::Bicubic);
@@ -59,6 +62,16 @@ fn image_sizing_layout_copy_and_compilation_share_pixels() -> TestResult {
     assert_eq!(authored.rgba8().as_ptr(), compiled.rgba8().as_ptr());
     drop(store);
     assert_eq!(scene.live(&mut session).effective_layout(&b)?.width, 4.0);
+    let revision = scene.revision();
+    {
+        let mut live = scene.live(&mut session);
+        assert_eq!(
+            live.dimension_length(&anchor, LayoutDimension::Width)?,
+            a.width()?
+        );
+        live.rescale_to_fit(&anchor, f64::NAN, LayoutDimension::Depth, false)?;
+    }
+    assert_eq!(scene.revision(), revision);
     Ok(())
 }
 

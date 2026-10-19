@@ -7438,6 +7438,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryLayoutDimensionLength)]
+        pub fn query_layout_dimension_length(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_layout_dimension_length(
+                    &source.anchor,
+                    dimension.try_into().map_err(typed_js_error)?,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveRescaleToFit)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_rescale_to_fit(

@@ -1999,6 +1999,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_layout_dimension_length(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.dimension_length(source, dimension))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rescale_to_fit(
         &mut self,
         source: &noon::LayoutAnchor,

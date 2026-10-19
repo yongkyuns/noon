@@ -38,6 +38,13 @@ try {
     // Geometry, identities, family traversal and all observations remain Rust-owned.
     globalThis.noonCreateCanonicalAuthoringSceneContext = () => store.createSceneContext();
     globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
+    globalThis.noonAuthoringImageOptions = wasm.WasmImageMobjectOptions;
+    globalThis.noonCreateAuthoringImageHandle = options => store.createImage(options);
+    // These dimension probes use inline RGBA8 arrays. URL I/O is qualified
+    // separately through the real production worker's image-input lane.
+    globalThis.noonLoadImageUrl = async () => {
+      throw new Error("image URLs are outside the inline dimension profile");
+    };
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonAuthoringCoordinateOptions = wasm.WasmCoordinateOptions;
@@ -1436,6 +1443,15 @@ json.dumps({
     assert.ok(Math.abs(fitting.width_control.after.height - 2) <= 1e-5, `${name}: uniform height control`);
     assert.ok(Math.abs(fitting.height_stretch_control.after.width - 2) <= 1e-5, `${name}: stretch preserves width`);
     assert.ok(Math.abs(fitting.height_stretch_control.after.height - 3) <= 1e-5, `${name}: height control`);
+  }
+  for (const name of ["resource_dimension_fitting", "resource_dimension_fitting_live"]) {
+    const resource = observations[name];
+    assert.deepEqual(Object.keys(resource).sort(), ["family", "image"]);
+    for (const value of Object.values(resource)) {
+      assert.equal(value.returns_self, true, `${name}: resource fitting returns its receiver`);
+      assert.ok(Math.abs(value.width - 4) <= 1e-5, `${name}: resource width`);
+      assert.ok(Math.abs(value.height - 2) <= 1e-5, `${name}: resource aspect ratio`);
+    }
   }
   const zIndexByZ = observations.mobject_z_index_by_z;
   assert.equal(zIndexByZ.returns_self, true,

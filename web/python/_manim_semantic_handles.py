@@ -849,7 +849,7 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
     # Manim ignores length/pivot arguments when the shared source extent is
     # zero. Avoid coercing them, but still let Rust validate the anchor and own
     # the no-op decision from its coherent fitting snapshot.
-    zero_extent = _length_over_dim_observation(self, dim) == 0
+    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
     pivot = ((0., 0., False) if zero_extent
              else _pivot_arguments(about_point, about_edge))
     length = 0.0 if zero_extent else float(length)
@@ -868,7 +868,7 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
         raise TypeError("dimension match target must be a Mobject")
     dim = _fitting_dimension_index(dim)
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
-    zero_extent = _length_over_dim_observation(self, dim) == 0
+    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
     pivot = ((0., 0., False) if zero_extent
              else _pivot_arguments(about_point, about_edge))
     target = _layout_anchor(mobject)
@@ -882,6 +882,12 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
     except Exception as error:
         raise_engine_error(error)
     return self
+
+
+def _dimension_fit_extent(anchor, context, dim):
+    if context is None:
+        return engine_call(anchor.dimensionLength, dim)
+    return engine_call(context.queryLayoutDimensionLength, anchor, dim)
 
 
 def _fitting_dimension_index(dim):
