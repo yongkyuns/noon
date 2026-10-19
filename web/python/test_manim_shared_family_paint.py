@@ -212,6 +212,61 @@ class SharedFamilyPaintTests(unittest.TestCase):
         self.assertEqual(family._semantic_family_handle.ownFillOpacity.call_count, 5)
         self.assertEqual(family._semantic_family_handle.ownStrokeOpacity.call_count, 5)
 
+    def test_vgroup_nonrecursive_fade_uses_one_authored_or_live_root_operation(self):
+        for live in (False, True):
+            with self.subTest(live=live):
+                family = identity_only_wrapper(compat.VGroup, submobjects=[])
+                family._semantic_family_handle = Mock()
+                context = Mock() if live else None
+                with patch.object(
+                    handles,
+                    "_style_target",
+                    return_value=(family._semantic_family_handle, context, "Family"),
+                ):
+                    self.assertIs(handles._fade(family, 0.25, family=False), family)
+                if live:
+                    context.liveFadeFamilyOwn.assert_called_once_with(
+                        family._semantic_family_handle, 0.25
+                    )
+                    family._semantic_family_handle.fadeOwn.assert_not_called()
+                else:
+                    family._semantic_family_handle.fadeOwn.assert_called_once_with(
+                        0.25
+                    )
+
+    def test_vgroup_nonrecursive_fade_rejects_staged_callbacks_before_writes(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                family.fade(0.25, family=False)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_not_called()
+        family._semantic_family_handle.fadeOwn.assert_not_called()
+
+    def test_vgroup_background_opacity_query_reads_the_root_family_state(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock(
+            ownBackgroundStrokeOpacity=Mock(return_value=0.75)
+        )
+        self.assertEqual(family.get_stroke_opacity(background=True), 0.75)
+        rows = family.get_stroke_rgbas(background=True)
+        rows = rows.tolist() if hasattr(rows, "tolist") else rows
+        self.assertEqual(rows[0], [0.0, 0.0, 0.0, 0.75])
+
+    def test_vgroup_background_opacity_setter_routes_to_root_only_owner(self):
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
+        context = Mock()
+        with patch.object(handles, "_group_target_context", return_value=context):
+            self.assertIs(family.set_background_stroke(opacity=0.5, family=False), family)
+        context.liveSetFamilyOwnBackgroundStrokeOpacity.assert_called_once_with(
+            family._semantic_family_handle, 0.5
+        )
+
     def test_root_only_callback_color_fails_before_leaf_mutation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])
         group._semantic_family_handle = Mock()
@@ -263,7 +318,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             else:
                 handle.fade.assert_called_once_with(0.5)
 
-    def test_plain_group_nonrecursive_fade_is_a_noop_and_vector_group_stays_unsupported(self):
+    def test_plain_group_nonrecursive_fade_is_a_noop_and_vector_group_fades_its_root(self):
         leaf = identity_only_wrapper(compat.Square)
         plain_group = identity_only_wrapper(compat.Group, submobjects=[])
         plain_group._semantic_family_handle = Mock()
@@ -276,8 +331,13 @@ class SharedFamilyPaintTests(unittest.TestCase):
             get_handle.assert_not_called()
         self.assertIs(plain_group.fade(float("nan"), family=False), plain_group)
         plain_group._semantic_family_handle.assert_not_called()
-        with self.assertRaisesRegex(NotImplementedError, "non-recursive Group fade"):
-            group.fade(family=False)
+        with patch.object(
+            handles,
+            "_style_target",
+            return_value=(group._semantic_family_handle, None, "Family"),
+        ):
+            self.assertIs(group.fade(0.25, family=False), group)
+        group._semantic_family_handle.fadeOwn.assert_called_once_with(0.25)
         group._semantic_family_handle.fade.assert_not_called()
 
     def test_plain_group_nonrecursive_fade_is_a_noop_in_callback_phase(self):

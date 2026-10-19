@@ -159,6 +159,7 @@ pub enum SemanticMutation {
     SetFamilyStyle {
         node: SemanticTransactionNodeRef,
         style: SemanticStyle,
+        background_stroke_opacity: Option<f64>,
     },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
@@ -1057,6 +1058,23 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// Replace a non-rendered family's own foreground style and default-width
+    /// background-stroke opacity in one atomic publication.
+    pub fn set_family_style_with_background_stroke_opacity(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+        background_stroke_opacity: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            background_stroke_opacity: Some(background_stroke_opacity),
         });
         self
     }
@@ -2814,21 +2832,39 @@ impl SemanticMutationTransaction {
                     staged_family_colors.insert(*node, *color);
                     staged_family_styles.insert(*node, next_style);
                 }
-                SemanticMutation::SetFamilyStyle { node, style } => {
+                SemanticMutation::SetFamilyStyle {
+                    node,
+                    style,
+                    background_stroke_opacity,
+                } => {
                     catalog.ensure_family(*node, index)?;
                     if !style.is_finite() {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    if background_stroke_opacity.is_some_and(|opacity| {
+                        !opacity.is_finite() || !(0.0..=1.0).contains(&opacity)
+                    }) {
                         return Err(invalid_style_error(index, *node));
                     }
                     let previous_style = staged_family_styles
                         .get(node)
                         .cloned()
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
+                    let previous_background_stroke_opacity = catalog
+                        .family_background_stroke_opacity(*node)
+                        .expect("validated family");
                     let previous_color = staged_family_colors
                         .get(node)
                         .copied()
                         .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
                     let next_color = style.family_color().unwrap_or(previous_color);
-                    changed.push(previous_style != *style || previous_color != next_color);
+                    let next_background_stroke_opacity =
+                        background_stroke_opacity.unwrap_or(previous_background_stroke_opacity);
+                    changed.push(
+                        previous_style != *style
+                            || previous_color != next_color
+                            || previous_background_stroke_opacity != next_background_stroke_opacity,
+                    );
                     staged_family_styles.insert(*node, style.clone());
                     staged_family_colors.insert(*node, next_color);
                 }

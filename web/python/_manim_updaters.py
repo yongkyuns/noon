@@ -1847,6 +1847,15 @@ def _canonical_fade(self, darkness=0.5, family=True):
         # plain Group observes no paint write (and does not inspect darkness).
         return self
     darkness = _opacity("darkness", darkness)
+    if not family and isinstance(self, VGroup):
+        if (
+            _ACTIVE_CANONICAL_CONTEXT.get() is not None
+            or _canonical_phase_context(self) is not None
+        ):
+            raise NotImplementedError(
+                "root-only VGroup fade is unavailable inside staged callbacks"
+            )
+        return _base._semantic_operations()._fade(self, darkness, family=False)
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")
     context = (_ACTIVE_CANONICAL_CONTEXT.get() if _is_shared_family(self)

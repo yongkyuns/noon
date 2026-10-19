@@ -467,6 +467,12 @@ impl SemanticNode {
             _ => None,
         }
     }
+    pub fn family_background_stroke_opacity(&self) -> Option<f64> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_opacity),
+            _ => None,
+        }
+    }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
             unreachable!("preflighted family color");
@@ -483,6 +489,12 @@ impl SemanticNode {
         if let Some(color) = color {
             state.own_color = color;
         }
+    }
+    pub(crate) fn set_family_background_stroke_opacity(&mut self, opacity: f64) {
+        let SemanticNodeKind::Family(state) = &mut self.kind else {
+            unreachable!("preflighted family background stroke opacity");
+        };
+        state.own_background_stroke_opacity = opacity;
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {

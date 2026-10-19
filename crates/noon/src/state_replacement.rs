@@ -177,8 +177,14 @@ fn stage_paired_family_styles(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<(), AuthoringError> {
-    for (source, style) in paired_family_styles(store, source, target)? {
-        transaction.set_family_style(source, style);
+    for (source, style, background_stroke_opacity) in
+        paired_family_style_states(store, source, target)?
+    {
+        transaction.set_family_style_with_background_stroke_opacity(
+            source,
+            style,
+            background_stroke_opacity,
+        );
     }
     Ok(())
 }
@@ -188,19 +194,33 @@ pub(crate) fn paired_family_styles(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle)>, AuthoringError> {
+    Ok(paired_family_style_states(store, source, target)?
+        .into_iter()
+        .map(|(source, style, _)| (source, style))
+        .collect())
+}
+
+fn paired_family_style_states(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle, f64)>, AuthoringError> {
     store
         .ordered_family_root_pairs(source, target)
         .map_err(AuthoringError::from)?
         .into_iter()
         .map(|(source, target)| {
-            store
-                .node(target)
-                .and_then(noon_core::SemanticNode::family_style)
-                .cloned()
-                .map(|style| (source, style))
-                .ok_or_else(|| {
+            let node = store.node(target).ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
+            })?;
+            let style = node.family_style().cloned().ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
+            })?;
+            let background_stroke_opacity =
+                node.family_background_stroke_opacity().ok_or_else(|| {
                     AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
-                })
+                })?;
+            Ok((source, style, background_stroke_opacity))
         })
         .collect()
 }

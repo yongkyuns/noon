@@ -1445,6 +1445,26 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_background_stroke_opacity(
+        &mut self,
+        source: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.set_family_own_background_stroke_opacity(source, opacity)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_fade_family_own(
+        &mut self,
+        source: &noon::MobjectFamily,
+        darkness: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_family_own(source, darkness))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_stroke_cap(
         &mut self,
         source: &noon::MobjectFamily,

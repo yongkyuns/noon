@@ -347,6 +347,9 @@ pub struct SemanticFamilyState {
     pub presentation: SemanticPresentation,
     pub own_color: crate::Color,
     pub own_style: SemanticStyle,
+    /// Opacity of the default zero-width background stroke retained on the
+    /// non-rendered family root. Nonzero background widths remain unsupported.
+    pub own_background_stroke_opacity: f64,
 }
 impl Default for SemanticFamilyState {
     fn default() -> Self {
@@ -354,6 +357,7 @@ impl Default for SemanticFamilyState {
             presentation: SemanticPresentation::default(),
             own_color: crate::Color::WHITE,
             own_style: SemanticStyle::manim_family_root(crate::Color::WHITE),
+            own_background_stroke_opacity: 1.0,
         }
     }
 }

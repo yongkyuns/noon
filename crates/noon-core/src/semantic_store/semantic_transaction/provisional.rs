@@ -346,6 +346,22 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn family_background_stroke_opacity(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<f64> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_opacity),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(1.0),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,

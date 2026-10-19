@@ -1476,7 +1476,6 @@ def _set_style(
 
 
 def _set_background_stroke(self, color=None, width=None, opacity=None, family=True):
-    del family
     color = _style_color(color, "background stroke color")
     width = _style_value(width, "background stroke width")
     opacity = _style_value(opacity, "background stroke opacity")
@@ -1489,8 +1488,54 @@ def _set_background_stroke(self, color=None, width=None, opacity=None, family=Tr
     if normalized_width is not None and normalized_width != 0.0:
         raise NotImplementedError("background strokes require shared background paint")
     if normalized_opacity is not None and normalized_opacity != 1.0:
+        if not family and isinstance(self, _compat.VGroup):
+            from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+
+            if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+                raise NotImplementedError(
+                    "root-only background stroke updates are unavailable inside staged callbacks"
+                )
+            handle = getattr(self, "_semantic_family_handle", None)
+            if handle is None:
+                raise RuntimeError("VGroup paint requires the shared Rust authoring host")
+            context = _group_target_context(self)
+            if context is None:
+                engine_call(
+                    handle.setOwnBackgroundStrokeOpacity,
+                    normalized_opacity,
+                    operation="VMobject.set_background_stroke",
+                )
+            else:
+                engine_call(
+                    context.liveSetFamilyOwnBackgroundStrokeOpacity,
+                    handle,
+                    normalized_opacity,
+                    operation="VMobject.set_background_stroke",
+                )
+            return self
         raise NotImplementedError("background strokes require shared background paint")
+    if not family and isinstance(self, _compat.VGroup):
+        return self
     return self
+
+
+def _get_background_stroke_opacity(self):
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is None:
+        return 1.0
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
+
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(self) is not None
+    ):
+        raise NotImplementedError(
+            "family root background-stroke queries require staged style observation"
+        )
+    method = getattr(family_handle, "ownBackgroundStrokeOpacity", None)
+    if method is None:
+        return 1.0
+    return float(engine_call(method))
 
 
 def _set_sheen_direction(self, direction, family=True):
@@ -1889,6 +1934,26 @@ def _fade(self, darkness=0.5, family=True):
         # plain Group therefore returns unchanged without reading darkness.
         return self
     darkness = _compat._opacity("darkness", darkness)
+    if not family and isinstance(self, _compat.VGroup):
+        from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+
+        if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+            raise NotImplementedError(
+                "root-only VGroup fade is unavailable inside staged callbacks"
+            )
+        handle, context, _suffix = _style_target(self)
+        if handle is None:
+            raise RuntimeError("VGroup fade requires the shared Rust authoring host")
+        if context is None:
+            engine_call(handle.fadeOwn, darkness, operation="VMobject.fade")
+        else:
+            engine_call(
+                context.liveFadeFamilyOwn,
+                handle,
+                darkness,
+                operation="VMobject.fade",
+            )
+        return self
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")
     handle, context, suffix = _style_target(self)

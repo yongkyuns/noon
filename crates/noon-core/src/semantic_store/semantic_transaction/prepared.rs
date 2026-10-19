@@ -1561,12 +1561,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyColor { node });
                 }
-                SemanticMutation::SetFamilyStyle { node, style } => {
+                SemanticMutation::SetFamilyStyle {
+                    node,
+                    style,
+                    background_stroke_opacity,
+                } => {
                     let node = resolve_node_ref(node, &committed_nodes);
-                    store
-                        .node_mut(node)
-                        .expect("preflighted family")
-                        .set_family_style(style);
+                    let family = store.node_mut(node).expect("preflighted family");
+                    family.set_family_style(style);
+                    if let Some(opacity) = background_stroke_opacity {
+                        family.set_family_background_stroke_opacity(opacity);
+                    }
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });
                 }

@@ -1478,6 +1478,20 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = ownBackgroundStrokeOpacity)]
+        pub fn own_background_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_opacity()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnBackgroundStrokeOpacity)]
+        pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_background_stroke_opacity(opacity)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = ownStrokeCap)]
         pub fn own_stroke_cap(&self) -> Result<String, JsValue> {
             self.semantic_family()?
@@ -1546,6 +1560,11 @@ mod wasm {
         #[wasm_bindgen(js_name = fade)]
         pub fn fade(&self, darkness: f64) -> Result<(), JsValue> {
             self.semantic_family()?.fade(darkness).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = fadeOwn)]
+        pub fn fade_own(&self, darkness: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.fade_own(darkness).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = fadeTo)]

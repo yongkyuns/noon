@@ -498,6 +498,18 @@ expected_cap_style = {
 }
 assert observations["cap_style"] == expected_cap_style
 assert observations["cap_style_live"] == expected_cap_style
+expected_vgroup_nonrecursive_fade = {
+    "returned_self": True,
+    "root": [0.0, 0.75, 0.75],
+    "children": [[0.4, 0.6, 1.0], [0.2, 0.8, 1.0]],
+}
+assert observations["vgroup_fade_family_false"] == expected_vgroup_nonrecursive_fade
+live_fade_mismatch = _compare(
+    observations["vgroup_fade_family_false_live"],
+    expected_vgroup_nonrecursive_fade,
+    1e-6,
+)
+assert not live_fade_mismatch, live_fade_mismatch
 assert not _compare(
     observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5
 ), _compare(observations["cubic_bezier"], observations["cubic_bezier_live"], 1e-5)

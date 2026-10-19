@@ -9695,6 +9695,32 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyOwnBackgroundStrokeOpacity)]
+        pub fn live_set_family_own_background_stroke_opacity(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_background_stroke_opacity(&source.semantic_family()?, opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveFadeFamilyOwn)]
+        pub fn live_fade_family_own(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            darkness: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_fade_family_own(&source.semantic_family()?, darkness)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyOwnStrokeCap)]
         pub fn live_set_family_own_stroke_cap(
             &mut self,

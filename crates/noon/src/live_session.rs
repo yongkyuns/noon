@@ -2985,6 +2985,26 @@ impl<'a> LiveSession<'a> {
         self.apply(family.own_style_transaction(update)?)
     }
 
+    pub fn set_family_own_background_stroke_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.own_background_stroke_opacity_transaction(opacity)?)
+    }
+
+    pub fn fade_family_own(
+        &mut self,
+        family: &MobjectFamily,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.fade_own_transaction(darkness)?)
+    }
+
     pub fn set_family_own_stroke_cap(
         &mut self,
         family: &MobjectFamily,

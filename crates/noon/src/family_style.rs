@@ -121,6 +121,64 @@ impl MobjectFamily {
         Ok(self.own_style()?.stroke_cap)
     }
 
+    pub fn own_background_stroke_opacity(&self) -> Result<f64, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        Ok(store
+            .node(self.node_id())
+            .expect("validated family")
+            .family_background_stroke_opacity()
+            .expect("family background stroke opacity"))
+    }
+
+    pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
+        self.own_background_stroke_opacity_transaction(opacity)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn own_background_stroke_opacity_transaction(
+        &self,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        let mut validation = noon_core::SemanticStyle::default();
+        edit_fill_opacity(&mut validation, opacity)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style_with_background_stroke_opacity(
+            self.node_id(),
+            self.own_style()?,
+            opacity,
+        );
+        Ok(transaction)
+    }
+
+    /// Fade only a VMobject family's non-rendered root paint. Its default
+    /// background stroke has zero width, so the opacity is observable but
+    /// has no raster effect.
+    pub fn fade_own(&self, darkness: f64) -> Result<(), AuthoringError> {
+        self.fade_own_transaction(darkness)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn fade_own_transaction(
+        &self,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        let mut style = self.own_style()?;
+        edit_fade(&mut style, darkness)?;
+        let background_opacity = self.own_background_stroke_opacity()? * (1.0 - darkness);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style_with_background_stroke_opacity(
+            self.node_id(),
+            style,
+            background_opacity,
+        );
+        Ok(transaction)
+    }
+
     pub fn set_own_stroke_cap(&self, cap: &str) -> Result<(), AuthoringError> {
         let mut style = self.own_style()?;
         style.stroke_cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
@@ -656,6 +714,53 @@ mod tests {
     }
 
     #[test]
+    fn family_root_fade_updates_background_opacity_without_touching_children() {
+        let mut scene = Scene::new();
+        let mut leaf = scene.square(1.0).unwrap();
+        leaf.set_fill(1.0, 0.0, 0.0, 0.6).unwrap();
+        leaf.set_stroke_opacity(0.4).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        let child_before = leaf.state().unwrap().style;
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 1.0);
+
+        let revision = scene.integration_store().borrow().scene_revision();
+        family.fade_own(0.25).unwrap();
+        assert_eq!(family.own_style().unwrap().fill_opacity, 0.0);
+        assert_eq!(family.own_style().unwrap().stroke_opacity, 0.75);
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.75);
+        assert_eq!(leaf.state().unwrap().style, child_before);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision.checked_next().unwrap()
+        );
+
+        let root_before = (
+            family.own_style().unwrap(),
+            family.own_background_stroke_opacity().unwrap(),
+        );
+        let revision = scene.integration_store().borrow().scene_revision();
+        assert!(family.fade_own(f64::NAN).is_err());
+        assert_eq!(
+            (
+                family.own_style().unwrap(),
+                family.own_background_stroke_opacity().unwrap()
+            ),
+            root_before
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+
+        family.set_own_background_stroke_opacity(0.2).unwrap();
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.2);
+        assert_eq!(leaf.state().unwrap().style, child_before);
+        let root_before = family.own_background_stroke_opacity().unwrap();
+        assert!(family.set_own_background_stroke_opacity(1.2).is_err());
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), root_before);
+    }
+
+    #[test]
     fn family_root_style_survives_copy_and_become() {
         let mut scene = Scene::new();
         let first = scene.square(0.5).unwrap();
@@ -671,11 +776,13 @@ mod tests {
                 ..StyleUpdate::default()
             })
             .unwrap();
+        source.set_own_background_stroke_opacity(0.7).unwrap();
         let expected = source.own_style().unwrap();
         assert_eq!(source.own_color().unwrap(), Color::BLUE);
 
         let copy = source.copy_family().unwrap();
         assert_eq!(copy.root().own_style().unwrap(), expected);
+        assert_eq!(copy.root().own_background_stroke_opacity().unwrap(), 0.7);
         assert_eq!(copy.root().own_color().unwrap(), Color::BLUE);
         target
             .set_own_style(StyleUpdate {
@@ -687,6 +794,7 @@ mod tests {
             .become_family(&source, crate::ManimBecomeOptions::default())
             .unwrap();
         assert_eq!(target.own_style().unwrap(), expected);
+        assert_eq!(target.own_background_stroke_opacity().unwrap(), 0.7);
         assert_eq!(target.own_color().unwrap(), Color::BLUE);
     }
 
