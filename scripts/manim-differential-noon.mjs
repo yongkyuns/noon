@@ -1045,6 +1045,13 @@ json.dumps({
     "mobject_depth_methods: match-depth returns the receiver");
   assert.deepEqual(depthMethods.after, depthMethods.before,
     "mobject_depth_methods: zero-depth fitting leaves planar geometry unchanged");
+  const zIndexByZ = observations.mobject_z_index_by_z;
+  assert.equal(zIndexByZ.returns_self, true,
+    "mobject_z_index_by_z: returns the receiver");
+  assert.equal(zIndexByZ.group_z_index, 0,
+    "mobject_z_index_by_z: the planar group z position becomes its z-index");
+  assert.deepEqual(zIndexByZ.member_z_indices, [0, 0],
+    "mobject_z_index_by_z: default family propagation updates every member");
   const surround = observations.mobject_surround;
   assert.equal(surround.returns_self, true,
     "mobject_surround: surround returns the receiver");

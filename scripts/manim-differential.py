@@ -1454,6 +1454,28 @@ def _manim_mobject_depth_methods() -> Any:
     return _mobject_depth_methods(manim)
 
 
+def _mobject_z_index_by_z(provider: Any) -> Any:
+    left = provider.Square(side_length=1.0).shift(provider.LEFT)
+    right = provider.Circle(radius=0.5).shift(provider.RIGHT)
+    left.z_index = 3.0
+    right.z_index = -4.0
+    group = provider.Group(left, right)
+    returned = group.set_z_index_by_z_Point3D()
+    return {
+        "returns_self": returned is group,
+        "group_z_index": float(group.z_index),
+        "member_z_indices": [float(left.z_index), float(right.z_index)],
+    }
+
+
+def _noon_mobject_z_index_by_z() -> Any:
+    return _mobject_z_index_by_z(noon)
+
+
+def _manim_mobject_z_index_by_z() -> Any:
+    return _mobject_z_index_by_z(manim)
+
+
 def _mobject_surround(provider: Any) -> Any:
     target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
     surrounder = provider.Circle(radius=0.25)
@@ -4528,6 +4550,9 @@ FIXTURES = [
     Fixture("mobject_depth_methods",
             _noon_mobject_depth_methods,
             _manim_mobject_depth_methods),
+    Fixture("mobject_z_index_by_z",
+            _noon_mobject_z_index_by_z,
+            _manim_mobject_z_index_by_z),
     Fixture("mobject_surround",
             _noon_mobject_surround,
             _manim_mobject_surround,

@@ -899,6 +899,10 @@ class Mobject:
     def set_z_index(self, z_index_value: float, family: bool = True) -> Mobject:
         return _semantic_operations()._set_z_index(self, z_index_value, family)
 
+    def set_z_index_by_z_Point3D(self) -> Mobject:
+        # Noon geometry is planar, so its pinned 3D center z coordinate is zero.
+        return self.set_z_index(0.0)
+
     def flip(self, axis=UP, *, about_point=None, about_edge=None) -> Mobject:
         return _semantic_operations()._flip(self, axis, about_point=about_point, about_edge=about_edge)
 
