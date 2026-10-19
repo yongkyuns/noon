@@ -322,6 +322,25 @@ class Mobject:
             mobject.align_points_with_larger(self)
         return self
 
+    def align_submobjects(self, mobject: Mobject) -> Self:
+        own_members = getattr(self, "submobjects", ())
+        other_members = getattr(mobject, "submobjects", ())
+        own_growth = max(0, len(other_members) - len(own_members))
+        other_growth = max(0, len(own_members) - len(other_members))
+        own_add = getattr(self, "add_n_more_submobjects", None)
+        other_add = getattr(mobject, "add_n_more_submobjects", None)
+        if (own_growth and not callable(own_add)) or (
+            other_growth and not callable(other_add)
+        ):
+            raise NotImplementedError(
+                "align_submobjects requires family-backed growth for both objects"
+            )
+        if callable(own_add):
+            own_add(own_growth)
+        if callable(other_add):
+            other_add(other_growth)
+        return self
+
     def align_points_with_larger(self, larger_mobject: Mobject) -> Mobject:
         raise NotImplementedError("Please override in a child class.")
 

@@ -699,6 +699,33 @@ def _noon_leaf_arrange_submobjects_live() -> Any:
     )
 
 
+def _leaf_align_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25).shift(provider.LEFT + provider.UP)
+    second = provider.Square(side_length=0.5).shift(provider.RIGHT + provider.DOWN)
+    if scene is not None:
+        scene.add(first, second)
+    returned = first.align_submobjects(second)
+    return {
+        "returns_self": returned is first,
+        "first": _object_observation(first),
+        "second": _object_observation(second),
+    }
+
+
+def _noon_leaf_align_submobjects() -> Any:
+    return _leaf_align_submobjects(noon)
+
+
+def _manim_leaf_align_submobjects() -> Any:
+    return _leaf_align_submobjects(manim)
+
+
+def _noon_leaf_align_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _leaf_align_submobjects(noon, scene)
+    )
+
+
 def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Circle(radius=0.25)
     second = provider.Square(side_length=0.5)
@@ -4978,6 +5005,8 @@ FIXTURES = [
     Fixture("group_align_submobjects_live", _noon_group_align_submobjects_live, _manim_group_align_submobjects),
     Fixture("leaf_arrange_submobjects", _noon_leaf_arrange_submobjects, _manim_leaf_arrange_submobjects),
     Fixture("leaf_arrange_submobjects_live", _noon_leaf_arrange_submobjects_live, _manim_leaf_arrange_submobjects),
+    Fixture("leaf_align_submobjects", _noon_leaf_align_submobjects, _manim_leaf_align_submobjects),
+    Fixture("leaf_align_submobjects_live", _noon_leaf_align_submobjects_live, _manim_leaf_align_submobjects),
     Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),

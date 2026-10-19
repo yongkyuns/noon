@@ -123,7 +123,10 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
         reason = policy["overrides"]["Mobject"]["reason"]
         self.assertIn("arrange_submobjects() center a point-owning leaf", reason)
+        self.assertIn("align_submobjects() matches the leaf-to-leaf no-op", reason)
         self.assertIn("scripts/manim-differential.py:leaf_arrange_submobjects_live",
+                      policy["overrides"]["Mobject"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:leaf_align_submobjects_live",
                       policy["overrides"]["Mobject"]["evidence"])
 
     def test_vdict_is_exported_with_shared_family_evidence_and_show_keys_limit(self) -> None:

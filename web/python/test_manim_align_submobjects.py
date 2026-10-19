@@ -31,6 +31,19 @@ class AlignSubmobjectsTests(unittest.TestCase):
                     [call(own, own_growth), call(other, other_growth)],
                 )
 
+    def test_mixed_family_growth_rejects_before_mutating_the_supported_side(self):
+        own = object.__new__(Group)
+        other = object()
+        with (
+            patch.object(Group, "submobjects", new_callable=PropertyMock) as children,
+            patch.object(Group, "add_n_more_submobjects", autospec=True) as grow,
+        ):
+            children.return_value = [object(), object()]
+            with self.assertRaisesRegex(NotImplementedError, "family-backed growth"):
+                Group.align_submobjects(own, other)
+
+        grow.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
