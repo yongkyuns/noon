@@ -10,13 +10,17 @@ permissions:
   actions: read
 concurrency:
   group: gallery-preparation-latency-diagnostic
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   evaluate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [showcase-triangle-light, showcase-cuda-transpose, showcase-gpu-glow]
     env:
-      NOON_PREPARATION_CASES: showcase-first-scene,showcase-code-blocks,showcase-dynamic-scene
+      NOON_PREPARATION_CASES: ${{ matrix.example }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -46,7 +50,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: gallery-preparation-latency
+          name: gallery-preparation-${{ matrix.example }}
           path: browser-smoke-artifacts/gallery-preparation
           if-no-files-found: warn
           retention-days: 7
