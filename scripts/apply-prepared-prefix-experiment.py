@@ -53,6 +53,49 @@ exports = 'PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixRe
 append_once('crates/noon-runtime/src/lib.rs', '#[cfg(feature = "prepared-prefix")]\npub use replay::{' + exports + '};')
 append_once('crates/noon/src/execution_session/replay.rs', '#[cfg(feature = "prepared-prefix")]\nmod prefix;')
 append_once('crates/noon/src/lib.rs', '#[cfg(feature = "prepared-prefix")]\npub use noon_runtime::{' + exports + '};')
+
+# Semantic lowering always installs a ReactiveRuntime, even for an empty graph.
+# Admission must inspect current VM state, not whether that container exists.
+# Read the existing storage length so later signal enrollment is visible without
+# a duplicated signal counter or a per-publication scan.
+replace_once('crates/noon-core/src/reactive/native_reactive/compute_ir.rs',
+    'impl ComputeState {\n    pub fn value(',
+    '''impl ComputeState {
+    /// Current instantiated signal count, including inputs enrolled after lowering.
+    pub fn signal_count(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn value(''')
+replace_once('crates/noon-runtime/src/reactive/runtime.rs',
+    'impl ReactiveRuntime {\n    pub(crate) fn owns_property(',
+    '''impl ReactiveRuntime {
+    /// Empty semantic reactive scaffolding is not externally driven behavior.
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.state.signal_count() == 0 && self.targets.is_empty()
+    }
+
+    pub(crate) fn owns_property(''')
+prefix_path = Path('crates/noon-runtime/src/replay/prefix.rs')
+prefix_source = prefix_path.read_text()
+old_guard = 'if self.reactive.is_some() { return Err(ReplayError::UnsupportedDomain.into()); }'
+new_guard = '''if self.reactive.as_ref().is_some_and(|reactive| !reactive.is_empty()) {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }'''
+if old_guard in prefix_source:
+    if prefix_source.count(old_guard) != 2:
+        raise RuntimeError('Expected both bootstrap and extension reactive admission guards')
+    prefix_path.write_text(prefix_source.replace(old_guard, new_guard))
+elif prefix_source.count('!reactive.is_empty()') != 2:
+    raise RuntimeError('Reactive prefix admission has an unexpected shape')
+
+test_path = Path('crates/noon/tests/prepared_prefix_incremental.rs')
+test_source = test_path.read_text()
+test_path.write_text(test_source.replace(
+    'let (mut scene, object, mut source) = recorded_scene();',
+    'let (scene, object, mut source) = recorded_scene();'))
+
 replace_once('docs/architecture.md',
     '### Identity generations, revisions, versions and sequences',
     '''### Experimental completed-prefix delivery
@@ -70,6 +113,8 @@ already-published history. New suffix conversion uses a sparse reverse overlay,
 not a copy of the source scene or a rewind of either execution cursor.
 
 This initial slice admits fixed membership/content and ordinary property tracks.
+An empty reactive runtime installed by semantic lowering is admissible; actual
+signals or bindings, including later enrollment, require their own history policy.
 Structural/resource extension, family channels, reactive/native input, host
 callbacks, terminal endpoint publication and a realtime producer/player shell
 remain outside admission. It is disabled by default and does not change gallery
