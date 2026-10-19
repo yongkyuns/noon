@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 95
     env:
       EXPECTED_PR: 5b4962cf0f490c966c915f5b4557b7e5d328d25b
-      EXPECTED_MASTER: eea9df8ffeac2fe163d59b80171f0ab95f84167d
+      EXPECTED_MASTER: fc3a20c60dbe7c33695e96ecb9c2958984f14d90
       EXPECTED_MERGE_BASE: 85b67388db42a073493583b341babd6fac1cfd5d
       PROOF_DIR: /tmp/noon-2175-integrated
       CARGO_INCREMENTAL: "0"
@@ -50,7 +50,20 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_PR"
           test "$(git rev-parse MERGE_HEAD)" = "$EXPECTED_MASTER"
           test -z "$(git ls-files -u)"
-          git diff --cached --check
+          # Master already carries two literal third-party license whitespace issues.
+          # Fail closed unless that notice is byte-identical to pinned master.
+          # Keep the original failure evidence and check every other staged path.
+          notice=crates/noon/src/code_display/THIRD_PARTY_NOTICES.md
+          test "$(git rev-parse ":$notice")" = "$(git rev-parse "$EXPECTED_MASTER:$notice")"
+          set +e
+          git diff --cached --check -- "$notice" > "$PROOF_DIR/inherited-notice-whitespace.txt" 2>&1
+          notice_status=$?
+          set -e
+          test "$notice_status" -eq 2
+          grep -Fq "$notice:2195: trailing whitespace." "$PROOF_DIR/inherited-notice-whitespace.txt"
+          grep -Fq "$notice:3214: new blank line at EOF." "$PROOF_DIR/inherited-notice-whitespace.txt"
+          test "$(grep -c "^$notice:" "$PROOF_DIR/inherited-notice-whitespace.txt")" -eq 2
+          git diff --cached --check -- . ":(exclude)$notice"
           git write-tree > "$PROOF_DIR/staged-tree.txt"
           printf '%s\n' "$EXPECTED_PR" > "$PROOF_DIR/pr-head.txt"
           printf '%s\n' "$EXPECTED_MASTER" > "$PROOF_DIR/master-head.txt"
@@ -116,7 +129,13 @@ jobs:
           test "$(git rev-parse MERGE_HEAD)" = "$EXPECTED_MASTER"
           test "$(git write-tree)" = "$(cat "$PROOF_DIR/staged-tree.txt")"
           git diff --quiet
-          git diff --cached --check
+          # Reapply the same fail-closed policy after every test and source check.
+          notice=crates/noon/src/code_display/THIRD_PARTY_NOTICES.md
+          test "$(git rev-parse ":$notice")" = "$(git rev-parse "$EXPECTED_MASTER:$notice")"
+          test "$(grep -c "^$notice:" "$PROOF_DIR/inherited-notice-whitespace.txt")" -eq 2
+          grep -Fq "$notice:2195: trailing whitespace." "$PROOF_DIR/inherited-notice-whitespace.txt"
+          grep -Fq "$notice:3214: new blank line at EOF." "$PROOF_DIR/inherited-notice-whitespace.txt"
+          git diff --cached --check -- . ":(exclude)$notice"
           sha256sum crates/noon-render-wgpu/src/gpu/mod.rs > "$PROOF_DIR/integrated-renderer-sha256.txt"
           printf 'VALIDATED_INTEGRATION_TREE=%s\n' "$(git write-tree)"
           printf 'NO_BRANCH_REF_UPDATED=true\n' > "$PROOF_DIR/proof-complete.txt"
