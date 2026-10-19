@@ -9,6 +9,7 @@ import pngjs from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { browserArgs } from './manim-raster-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
+import { modelLookahead } from './preparation-lookahead.mjs';
 
 const root = process.cwd();
 const output = path.join(root, 'browser-smoke-artifacts/gallery-preparation');
@@ -28,7 +29,7 @@ const report = {
     unsupported: 'Callbacks and manifest-declared nonreplayable input excluded, never silently skipped',
     setup: 'Worker/runtime initialization measured separately; assets may be job-cache warm. Not a cold-network benchmark.',
     rendering: 'Software WebGL2; same 960x540 canvas and renderer build for both conditions',
-    lookaheadModel: 'Optimistic independent-producer estimate from actual authored segment completion times, excludes renderer cost, worker contention and partial-history publication. NOT an end-to-end streaming implementation.',
+    lookaheadModel: 'Version 2 requires completed segments at their START. Optimistic independent-producer estimate; excludes renderer cost, worker contention and partial-history publication. NOT an end-to-end streaming implementation.',
     repetitions: 3,
     correctness: 'Three exact-time RGBA comparisons against independent source-driven forward sampling; not complete API/parity qualification',
   },
@@ -103,28 +104,6 @@ await writeFile('web/gallery-preparation-diagnostic.html', '<!doctype html><meta
 const server = await serveRepository(root, 0);
 const cache = createPyodideResourceCache(workerSource);
 let browser;
-
-// A non-authoritative, best-case lookahead model: if an independent player can
-// start at zero once the first segment is ready, when would it outrun the
-// actually observed producer frontier? No renderer time or CPU contention is
-// charged, and this does not prove segmented replay admission works.
-function modelLookahead(trace) {
-  if (!Array.isArray(trace) || !trace.length) return {valid:false, reason:'no completed barriers'};
-  if (trace.some((x,i) => !Number.isFinite(x.targetSec) || x.targetSec < 0 || !Number.isFinite(x.completedMs)
-    || (i>0 && (x.targetSec < trace[i-1].targetSec || x.completedMs < trace[i-1].completedMs)))) {
-    return {valid:false, reason:'invalid/nonmonotonic recorded frontier'};
-  }
-  const initialReadyMs = trace[0].completedMs;
-  let stallMs = 0, stallEvents = 0;
-  const segments = trace.map(x=>{
-    const neededAtMs = initialReadyMs + x.targetSec*1000 + stallMs;
-    const missingMs = Math.max(0,x.completedMs-neededAtMs);
-    if (missingMs > 0) {stallMs += missingMs; stallEvents++;}
-    return {authoredEndSec:x.targetSec, producerReadyMs:x.completedMs, bufferStallMs:missingMs};
-  });
-  return {valid:true, initialReadyMs, projectedBufferStallMs:stallMs, projectedBufferEvents:stallEvents,
-    finalPreparedAtMs:trace.at(-1).completedMs, segments};
-}
 
 async function execute(entry, mode, trial, checks = false) {
   const source = await readFile(path.join('web', entry.path), 'utf8');
