@@ -1,13 +1,20 @@
-//! Experimental fixed-membership prefix transfer. Uses the existing compiler
+//! Experimental sparse lifecycle/content prefix transfer. Uses the existing compiler
 //! revision representation; no second scene, evaluator, or resource registry.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
 use noon_core::{Property, TrackId};
 use std::collections::BTreeMap;
 
+mod order;
+mod resources;
+mod storage;
+use order::SparseOrder;
+
 fn local_property(property: Property) -> bool {
     matches!(
         property,
-        Property::Transform
+        Property::Presence
+            | Property::ZIndex
+            | Property::Transform
             | Property::Position
             | Property::Rotation
             | Property::Scale
@@ -36,9 +43,10 @@ impl CompiledScene {
     /// Capturing each revision from the latest scene directly would leak a later
     /// write into earlier timestamps when a row is changed more than once.
     ///
-    /// Admission is deliberately narrow: existing live rows, unchanged content,
-    /// order, glow and spatial domains, and ordinary property tracks. Structural,
-    /// family, path-motion and external-resource extension need separate support.
+    /// Ordinary 2D lifecycle, content and property tracks are admitted. Family,
+    /// path-motion, spatial and glow plans still require separate qualification.
+    /// Ordering reconstruction visits only affected rows and their neighbours;
+    /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's
     /// current frontier and validate originating runtime/scope identity first.
     /// None leaves this scene unchanged and publishes nothing.
@@ -47,6 +55,7 @@ impl CompiledScene {
         inverse: &[&CompiledReplayRevision],
     ) -> Option<Vec<CompiledReplayRevision>> {
         let mut row_overlay = BTreeMap::new();
+        let mut order = SparseOrder::new(self);
         let mut track_overlay: BTreeMap<TrackId, Option<CompiledTrack>> = BTreeMap::new();
         let mut output = Vec::with_capacity(inverse.len());
         for old in inverse.iter().rev() {
@@ -58,35 +67,44 @@ impl CompiledScene {
             {
                 return None;
             }
+            // Current compiler structural patches each own a single order row.
+            // Do not silently invent atomic multi-row exchange semantics.
+            if old.rows.iter().filter(|row| row.order.is_some()).count() > 1 {
+                return None;
+            }
             let mut rows = Vec::with_capacity(old.rows.len());
             for saved in &old.rows {
-                if saved.order.is_some() {
-                    return None;
-                }
-                let before = saved.object.as_ref()?;
+                let physical = self.objects.get(saved.index as usize)?;
                 let current = row_overlay
                     .entry(saved.index)
-                    .or_insert_with(|| self.objects.get(saved.index as usize).cloned());
-                let after = current.as_ref()?;
-                if !before.live
-                    || !after.live
-                    || before.id != after.id
-                    || before.content != after.content
-                    || before.text_bounds != after.text_bounds
-                    || before.base_z_index != after.base_z_index
-                    || before.spatial.is_some()
-                    || after.spatial.is_some()
-                    || before.glow.is_some()
-                    || after.glow.is_some()
-                {
-                    return None;
+                    .or_insert_with(|| physical.live.then(|| physical.clone()));
+                for object in saved.object.iter().chain(current.iter()) {
+                    if !object.live
+                        || object.id != physical.id
+                        || object.spatial.is_some()
+                        || object.glow.is_some()
+                    {
+                        return None;
+                    }
                 }
+                // Capture the actual opposite membership/order, then undo this
+                // one local order change in the sparse scratch view.
+                let forward_order = if let Some(before) = saved.order {
+                    let after = order.successor(saved.index);
+                    order.restore(saved.index, saved.object.is_some(), before)?;
+                    Some(after)
+                } else {
+                    if saved.object.is_none() || current.is_none() {
+                        return None;
+                    }
+                    None
+                };
                 rows.push(SavedRow {
                     index: saved.index,
-                    object: Some(after.clone()),
-                    order: None,
+                    object: current.clone(),
+                    order: forward_order,
                 });
-                *current = Some(before.clone());
+                *current = saved.object.clone();
             }
             let mut tracks = Vec::with_capacity(old.tracks.len());
             for (id, before) in &old.tracks {

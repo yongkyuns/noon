@@ -700,12 +700,19 @@ ordered, scope-bound stream may extend a reader; budgets and failures preserve
 already-published history. New suffix conversion uses a sparse reverse overlay,
 not a copy of the source scene or a rewind of either execution cursor.
 
-This initial slice admits fixed membership/content and ordinary property tracks.
+The experimental 2D slice admits sparse creation, removal/re-entry, order/content
+changes and ordinary property tracks. New physical rows are installed as inactive
+slots; they become visible only through historical revision selection. Source
+resource closures carry only not-yet-delivered immutable handles and dependencies.
+A new-slot capacity reservation is an explicit bounded maintenance barrier, never
+an implicit whole-scene relocation during append. It may be O(existing storage);
+ordinary suffix extraction/installation remains proportional to newly touched
+payloads and ordering neighbours. Resource/payload limits count entries, not bytes.
 An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or bindings, including later enrollment, require their own history policy.
-Structural/resource extension, family channels, reactive/native input, host
-callbacks, terminal endpoint publication and a realtime producer/player shell
-remain outside admission. It is disabled by default and does not change gallery
+Family channels, spatial/glow plans, reactive/native input, host callbacks,
+terminal endpoint publication and a realtime producer/player shell remain outside
+admission. It is disabled by default and does not change gallery
 presentation or establish physical-device performance. Implementation and
 qualification remain in #2211; this is not another scene or rendering authority.
 
