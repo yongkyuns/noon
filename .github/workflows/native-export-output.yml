@@ -45,6 +45,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
       WGPU_BACKEND: vulkan
       NOON_OUTPUT_PROOF_DIR: ${{ github.workspace }}/output-proof/media
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/output-proof/pixels
     steps:
       - uses: actions/checkout@v7
       - name: Pin toolchain and evidence identity

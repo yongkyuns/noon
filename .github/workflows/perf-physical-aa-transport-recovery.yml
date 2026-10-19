@@ -1,0 +1,19 @@
+name: Physical A/A after authenticated transport correction (manual diagnostic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      consent:
+        description: "Type RUN_PHYSICAL_AA_ONCE; separate registration, no retries or qualification"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  acquire:
+    uses: ./.github/workflows/perf-physical-aa.yml
+    with:
+      transport-recovery: true

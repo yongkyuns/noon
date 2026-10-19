@@ -4,6 +4,28 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
+    /// Place and fit from one effective snapshot, then publish one local edit.
+    pub fn next_layout_to_edge_in_frame(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        edge: (f64, f64),
+        args: ManimNextToArgs,
+        frame_buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_next_layout_to_edge_in_frame(
+            self.store,
+            self.root,
+            self.session,
+            source,
+            target,
+            edge,
+            args,
+            frame_buff,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
     /// Stretch a selected live object/family through the shared world-axis operation.
     pub fn stretch(
         &mut self,

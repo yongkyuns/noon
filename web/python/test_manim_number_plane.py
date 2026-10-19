@@ -54,7 +54,8 @@ class NumberPlaneAdapterTests(TestCase):
         self.axes = patch.object(
             number_plane._plot,
             "_attach_number_line",
-            side_effect=lambda wrapper, handle: self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
+            side_effect=lambda wrapper, handle, **kwargs:
+                self.wrapped_parts[2 + ((self.axes.call_count - 1) % 2)],
         ).start()
         self.family = patch.object(number_plane._plot, "_family", side_effect=self._family).start()
         patch.object(number_plane._plot._compat, "VGroup", side_effect=lambda *members: members).start()
@@ -82,6 +83,14 @@ class NumberPlaneAdapterTests(TestCase):
         self.live.assert_called_once_with(self.options)
         self.cold.assert_not_called()
         self.options.free.assert_not_called()
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
+            [(0, False, 0.1, True), (1, False, 0.1, True)],
+        )
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTips.call_args_list],
+            [(0, False, 0.35, 0.35), (1, False, 0.35, 0.35)],
+        )
 
         self.resolve.return_value = None
         self.live.reset_mock()
@@ -107,15 +116,19 @@ class NumberPlaneAdapterTests(TestCase):
         self.live.assert_not_called()
         self.cold.assert_not_called()
 
-    def test_unknown_constructor_options_and_tips_reject_before_publication(self):
+    def test_unknown_constructor_options_reject_but_axis_tips_are_supported(self):
         with self.assertRaises(TypeError):
             self.construct(unsupported=True)
-        with self.assertRaises(NotImplementedError):
-            self.construct(axis_config={"include_tip": True})
-        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
-        self.live.assert_not_called()
-        self.cold.assert_not_called()
-        self.options.free.assert_not_called()
+        plane = self.construct(axis_config={"include_tip": True})
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTips.call_args_list],
+            [(0, True, 0.35, 0.35), (1, True, 0.35, 0.35)],
+        )
+        self.assertTrue(self.axes.call_args_list[0].kwargs["include_tip"])
+        self.assertTrue(self.axes.call_args_list[1].kwargs["include_tip"])
+        self.assertIs(plane.x_axis, self.wrapped_parts[2])
+        number_plane._plot._coordinate_options.numberPlane.assert_called_once()
+        self.live.assert_called_once_with(self.options)
 
     def test_constructor_attaches_numeric_labels_with_shared_and_per_axis_options(self):
         plane = number_plane.NumberPlane(
@@ -131,7 +144,11 @@ class NumberPlaneAdapterTests(TestCase):
                 "include_numbers": False,
                 "numbers_to_include": [2],
                 "label_direction": number_plane._plot._base.LEFT,
-                "decimal_number_config": {"num_decimal_places": 3},
+                "decimal_number_config": {
+                    "num_decimal_places": 3, "include_sign": True,
+                    "group_with_commas": False, "show_ellipsis": True,
+                    "unit": r"\text{s}",
+                },
             },
         )
 
@@ -148,6 +165,11 @@ class NumberPlaneAdapterTests(TestCase):
         )
         self.assertEqual(x_axis.number_label_decimal_places, 2)
         self.assertEqual(y_axis.number_label_decimal_places, 3)
+        self.assertEqual(y_axis.decimal_number_config, {
+            "num_decimal_places": 3, "include_sign": True,
+            "group_with_commas": False, "show_ellipsis": True,
+            "unit": r"\text{s}",
+        })
         self.assertIsInstance(x_axis.scaling, number_plane._plot.LinearBase)
         self.assertIsInstance(y_axis.scaling, number_plane._plot.LinearBase)
 
@@ -160,6 +182,108 @@ class NumberPlaneAdapterTests(TestCase):
             with self.subTest(config=config):
                 self.construct(axis_config=config)
                 self.assertIs(number_plane._plot._coordinate_style.call_args.args[1], expected)
+
+    def test_constructor_forwards_independent_axis_tick_configuration(self):
+        plane = self.construct(
+            axis_config={"include_ticks": True, "tick_size": 0.2},
+            x_axis_config={"exclude_origin_tick": True},
+            y_axis_config={"tick_size": 0.3, "exclude_origin_tick": False},
+        )
+
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTicks.call_args_list],
+            [(0, True, 0.2, True), (1, True, 0.3, True)],
+        )
+        self.assertEqual(self.axes.call_args_list[0].kwargs, {
+            "tick_size": 0.2, "include_ticks": True, "include_tip": False,
+            "exclude_origin_tick": True,
+        })
+        self.assertEqual(self.axes.call_args_list[1].kwargs, {
+            "tick_size": 0.3, "include_ticks": True, "include_tip": False,
+            "exclude_origin_tick": True,
+        })
+
+    def test_constructor_forwards_independent_axis_stroke_styles(self):
+        plane = self.construct(
+            axis_config={"stroke_width": 2, "stroke_opacity": 0.8, "opacity": 0.9},
+            x_axis_config={
+                "color": number_plane._plot._base.GREEN,
+                "stroke_width": 4,
+                "stroke_opacity": 0.4,
+                "opacity": 0.6,
+            },
+            y_axis_config={"stroke_color": number_plane._plot._base.BLUE},
+        )
+
+        green = number_plane._plot._compat._as_color("color", number_plane._plot._base.GREEN)
+        blue = number_plane._plot._compat._as_color("color", number_plane._plot._base.BLUE)
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisStyle.call_args_list],
+            [
+                (0, [green.red, green.green, green.blue, green.alpha], 0.04, 0.4, 0.6),
+                (1, [blue.red, blue.green, blue.blue, blue.alpha], None, None, None),
+            ],
+        )
+        self.assertIs(plane.x_axis, self.wrapped_parts[2])
+
+    def test_constructor_forwards_independent_tip_options(self):
+        self.construct(
+            axis_config={"include_tip": True, "tip_width": 0.4, "tip_height": 0.3},
+            x_axis_config={"include_tip": False},
+            y_axis_config={"tip_width": 0.6, "tip_height": 0.2},
+        )
+
+        self.assertEqual(
+            [call.args for call in self.options.setPlaneAxisTips.call_args_list],
+            [(0, False, 0.4, 0.3), (1, True, 0.6, 0.2)],
+        )
+        self.assertFalse(self.axes.call_args_list[0].kwargs["include_tip"])
+        self.assertTrue(self.axes.call_args_list[1].kwargs["include_tip"])
+        self.assertEqual(self.wrapped_parts[2].tip_width, 0.4)
+        self.assertEqual(self.wrapped_parts[2].tip_height, 0.3)
+        self.assertEqual(self.wrapped_parts[3].tip_width, 0.6)
+        self.assertEqual(self.wrapped_parts[3].tip_height, 0.2)
+
+    def test_invalid_axis_stroke_styles_fail_before_host_admission(self):
+        for kwargs in (
+            {"x_axis_config": {"stroke_width": -1}},
+            {"x_axis_config": {"stroke_opacity": 1.1}},
+            {"y_axis_config": {"opacity": -0.1}},
+            {"y_axis_config": {"color": "not-a-color"}},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
+
+    def test_tick_configuration_is_validated_before_host_admission(self):
+        for kwargs in (
+            {"axis_config": {"include_ticks": 1}},
+            {"x_axis_config": {"exclude_origin_tick": 1}},
+            {"y_axis_config": {"tick_size": -0.1}},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
+
+    def test_tip_configuration_is_validated_before_host_admission(self):
+        for kwargs in (
+            {"axis_config": {"include_tip": 1}},
+            {"x_axis_config": {"tip_width": 0}},
+            {"y_axis_config": {"tip_height": float("inf")}},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.construct(**kwargs)
+        self.resolve.assert_not_called()
+        number_plane._plot._coordinate_options.numberPlane.assert_not_called()
+        self.live.assert_not_called()
+        self.cold.assert_not_called()
 
     def test_constructor_preserves_integer_and_float_step_label_precision(self):
         for axis_range, expected in (
@@ -196,7 +320,6 @@ class NumberPlaneAdapterTests(TestCase):
     def test_unqualified_axis_config_fails_before_host_admission(self):
         for kwargs, message in (
             ({"axis_config": {"unknown": True}}, "unsupported axis_config"),
-            ({"x_axis_config": {"stroke_width": 3}}, "per-axis stroke_width"),
             ({"y_axis_config": {"scaling": number_plane._plot.LogBase()}}, "nonlinear"),
         ):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(NotImplementedError, message):

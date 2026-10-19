@@ -74,6 +74,62 @@ try {
       fs.readFileSync(path.join(root, "web", descriptor.sourcePath), "utf8"));
   }
   pyodide.runPython('import sys\nsys.path.insert(0, "/tmp")\nimport noon');
+  // A rejected composition must not bootstrap deferred updater registrations.
+  // Use real handles from two stores; only continuation transport is a fixture.
+  const foreignStore = new wasm.WasmAuthoringStore();
+  let continuationCalls = 0;
+  globalThis.noonForeignGeometryFactory = options => foreignStore.createManimGeometry(options);
+  globalThis.noonRequireSemanticContinuationActive = () => { continuationCalls++; };
+  globalThis.noonSetSemanticContinuationCallbackSession = () => { continuationCalls++; };
+  try {
+    pyodide.runPython(`
+import json
+import _manim_scene as operations
+import _manim_semantic_handles as handles
+from js import noonForeignGeometryFactory
+from noon import Scene, Square, Transform
+ordinary_factory = handles._create_geometry_handle
+try:
+    handles._create_geometry_handle = noonForeignGeometryFactory
+    foreign_target = Square()
+finally:
+    handles._create_geometry_handle = ordinary_factory
+rejected_scene = Scene()
+rejected_source = Square()
+rejected_source.add_updater(lambda m, dt: None)
+rejected_scene.add(rejected_source)
+registration = rejected_source._noon_updater_registration_history[0]
+# execution_context() deliberately flushes callbacks; this observation must not.
+context = operations._context(rejected_scene)
+def rejection_snapshot():
+    return dict(registered=registration.canonical_registered,
+        callback_id=registration.callback_id,
+        callback_session=hasattr(rejected_scene, "_noon_canonical_callback_session"),
+        time=rejected_scene.time, ownership=str(context.liveExecutionOwnership()),
+        next_id=rejected_scene._next_object_id, keys=dict(rejected_scene._object_keys))
+before_rejection = rejection_snapshot()
+assert before_rejection["registered"] is False
+operations._begin_async_continuation_construct(rejected_scene)
+try:
+    try:
+        rejected_scene.play(Transform(rejected_source, foreign_target), run_time=1)
+    except ValueError as error:
+        assert "another authoring store" in str(error), str(error)
+    else:
+        raise AssertionError("foreign composition target was accepted")
+finally:
+    operations._finish_async_continuation_construct(rejected_scene)
+assert rejection_snapshot() == before_rejection
+_rejection_result_json = json.dumps(before_rejection)
+`);
+    assert.equal(continuationCalls, 0, "rejection must precede continuation bootstrap");
+    report.rejectedComposition = JSON.parse(pyodide.globals.get("_rejection_result_json"));
+  } finally {
+    delete globalThis.noonForeignGeometryFactory;
+    delete globalThis.noonRequireSemanticContinuationActive;
+    delete globalThis.noonSetSemanticContinuationCallbackSession;
+    foreignStore.free();
+  }
   // Actual optional owned WASM arguments must retain the font wrapper for reuse
   // across cold/live plain and markup text, copies, and constructor defaults.
   pyodide.runPython(`

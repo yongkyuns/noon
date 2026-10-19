@@ -1159,6 +1159,7 @@ impl Scene {
         }
     }
 
+    #[cfg(any(feature = "native-text", feature = "latex"))]
     pub(crate) fn composite_entry_state(
         &self,
         object: &Mobject,

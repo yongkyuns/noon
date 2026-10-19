@@ -133,6 +133,26 @@
       "beats": [{"time": 0.8, "label": "Write the equation"}, {"time": 2.0, "label": "Write the heading"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
+      "id": "showcase-code-blocks",
+      "title": "Code with native syntax highlighting",
+      "lesson": "Display Python and CUDA source with native Rust-owned syntax coloring, preserved indentation and line numbers; reveal and move the retained code blocks as normal scene objects.",
+      "primary_feature": "native-syntax-highlighted-code",
+      "category": "Text and mathematics",
+      "path": "python/examples/showcase_code_blocks.py",
+      "features": ["Code", "Python", "CUDA C++", "syntax highlighting", "indentation", "line numbers", "Monokai", "Emacs", "FadeIn", "animate.shift"],
+      "duration": 6.0,
+      "thumbnail_time": 5.5,
+      "thumbnail": "thumbnails/showcase/showcase-code-blocks.png",
+      "thumbnail_alt": "Actual Noon-rendered dark Python code window and light CUDA C++ source panel with native token colors and aligned line numbers",
+      "still_intervals": [[2.0, 2.5], [3.7, 4.2], [5.2, 6.0]],
+      "beats": [
+        {"time": 1.6, "label": "Reveal highlighted Python with indentation"},
+        {"time": 3.2, "label": "Reveal CUDA C++ in another theme"},
+        {"time": 4.7, "label": "Animate both code families"},
+        {"time": 5.5, "label": "Inspect complete source panels"}
+      ]
+    },
+    {
       "id": "showcase-latex-create", "title": "Draw and write LaTeX",
       "lesson": "Compare Create and Write on compiled LaTeX glyphs and fraction bars.",
       "primary_feature": "latex-create", "category": "Text and mathematics",
@@ -366,6 +386,46 @@
         {
           "time": 24,
           "label": "Dense near-white exposure and rainbow direction ring"
+        }
+      ]
+    },
+    {
+      "id": "showcase-cuda-transpose",
+      "title": "One Extra Column",
+      "lesson": "Follow source-synchronized CUDA transpose accesses, then see how padding one shared-memory column removes a warp-wide bank conflict.",
+      "primary_feature": "cuda-shared-memory-bank-conflicts",
+      "category": "Algorithms and systems",
+      "path": "python/examples/cuda_transpose_banks.py",
+      "features": [
+        "CUDA",
+        "shared memory",
+        "transpose",
+        "warp bank conflicts",
+        "padding",
+        "syntax-highlighted code"
+      ],
+      "duration": 76.14,
+      "thumbnail_time": 64.0499998399999,
+      "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
+      "thumbnail_alt": "Actual Noon-rendered padded CUDA transpose: the highlighted tile read sends 32 numbered requests to 32 separate shared-memory banks",
+      "playback_capability": "deterministic-retained-replay",
+      "still_intervals": [[72.64, 76.14]],
+      "beats": [
+        {
+          "time": 6.29,
+          "label": "Load adjacent global-memory words into shared rows"
+        },
+        {
+          "time": 31.21,
+          "label": "Unpadded column read serializes 32 requests into one bank"
+        },
+        {
+          "time": 64.0499998399999,
+          "label": "Padded column read distributes lanes across all 32 banks"
+        },
+        {
+          "time": 73,
+          "label": "Compare padded and unpadded read rounds"
         }
       ]
     }

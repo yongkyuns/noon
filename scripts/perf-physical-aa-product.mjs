@@ -25,9 +25,28 @@ const EXPECTED_ENV = {
 // Fixed preregistered physical AA controls. No fields depend on outcomes.
 const SOURCES = ["0473399d1cba9fc1f217c8b88b93c73c69991597",
   "e11ed3046f9b282331214aca8ffdda765cf7b172"];
+export const TRANSPORT_RECOVERY = JSON.parse(await readFile(new URL(
+  "../benchmarks/perf-physical-aa-transport-recovery.json", import.meta.url)));
+
+// Expand only this preregistered setup correction; never copy or edit the
+// original cohort, source, schedule or scorer configuration to start again.
+export function transportRecoveryPlan(originalBytes) {
+  assert.equal(sha256(originalBytes), TRANSPORT_RECOVERY.originalPlanSha256,
+    "original registered plan bytes changed");
+  const original = validatePlan(JSON.parse(originalBytes));
+  return validatePlan({ ...original, studyId: TRANSPORT_RECOVERY.studyId,
+    registration: TRANSPORT_RECOVERY });
+}
+
 export function validatePlan(p) {
   assert.equal(p?.schema,1);
-  assert.equal(p.studyId,"1933-physical-aa-20261010-01");
+  if (p.studyId === TRANSPORT_RECOVERY.studyId) {
+    assert.deepEqual(p.registration, TRANSPORT_RECOVERY,
+      "transport correction registration changed");
+  } else {
+    assert.equal(p.studyId,"1933-physical-aa-20261010-01");
+    assert.equal(p.registration, undefined, "original registration remains sealed");
+  }
   assert.equal(p.kind,"diagnostic-only");
   assert.equal(p.issue,1933);
   for(const key of ["qualification","performanceAcceptance","mergeApproval"])

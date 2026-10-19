@@ -102,21 +102,37 @@ NOON_CUDA_REQUIRE_GPU=1 \
 node scripts/cuda-transpose-qualification.mjs
 ```
 
-The driver verifies the capture before replay, supplies its actual addresses and
-values to the scene, and includes the capture fingerprint/provenance in its
-report. Missing GPU evidence is an error, not a CPU fallback. `cudaValidated`
-records acceptance of the capture; the report's separate `status` must also be
-`passed` to claim that the visual qualification passed.
+The driver verifies the full capture, then compares the **actual demo model**
+against it for all 32 columns and both layouts. Only the pure `reference_trace`
+and `service_batches` functions are extracted from the scene source; no Noon
+module is mocked and no scene code executes during this model comparison.
+The verification summary includes a SHA-256 of the complete demo source, which
+the browser driver checks against the source it is about to run.
 
-The original pasteable recorder interface is retained:
+The demo always models a tile-relative shared-memory base of zero. Verification
+subtracts the recorded physical base from captured shared addresses without
+changing lane, value, or output-address associations. A physical base offset
+rotates bank IDs uniformly; the comparator checks conflict multiplicity and
+that each schematic round contains at most one distinct word per physical bank.
+It does not claim the animation reproduces measured bank-service ordering.
+
+**Captured data never replaces the demo model.** After comparison, the browser
+runs the ordinary educational scene, with the same source, inputs, and playback
+path used without a capture. Its existing independent semantic and pixel checks
+remain in place. Missing or stale GPU evidence is an error, not a CPU fallback.
+`cudaCaptureVerified` records capture/model acceptance; `cudaValidated` becomes
+true only after the full positive and negative browser suite passes with that
+capture. A failed or CPU-only run cannot claim GPU-backed visual qualification.
+
+The low-level recorder now emits full JSON evidence only:
 
 ```bash
 nvcc -std=c++17 -O2 tools/cuda-transpose/record_cuda.cu -o record_cuda
-./record_cuda 3 > gpu_trace.py
+./record_cuda 3 > cuda-accesses.json
 ```
 
-That small assignment alone is useful for manual replay, but is not the complete
-source-bound, sanitizer-qualified evidence bundle required by the strict runner.
+That output alone is not the source-bound, sanitizer-qualified evidence bundle.
+Use `capture_cuda.py` for strict validation; there is no paste-into-demo mode.
 
 ## Evidence and scope
 

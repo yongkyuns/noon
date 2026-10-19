@@ -15,9 +15,13 @@ class TimeSeriesPlotting(Scene):
     def construct(self):
         axes = Axes((0, 10, 2), (0, 2.5, 0.5), x_length=10, y_length=4, tips=False)
         self.add(axes)
+        # Keep the data-origin label independently of automatic tick exclusions.
         axes.add_coordinates(
-            x_config={"decimal_places": 0, "exclude_zero": False},
-            y_config={"decimal_places": 1, "exclude_zero": True},
+            (0, 2, 4, 6, 8, 10), None,
+            x_config={"font": "DejaVu Sans Mono", "decimal_places": 0,
+                      "exclude_zero": False},
+            y_config={"font": "DejaVu Sans Mono", "decimal_places": 1,
+                      "exclude_zero": True},
         )
         for text, size, y in (
             ("Time-synchronized sampled data", 28, 3.1),

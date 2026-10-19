@@ -13,12 +13,15 @@ import math
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
+from weakref import WeakValueDictionary
 
 import noon as _base
 from _noon_errors import engine_await, engine_call, raise_engine_error
 
 _NEXT_SESSION_ID = 0
-_TRACKED_MOBJECTS: list[_base.Mobject] = []
+# Discovery must not own abandoned wrappers or their callback captures. Identity
+# keys avoid user-defined equality/hash; callers and active sessions own targets.
+_TRACKED_MOBJECTS: WeakValueDictionary[int, _base.Mobject] = WeakValueDictionary()
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
 _ACTIVE_CONTEXTS: dict[int, Any] = {}
 _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = ContextVar(
@@ -33,8 +36,9 @@ def _coordinate_operations():
 
 
 def _track(mobject: _base.Mobject) -> None:
-    if not any(existing is mobject for existing in _TRACKED_MOBJECTS):
-        _TRACKED_MOBJECTS.append(mobject)
+    key = id(mobject)
+    if key not in _TRACKED_MOBJECTS:
+        _TRACKED_MOBJECTS[key] = mobject
 
 
 @dataclass(slots=True)
@@ -230,7 +234,7 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
     """
 
     history: list[_UpdaterRegistration] = []
-    for mobject in _TRACKED_MOBJECTS:
+    for mobject in _TRACKED_MOBJECTS.values():
         # Group/VGroup wrappers intentionally have no typed-Mobject ``_scene``
         # field. Their callbacks are not yet admitted to the canonical model,
         # so detached family registrations are ignored during typed binding.

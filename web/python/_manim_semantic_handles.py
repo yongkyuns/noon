@@ -105,12 +105,11 @@ def _live_mutation_context(value: object):
         context = getattr(scene, "_canonical_authoring_context", None)
     if context is None:
         return None
-    ownership = str(engine_call(context.liveExecutionOwnership))
     # Returning the player keeps its runtime alive for the next source operation.
     # Mutations and target creation must publish through that same session too.
     # A transferred runtime retains this context so its typed call rejects before
     # changing the shared store while another endpoint owns the player.
-    return context if ownership in {"active", "transferred", "returned"} else None
+    return context if engine_call(context.requiresLiveMutationRouting) else None
 
 
 def _typed_manim_observation(
@@ -1206,6 +1205,24 @@ def _layout_anchor(value, index=None, *, callback_context=None):
     if handle is None:
         return None
     return engine_call(handle.layoutAnchor, _semantic_member_index(index))
+
+
+def _next_to_edge_in_frame(self, target, edge, direction, buff, frame_buff):
+    """Forward placement intent; Rust owns bounds, frame fitting and publication."""
+    source = _layout_anchor(self)
+    target_anchor = _layout_anchor(target)
+    if source is None or target_anchor is None:
+        raise RuntimeError("placement requires current shared Rust source and target handles")
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
+               else _live_mutation_context(self) or _live_constructor_context())
+    arguments = (edge.x, edge.y, direction.x, direction.y, float(buff), float(frame_buff))
+    try:
+        if context is None:
+            engine_call(source.nextToEdgeInFrame, target_anchor, *arguments)
+        else:
+            engine_call(context.liveNextLayoutToEdgeInFrame, source, target_anchor, *arguments)
+    except Exception as error:
+        raise_engine_error(error)
 
 
 def _shared_next_to(self, target, direction, buff, aligned_edge,
@@ -3235,7 +3252,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
-            "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle",
+            "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle", "_code_handle",
             "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for
             # convenience queries and dependent edits. Family copying already maps

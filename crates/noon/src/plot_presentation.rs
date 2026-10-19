@@ -6,7 +6,7 @@ pub use preparation::{
     MAX_TIMED_PLOT_SAMPLES,
 };
 
-#[cfg(feature = "native-text")]
+#[cfg(any(feature = "native-text", feature = "latex"))]
 mod label_options;
-#[cfg(feature = "native-text")]
+#[cfg(any(feature = "native-text", feature = "latex"))]
 pub use label_options::{NumberLabelAuthoringError, NumberLabelOptions};

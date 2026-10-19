@@ -1,5 +1,5 @@
 //! Thin NumberPlane options and handle observations over shared coordinate semantics.
-use noon::{ManimNumberPlane, ManimNumberPlaneOptions, SemanticPaint};
+use noon::{CoordinateTicks, ManimNumberPlane, ManimNumberPlaneOptions, SemanticPaint};
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_coordinates::{CoordinateRequest, WasmAxesFrame};
@@ -73,6 +73,105 @@ impl WasmCoordinateOptions {
         if let Some(value) = opacity {
             style.stroke_opacity = value;
         }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setPlaneAxisTicks)]
+    pub fn set_plane_axis_ticks(
+        &mut self,
+        axis_index: u32,
+        enabled: bool,
+        tick_size: f64,
+        exclude_origin: bool,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis tick options require NumberPlane options"));
+        };
+        let ticks = match axis_index {
+            0 => &mut options.x_ticks,
+            1 => &mut options.y_ticks,
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        *ticks = CoordinateTicks {
+            enabled,
+            half_length: tick_size,
+            exclude_origin,
+            ..*ticks
+        };
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setPlaneAxisTips)]
+    pub fn set_plane_axis_tips(
+        &mut self,
+        axis_index: u32,
+        enabled: bool,
+        width: f64,
+        height: f64,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis tip options require NumberPlane options"));
+        };
+        let (include_tip, tip_width, tip_height) = match axis_index {
+            0 => (
+                &mut options.x_include_tip,
+                &mut options.x_tip_width,
+                &mut options.x_tip_height,
+            ),
+            1 => (
+                &mut options.y_include_tip,
+                &mut options.y_tip_width,
+                &mut options.y_tip_height,
+            ),
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        if !width.is_finite() || width <= 0.0 || !height.is_finite() || height <= 0.0 {
+            return Err(js_error(
+                "NumberPlane tip width and height must be positive",
+            ));
+        }
+        *include_tip = enabled;
+        *tip_width = width;
+        *tip_height = height;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setPlaneAxisStyle)]
+    pub fn set_plane_axis_style(
+        &mut self,
+        axis_index: u32,
+        color: &[f64],
+        width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<(), JsValue> {
+        let CoordinateRequest::NumberPlane(options) = &mut self.request else {
+            return Err(js_error("axis style requires NumberPlane options"));
+        };
+        let target = match axis_index {
+            0 => &mut options.x_axis_style,
+            1 => &mut options.y_axis_style,
+            _ => return Err(js_error("NumberPlane axis index must be 0 or 1")),
+        };
+        let mut style = target.as_ref().unwrap_or(&options.axis_style).clone();
+        if !color.is_empty() {
+            let [r, g, b, a] = color else {
+                return Err(js_error("axis stroke color requires RGBA"));
+            };
+            style.stroke = crate::authoring_mobject::family_color(true, *r, *g, *b, *a)
+                .map_err(js_error)?
+                .map(SemanticPaint::Solid);
+        }
+        if let Some(value) = width {
+            style.stroke_width = value;
+        }
+        if let Some(value) = stroke_opacity {
+            style.stroke_opacity = value;
+        }
+        if let Some(value) = opacity {
+            style.object_opacity = value;
+        }
+        *target = Some(style);
         Ok(())
     }
 }
@@ -156,5 +255,17 @@ pub async fn create_number_plane_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::number_plane::session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createComplexPlaneRenderer)]
+pub async fn create_complex_plane_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::complex_plane::session().map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

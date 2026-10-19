@@ -18,6 +18,7 @@ use std::{
 
 const MAX_ENTRIES: usize = 128;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(feature = "native-text")]
 const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-cairo-v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -179,7 +180,13 @@ pub fn text_compiler_diagnostics() -> TextCompilerDiagnostics {
     REGISTRY.with(|registry| registry.borrow().diagnostics)
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "latex",
+        all(feature = "native-text", feature = "bundled-fonts")
+    )
+))]
 pub(crate) fn clear_text_compiler_cache() {
     REGISTRY.with(|registry| *registry.borrow_mut() = TextCompilerRegistry::default());
 }
@@ -195,6 +202,7 @@ pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, T
         };
         let mut options = NativeTextOptions::new(text.font_size);
         options.line_spacing = text.line_spacing;
+        options.disable_ligatures = text.disable_ligatures;
         // Object color is semantic presentation. It must not affect shaping or cache identity.
         options.fill = None;
         let mut compiler = NativeTextCompiler::new();
@@ -242,6 +250,7 @@ fn push_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
 fn push_text(bytes: &mut Vec<u8>, value: &str) {
     push_bytes(bytes, value.as_bytes());
 }
+#[cfg(feature = "native-text")]
 fn push_color(bytes: &mut Vec<u8>, color: Color) {
     for value in [color.red, color.green, color.blue, color.alpha] {
         bytes.extend_from_slice(&value.to_bits().to_le_bytes());
@@ -282,6 +291,11 @@ fn native_key(text: &Text) -> Result<TextCompileKey, TextAuthoringError> {
     for (selector, color) in &text.text2color {
         push_text(&mut bytes, selector.as_ref());
         push_color(&mut bytes, *color);
+    }
+    // Preserve existing ordinary Text identities; enabled code shaping is a
+    // distinct immutable artifact even when this font happens to have no liga.
+    if text.disable_ligatures {
+        push_text(&mut bytes, "disable-ligatures");
     }
     let fonts: Arc<[Arc<[u8]>]> = text
         .font_face
@@ -581,4 +595,63 @@ fn recenter_latex_artifact(artifact: &mut noon_text::latex::LatexDviArtifact) {
         artifact.resource.bounds.min - center,
         artifact.resource.bounds.max - center,
     );
+}
+
+#[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
+mod ligature_tests {
+    use super::*;
+
+    #[test]
+    fn ligature_policy_has_distinct_cached_resources_and_presentation_reuses_them() {
+        clear_text_compiler_cache();
+        let mut scene = crate::Scene::new();
+        let source = Text::new("ffi").with_font("Libertinus Serif");
+        assert!(!source.disable_ligatures());
+        let ordinary = scene.text(source.clone()).unwrap();
+        let code = scene
+            .text(source.clone().with_disable_ligatures(true))
+            .unwrap();
+        let shifted_code = scene
+            .text(
+                source
+                    .clone()
+                    .with_disable_ligatures(true)
+                    .shift(Vec2::new(2.0, 0.0)),
+            )
+            .unwrap();
+        let restored = scene
+            .text(
+                source
+                    .with_disable_ligatures(true)
+                    .with_disable_ligatures(false),
+            )
+            .unwrap();
+        let ordinary_handle = ordinary.state().unwrap().content.text().unwrap();
+        let code_handle = code.state().unwrap().content.text().unwrap();
+        assert_ne!(ordinary_handle, code_handle);
+        assert_eq!(
+            shifted_code.state().unwrap().content.text(),
+            Some(code_handle)
+        );
+        assert_eq!(
+            restored.state().unwrap().content.text(),
+            Some(ordinary_handle)
+        );
+        let store = scene.integration_store();
+        let store = store.borrow();
+        assert_eq!(store.text_resources().len(), 2);
+        let ordinary = store.text_resources().get(ordinary_handle).unwrap();
+        let code = store.text_resources().get(code_handle).unwrap();
+        assert!(ordinary
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter())
+            .any(|glyph| { glyph.cluster.source_span == TextSourceSpan::new(0, 3) }));
+        assert!(code
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter())
+            .all(|glyph| { glyph.cluster.source_span.end - glyph.cluster.source_span.start == 1 }));
+        assert_eq!(text_compiler_diagnostics().successful_compiles, 2);
+    }
 }

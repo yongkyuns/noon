@@ -8,7 +8,7 @@ class AnimatedNumberLine(Scene):
         caption = Text("Coordinates follow the line", font_size=22).shift(2 * UP)
         number_line = NumberLine([-4, 4, 1], length=8.8, include_ticks=True, color=WHITE)
         # Match the Rust demo's explicit native Text spacing.
-        number_line.add_numbers(font_size=18, buff=0.12, exclude_zero=False)
+        number_line.add_numbers(font="DejaVu Sans Mono", font_size=18, buff=0.12, exclude_zero=False)
         marker = Dot(number_line.n2p(-4), color=YELLOW, radius=0.11)
 
         self.play(Write(title), run_time=0.5, rate_func=linear)

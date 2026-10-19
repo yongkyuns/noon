@@ -156,7 +156,7 @@ export function createAuthoringRenderController(host) {
             renderer?.setGpuCompletionProfiling(true);
           }
           {
-            const metrics = currentMetrics();
+            const metrics = currentMetrics(message);
             if (gpuCompletionProfiling && !drainGpuDiagnostics()) return;
             if (message.includeGpuIdentity === true) {
               if (renderer === null || typeof renderer.rendererAdapterInfo !== "function") {
@@ -1066,7 +1066,7 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function currentMetrics() {
+  function currentMetrics({ profileRenderSubstages, profileGpuCompletion } = {}) {
     const base = {
       ready: renderer !== null,
       mode,
@@ -1095,15 +1095,20 @@ export function createAuthoringRenderController(host) {
     } : {}),
     ...(renderSubstageProfiling ? {
       renderSubstageProfiling: true,
-      renderSubstageSamples: renderer === null
-        ? []
-        : JSON.parse(renderer.takeRenderSubstageSamplesJson()),
+      // Ordinary UI polls must not consume samples owned by profiling requests.
+      ...(profileRenderSubstages === true ? {
+        renderSubstageSamples: renderer === null
+          ? []
+          : JSON.parse(renderer.takeRenderSubstageSamplesJson()),
+      } : {}),
     } : {}),
     ...(gpuCompletionProfiling ? {
       gpuCompletionProfiling: true,
-      gpuCompletion: renderer === null
-        ? null
-        : JSON.parse(renderer.takeGpuCompletionSamplesJson()),
+      ...(profileGpuCompletion === true ? {
+        gpuCompletion: renderer === null
+          ? null
+          : JSON.parse(renderer.takeGpuCompletionSamplesJson()),
+      } : {}),
     } : {}),
     };
     if (renderer === null) {

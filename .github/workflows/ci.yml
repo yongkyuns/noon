@@ -26,6 +26,7 @@ on:
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/painter-order-browser-smoke.mjs"
       - "scripts/manim-shape-matcher-current-bounds.mjs"
       - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"
       - "web/python/**"

@@ -22,6 +22,9 @@ import initNoonWeb, {
   WasmMatrixOptions,
   WasmCompositeRows,
   WasmTableOptions,
+  WasmCodeOptions,
+  noonCodeStylesList,
+  noonCodeLanguagesList,
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
   resolveCreateAnimationOptions,
@@ -264,6 +267,28 @@ async function initializePyodide() {
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
+  self.noonNumberLineDecimalNumberLabelFamily = (
+    line, values, automatic, options, attach,
+  ) => {
+    if (!latexCompiler) {
+      options.free();
+      throw new Error("Call await prepare_latex() before constructing NumberLine numbers");
+    }
+    return line.numberLineDecimalNumberLabelFamily(
+      values, automatic, options, attach, latexCompiler,
+    );
+  };
+  self.noonAxesDecimalCoordinateLabelFamilies = (
+    axes, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error("Call await prepare_latex() before constructing Axes coordinates");
+    }
+    return axes.axesDecimalCoordinateLabelFamilies(
+      xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
@@ -340,6 +365,13 @@ async function initializePyodide() {
     return entries;
   };
   self.noonTableOptions = (...args) => new WasmTableOptions(...args);
+  self.noonCodeOptions = (...args) => new WasmCodeOptions(...args);
+  self.noonCodeFromFamily = (family) => family.asCode();
+  self.noonCodeStylesList = () => noonCodeStylesList();
+  self.noonCodeLanguagesList = () => noonCodeLanguagesList();
+  self.noonCreateAuthoringCodeHandle = (source, options, context) =>
+    context == null ? authoringStore.createCode(source, options)
+      : context.liveCreateCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
     context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);

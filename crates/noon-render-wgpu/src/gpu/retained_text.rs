@@ -2892,7 +2892,8 @@ impl RetainedFramePreparer {
         }
 
         if !fill_path.is_empty() {
-            let fill = run.fill.or(object_style.fill).unwrap_or(Color::WHITE);
+            let fill = crate::text::resolve_text_paint(run.fill, object_style.fill)
+                .unwrap_or(Color::WHITE);
             self.push_geometry(
                 object_id,
                 GeometryRef::VectorPath(fill_path),
@@ -2916,7 +2917,8 @@ impl RetainedFramePreparer {
 
         if let Some(stroke) = run.stroke.as_ref() {
             if !stroke_path.is_empty() {
-                let color = stroke.paint.or(object_style.fill).unwrap_or(Color::WHITE);
+                let color = crate::text::resolve_text_paint(stroke.paint, object_style.fill)
+                    .unwrap_or(Color::WHITE);
                 self.push_geometry(
                     object_id,
                     GeometryRef::VectorPath(stroke_path),
@@ -2946,12 +2948,12 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
     let has_stroke = vector.style.stroke_width > 0.0;
     Style {
         fill: if vector.style.fill.is_some() || !has_stroke {
-            vector.style.fill.or(object_style.fill)
+            crate::text::resolve_text_paint(vector.style.fill, object_style.fill)
         } else {
             None
         },
         stroke: has_stroke
-            .then(|| vector.style.stroke.or(object_style.fill))
+            .then(|| crate::text::resolve_text_paint(vector.style.stroke, object_style.fill))
             .flatten(),
         stroke_width: vector.style.stroke_width,
         background_stroke: object_style.background_stroke,

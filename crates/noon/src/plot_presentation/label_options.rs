@@ -9,6 +9,10 @@ pub struct NumberLabelOptions {
     pub font: String,
     pub font_size: f32,
     pub decimal_places: u32,
+    pub include_sign: bool,
+    pub group_with_commas: bool,
+    pub show_ellipsis: bool,
+    pub unit: Option<String>,
     pub exclude_zero: bool,
     /// Exact numeric exclusions, checked before allocating text resources.
     pub excluded_numbers: Vec<f64>,
@@ -19,12 +23,28 @@ pub struct NumberLabelOptions {
     pub color: crate::Color,
 }
 
+impl NumberLabelOptions {
+    pub(crate) fn decimal_format(&self) -> noon_core::DecimalFormat {
+        noon_core::DecimalFormat {
+            decimal_places: self.decimal_places,
+            include_sign: self.include_sign,
+            group_with_commas: self.group_with_commas,
+            show_ellipsis: self.show_ellipsis,
+            unit: self.unit.clone(),
+        }
+    }
+}
+
 impl Default for NumberLabelOptions {
     fn default() -> Self {
         Self {
             font: "DejaVu Sans Mono".into(),
             font_size: 18.0,
             decimal_places: 0,
+            include_sign: false,
+            group_with_commas: true,
+            show_ellipsis: false,
+            unit: None,
             exclude_zero: true,
             excluded_numbers: Vec::new(),
             include_tip: false,

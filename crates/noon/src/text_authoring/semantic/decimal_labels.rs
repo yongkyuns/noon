@@ -3,7 +3,7 @@
 use crate::numeric_authoring::PreparedDecimalValue;
 use crate::plot_presentation::{NumberLabelAuthoringError as Error, NumberLabelOptions};
 use crate::{
-    AuthoringError, AxesFrame, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
+    AuthoringError, AxesFrame, Bounds2D64, LatexBackend, ManimAxes, ManimNextToArgs,
     ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, TextAuthoringError,
 };
 use noon_core::{
@@ -43,10 +43,7 @@ impl PreparedDecimalLabels {
             values.push(PreparedDecimalValue::prepare(
                 backend,
                 label.number,
-                DecimalFormat {
-                    decimal_places: options.decimal_places,
-                    ..Default::default()
-                },
+                options.decimal_format(),
                 options.font_size,
             )?);
             placements.push((label.number, label.point));

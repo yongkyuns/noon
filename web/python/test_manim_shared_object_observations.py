@@ -79,6 +79,9 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             ) == (0.1, 0.2, 0.3, 1.0)
 
             class DetachedLiveContext:
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "returned"
                 def queryMobjectLineEndpoints(self, handle):
                     raise AssertionError("detached identity was queried through execution")
@@ -103,6 +106,9 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
 
             class EffectiveContext:
                 def __init__(self): self.ownership = "returned"
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return self.ownership
                 def queryMobjectLineEndpoints(self, handle):
                     if self.ownership == "transferred":

@@ -1,6 +1,8 @@
 """Callable bookkeeping delegates interval changes to the shared context."""
 
+import gc
 import unittest
+import weakref
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -31,19 +33,19 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.context = RecordingContext()
         self.scene = SimpleNamespace(time=0.0, _canonical_authoring_context=self.context)
         self.handle = SimpleNamespace(semanticSlot=7, semanticGeneration=3)
-        self.mobject = SimpleNamespace(
-            _scene=None, _object=object(), _semantic_handle=self.handle,
-        )
+        self.mobject = object.__new__(updaters._base.Mobject)
+        self.mobject._scene = None
+        self.mobject._object = object()
+        self.mobject._semantic_handle = self.handle
 
     def tearDown(self):
         session = getattr(self.scene, "_noon_canonical_callback_session", None)
         if session is not None:
             updaters.release_session(session.session_id)
-        updaters._TRACKED_MOBJECTS[:] = [
-            item for item in updaters._TRACKED_MOBJECTS
-            if item is not self.mobject
-            and item is not getattr(self, "family_group", None)
-        ]
+        updaters._TRACKED_MOBJECTS.pop(id(self.mobject), None)
+        group = getattr(self, "family_group", None)
+        if group is not None:
+            updaters._TRACKED_MOBJECTS.pop(id(group), None)
 
     def bind(self):
         self.mobject._scene = self.scene
@@ -53,7 +55,7 @@ class UpdaterLifecycleTests(unittest.TestCase):
         group = compat.Group.__new__(compat.Group)
         group._semantic_family_handle = object()
         self.family_group = group
-        updaters._TRACKED_MOBJECTS.append(group)
+        updaters._track(group)
 
         self.assertIsNone(
             updaters.prepare_canonical_callbacks(self.scene, self.context)
@@ -229,16 +231,8 @@ class UpdaterLifecycleTests(unittest.TestCase):
         donor_child_object = Mobject("donor-child", [donor_child])
         donor.family.append(donor_child_object)
         tracked_ids = {id(root), id(child), id(donor), id(donor_child_object)}
-        self.addCleanup(
-            lambda: updaters._TRACKED_MOBJECTS.__setitem__(
-                slice(None),
-                [
-                    item
-                    for item in updaters._TRACKED_MOBJECTS
-                    if id(item) not in tracked_ids
-                ],
-            )
-        )
+        for key in tracked_ids:
+            self.addCleanup(updaters._TRACKED_MOBJECTS.pop, key, None)
 
         clear = updaters.clear_updaters
         add = updaters.add_updater
@@ -466,6 +460,73 @@ class UpdaterLifecycleTests(unittest.TestCase):
         updaters.add_updater(self.mobject, callback)
         self.assertEqual(self.context.calls, [("add", self.handle, "0", 0.0, None)])
         self.assertIs(session.callbacks[0], callback)
+
+
+class UpdaterDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        # Isolate discovery without prescribing whether its storage owns values.
+        registry = type(updaters._TRACKED_MOBJECTS)()
+        discovery = patch.object(updaters, "_TRACKED_MOBJECTS", registry)
+        discovery.start()
+        self.addCleanup(discovery.stop)
+
+    def make_mobject(self, slot=7, cls=None):
+        value = object.__new__(cls or updaters._base.Mobject)
+        value._scene = None
+        value._object = None
+        value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=3)
+        return value
+
+    def test_abandoned_registration_does_not_retain_wrapper_or_callback_capture(self):
+        class Payload:
+            pass
+
+        value, payload = self.make_mobject(), Payload()
+        object_ref, payload_ref = weakref.ref(value), weakref.ref(payload)
+        callback = lambda obj, dt, target=value, captured=payload: None
+        updaters.add_updater(value, callback)
+        del value, payload, callback
+        gc.collect()
+        self.assertIsNone(object_ref(), "discovery must not own abandoned wrappers")
+        self.assertIsNone(payload_ref(), "callback captures must be collectable")
+
+    def test_identity_discovery_preserves_wrapper_order_and_duplicate_callables(self):
+        class UnhashableMobject(updaters._base.Mobject):
+            __hash__ = None
+
+            def __eq__(self, other):
+                raise AssertionError("discovery must not invoke author equality")
+
+        first = self.make_mobject(7, UnhashableMobject)
+        second = self.make_mobject(8, UnhashableMobject)
+        callback = lambda obj: None
+        updaters.add_updater(first, callback)
+        updaters.add_updater(second, callback)
+        updaters.add_updater(first, callback)
+        context = RecordingContext()
+        scene = SimpleNamespace(time=0.0, _canonical_authoring_context=context)
+        first._scene = second._scene = scene
+        session_id = updaters.prepare_canonical_callbacks(scene, context)
+        self.addCleanup(updaters.release_session, session_id)
+        self.assertEqual([call[1].semanticSlot for call in context.calls], [7, 7, 8])
+        self.assertEqual(updaters.get_updaters(first), [callback, callback])
+
+    def test_active_session_owns_detached_target_until_its_release(self):
+        value = self.make_mobject()
+        context = RecordingContext()
+        scene = SimpleNamespace(time=0.0, _canonical_authoring_context=context)
+        value._scene = scene
+        updaters.add_updater(value, lambda obj: None)
+        session_id = scene._noon_canonical_callback_session.session_id
+        self.addCleanup(updaters.release_session, session_id)
+        ref = weakref.ref(value)
+        value._scene = None
+        del value, context, scene
+        gc.collect()
+        self.assertIsNotNone(ref(), "an active session must retain its target")
+        updaters.release_session(session_id)
+        gc.collect()
+        self.assertIsNone(ref(), "released targets must not remain rooted by discovery")
 
 
 class CallbackEntryTests(unittest.IsolatedAsyncioTestCase):
