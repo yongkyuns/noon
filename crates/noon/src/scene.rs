@@ -859,6 +859,41 @@ impl Scene {
         })
     }
 
+    /// Align one object to the default frame using authored or effective bounds.
+    pub fn align_mobject_on_frame(
+        &mut self,
+        object: &Mobject,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        let target = crate::family_layout::frame_alignment_target(direction, buff)?;
+        let mask = (
+            if direction.0 == 0.0 { 0.0 } else { 1.0 },
+            if direction.1 == 0.0 { 0.0 } else { 1.0 },
+        );
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_move_to(
+                &self.store,
+                object,
+                crate::LiveLayoutTarget::Point(target.0, target.1),
+                direction,
+                mask,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_move_to(
+                store,
+                root,
+                execution,
+                object,
+                crate::LiveLayoutTarget::Point(target.0, target.1),
+                direction,
+                mask,
+            )
+        })
+    }
+
     /// Move a family using authored layout while cold or coherent effective layout while running.
     pub fn move_family_to(
         &mut self,

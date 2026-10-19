@@ -7547,6 +7547,29 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAlignMobjectOnFrame)]
+        pub fn live_align_mobject_on_frame(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_align_mobject_on_frame(
+                    handle.semantic_mobject(),
+                    (direction_x, direction_y),
+                    buff,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_align_family_to_point(

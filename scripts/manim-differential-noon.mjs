@@ -1037,6 +1037,22 @@ json.dumps({
     assertPointNear(profile.right, [profile.point[0], profile.before.center[1]],
       `${name}: aligns x to the point and preserves y`);
   }
+  for (const [directName, liveName] of [
+    ["to_edge", "to_edge_live"],
+    ["to_corner", "to_corner_live"],
+    ["align_on_border", "align_on_border_live"],
+  ]) {
+    const direct = observations[directName];
+    const live = observations[liveName];
+    for (const [name, profile] of [[directName, direct], [liveName, live]]) {
+      assert.equal(profile.returns_self, true, `${name}: returns the same Mobject`);
+    }
+    assertPointNear(live.object.center, direct.object.center,
+      `${liveName}: frame-aligned center matches detached authoring`);
+    assertPointNear([live.object.width, live.object.height],
+      [direct.object.width, direct.object.height],
+      `${liveName}: alignment preserves geometry`);
+  }
   for (const name of ["point_function_transforms", "point_function_transforms_live"]) {
     const profile = observations[name];
     assert.equal(profile.pointwise.returns_self, true, `${name}: apply_function identity`);

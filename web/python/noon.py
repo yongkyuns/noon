@@ -941,19 +941,7 @@ class Mobject:
         from _manim_updaters import canonical_callback_phase_active
         if canonical_callback_phase_active():
             raise NotImplementedError("frame alignment queries are unavailable during staged callbacks")
-        axis = _as_vec2(direction)
-        sign_x = (axis.x > 0.0) - (axis.x < 0.0)
-        sign_y = (axis.y > 0.0) - (axis.y < 0.0)
-        target = Vec2(
-            sign_x * DEFAULT_FRAME_WIDTH / 2.0,
-            sign_y * DEFAULT_FRAME_HEIGHT / 2.0,
-        )
-        point = self.get_critical_point(axis)
-        shift = Vec2(
-            (target.x - point.x - buff * axis.x) * abs(sign_x),
-            (target.y - point.y - buff * axis.y) * abs(sign_y),
-        )
-        return self.shift(shift)
+        return self._align_on_frame(_as_vec2(direction), float(buff))
 
     def apply_function_to_position(
         self,

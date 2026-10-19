@@ -676,6 +676,46 @@ fn scene_move_to_matches_authored_and_running_placement_for_stable_state() {
 }
 
 #[test]
+fn scene_leaf_frame_alignment_matches_authored_and_running_placement() {
+    fn make_scene() -> (Scene, Mobject) {
+        let mut scene = Scene::new();
+        let mut object = scene.square(2.0).unwrap();
+        object.shift(2.0, -1.0).unwrap();
+        (scene, object)
+    }
+
+    let direction = (-1.0, 1.0);
+    let buff = 0.25;
+    let (mut cold, cold_object) = make_scene();
+    cold.align_mobject_on_frame(&cold_object, direction, buff)
+        .unwrap();
+    let cold_corner = cold_object
+        .critical_point(direction.0, direction.1)
+        .unwrap();
+
+    let (mut running, running_object) = make_scene();
+    let execution = running.execution_session().unwrap();
+    running.install_execution(execution);
+    running
+        .align_mobject_on_frame(&running_object, direction, buff)
+        .unwrap();
+    let running_corner = running_object
+        .critical_point(direction.0, direction.1)
+        .unwrap();
+
+    let expected = (
+        -f64::from(noon_core::DEFAULT_FRAME_WIDTH) / 2.0 + buff,
+        f64::from(noon_core::DEFAULT_FRAME_HEIGHT) / 2.0 - buff,
+    );
+    for point in [cold_corner, running_corner] {
+        assert!((point.0 - expected.0).abs() < 1e-5);
+        assert!((point.1 - expected.1).abs() < 1e-5);
+    }
+    assert!((cold_corner.0 - running_corner.0).abs() < 1e-6);
+    assert!((cold_corner.1 - running_corner.1).abs() < 1e-6);
+}
+
+#[test]
 fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
     let mut scene = Scene::new();
     let mut left = scene.square(2.0).unwrap();

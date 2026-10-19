@@ -1279,10 +1279,19 @@ def _align_on_frame(
     handle = _handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         raise RuntimeError("Mobject frame alignment requires a current shared Rust semantic handle")
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets do not support frame alignment"
-        )
+    context = _live_mutation_context(self) or _live_constructor_context()
+    if context is not None:
+        try:
+            engine_call(
+                context.liveAlignMobjectOnFrame,
+                handle,
+                direction.x,
+                direction.y,
+                float(buff),
+            )
+        except Exception as error:
+            raise_engine_error(error)
+        return self
     engine_call(handle.alignOnFrame, direction.x, direction.y, float(buff))
     return self
 

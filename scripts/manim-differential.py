@@ -289,24 +289,83 @@ def _noon_align_to_group_top_live() -> Any:
     )
 
 
+def _to_edge(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Square(side_length=1.0)
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.to_edge(provider.LEFT, buff=0.4)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
+
+
 def _noon_to_edge() -> Any:
-    obj = noon.Square(side_length=1.0).to_edge(noon.LEFT, buff=0.4)
-    return _object_observation(obj)
+    return _to_edge(noon)
 
 
 def _manim_to_edge() -> Any:
-    obj = manim.Square(side_length=1.0).to_edge(manim.LEFT, buff=0.4)
-    return _object_observation(obj)
+    return _to_edge(manim)
+
+
+def _noon_to_edge_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _to_edge(noon, scene))
+
+
+def _to_corner(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Circle(radius=0.5)
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.to_corner(provider.UR, buff=0.25)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
 
 
 def _noon_to_corner() -> Any:
-    obj = noon.Circle(radius=0.5).to_corner(noon.UR, buff=0.25)
-    return _object_observation(obj)
+    return _to_corner(noon)
 
 
 def _manim_to_corner() -> Any:
-    obj = manim.Circle(radius=0.5).to_corner(manim.UR, buff=0.25)
-    return _object_observation(obj)
+    return _to_corner(manim)
+
+
+def _noon_to_corner_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _to_corner(noon, scene))
+
+
+def _align_on_border(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Rectangle(width=0.8, height=0.4).shift(
+        provider.LEFT + provider.DOWN
+    )
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.align_on_border(provider.LEFT + provider.UP, buff=0.3)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
+
+
+def _noon_align_on_border() -> Any:
+    return _align_on_border(noon)
+
+
+def _manim_align_on_border() -> Any:
+    return _align_on_border(manim)
+
+
+def _noon_align_on_border_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_on_border(noon, scene)
+    )
 
 
 def _noon_arrange() -> Any:
@@ -5385,7 +5444,11 @@ FIXTURES = [
     Fixture("align_to_group_top", _noon_align_to_group_top, _manim_align_to_group_top),
     Fixture("align_to_group_top_live", _noon_align_to_group_top_live, _manim_align_to_group_top),
     Fixture("to_edge", _noon_to_edge, _manim_to_edge),
+    Fixture("to_edge_live", _noon_to_edge_live, _manim_to_edge),
     Fixture("to_corner", _noon_to_corner, _manim_to_corner),
+    Fixture("to_corner_live", _noon_to_corner_live, _manim_to_corner),
+    Fixture("align_on_border", _noon_align_on_border, _manim_align_on_border),
+    Fixture("align_on_border_live", _noon_align_on_border_live, _manim_align_on_border),
     Fixture("vgroup_arrange", _noon_arrange, _manim_arrange),
     Fixture("set_xy", _noon_set_xy, _manim_set_xy),
     Fixture("set_z_zero", _noon_set_z_zero, _manim_set_z_zero),

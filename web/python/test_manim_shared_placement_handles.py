@@ -88,6 +88,8 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     self.calls.append("alignToPoint")
                     self.shift(px - self.criticalX(dx, dy) if dx != 0 else 0.0,
                                py - self.criticalY(dx, dy) if dy != 0 else 0.0)
+                def alignOnFrame(self, dx, dy, buff):
+                    self.calls.append("alignOnFrame")
 
             import _typed_geometry_test_support as _geometry_test
 
@@ -131,6 +133,7 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                 def liveExecutionOwnership(self): return "returned"
                 def liveMoveToLayout(self, *args): self.calls.append(("layout", args))
                 def liveMoveToPoint(self, *args): self.calls.append(("point", args))
+                def liveAlignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
 
             live_context = FakeLiveContext()
             handles._live_mutation_context = lambda value: live_context
@@ -148,6 +151,10 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             assert live_context.calls[-1][1] == (
                 live_receiver._semantic_handle, 3.0, 4.0,
                 0.0, 1.0, 0.0, 1.0,
+            )
+            assert live_receiver.to_edge(LEFT, buff=0.3) is live_receiver
+            assert live_context.calls[-1] == (
+                "frame", (live_receiver._semantic_handle, -1.0, 0.0, 0.3),
             )
 
             # Invalid identities must reject before any Python-derived edit.

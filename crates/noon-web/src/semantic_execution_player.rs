@@ -749,6 +749,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_mobject_on_frame(
+        &mut self,
+        mobject: &noon::Mobject,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_on_frame(mobject, direction, buff))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_become_family(
         &mut self,
         source: &noon::MobjectFamily,
