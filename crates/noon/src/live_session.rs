@@ -3028,7 +3028,7 @@ impl<'a> LiveSession<'a> {
         direction: SemanticSheenDirection,
         family: bool,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        target.require_store(&self.store)?;
+        target.require_store(self.store)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(target.sheen_direction_transaction(direction, family)?)
     }
@@ -3042,7 +3042,7 @@ impl<'a> LiveSession<'a> {
         axis: SemanticVec3,
         family: bool,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        target.require_store(&self.store)?;
+        target.require_store(self.store)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(target.rotate_sheen_direction_transaction(angle, axis, family)?)
     }

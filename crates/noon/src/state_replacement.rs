@@ -219,20 +219,19 @@ pub(crate) fn paired_family_styles(
         .collect())
 }
 
+type PairedFamilyStyleState = (
+    SemanticNodeId,
+    noon_core::SemanticStyle,
+    crate::Color,
+    f64,
+    f64,
+);
+
 fn paired_family_style_states(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
-) -> Result<
-    Vec<(
-        SemanticNodeId,
-        noon_core::SemanticStyle,
-        crate::Color,
-        f64,
-        f64,
-    )>,
-    AuthoringError,
-> {
+) -> Result<Vec<PairedFamilyStyleState>, AuthoringError> {
     store
         .ordered_family_root_pairs(source, target)
         .map_err(AuthoringError::from)?

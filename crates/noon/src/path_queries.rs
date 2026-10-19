@@ -1006,7 +1006,7 @@ fn point_reduction_tree_from_topology(
     Ok(PointReductionTree {
         points: topology
             .object
-            .map_or_else(|| Ok(Vec::new()), |object| point_query(object))?,
+            .map_or_else(|| Ok(Vec::new()), &mut *point_query)?,
         children: topology
             .children
             .iter()
