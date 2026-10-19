@@ -165,10 +165,9 @@ pub fn compose_numeric_text_resource(
         let placed = transform_rect(scaled, placement);
         transforms.push(placement);
         bounds.push(placed);
-        let gap = tokens.get(index + 1).map_or(0.0, |next| match next.part {
-            NumericTextPart::Unit { .. } => 2.0 * digit_buff,
-            _ => digit_buff,
-        });
+        // Manim's default unit buffer is zero: the same one-digit buffer
+        // separates both ordinary tokens and the optional unit/superscript.
+        let gap = tokens.get(index + 1).map_or(0.0, |_| digit_buff);
         cursor = placed.max.x + gap;
     }
     for (index, token) in tokens.iter().enumerate() {

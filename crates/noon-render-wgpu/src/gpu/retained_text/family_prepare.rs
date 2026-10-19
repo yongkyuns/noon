@@ -490,7 +490,8 @@ impl RetainedFramePreparer {
                     if path.is_empty() {
                         continue;
                     }
-                    let fill = run.fill.or(object.style.fill).unwrap_or(Color::WHITE);
+                    let fill = crate::text::resolve_text_paint(run.fill, object.style.fill)
+                        .unwrap_or(Color::WHITE);
                     let scratch_slot = self.push_geometry(
                         object_id,
                         GeometryRef::VectorPath(path),

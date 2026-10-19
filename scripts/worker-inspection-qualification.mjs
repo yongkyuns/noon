@@ -295,8 +295,10 @@ try {
           const h = workerInspection;
           h.completion = { samples: [], failed: 0, dropped: 0, maxInFlight: 0 };
           const original = h.execution.metrics.bind(h.execution);
-          h.execution.metrics = async (...args) => {
-            const result = await original(...args), observed = result.metrics.gpuCompletion;
+          h.execution.metrics = async (options = {}) => {
+            // This collector explicitly owns reads of the bounded queue stream.
+            const result = await original({ ...options, profileGpuCompletion: true });
+            const observed = result.metrics.gpuCompletion;
             if (observed) {
               if (observed.observation !== "queue_work_done_callback" ||
                   observed.includesCallbackDispatchDelay !== true ||

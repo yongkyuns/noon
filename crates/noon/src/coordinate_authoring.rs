@@ -2,12 +2,12 @@
 //!
 //! Ranges live on semantic shafts; wrappers retain family identity, never
 //! endpoints or a second scene. Two-dimensional constructors stay label-free
-//! unless requested; NumberLine and Axes tips use retained filled geometry.
-//! The bounded ThreeDAxes request uses retained tips by default.
+//! unless requested; NumberLine, Axes, and NumberPlane tips use retained filled
+//! geometry. The bounded ThreeDAxes request uses retained tips by default.
 
 mod number_plane;
 mod three_d_axes;
-pub(crate) use number_plane::prepare_number_plane;
+pub(crate) use number_plane::{prepare_number_plane, publish_prepared_number_plane};
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
 pub use three_d_axes::{
     ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides,
@@ -948,7 +948,13 @@ pub(crate) fn resolve_family(
 pub(crate) fn prepare_number_line(
     options: &ManimNumberLineOptions,
 ) -> Result<PreparedNumberLine, CoordinateAuthoringError> {
-    let frame = options.frame()?;
+    prepare_number_line_in_frame(options.frame()?, options)
+}
+
+fn prepare_number_line_in_frame(
+    frame: NumberLineFrame,
+    options: &ManimNumberLineOptions,
+) -> Result<PreparedNumberLine, CoordinateAuthoringError> {
     if options.include_tip
         && (!options.tip_width.is_finite()
             || options.tip_width <= 0.0

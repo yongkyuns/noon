@@ -130,6 +130,8 @@ pub use graph_authoring::{
 pub use spatial_composition::SpatialCompositionError;
 mod implicit_plotting;
 pub use implicit_plotting::ImplicitPlotOptions;
+#[cfg(feature = "code")]
+mod code_display;
 mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
@@ -202,6 +204,11 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
 pub use camera_authoring::CameraAutoFrame;
+#[cfg(feature = "code")]
+pub use code_display::{
+    Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,
+    CodeParagraphConfig,
+};
 pub use composite_entry::CompositeEntryHandle;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub use coordinate_authoring::BarLabelOptions;
@@ -378,6 +385,11 @@ pub mod prelude {
         StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
         SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
         VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+    };
+    #[cfg(feature = "code")]
+    pub use crate::{
+        Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,
+        CodeParagraphConfig,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,

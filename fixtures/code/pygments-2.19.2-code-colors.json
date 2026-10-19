@@ -1,0 +1,231 @@
+{
+  "reference": {
+    "manim": "0.21.0",
+    "pygments": "2.19.2",
+    "source": "ManimCE Code uses Pygments lexer + HtmlFormatter; tests assert selected source-token colors, not raster pixel equivalence."
+  },
+  "cases": [
+    {
+      "id": "python-monokai-gallery",
+      "language": "python",
+      "style": "monokai",
+      "source": "def squares(values):\n    return [\n        x * x for x in values\n    ]",
+      "probes": [
+        {
+          "line": 0,
+          "start": 0,
+          "text": "def",
+          "token": "Token.Keyword",
+          "rgb": "66d9ef"
+        },
+        {
+          "line": 0,
+          "start": 4,
+          "text": "squares",
+          "token": "Token.Name.Function",
+          "rgb": "a6e22e"
+        },
+        {
+          "line": 1,
+          "start": 4,
+          "text": "return",
+          "token": "Token.Keyword",
+          "rgb": "66d9ef"
+        },
+        {
+          "line": 2,
+          "start": 14,
+          "text": "for",
+          "token": "Token.Keyword",
+          "rgb": "66d9ef"
+        },
+        {
+          "line": 2,
+          "start": 20,
+          "text": "in",
+          "token": "Token.Operator.Word",
+          "rgb": "ff4689"
+        }
+      ]
+    },
+    {
+      "id": "cuda-emacs-gallery",
+      "language": "cuda",
+      "style": "emacs",
+      "source": "__global__ void transpose(float *out) {\n    __shared__ float tile[8][9];\n    // Padding keeps the bank stride coprime.\n    out[threadIdx.x] = tile[0][threadIdx.x];\n}",
+      "probes": [
+        {
+          "line": 0,
+          "start": 0,
+          "text": "__global__",
+          "token": "Token.Keyword.Reserved",
+          "rgb": "aa22ff"
+        },
+        {
+          "line": 0,
+          "start": 11,
+          "text": "void",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 0,
+          "start": 26,
+          "text": "float",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 1,
+          "start": 4,
+          "text": "__shared__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 1,
+          "start": 15,
+          "text": "float",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 3,
+          "start": 8,
+          "text": "threadIdx",
+          "token": "Token.Name.Builtin",
+          "rgb": "aa22ff"
+        }
+      ]
+    },
+    {
+      "id": "cuda-emacs-qualifiers",
+      "language": "cuda",
+      "style": "emacs",
+      "source": "__device__ void f() {}\n__constant__ int value;\n__restrict__ float *ptr;\n__syncthreads();\n__syncthreads_count(1);\nint lane = threadIdx.x;",
+      "probes": [
+        {
+          "line": 0,
+          "start": 0,
+          "text": "__device__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 1,
+          "start": 0,
+          "text": "__constant__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 2,
+          "start": 0,
+          "text": "__restrict__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        },
+        {
+          "line": 3,
+          "start": 0,
+          "text": "__syncthreads",
+          "token": "Token.Name.Function",
+          "rgb": "00a000"
+        },
+        {
+          "line": 4,
+          "start": 0,
+          "text": "__syncthreads_count",
+          "token": "Token.Name.Function",
+          "rgb": "00a000"
+        },
+        {
+          "line": 5,
+          "start": 11,
+          "text": "threadIdx",
+          "token": "Token.Name.Builtin",
+          "rgb": "aa22ff"
+        }
+      ]
+    },
+    {
+      "id": "cuda-vim-qualifiers",
+      "language": "cuda",
+      "style": "vim",
+      "source": "__device__ void f() {}\n__constant__ int value;\n__restrict__ float *ptr;\n__syncthreads();\n__syncthreads_count(1);\nint lane = threadIdx.x;",
+      "probes": [
+        {
+          "line": 0,
+          "start": 0,
+          "text": "__device__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00cd00"
+        },
+        {
+          "line": 1,
+          "start": 0,
+          "text": "__constant__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00cd00"
+        },
+        {
+          "line": 2,
+          "start": 0,
+          "text": "__restrict__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00cd00"
+        },
+        {
+          "line": 3,
+          "start": 0,
+          "text": "__syncthreads",
+          "token": "Token.Name.Function",
+          "rgb": "cccccc"
+        },
+        {
+          "line": 4,
+          "start": 0,
+          "text": "__syncthreads_count",
+          "token": "Token.Name.Function",
+          "rgb": "cccccc"
+        },
+        {
+          "line": 5,
+          "start": 11,
+          "text": "threadIdx",
+          "token": "Token.Name.Builtin",
+          "rgb": "cd00cd"
+        }
+      ]
+    },
+    {
+      "id": "cuda-emacs-comment-and-string",
+      "language": "cuda",
+      "style": "emacs",
+      "source": "// __shared__ is a comment\nconst char *s = \"__global__\";\n__shared__ int x;",
+      "probes": [
+        {
+          "line": 0,
+          "start": 3,
+          "text": "__shared__",
+          "token": "Token.Comment.Single",
+          "rgb": "008800"
+        },
+        {
+          "line": 1,
+          "start": 17,
+          "text": "__global__",
+          "token": "Token.Literal.String",
+          "rgb": "bb4444"
+        },
+        {
+          "line": 2,
+          "start": 0,
+          "text": "__shared__",
+          "token": "Token.Keyword.Type",
+          "rgb": "00bb00"
+        }
+      ]
+    }
+  ]
+}

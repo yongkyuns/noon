@@ -113,8 +113,9 @@ pub fn program() -> Result<LiveProgram<TimeSeriesPlayback>, String> {
         .map_err(|error| error.to_string())?;
 
     // Both label families attach atomically and are ordinary axes members.
+    // Author the data-origin label independently of the axes' tick exclusions.
     axes.add_coordinates(
-        None,
+        Some(&[0.0, 2.0, 4.0, 6.0, 8.0, 10.0]),
         None,
         &NumberLabelOptions {
             exclude_zero: false,

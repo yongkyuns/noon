@@ -17,9 +17,10 @@ mod layout;
 mod manim_geometry;
 mod style;
 use bounds::transform_layout_xy;
+#[cfg(any(feature = "native-text", feature = "latex"))]
+pub(crate) use bounds::transformed_rect_layout_bounds;
 pub(crate) use bounds::{
     boundary_center, boundary_for_content, layout_for_content, transformed_path_layout_bounds,
-    transformed_rect_layout_bounds,
 };
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fade_occurrences,

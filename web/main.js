@@ -274,11 +274,20 @@ galleryStyle.textContent = `
 `;
 document.head.append(galleryStyle);
 
-const galleryManifest = await loadGalleryManifest();
-const SCENE_EXAMPLES = galleryManifest.examples;
-if (SCENE_EXAMPLES.length === 0) {
-  throw new Error("No runnable examples are ready for the gallery");
+let galleryManifest;
+try {
+  galleryManifest = await loadGalleryManifest();
+  if (galleryManifest.examples.length === 0) {
+    throw new Error("No runnable examples are ready for the gallery");
+  }
+} catch (error) {
+  // Manifest admission precedes the initialized gallery and its Run handlers.
+  showError(error, "Gallery failed");
+  patchStatus.value += " · Reload the page to try again";
+  sceneButton.disabled = true;
+  throw error;
 }
+const SCENE_EXAMPLES = galleryManifest.examples;
 
 const gallerySection = document.createElement("section");
 gallerySection.className = "example-gallery";
@@ -456,10 +465,10 @@ function beginBusy() {
   };
 }
 
-function showError(error) {
+function showError(error, fallbackTitle = "Runtime failed") {
   resetPresentationRate();
   console.error(error);
-  const title = diagnosticPanel.show(error, "Runtime failed");
+  const title = diagnosticPanel.show(error, fallbackTitle);
   if (title === null) return;
   setRuntimeStatus(title, "error");
   patchStatus.value = title;

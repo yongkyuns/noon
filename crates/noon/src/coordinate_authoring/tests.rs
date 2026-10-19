@@ -141,6 +141,177 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 }
 
 #[test]
+fn number_plane_retains_independent_axis_ticks_and_tick_sizes() {
+    let defaults = ManimNumberPlaneOptions::default();
+    assert!(defaults.x_ticks.exclude_origin);
+    assert!(defaults.y_ticks.exclude_origin);
+    let mut scene = Scene::new();
+    let options = ManimNumberPlaneOptions {
+        x_range: [-2.0, 2.0, 1.0],
+        y_range: [-1.0, 1.0, 1.0],
+        x_ticks: CoordinateTicks {
+            enabled: true,
+            half_length: 0.25,
+            exclude_origin: true,
+            ..CoordinateTicks::default()
+        },
+        y_ticks: CoordinateTicks {
+            enabled: true,
+            exclude_origin: false,
+            half_length: 0.15,
+            ..CoordinateTicks::default()
+        },
+        ..ManimNumberPlaneOptions::default()
+    };
+    let plane = scene.number_plane(&options).unwrap();
+    let x_ticks = plane.x_axis().unwrap().ticks().unwrap();
+    let y_ticks = plane.y_axis().unwrap().ticks().unwrap();
+    let store = scene.integration_store().borrow();
+    let x_nodes = store
+        .semantic_family_members_checked(x_ticks.node_id())
+        .unwrap();
+    let y_nodes = store
+        .semantic_family_members_checked(y_ticks.node_id())
+        .unwrap();
+    assert_eq!(x_nodes.len(), 4, "x ticks exclude their origin tick");
+    assert_eq!(y_nodes.len(), 3, "y ticks retain their origin tick");
+    let x_first = x_nodes[0];
+    let y_first = y_nodes[0];
+    drop(store);
+    let x_tick = Mobject::from_node(Rc::clone(scene.integration_store()), x_first).unwrap();
+    let y_tick = Mobject::from_node(Rc::clone(scene.integration_store()), y_first).unwrap();
+    assert!((x_tick.path_query().unwrap().arc_length(None).unwrap() - 0.5).abs() < 1.0e-6);
+    assert!((y_tick.path_query().unwrap().arc_length(None).unwrap() - 0.3).abs() < 1.0e-6);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_plane_retains_independent_axis_stroke_styles() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberPlaneOptions::default();
+    options.axis_style.stroke = Some(SemanticPaint::Solid(noon_core::BLUE));
+    options.axis_style.stroke_width = 0.05;
+    options.axis_style.stroke_opacity = 0.8;
+    options.axis_style.object_opacity = 0.9;
+    options.x_axis_style = Some(SemanticStyle {
+        stroke: Some(SemanticPaint::Solid(noon_core::RED)),
+        stroke_width: 0.03,
+        stroke_opacity: 0.4,
+        object_opacity: 0.6,
+        ..options.axis_style.clone()
+    });
+    options.y_axis_style = Some(SemanticStyle {
+        stroke: Some(SemanticPaint::Solid(noon_core::GREEN)),
+        ..options.axis_style.clone()
+    });
+
+    let plane = scene.number_plane(&options).unwrap();
+    let x_style = plane
+        .x_axis()
+        .unwrap()
+        .shaft()
+        .unwrap()
+        .state()
+        .unwrap()
+        .style;
+    let y_style = plane
+        .y_axis()
+        .unwrap()
+        .shaft()
+        .unwrap()
+        .state()
+        .unwrap()
+        .style;
+    assert_eq!(x_style.stroke, Some(SemanticPaint::Solid(noon_core::RED)));
+    assert_eq!(x_style.stroke_width, 0.03);
+    assert_eq!(x_style.stroke_opacity, 0.4);
+    assert_eq!(x_style.object_opacity, 0.6);
+    assert_eq!(y_style.stroke, Some(SemanticPaint::Solid(noon_core::GREEN)));
+    assert_eq!(y_style.stroke_width, 0.05);
+    assert_eq!(y_style.stroke_opacity, 0.8);
+    assert_eq!(y_style.object_opacity, 0.9);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_plane_retains_independent_tips_and_excludes_tip_endpoint_ticks() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberPlaneOptions {
+        x_range: [-2.0, 2.0, 1.0],
+        y_range: [-1.0, 1.0, 1.0],
+        ..ManimNumberPlaneOptions::default()
+    };
+    options.x_include_tip = true;
+    options.x_tip_width = 0.6;
+    options.x_tip_height = 0.4;
+    options.x_ticks.enabled = true;
+    options.y_ticks.enabled = true;
+    options.axis_style.stroke = Some(SemanticPaint::Solid(noon_core::BLUE));
+
+    let plane = scene.number_plane(&options).unwrap();
+    let x_axis = plane.x_axis().unwrap();
+    let y_axis = plane.y_axis().unwrap();
+    let x_tip = x_axis.tip().unwrap().expect("enabled x-axis tip");
+    assert!(y_axis.tip().unwrap().is_none(), "y tip remains disabled");
+    assert_eq!(x_tip.path_query().unwrap().start().unwrap(), (2.0, 0.0));
+    let tip_style = x_tip.state().unwrap().style;
+    assert_eq!(tip_style.fill, Some(SemanticPaint::Solid(noon_core::BLUE)));
+    // Pinned NumberLine reapplies the shaft outline to its filled tip.
+    assert_eq!(tip_style.stroke_width, options.axis_style.stroke_width);
+    assert_eq!(tip_style.stroke, tip_style.fill);
+    let shaft_end = x_axis.shaft().unwrap().path_query().unwrap().end().unwrap();
+    assert!((shaft_end.0 - 1.6).abs() < 1e-6);
+    assert!((x_axis.authored_frame().unwrap().end()[0] - 2.0).abs() < 1e-6);
+
+    let store = scene.integration_store().borrow();
+    let x_ticks = store
+        .semantic_family_members_checked(x_axis.ticks().unwrap().node_id())
+        .unwrap();
+    let y_ticks = store
+        .semantic_family_members_checked(y_axis.ticks().unwrap().node_id())
+        .unwrap();
+    assert_eq!(
+        x_ticks.len(),
+        3,
+        "tip endpoint and origin ticks are omitted"
+    );
+    assert_eq!(
+        y_ticks.len(),
+        2,
+        "tipless y axis retains its range endpoints"
+    );
+    assert_eq!(resources(&scene), 1);
+}
+
+#[test]
+fn invalid_number_plane_tip_fails_before_resource_or_scene_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let options = ManimNumberPlaneOptions {
+        x_include_tip: true,
+        x_tip_width: f64::NAN,
+        ..ManimNumberPlaneOptions::default()
+    };
+    assert!(scene.number_plane(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_plane_rejects_invalid_axis_style_before_publication() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimNumberPlaneOptions::default();
+    options.x_axis_style = Some(SemanticStyle {
+        stroke_width: f64::NAN,
+        ..options.axis_style.clone()
+    });
+    assert!(scene.number_plane(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
 fn number_line_tip_is_retained_and_removes_the_endpoint_tick() {
     let mut scene = Scene::new();
     let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);

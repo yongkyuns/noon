@@ -7,6 +7,52 @@ from pathlib import Path
 
 
 class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
+    def test_live_edit_routing_reads_the_current_typed_decision(self) -> None:
+        source = textwrap.dedent(
+            '''
+            import sys
+            from types import ModuleType, SimpleNamespace
+
+            bridge = ModuleType("js")
+            bridge.noonResolveAnimationOptions = object()
+            sys.modules["js"] = bridge
+            import _manim_semantic_handles as handles
+
+            class Context:
+                routing = False
+                calls = 0
+
+                def requiresLiveMutationRouting(self):
+                    self.calls += 1
+                    return self.routing
+
+                def liveExecutionOwnership(self):
+                    raise AssertionError("ordinary edits must not request the ownership string")
+
+            context = Context()
+            for wrapper in (
+                SimpleNamespace(_canonical_live_target_context=context),
+                SimpleNamespace(_scene=SimpleNamespace(_canonical_authoring_context=context)),
+            ):
+                for state, routing in (("none", False), ("active", True),
+                                       ("transferred", True), ("returned", True),
+                                       ("none", False)):
+                    context.routing = routing
+                    before = context.calls
+                    actual = handles._live_mutation_context(wrapper)
+                    assert actual is (context if routing else None), state
+                    assert context.calls == before + 1, "routing must not be cached"
+            assert handles._live_mutation_context(SimpleNamespace()) is None
+            '''
+        )
+        python_dir = Path(__file__).resolve().parent
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=python_dir,
+            env={**os.environ, "PYTHONPATH": str(python_dir)},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_bound_deterministic_state_stays_in_shared_handle(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -255,6 +301,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     self.transferred = False
                     self.queries = []
                     self.live_calls = []
+
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
                 def liveExecutionOwnership(self):
                     return "transferred" if self.transferred else "returned"

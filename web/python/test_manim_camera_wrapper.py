@@ -92,6 +92,9 @@ class MovingCameraWrapperTests(unittest.TestCase):
                     self.ownership = "none"
                     self.calls = []
 
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self):
                     return self.ownership
 

@@ -442,6 +442,7 @@ const expectedTypeSurface = [
   "beginAmbientCameraRotation(camera: WasmAuthoringMobjectHandle, rate: number, axis: string): void",
   "stopAmbientCameraRotation(camera: WasmAuthoringMobjectHandle): void",
   "static threeDAxes(x_range: Float64Array, y_range: Float64Array, z_range: Float64Array, x_length: number, y_length: number, z_length: number): WasmCoordinateOptions",
+  "export class WasmNumberLabelOptions",
   "export class WasmThreeDAxesFrame",
   "static line3D(start: Float64Array, end: Float64Array, thickness: number, segments: number): WasmMeshOptions",
   "static polyhedron(vertices: Float64Array, faces: Uint32Array): WasmMeshOptions",
