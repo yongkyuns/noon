@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/playground-flow-development.yml'
-      - 'scripts/continuous-flow-development.patch'
+      - 'scripts/prepare-continuous-flow.py'
+      - 'crates/noon-core/src/stroke_pattern.rs'
+      - 'crates/noon/src/semantic_mobject/stroke_pattern.rs'
 
 permissions:
   contents: read
@@ -13,33 +15,37 @@ jobs:
   prepare:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'work/2188-shared-rust-continuous-flow' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/flow-development/pixels
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Apply the reviewed source patch when present
+      - name: Apply the reviewed integration and remove temporary scaffolding
         id: patch
         shell: bash
         run: |
           set -eu
-          if [ -f scripts/continuous-flow-development.patch ]; then
-            git apply --check scripts/continuous-flow-development.patch
-            git apply scripts/continuous-flow-development.patch
-            rm scripts/continuous-flow-development.patch .github/workflows/playground-flow-development.yml
+          if [ -f scripts/prepare-continuous-flow.py ]; then
+            python3 scripts/prepare-continuous-flow.py
+            rm scripts/prepare-continuous-flow.py .github/workflows/playground-flow-development.yml
             cargo fmt --all
             git diff --check
-            git add crates web scripts/continuous-flow-development.patch .github/workflows/playground-flow-development.yml
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Implement retained continuous stroke patterns in shared Rust (#2188)'
+            git add crates web scripts/prepare-continuous-flow.py .github/workflows/playground-flow-development.yml
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Integrate retained continuous stroke patterns in shared Rust (#2188)'
             expected='${{ github.event.pull_request.head.sha }}'
             actual=$(git ls-remote origin refs/heads/work/2188-shared-rust-continuous-flow | cut -f1)
             test "$expected" = "$actual"
             git push origin HEAD:refs/heads/work/2188-shared-rust-continuous-flow
             echo 'applied=true' >> "$GITHUB_OUTPUT"
           fi
-      - name: Preserve text-only implementation sources for offline review
+      - name: Preserve exact implementation sources
         if: always()
         run: |
           mkdir -p flow-development
@@ -54,14 +60,21 @@ jobs:
                   if p.is_file() and p.suffix in endings:
                       archive.add(p, arcname=name, recursive=False)
           PY
-      - name: Qualify the actual Rust implementation
+      - name: Compile and test actual shared Rust feature
         if: steps.patch.outputs.applied == 'true'
         run: |
-          cargo test -p noon-core --lib
-          cargo test -p noon --no-default-features stroke_pattern
-          cargo test -p noon-runtime --lib
-          cargo test -p noon-render-wgpu --lib
-          cargo check -p noon-native --example continuous_flow
+          set -o pipefail
+          cargo test -p noon-core --lib 2>&1 | tee flow-development/core.log
+          cargo test -p noon --no-default-features stroke_pattern 2>&1 | tee flow-development/authoring.log
+          cargo test -p noon-render-wgpu --test continuous_stroke_pattern 2>&1 | tee flow-development/locality.log
+          cargo check -p noon-native --example continuous_flow 2>&1 | tee flow-development/native.log
+      - name: Capture the actual retained dash and dot renderer output
+        if: steps.patch.outputs.applied == 'true'
+        run: |
+          set -o pipefail
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+          cargo test -p noon-export --no-default-features --test capture native_capture_continuous_stroke_pattern -- --ignored --nocapture 2>&1 | tee flow-development/capture.log
       - uses: actions/upload-artifact@v7
         if: always()
         with:
