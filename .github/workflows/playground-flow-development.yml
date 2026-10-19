@@ -1,0 +1,70 @@
+name: Continuous-flow development workspace
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/playground-flow-development.yml'
+      - 'scripts/continuous-flow-development.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'work/2188-shared-rust-continuous-flow' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Apply the reviewed source patch when present
+        id: patch
+        shell: bash
+        run: |
+          set -eu
+          if [ -f scripts/continuous-flow-development.patch ]; then
+            git apply --check scripts/continuous-flow-development.patch
+            git apply scripts/continuous-flow-development.patch
+            rm scripts/continuous-flow-development.patch .github/workflows/playground-flow-development.yml
+            cargo fmt --all
+            git diff --check
+            git add crates web scripts/continuous-flow-development.patch .github/workflows/playground-flow-development.yml
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Implement retained continuous stroke patterns in shared Rust (#2188)'
+            expected='${{ github.event.pull_request.head.sha }}'
+            actual=$(git ls-remote origin refs/heads/work/2188-shared-rust-continuous-flow | cut -f1)
+            test "$expected" = "$actual"
+            git push origin HEAD:refs/heads/work/2188-shared-rust-continuous-flow
+            echo 'applied=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Preserve text-only implementation sources for offline review
+        if: always()
+        run: |
+          mkdir -p flow-development
+          git rev-parse HEAD > flow-development/tested-commit.txt
+          python3 - <<'PY'
+          import pathlib, subprocess, tarfile
+          names = subprocess.check_output(['git','ls-files','-z']).decode().split('\0')
+          endings = {'.rs','.wgsl','.toml','.lock','.sh','.md','.yml','.yaml','.py','.js','.mjs','.json'}
+          with tarfile.open('flow-development/source.tar.gz','w:gz') as archive:
+              for name in names:
+                  p = pathlib.Path(name)
+                  if p.is_file() and p.suffix in endings:
+                      archive.add(p, arcname=name, recursive=False)
+          PY
+      - name: Qualify the actual Rust implementation
+        if: steps.patch.outputs.applied == 'true'
+        run: |
+          cargo test -p noon-core --lib
+          cargo test -p noon --no-default-features stroke_pattern
+          cargo test -p noon-runtime --lib
+          cargo test -p noon-render-wgpu --lib
+          cargo check -p noon-native --example continuous_flow
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: continuous-flow-development-source
+          path: flow-development
+          retention-days: 1
