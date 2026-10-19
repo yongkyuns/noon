@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
+      - "crates/noon/src/code_display/highlight.rs"
+      - "fixtures/code/pygments-2.19.2-code-colors.json"
+      - "scripts/test_code_pygments_parity.py"
       - "crates/noon/src/diagnostics.rs"
       - "crates/noon/src/example_scenes/following_graph_camera.rs"
       - "web/python/examples/manim_example_following_graph_camera.py"
@@ -172,6 +175,8 @@ jobs:
           python -m pip show manimpango
           latex --version
           dvisvgm --version
+      - name: Verify pinned Code token colors used by ManimCE 0.21.0
+        run: python3 scripts/test_code_pygments_parity.py
       - name: Verify relocated manifests use repository-relative sources
         run: python scripts/test_manim_raster_manifest.py
       - name: Use repository-pinned Rust and WASM target
