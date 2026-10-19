@@ -181,8 +181,8 @@ impl LayoutAnchor {
 /// Target leaves shared with the source observe the staged scale before the
 /// final center shift, matching ordinary sequential replace semantics without
 /// publishing an intermediate revision.
-/// A missing dimension denotes planar zero depth. An optional circle buffer
-/// adds the pinned diagonal fit after remeasuring the replaced target.
+/// An optional circle buffer adds the pinned diagonal fit after remeasuring
+/// the replaced target.
 pub(crate) fn replacement_transaction(
     store: &noon_core::SemanticStore,
     leaves: &[crate::SemanticNodeId],
@@ -192,7 +192,7 @@ pub(crate) fn replacement_transaction(
         Option<Bounds2D64>,
         Option<Bounds2D64>,
     )],
-    dimension: Option<LayoutDimension>,
+    dimension: LayoutDimension,
     stretch: bool,
     circle_buffer_factor: Option<f64>,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
@@ -231,13 +231,10 @@ pub(crate) fn replacement_transaction(
             )?
             .map_or(1.0, |scale| scale.1);
         (x, y)
-    } else if let Some(dimension) = dimension {
+    } else {
         dimension
             .scale(source_bounds, dimension.length(target_bounds), false)?
             .unwrap_or((1.0, 1.0))
-    } else {
-        // Planar depth is zero; Manim's depth fit leaves the source unchanged.
-        (1.0, 1.0)
     };
     let center = crate::family_layout::bounds_critical_point(source_boundary, 0.0, 0.0);
     let sources: BTreeSet<_> = leaves.iter().copied().collect();
@@ -333,7 +330,7 @@ impl LayoutAnchor {
         dimension: LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
-        self.replace_layout_with_circle_buffer(target, Some(dimension), stretch, None)
+        self.replace_layout_with_circle_buffer(target, dimension, stretch, None)
     }
 
     /// Apply ManimCE Circle.surround sizing through one atomic affine edit.
@@ -355,7 +352,7 @@ impl LayoutAnchor {
     fn replace_layout_with_circle_buffer(
         &self,
         target: &LayoutAnchor,
-        dimension: Option<LayoutDimension>,
+        dimension: LayoutDimension,
         stretch: bool,
         circle_buffer_factor: Option<f64>,
     ) -> Result<(), AuthoringError> {
@@ -399,12 +396,10 @@ impl LayoutAnchor {
 pub(crate) fn circle_surround_dimension(
     dimension: u32,
     stretch: bool,
-) -> Result<Option<LayoutDimension>, AuthoringError> {
+) -> Result<LayoutDimension, AuthoringError> {
     if stretch {
-        Ok(Some(LayoutDimension::Width))
-    } else if dimension == 2 {
-        Ok(None)
+        Ok(LayoutDimension::Width)
     } else {
-        dimension.try_into().map(Some)
+        dimension.try_into()
     }
 }

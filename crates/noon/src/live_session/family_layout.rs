@@ -143,7 +143,7 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), LiveSessionError> {
-        self.replace_layout_with_circle_buffer(source, target, Some(dimension), stretch, None)
+        self.replace_layout_with_circle_buffer(source, target, dimension, stretch, None)
     }
 
     /// Publish Circle.surround from coherent live bounds with one revision.
@@ -170,7 +170,7 @@ impl LiveSession<'_> {
         &mut self,
         source: &crate::LayoutAnchor,
         target: &crate::LayoutAnchor,
-        dimension: Option<crate::LayoutDimension>,
+        dimension: crate::LayoutDimension,
         stretch: bool,
         circle_buffer_factor: Option<f64>,
     ) -> Result<(), LiveSessionError> {
