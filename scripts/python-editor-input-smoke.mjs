@@ -40,11 +40,16 @@ try {
   });
   await page.goto("http://editor.test/");
   await page.waitForSelector(".python-code-editor[data-editor-ready='true']");
-  const snapshot = () => page.evaluate(() => ({
-    source: document.querySelector("textarea").value,
-    observed: window.observedSources.slice(),
-    resetDisabled: document.querySelector("#reset").disabled,
-  }));
+  const snapshot = async () => {
+    const state = await page.evaluate(() => ({
+      source: document.querySelector("textarea").value,
+      observed: window.observedSources.slice(),
+      resetDisabled: document.querySelector("#reset").disabled,
+    }));
+    assert.equal(await page.locator("textarea").inputValue(), state.source,
+      "native textarea readback must match the enhanced editor after source changes");
+    return state;
+  };
 
   // Gallery loads and Reset project source without scheduling a user edit.
   await page.evaluate(() => { document.querySelector("textarea").value = "loaded"; });

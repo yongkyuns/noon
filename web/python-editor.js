@@ -93,6 +93,9 @@ async function enhancePythonEditors() {
     textarea.before(host);
 
     let projectingSource = false;
+    const setNativeValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype, "value",
+    ).set;
     const view = new EditorView({
       doc: textarea.value,
       parent: host,
@@ -104,7 +107,11 @@ async function enhancePythonEditors() {
         lintGutter(),
         linter(runRuff, { delay: 300 }),
         EditorView.updateListener.of((update) => {
-          if (!update.docChanged || projectingSource) return;
+          if (!update.docChanged) return;
+          // Keep native DOM readback coherent for forms and isolated realms,
+          // which do not see the instance-level value proxy below.
+          setNativeValue.call(textarea, update.view.state.doc.toString());
+          if (projectingSource) return;
           // DOM input fires before CodeMirror commits its document. Publish
           // only committed edits, including undo/redo, so draft and live-run
           // consumers read the source that actually triggered the notification.
