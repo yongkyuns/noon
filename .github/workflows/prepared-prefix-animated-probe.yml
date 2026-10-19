@@ -36,6 +36,17 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --test prepared_prefix_animation_admission -- --nocapture 2>&1 | tee prefix-animated-artifacts/native-text.log
+      - name: Real Vulkan late-text lifecycle frames
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p prefix-animated-artifacts
+          sudo apt-get update -qq
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers >/dev/null
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-prefix-text"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --test prepared_prefix_animation_admission -- --ignored --nocapture --test-threads=1 2>&1 | tee prefix-animated-artifacts/raster.log
       - name: Preserve candidate formatting
         if: always()
         run: |
