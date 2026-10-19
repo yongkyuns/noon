@@ -45,6 +45,19 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.mobject._scene = self.scene
         updaters.prepare_canonical_callbacks(self.scene, self.context)
 
+    def test_immediate_updater_is_rejected_before_registration_for_rust_handles(self):
+        callback = lambda mobject: None
+
+        with self.assertRaisesRegex(
+            NotImplementedError,
+            "^call_updater=True is not supported for canonical callbacks until "
+            "immediate invocation has one atomic shared-semantic operation$",
+        ):
+            updaters.add_updater(self.mobject, callback, call_updater=True)
+
+        self.assertEqual(updaters.get_updaters(self.mobject), [])
+        self.assertEqual(self.context.calls, [])
+
     def test_add_remove_and_clear_delegate_authored_boundaries(self):
         forward = lambda mobject, dt: None
         backward = lambda mobject, dt: None
