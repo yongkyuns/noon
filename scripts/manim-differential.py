@@ -4600,6 +4600,68 @@ def _vgroup_root_paint_array_probe(api, scene=None):
     }
 
 
+def _vmobject_init_colors_probe(api, scene=None):
+    def make_family():
+        first = api.Square(side_length=1).set_style(
+            fill_color=api.RED,
+            fill_opacity=0.2,
+            stroke_color=api.BLUE,
+            stroke_width=2,
+            stroke_opacity=0.4,
+        )
+        second = api.Square(side_length=1).set_style(
+            fill_color=api.YELLOW,
+            fill_opacity=0.3,
+            stroke_color=api.GREEN,
+            stroke_width=3,
+            stroke_opacity=0.5,
+        )
+        family = api.VGroup(first, second)
+        family.set_style(
+            fill_color=api.PURPLE,
+            fill_opacity=0.6,
+            stroke_color=api.ORANGE,
+            stroke_width=5,
+            stroke_opacity=0.7,
+            family=False,
+        )
+        if scene is not None:
+            scene.add(family)
+        return family, first, second
+
+    family, first, second = make_family()
+
+    def style(value):
+        return {
+            "fill_color": _paint_rgb(value.get_fill_color()),
+            "fill_opacity": _round_float(value.get_fill_opacity()),
+            "stroke_color": _paint_rgb(value.get_stroke_color()),
+            "stroke_width": _round_float(value.get_stroke_width()),
+            "stroke_opacity": _round_float(value.get_stroke_opacity()),
+        }
+
+    before = {"root": style(family), "children": [style(first), style(second)]}
+    returned_self = family.init_colors() is family
+    propagated = {"root": style(family), "children": [style(first), style(second)]}
+
+    local, local_first, local_second = make_family()
+    before_local = {
+        "root": style(local),
+        "children": [style(local_first), style(local_second)],
+    }
+    local_returned_self = local.init_colors(propagate_colors=False) is local
+    non_propagated = {
+        "root": style(local),
+        "children": [style(local_first), style(local_second)],
+    }
+    return {
+        "propagated": {"returned_self": returned_self, "before": before,
+                       "after": propagated},
+        "family_false": {"returned_self": local_returned_self,
+                         "before": before_local, "after": non_propagated},
+    }
+
+
 def _cap_style_probe(api, scene=None):
     cap_type = api.CapStyleType
     cap_names = ("AUTO", "ROUND", "BUTT", "SQUARE")
@@ -5323,6 +5385,14 @@ FIXTURES = [
     Fixture("generate_rgbas_array",
             lambda: _generate_rgbas_array_probe(noon),
             lambda: _generate_rgbas_array_probe(manim)),
+    Fixture("vmobject_init_colors",
+            lambda: _vmobject_init_colors_probe(noon),
+            lambda: _vmobject_init_colors_probe(manim), 1e-5),
+    Fixture("vmobject_init_colors_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vmobject_init_colors_probe(noon, scene)
+            ),
+            lambda: _vmobject_init_colors_probe(manim), 1e-5),
     Fixture(
         "plain_group_fade_family_false",
         lambda: _plain_group_nonrecursive_fade_probe(noon),

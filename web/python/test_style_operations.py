@@ -267,6 +267,72 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertIs(group.rotate_sheen_direction(0.0), group)
         self.assertIsNone(group.get_background_image())
 
+    def test_vmobject_init_colors_uses_supported_shared_paint(self):
+        self.assertEqual(
+            list(inspect.signature(compat.VMobject.init_colors).parameters),
+            ["self", "propagate_colors"],
+        )
+        self.assertIs(compat.VGroup.init_colors, compat.VMobject.init_colors)
+
+        vector = identity_only_wrapper(compat.VMobject)
+        black = compat._base.BLACK
+        with (
+            patch.object(vector, "get_stroke_color", return_value=black),
+            patch.object(vector, "get_stroke_width", side_effect=lambda background=False: 0 if background else 4),
+            patch.object(vector, "get_stroke_opacity", side_effect=lambda background=False: 1 if background else 0.7),
+            patch.object(vector, "get_sheen_factor", return_value=0),
+            patch.object(vector, "get_background_image", return_value=None),
+            patch.object(vector, "get_fill_color", return_value=compat._base.RED),
+            patch.object(vector, "get_fill_opacity", return_value=0.6),
+            patch.object(vector, "get_sheen_direction", return_value=[-1, 1, 0]),
+            patch.object(vector, "set_fill") as set_fill,
+            patch.object(vector, "set_stroke") as set_stroke,
+            patch.object(vector, "set_background_stroke") as set_background_stroke,
+            patch.object(vector, "set_sheen") as set_sheen,
+        ):
+            self.assertIs(vector.init_colors(propagate_colors=False), vector)
+            set_fill.assert_called_once_with(
+                color=compat._base.RED, opacity=0.6, family=False
+            )
+            set_stroke.assert_called_once_with(
+                color=black, width=4, opacity=0.7, family=False
+            )
+            set_background_stroke.assert_called_once_with(
+                color=black, width=0, opacity=1, family=False
+            )
+            set_sheen.assert_called_once_with(
+                factor=0, direction=[-1, 1, 0], family=False
+            )
+            set_fill.reset_mock()
+            set_stroke.reset_mock()
+            set_background_stroke.reset_mock()
+            set_sheen.reset_mock()
+            self.assertIs(vector.init_colors(), vector)
+            set_fill.assert_called_once_with(
+                color=compat._base.RED, opacity=0.6, family=True
+            )
+            set_stroke.assert_called_once_with(
+                color=black, width=4, opacity=0.7, family=True
+            )
+            set_background_stroke.assert_called_once_with(
+                color=black, width=0, opacity=1, family=True
+            )
+            set_sheen.assert_called_once_with(
+                factor=0, direction=[-1, 1, 0], family=True
+            )
+
+        with (
+            patch.object(vector, "get_stroke_color", side_effect=lambda background=False: compat._base.BLUE if background else black),
+            patch.object(vector, "get_stroke_width", side_effect=lambda background=False: 2 if background else 4),
+            patch.object(vector, "get_stroke_opacity", side_effect=lambda background=False: 0.5 if background else 0.7),
+            patch.object(vector, "get_sheen_factor", return_value=0),
+            patch.object(vector, "get_background_image", return_value=None),
+            patch.object(vector, "set_fill") as set_fill,
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "background-stroke paint"):
+                vector.init_colors()
+            set_fill.assert_not_called()
+
     def test_sheen_direction_mutators_use_shared_rust_detached_and_live_routes(self):
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(

@@ -1051,6 +1051,48 @@ json.dumps({
   ]);
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
+  const assertStyleNear = (actual, expected, message) => {
+    assert.deepEqual(actual.fill_color, expected.fill_color,
+      `${message}: fill color`);
+    assert.deepEqual(actual.stroke_color, expected.stroke_color,
+      `${message}: stroke color`);
+    for (const key of ["fill_opacity", "stroke_width", "stroke_opacity"]) {
+      assert.ok(Math.abs(actual[key] - expected[key]) <= 1e-5,
+        `${message}: ${key} (${actual[key]} vs ${expected[key]})`);
+    }
+  };
+  for (const name of ["vmobject_init_colors", "vmobject_init_colors_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.propagated.returned_self, true,
+      `${name}: propagating init_colors returns the family`);
+    assertStyleNear(profile.propagated.after.root, profile.propagated.before.root,
+      `${name}: propagation preserves the root's own style`);
+    for (const child of profile.propagated.after.children) {
+      assertStyleNear(child, profile.propagated.before.root,
+        `${name}: propagation applies root fill and stroke to every child`);
+    }
+    assert.equal(profile.family_false.returned_self, true,
+      `${name}: family=False init_colors returns the family`);
+    assertStyleNear(profile.family_false.after.root, profile.family_false.before.root,
+      `${name}: family=False retains the root style`);
+    for (let index = 0; index < profile.family_false.after.children.length; index += 1) {
+      assertStyleNear(profile.family_false.after.children[index],
+        profile.family_false.before.children[index],
+        `${name}: family=False retains child ${index} style`);
+    }
+  }
+  for (const mode of ["propagated", "family_false"]) {
+    for (const member of ["root", "children"]) {
+      const authored = observations.vmobject_init_colors[mode].after[member];
+      const live = observations.vmobject_init_colors_live[mode].after[member];
+      const authoredMembers = Array.isArray(authored) ? authored : [authored];
+      const liveMembers = Array.isArray(live) ? live : [live];
+      for (let index = 0; index < authoredMembers.length; index += 1) {
+        assertStyleNear(liveMembers[index], authoredMembers[index],
+          `init_colors ${mode} ${member} ${index}: authored/live result`);
+      }
+    }
+  }
   for (const name of ["apply_over_attr_arrays", "apply_over_attr_arrays_live"]) {
     const profile = observations[name];
     assert.equal(profile.returns_self, true, `${name}: returns the same Mobject`);

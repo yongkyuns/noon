@@ -224,6 +224,88 @@ class VMobject(Mobject):
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 
+    def init_colors(self, propagate_colors=True):
+        """Reapply the root's supported paint profile through shared Rust.
+
+        Noon stores paint on the semantic object, so this re-applies the
+        current root profile through the normal typed setters. The non-propagating
+        form remains root-local. Background strokes, nonzero sheen, and
+        background images are rejected before any writes.
+        """
+        def current(name, getter):
+            try:
+                return getattr(self, name)
+            except AttributeError:
+                return getter()
+
+        background_stroke_color = current(
+            "background_stroke_color",
+            lambda: self.get_stroke_color(background=True),
+        )
+        background_stroke_width = current(
+            "background_stroke_width",
+            lambda: self.get_stroke_width(background=True),
+        )
+        background_stroke_opacity = current(
+            "background_stroke_opacity",
+            lambda: self.get_stroke_opacity(background=True),
+        )
+        sheen_factor = current("sheen_factor", self.get_sheen_factor)
+        background_image = current("background_image", self.get_background_image)
+        if background_stroke_color is None:
+            background_stroke_color = self.get_stroke_color(background=True)
+        if background_stroke_width is None:
+            background_stroke_width = self.get_stroke_width(background=True)
+        if background_stroke_opacity is None:
+            background_stroke_opacity = self.get_stroke_opacity(background=True)
+        if (
+            background_stroke_color != _base.BLACK
+            or background_stroke_width != 0
+            or background_stroke_opacity != 1
+        ):
+            raise NotImplementedError(
+                "VMobject.init_colors requires shared background-stroke paint"
+            )
+        if sheen_factor != 0:
+            raise NotImplementedError(
+                "VMobject.init_colors requires shared gradient paint"
+            )
+        if background_image is not None:
+            raise NotImplementedError(
+                "VMobject.init_colors requires shared image paint"
+            )
+
+        fill_color = current("fill_color", self.get_fill_color)
+        fill_opacity = current("fill_opacity", self.get_fill_opacity)
+        stroke_color = current("stroke_color", self.get_stroke_color)
+        stroke_width = current("stroke_width", self.get_stroke_width)
+        stroke_opacity = current("stroke_opacity", self.get_stroke_opacity)
+        sheen_direction = current("sheen_direction", self.get_sheen_direction)
+
+        self.set_fill(
+            color=fill_color,
+            opacity=fill_opacity,
+            family=propagate_colors,
+        )
+        self.set_stroke(
+            color=stroke_color,
+            width=stroke_width,
+            opacity=stroke_opacity,
+            family=propagate_colors,
+        )
+        self.set_background_stroke(
+            color=background_stroke_color,
+            width=background_stroke_width,
+            opacity=background_stroke_opacity,
+            family=propagate_colors,
+        )
+        self.set_sheen(
+            factor=sheen_factor,
+            direction=sheen_direction,
+            family=propagate_colors,
+        )
+        return self
+
     def consider_points_equals(self, p0, p1):
         from _manim_path_queries import consider_points_equals
         return consider_points_equals(self, p0, p1)
@@ -1198,6 +1280,7 @@ class VGroup(Group):
     set_sheen = VMobject.set_sheen
     get_style = VMobject.get_style
     set_style = VMobject.set_style
+    init_colors = VMobject.init_colors
     get_fill_color = VMobject.get_fill_color
     get_fill_rgbas = VMobject.get_fill_rgbas
     get_fill_colors = VMobject.get_fill_colors
