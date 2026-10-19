@@ -106,7 +106,8 @@ fn fill_only_line_cannot_interpret_pattern_parameters_as_fill_color() {
     let mut runtime =
         SceneInstance::new(CompiledScene::compile_objects(vec![styled], &[]).unwrap());
     runtime.advance_to(0.0).unwrap();
-    let prepared = FramePreparer::new().prepare(runtime.frame());
+    let mut preparer = FramePreparer::new();
+    let prepared = preparer.prepare(runtime.frame());
     assert_eq!(prepared.lines.len(), 1);
     assert_eq!(prepared.lines[0].style.fill_enabled, 1);
     assert_eq!(prepared.lines[0].style.fill, [1.0; 4]);
