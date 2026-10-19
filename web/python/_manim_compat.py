@@ -1163,6 +1163,46 @@ class VGroup(Group):
         return change_anchor_mode(self, mode)
 
 
+class CurvesAsSubmobjects(VGroup):
+    """Expose each shared-Rust cubic path segment as a styled VMobject child."""
+
+    def __init__(self, vmobject: VMobject, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        for curve in vmobject.get_cubic_bezier_tuples():
+            part = VMobject()
+            part.set_points(curve)
+            part.match_style(vmobject)
+            self.add(part)
+
+    def point_from_proportion(self, alpha: float) -> _base.Vec2:
+        """Query this piecewise family by cumulative shared-Rust arc length."""
+        if alpha < 0 or alpha > 1:
+            raise ValueError(f"Alpha {alpha} not between 0 and 1.")
+
+        if len(self.submobjects) == 0:
+            raise Exception(
+                "Cannot call CurvesAsSubmobjects. point_from_proportion for a "
+                "CurvesAsSubmobject with no submobjects"
+            )
+        parts = [part for part in self.submobjects if part.get_num_points() > 0]
+        if not parts:
+            raise Exception(
+                "Cannot call CurvesAsSubmobjects. point_from_proportion for a "
+                "CurvesAsSubmobject whose submobjects have no points"
+            )
+        if alpha == 1:
+            return parts[-1].point_from_proportion(1)
+
+        lengths = [part.get_arc_length() for part in parts]
+        target_length = alpha * sum(lengths)
+        current_length = 0.0
+        for part, length in zip(parts, lengths):
+            if current_length + length >= target_length:
+                residue = (target_length - current_length) / length
+                return part.point_from_proportion(residue)
+            current_length += length
+
+
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:
     """Capture a detached target through the shared Rust target editor."""
     del use_deepcopy

@@ -100,6 +100,14 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertIn("scripts/manim-differential.py:always_builder", policy["overrides"]["Mobject"]["evidence"])
         self.assertIn("scripts/manim-differential.py:always_builder_live", policy["overrides"]["Mobject"]["evidence"])
 
+    def test_curves_as_submobjects_is_exported_with_a_bounded_disposition(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        self.assertIn("CurvesAsSubmobjects", coverage.noon_public_exports())
+        disposition = policy["overrides"]["CurvesAsSubmobjects"]
+        self.assertEqual(disposition["status"], "partial")
+        self.assertIn("point_from_proportion", disposition["reason"])
+        self.assertIn("scripts/manim-differential.py:curves_as_submobjects_live", disposition["evidence"])
+
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())

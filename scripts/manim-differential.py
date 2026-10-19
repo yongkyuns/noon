@@ -3713,6 +3713,47 @@ def _path_selection(api):
     return result
 
 
+def _curves_as_submobjects_probe(api, scene=None):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject(
+        stroke_color=api.BLUE,
+        stroke_width=3.0,
+        stroke_opacity=0.75,
+    ).start_new_path(point(0, 0))
+    source.add_cubic_bezier_curve_to(point(0, 2), point(2, 2), point(2, 0))
+    source.add_line_to(point(5, 0))
+    if scene is not None:
+        scene.add(source)
+
+    curves = api.CurvesAsSubmobjects(source)
+    if scene is not None:
+        scene.add(curves)
+    parts = curves.submobjects
+    return {
+        "part_count": len(parts),
+        "part_point_counts": [part.get_num_points() for part in parts],
+        "part_lengths": [_round_float(part.get_arc_length()) for part in parts],
+        "part_styles": [
+            [
+                _paint_rgb(part.get_stroke_color()),
+                _round_float(part.get_stroke_width()),
+                _round_float(part.get_stroke_opacity()),
+            ]
+            for part in parts
+        ],
+        "samples": [
+            _point_observation(curves.point_from_proportion(alpha))
+            for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
+        ],
+    }
+
+
+def _noon_curves_as_submobjects_live():
+    return _noon_live_scene_probe(
+        lambda scene: _curves_as_submobjects_probe(noon, scene)
+    )
+
+
 def _path_pieces(api):
     source = api.VMobject().set_points_as_corners(
         [(0, 0, 0), (2, 0, 0), (2, 2, 0)]
@@ -4498,6 +4539,10 @@ FIXTURES = [
             lambda: _background_image_default_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
+    Fixture("curves_as_submobjects", lambda: _curves_as_submobjects_probe(noon),
+            lambda: _curves_as_submobjects_probe(manim), 1e-5),
+    Fixture("curves_as_submobjects_live", _noon_curves_as_submobjects_live,
+            lambda: _curves_as_submobjects_probe(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
     Fixture("set_points_as_corners_custom_constructor_samples", lambda: _set_points_as_corners_custom_constructor_samples(noon), lambda: _set_points_as_corners_custom_constructor_samples(manim), 1e-5),
