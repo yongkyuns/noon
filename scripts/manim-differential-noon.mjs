@@ -1071,6 +1071,13 @@ json.dumps({
   ]);
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
+  const curveQueries = observations.curve_function_queries;
+  for (const name of ["functions", "functions_with_lengths"]) {
+    const escaped = curveQueries.escaped_after_generator_error[name];
+    assert.equal(escaped.error_message, "stop querying");
+    assert.deepEqual(escaped.curve, curveQueries.functions[0],
+      `${name}: an escaped curve remains usable after its generator fails`);
+  }
   const assertStyleNear = (actual, expected, message) => {
     for (const key of ["fill_color", "stroke_color", "background_stroke_color"]) {
       if (!(key in expected)) continue;

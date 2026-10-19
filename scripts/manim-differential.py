@@ -2544,6 +2544,20 @@ def _curve_function_queries(api):
     with_length, length = path.get_nth_curve_function_with_length(
         0, sample_points=6
     )
+
+    def escaped_curve_after_generator_error(with_lengths):
+        stream = (
+            path.get_curve_functions_with_lengths(sample_points=6)
+            if with_lengths else path.get_curve_functions()
+        )
+        yielded = next(stream)
+        function = yielded[0] if with_lengths else yielded
+        try:
+            stream.throw(ValueError("stop querying"))
+        except ValueError as error:
+            message = str(error)
+        return {"error_message": message, "curve": sample(function)}
+
     return {
         "sampled_lengths": {
             "default_pieces": [
@@ -2586,6 +2600,10 @@ def _curve_function_queries(api):
                 sample_points=6
             )
         ],
+        "escaped_after_generator_error": {
+            "functions": escaped_curve_after_generator_error(False),
+            "functions_with_lengths": escaped_curve_after_generator_error(True),
+        },
         "vector_family_boundary": [
             _point_observation(point)
             for point in vector_family.get_points_defining_boundary()

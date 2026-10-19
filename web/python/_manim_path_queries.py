@@ -856,48 +856,46 @@ def _empty_curve_callable():
 def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None):
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
-    try:
-        point_count = int(query.pointCount)
-        count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
-        curve_indices = range(count)
-        if with_lengths and count > 0 and extra_kwargs:
-            unexpected = set(extra_kwargs) - {"sample_points"}
-            if unexpected:
-                # Match Manim's lazy per-curve dispatch, including subclass
-                # overrides and Python's bound-method TypeError text.
-                for index in curve_indices:
-                    yield value.get_nth_curve_function_with_length(
-                        index, **extra_kwargs
-                    )
-                return
-        samples = (
-            _curve_sample_count(sample_points)
-            if with_lengths and count > 0
-            else None
-        )
-        if with_lengths and count > 0 and samples == 0:
-            _raise_zero_sample_length_axis_error()
-        for index in curve_indices:
-            selection = _nth_curve_selection(value, index, query)
-            function = (
-                _empty_curve_callable()
-                if selection is None
-                else _selected_curve_callable(snapshot, selection)
-            )
-            if with_lengths:
-                import numpy as np
-
-                if selection is None:
-                    raise IndexError("index 0 is out of bounds for axis 1 with size 0")
-                length = np.float64(
-                    _curve_length_from_selection(query, selection, samples)
+    # Yielded callables share this owner. Generator failure must not release
+    # the query while any previously returned callable still needs it.
+    point_count = int(query.pointCount)
+    count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
+    curve_indices = range(count)
+    if with_lengths and count > 0 and extra_kwargs:
+        unexpected = set(extra_kwargs) - {"sample_points"}
+        if unexpected:
+            # Match Manim's lazy per-curve dispatch, including subclass
+            # overrides and Python's bound-method TypeError text.
+            for index in curve_indices:
+                yield value.get_nth_curve_function_with_length(
+                    index, **extra_kwargs
                 )
-                yield function, length
-            else:
-                yield function
-    except Exception:
-        snapshot.__del__()
-        raise
+            return
+    samples = (
+        _curve_sample_count(sample_points)
+        if with_lengths and count > 0
+        else None
+    )
+    if with_lengths and count > 0 and samples == 0:
+        _raise_zero_sample_length_axis_error()
+    for index in curve_indices:
+        selection = _nth_curve_selection(value, index, query)
+        function = (
+            _empty_curve_callable()
+            if selection is None
+            else _selected_curve_callable(snapshot, selection)
+        )
+        if with_lengths:
+            import numpy as np
+
+            if selection is None:
+                raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+            length = np.float64(
+                _curve_length_from_selection(query, selection, samples)
+            )
+            yield function, length
+        else:
+            yield function
 
 
 def curve_function(value, n):

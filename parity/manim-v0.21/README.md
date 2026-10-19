@@ -273,3 +273,10 @@ The shared runtime generic-transform regression also checks intermediate
 background RGBA and width, exact endpoints, and equality of direct seek and
 forward playback for point-owning paths. This is native runtime evidence;
 pinned ManimCE timing and raster equivalence remains unqualified.
+
+Curve-function generators retain shared Rust query ownership for every callable
+already returned, including after a caller injects a generator exception or a
+later curve-length query fails. Regression tests verify final-owner cleanup;
+actual WASM/Pyodide probes cover escaped callables from both generator variants.
+The pinned two-sided comparison for these new error-lifetime probes remains
+pending. This does not qualify source-edit tracking or broader curve contracts.
