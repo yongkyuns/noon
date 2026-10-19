@@ -488,8 +488,14 @@ fn native_capture_continuous_stroke_pattern_replays_retained_pixels() {
         };
         let cyan_runs = separated_ink_runs(|p| p[0] < 64 && p[1] > 160 && p[2] > 160);
         let yellow_runs = separated_ink_runs(|p| p[0] > 160 && p[1] > 120 && p[2] < 64);
-        assert!(cyan_runs >= 8, "dashes must be separated at t={time}: {cyan_runs} regions");
-        assert!(yellow_runs >= 8, "dots must be separated at t={time}: {yellow_runs} regions");
+        assert!(
+            cyan_runs >= 8,
+            "dashes must be separated at t={time}: {cyan_runs} regions"
+        );
+        assert!(
+            yellow_runs >= 8,
+            "dots must be separated at t={time}: {yellow_runs} regions"
+        );
         assert!(
             rgb.iter()
                 .filter(|p| p[0] < 64 && p[1] > 160 && p[2] > 160)
