@@ -115,7 +115,14 @@ async function execute(entry, mode, trial, checks = false) {
       const started = performance.now();
       const worker = new Worker(mode === 'headless' ? './gallery-preparation-diagnostic-worker.js' : './python-worker.js', {type:'module'});
       let headlessStats = null;
-      worker.addEventListener('message', event => { if (event.data?.channel === 'noon.preparation.diagnostic') headlessStats = event.data.stats; });
+      // Register before PythonAuthoringClient: its production protocol correctly
+      // rejects foreign channels. Consume only this test-only telemetry message;
+      // ordinary production messages and their validation remain untouched.
+      worker.addEventListener('message', event => {
+        if (event.data?.channel !== 'noon.preparation.diagnostic') return;
+        event.stopImmediatePropagation();
+        headlessStats = event.data.stats;
+      });
       const authoring = new PythonAuthoringClient(worker);
       let executionError = null;
       const execution = new AuthoringExecutionClient(document.querySelector('#scene'), {onError: error => { executionError = String(error); }});
