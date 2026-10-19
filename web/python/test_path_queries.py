@@ -152,6 +152,59 @@ class PathQueryTests(unittest.TestCase):
             gc.collect()
             self.assertEqual(query.free.call_count, 3)
 
+    def test_yielded_curve_survives_generator_error_until_last_owner_releases_it(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy curve callable results")
+        value = identity_only_wrapper(compat.VMobject)
+        for with_lengths in (False, True):
+            with self.subTest(with_lengths=with_lengths):
+                query = Mock(curveCount=2, pointCount=8)
+                query.curveLength.return_value = 2.5
+                query.curvePointsAt.return_value = [0.5, 1., 0.]
+                with patch.object(queries, "_typed_manim_observation", return_value=query):
+                    stream = (
+                        value.get_curve_functions_with_lengths()
+                        if with_lengths else value.get_curve_functions()
+                    )
+                    yielded = next(stream)
+                    function = yielded[0] if with_lengths else yielded
+                    with self.assertRaisesRegex(ValueError, "stop querying"):
+                        stream.throw(ValueError("stop querying"))
+                query.free.assert_not_called()
+                np.testing.assert_array_equal(function(0.5), [0.5, 1., 0.])
+                del stream, yielded, function
+                gc.collect()
+                query.free.assert_called_once_with()
+
+    def test_yielded_curve_survives_later_length_query_failure(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy curve callable results")
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock(curveCount=2, pointCount=8)
+        query.curvePointsAt.return_value = [0.5, 1., 0.]
+
+        def length(index, _samples):
+            if index == 1:
+                raise ValueError("later length failed")
+            return 2.5
+
+        query.curveLength.side_effect = length
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            stream = value.get_curve_functions_with_lengths()
+            function, curve_length = next(stream)
+            self.assertEqual(curve_length, 2.5)
+            with self.assertRaisesRegex(ValueError, "later length failed"):
+                next(stream)
+        query.free.assert_not_called()
+        np.testing.assert_array_equal(function(0.5), [0.5, 1., 0.])
+        del stream, function
+        gc.collect()
+        query.free.assert_called_once_with()
+
     def test_curve_function_index_and_length_generator_arguments(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock()
