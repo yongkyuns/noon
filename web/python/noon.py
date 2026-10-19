@@ -309,6 +309,10 @@ class Mobject:
         message = f"get_point_mobject not implemented for {self.__class__.__name__}"
         raise NotImplementedError(message)
 
+    def repeat_submobject(self, submob: Mobject) -> Mobject:
+        """Return an independent shared-semantic copy of ``submob``."""
+        return submob.copy()
+
     def align_points(self, mobject: Mobject) -> Mobject:
         count = self.get_num_points()
         other_count = mobject.get_num_points()

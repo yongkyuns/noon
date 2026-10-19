@@ -569,6 +569,25 @@ def _manim_vgroup_add_remove() -> Any:
     return _members_observation(group)
 
 
+def _repeat_submobject_probe(provider: Any) -> Any:
+    parent = provider.Group()
+    member = provider.Circle(radius=0.25).shift(provider.RIGHT)
+    repeated = parent.repeat_submobject(member)
+    return {
+        "returns_distinct_copy": repeated is not member,
+        "member": _object_observation(member),
+        "copy": _object_observation(repeated),
+    }
+
+
+def _noon_repeat_submobject() -> Any:
+    return _repeat_submobject_probe(noon)
+
+
+def _manim_repeat_submobject() -> Any:
+    return _repeat_submobject_probe(manim)
+
+
 def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Circle(radius=0.25)
     second = provider.Square(side_length=0.5)
@@ -4842,6 +4861,7 @@ FIXTURES = [
     Fixture("family_fade_to", lambda: _family_fade_to_probe(noon),
             lambda: _family_fade_to_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
+    Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),
     Fixture("vdict_mapping_live", _noon_vdict_mapping_live, _manim_vdict_mapping),
