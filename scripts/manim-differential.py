@@ -623,6 +623,53 @@ def _noon_group_add_n_more_submobjects_live() -> Any:
     )
 
 
+def _group_align_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    left_first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    left_second = provider.Square(side_length=0.5, color=provider.GREEN).shift(provider.RIGHT)
+    left = provider.VGroup(left_first, left_second)
+    right_members = [
+        provider.Triangle(color=provider.BLUE).shift(provider.UP),
+        provider.Rectangle(width=0.8, height=0.4, color=provider.YELLOW).shift(provider.DOWN),
+        provider.Dot(color=provider.PURPLE).shift(provider.LEFT + provider.UP),
+        provider.Circle(radius=0.15, color=provider.ORANGE).shift(provider.RIGHT + provider.DOWN),
+    ]
+    right = provider.VGroup(*right_members)
+    if scene is not None:
+        scene.add(left, right)
+    returned = left.align_submobjects(right)
+    left_children = list(left.submobjects)
+    right_children = list(right.submobjects)
+    return {
+        "returns_self": returned is left,
+        "member_counts": [len(left_children), len(right_children)],
+        "retains_original_positions": [
+            left_children[0] is left_first,
+            left_children[2] is left_second,
+            all(actual is expected for actual, expected in zip(right_children, right_members, strict=True)),
+        ],
+        "left_geometry": [_object_observation(member) for member in left_children],
+        "left_colors": [_paint_rgb(member.get_color()) for member in left_children],
+        "left_opacities": [
+            [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+            for member in left_children
+        ],
+    }
+
+
+def _noon_group_align_submobjects() -> Any:
+    return _group_align_submobjects(noon)
+
+
+def _manim_group_align_submobjects() -> Any:
+    return _group_align_submobjects(manim)
+
+
+def _noon_group_align_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_align_submobjects(noon, scene)
+    )
+
+
 def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Circle(radius=0.25)
     second = provider.Square(side_length=0.5)
@@ -4898,6 +4945,8 @@ FIXTURES = [
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("group_add_n_more_submobjects", _noon_group_add_n_more_submobjects, _manim_group_add_n_more_submobjects),
     Fixture("group_add_n_more_submobjects_live", _noon_group_add_n_more_submobjects_live, _manim_group_add_n_more_submobjects),
+    Fixture("group_align_submobjects", _noon_group_align_submobjects, _manim_group_align_submobjects),
+    Fixture("group_align_submobjects_live", _noon_group_align_submobjects_live, _manim_group_align_submobjects),
     Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),

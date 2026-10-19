@@ -924,6 +924,13 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_add_n_more_submobjects
         return _group_add_n_more_submobjects(self, n)
 
+    def align_submobjects(self, mobject: Group) -> Self:
+        own_count = len(self.submobjects)
+        other_count = len(mobject.submobjects)
+        self.add_n_more_submobjects(max(0, other_count - own_count))
+        mobject.add_n_more_submobjects(max(0, own_count - other_count))
+        return self
+
     def invert(self, recursive: bool = False) -> Self:
         from _manim_semantic_handles import _group_invert
         return _group_invert(self, recursive)
