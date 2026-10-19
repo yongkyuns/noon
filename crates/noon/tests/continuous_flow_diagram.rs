@@ -81,7 +81,9 @@ fn both_moving_endpoints_and_reverse_flow_remain_attached_at_every_seek() {
     // Both ends move independently while the dash phase runs in reverse.
     // This is one normal object track per object, not an attachment updater.
     let target = scene.line((-2.0, -1.0), (2.0, 2.0)).unwrap();
-    let flow = scene.flow_stroke_to(&connector, &target, -0.75, 2.0).unwrap();
+    let flow = scene
+        .flow_stroke_to(&connector, &target, -0.75, 2.0)
+        .unwrap();
     let mut children = vec![flow.node_id()];
     for (node, from, to) in [
         (
@@ -134,8 +136,14 @@ fn both_moving_endpoints_and_reverse_flow_remain_attached_at_every_seek() {
         let expected_left = Vec2::new(-3.0 + progress, -progress);
         let expected_right = Vec2::new(3.0 - progress, 2.0 * progress);
         let close = |actual: Vec2, expected: Vec2| {
-            assert!((actual.x - expected.x).abs() < 1e-5, "x: {actual:?} vs {expected:?}");
-            assert!((actual.y - expected.y).abs() < 1e-5, "y: {actual:?} vs {expected:?}");
+            assert!(
+                (actual.x - expected.x).abs() < 1e-5,
+                "x: {actual:?} vs {expected:?}"
+            );
+            assert!(
+                (actual.y - expected.y).abs() < 1e-5,
+                "y: {actual:?} vs {expected:?}"
+            );
         };
         close(frame.objects[0].transform.translation, expected_left);
         close(frame.objects[1].transform.translation, expected_right);
@@ -143,8 +151,14 @@ fn both_moving_endpoints_and_reverse_flow_remain_attached_at_every_seek() {
         let GeometryRef::Line { start, end } = line.geometry().unwrap() else {
             panic!("flow must retain analytic connection geometry");
         };
-        close(line.transform.transform_point(*start), frame.objects[0].transform.translation);
-        close(line.transform.transform_point(*end), frame.objects[1].transform.translation);
+        close(
+            line.transform.transform_point(*start),
+            frame.objects[0].transform.translation,
+        );
+        close(
+            line.transform.transform_point(*end),
+            frame.objects[1].transform.translation,
+        );
         let phase = line.style.stroke_pattern.unwrap().phase();
         assert!(
             (phase + 1.5 * progress).abs() < 1e-5,
