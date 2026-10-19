@@ -209,13 +209,29 @@ impl MobjectFamily {
         Ok(transaction)
     }
 
-    /// Match Manim VMobject.set_opacity() for this root's foreground fill/stroke.
+    /// Match Manim VMobject.set_opacity() for this root's foreground and
+    /// default-width background-stroke opacity.
     pub fn set_own_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
-        self.set_own_style(StyleUpdate {
+        self.own_opacity_transaction(opacity)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn own_opacity_transaction(
+        &self,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        let mut style = self.own_style()?;
+        StyleUpdate {
             fill_opacity: Some(opacity),
             stroke_opacity: Some(opacity),
             ..StyleUpdate::default()
-        })
+        }
+        .apply(&mut style)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style_with_background_stroke_opacity(self.node_id(), style, opacity);
+        Ok(transaction)
     }
 
     /// Atomically recolor selected leaves by current authoritative family order.
@@ -689,7 +705,25 @@ mod tests {
         let opacity_style = family.own_style().unwrap();
         assert_eq!(opacity_style.fill_opacity, 0.25);
         assert_eq!(opacity_style.stroke_opacity, 0.25);
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.25);
         assert_eq!(leaf.state().unwrap().style, leaf_before);
+        let root_before = (
+            family.own_style().unwrap(),
+            family.own_background_stroke_opacity().unwrap(),
+        );
+        let revision_before = scene.integration_store().borrow().scene_revision();
+        assert!(family.set_own_opacity(1.2).is_err());
+        assert_eq!(
+            (
+                family.own_style().unwrap(),
+                family.own_background_stroke_opacity().unwrap(),
+            ),
+            root_before
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision_before
+        );
 
         family.set_own_stroke_cap("square").unwrap();
         assert_eq!(

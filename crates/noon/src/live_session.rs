@@ -2985,6 +2985,16 @@ impl<'a> LiveSession<'a> {
         self.apply(family.own_style_transaction(update)?)
     }
 
+    pub fn set_family_own_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.own_opacity_transaction(opacity)?)
+    }
+
     pub fn set_family_own_background_stroke_opacity(
         &mut self,
         family: &MobjectFamily,

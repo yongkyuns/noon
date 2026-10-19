@@ -9808,15 +9808,10 @@ mod wasm {
             source: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            let update = noon::StyleUpdate {
-                fill_opacity: Some(opacity),
-                stroke_opacity: Some(opacity),
-                ..noon::StyleUpdate::default()
-            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_family_own_style(&source.semantic_family()?, update)
+                .live_set_family_own_opacity(&source.semantic_family()?, opacity)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]

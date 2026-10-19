@@ -1831,12 +1831,30 @@ def _family_own_paint_probe(api):
         vector_root_only.get_stroke_opacity(),
         [rgb(member) for member in vector_root_only.submobjects],
     ]
+    root_opacity_children_before = [
+        [
+            member.get_fill_opacity(),
+            member.get_stroke_opacity(),
+            member.get_stroke_opacity(background=True),
+        ]
+        for member in vector_root_only.submobjects
+    ]
     vector_root_only.set_opacity(0.6, family=False)
     root_opacity_style = [
         rgb(vector_root_only),
         vector_root_only.get_fill_opacity(),
         vector_root_only.get_stroke_opacity(),
+        vector_root_only.get_stroke_opacity(background=True),
         [rgb(member) for member in vector_root_only.submobjects],
+        [
+            [
+                member.get_fill_opacity(),
+                member.get_stroke_opacity(),
+                member.get_stroke_opacity(background=True),
+            ]
+            for member in vector_root_only.submobjects
+        ],
+        root_opacity_children_before,
     ]
     vector_root_only.set_stroke(api.BLUE, width=4, opacity=0.45, family=False)
     root_stroke_style = [
@@ -3472,7 +3490,7 @@ UNSUPPORTED = {
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
-    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade(family=False) in detached/live fixtures; the fade publishes foreground and default zero-width background-stroke opacity atomically without changing children. Staged callback use, non-default background stroke width/color, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
+    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity(family=False) in detached/live fixtures; both operations publish foreground and default zero-width background-stroke opacity atomically without changing children. Staged callback use, recursive background-stroke opacity, non-default background stroke width/color, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
 }
 
 
