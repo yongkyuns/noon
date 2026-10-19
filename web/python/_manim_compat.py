@@ -653,6 +653,58 @@ class VMobject(Mobject):
                 rgbas = rgbas + light_rgbas
         return rgbas
 
+    def update_rgbas_array(self, array_name, color=None, opacity=None):
+        """Update supported solid fill/stroke paint through the Rust owner.
+
+        Per-point gradients and arbitrary Python-owned RGBA arrays have no
+        shared semantic representation, so they fail explicitly.
+        """
+        if not isinstance(array_name, str):
+            raise TypeError("array_name must be a string")
+        if array_name not in (
+            "fill_rgbas",
+            "stroke_rgbas",
+            "background_stroke_rgbas",
+        ):
+            raise NotImplementedError(
+                f"unsupported RGBA array {array_name!r}; use shared fill or stroke paint"
+            )
+        if array_name in getattr(self, "__dict__", {}):
+            raise NotImplementedError(
+                "Python-owned RGBA arrays are not shared semantic paint"
+            )
+        if getattr(self, "sheen_factor", self.get_sheen_factor()) != 0:
+            raise NotImplementedError(
+                "RGBA array updates with sheen require shared gradient paint"
+            )
+
+        from _manim_semantic_handles import _style_value
+
+        parsed_color = None
+        if color is not None:
+            rgba_rows = self.generate_rgbas_array(color, 1.0)
+            if hasattr(rgba_rows, "tolist"):
+                rgba_rows = rgba_rows.tolist()
+            if len(rgba_rows) != 1:
+                raise NotImplementedError(
+                    "multi-color RGBA updates require shared gradient paint"
+                )
+            parsed_color = _base.Color(*rgba_rows[0][:3])
+        parsed_opacity = _style_value(opacity, "opacity")
+
+        if array_name == "fill_rgbas":
+            return self.set_fill(
+                color=parsed_color,
+                opacity=parsed_opacity,
+                family=False,
+            )
+        return self.set_stroke(
+            color=parsed_color,
+            opacity=parsed_opacity,
+            background=array_name == "background_stroke_rgbas",
+            family=False,
+        )
+
     def get_sheen_direction(self):
         from _manim_semantic_handles import _get_sheen_direction
         return _get_sheen_direction(self)
@@ -1269,6 +1321,7 @@ class VGroup(Group):
     get_background_image = VMobject.get_background_image
     get_sheen_factor = VMobject.get_sheen_factor
     generate_rgbas_array = VMobject.generate_rgbas_array
+    update_rgbas_array = VMobject.update_rgbas_array
     get_sheen_direction = VMobject.get_sheen_direction
     set_background_stroke = VMobject.set_background_stroke
     set_cap_style = VMobject.set_cap_style

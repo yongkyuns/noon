@@ -4744,6 +4744,68 @@ def _generate_rgbas_array_probe(api):
     return result
 
 
+def _update_rgbas_array_probe(api, scene=None):
+    value = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_opacity=0.4,
+        stroke_width=3,
+    )
+    if scene is not None:
+        scene.add(value)
+
+    def style(obj):
+        return {
+            "fill_color": _paint_rgb(obj.get_fill_color()),
+            "fill_opacity": _round_float(obj.get_fill_opacity()),
+            "stroke_color": _paint_rgb(obj.get_stroke_color()),
+            "stroke_opacity": _round_float(obj.get_stroke_opacity()),
+            "stroke_width": _round_float(obj.get_stroke_width()),
+        }
+
+    before = style(value)
+    returned = [value.update_rgbas_array("fill_rgbas", api.YELLOW) is value]
+    after_fill_color = style(value)
+    returned.extend([
+        value.update_rgbas_array("fill_rgbas", opacity=0.75) is value,
+        value.update_rgbas_array("fill_rgbas") is value,
+        value.update_rgbas_array("stroke_rgbas", "#FF8000AA") is value,
+    ])
+    after_stroke_color = style(value)
+    returned.append(
+        value.update_rgbas_array("stroke_rgbas", opacity=[0.65]) is value
+    )
+    after = style(value)
+
+    child = api.VMobject(fill_color=api.RED, fill_opacity=0.2)
+    family = api.VGroup(child)
+    family.set_style(fill_color=api.BLUE, fill_opacity=0.6, family=False)
+    if scene is not None:
+        scene.add(family)
+    family_before = {"root": style(family), "child": style(child)}
+    family_returned = family.update_rgbas_array(
+        "fill_rgbas", color=api.GREEN, opacity=0.35
+    ) is family
+    family_after = {"root": style(family), "child": style(child)}
+    return {
+        "returns": returned,
+        "expected": {
+            "yellow": _paint_rgb(api.YELLOW),
+            "green": _paint_rgb(api.GREEN),
+        },
+        "before": before,
+        "after_fill_color": after_fill_color,
+        "after_stroke_color": after_stroke_color,
+        "after": after,
+        "family": {
+            "returned_self": family_returned,
+            "before": family_before,
+            "after": family_after,
+        },
+    }
+
+
 def _style_query_probe(api):
     source = api.VMobject(
         fill_color=api.GREEN,
@@ -5385,6 +5447,14 @@ FIXTURES = [
     Fixture("generate_rgbas_array",
             lambda: _generate_rgbas_array_probe(noon),
             lambda: _generate_rgbas_array_probe(manim)),
+    Fixture("update_rgbas_array",
+            lambda: _update_rgbas_array_probe(noon),
+            lambda: _update_rgbas_array_probe(manim), 1e-5),
+    Fixture("update_rgbas_array_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _update_rgbas_array_probe(noon, scene)
+            ),
+            lambda: _update_rgbas_array_probe(manim), 1e-5),
     Fixture("vmobject_init_colors",
             lambda: _vmobject_init_colors_probe(noon),
             lambda: _vmobject_init_colors_probe(manim), 1e-5),

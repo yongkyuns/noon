@@ -1052,10 +1052,14 @@ json.dumps({
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
   const assertStyleNear = (actual, expected, message) => {
-    assert.deepEqual(actual.fill_color, expected.fill_color,
-      `${message}: fill color`);
-    assert.deepEqual(actual.stroke_color, expected.stroke_color,
-      `${message}: stroke color`);
+    for (const key of ["fill_color", "stroke_color"]) {
+      assert.equal(actual[key].length, expected[key].length,
+        `${message}: ${key} dimensions`);
+      for (let index = 0; index < expected[key].length; index += 1) {
+        assert.ok(Math.abs(actual[key][index] - expected[key][index]) <= 1e-5,
+          `${message}: ${key}[${index}] (${actual[key][index]} vs ${expected[key][index]})`);
+      }
+    }
     for (const key of ["fill_opacity", "stroke_width", "stroke_opacity"]) {
       assert.ok(Math.abs(actual[key] - expected[key]) <= 1e-5,
         `${message}: ${key} (${actual[key]} vs ${expected[key]})`);
@@ -1092,6 +1096,34 @@ json.dumps({
           `init_colors ${mode} ${member} ${index}: authored/live result`);
       }
     }
+  }
+  for (const name of ["update_rgbas_array", "update_rgbas_array_live"]) {
+    const profile = observations[name];
+    assert.deepEqual(profile.returns, [true, true, true, true, true],
+      `${name}: each scalar update returns the same VMobject`);
+    assertStyleNear(profile.after_fill_color, {
+      ...profile.before,
+      fill_color: profile.expected.yellow,
+    }, `${name}: color-only fill update preserves opacity`);
+    assertStyleNear(profile.after_stroke_color, {
+      ...profile.after_fill_color,
+      fill_opacity: 0.75,
+      stroke_color: [1, 128 / 255, 0],
+    }, `${name}: color-only stroke update preserves opacity`);
+    assertStyleNear(profile.after, {
+      ...profile.after_stroke_color,
+      fill_opacity: 0.75,
+      stroke_opacity: 0.65,
+    }, `${name}: explicit opacity updates replace only alpha`);
+    assert.equal(profile.family.returned_self, true,
+      `${name}: VGroup update returns the same family`);
+    assertStyleNear(profile.family.after.root, {
+      ...profile.family.before.root,
+      fill_color: profile.expected.green,
+      fill_opacity: 0.35,
+    }, `${name}: VGroup update changes only root paint`);
+    assertStyleNear(profile.family.after.child, profile.family.before.child,
+      `${name}: VGroup update leaves child paint unchanged`);
   }
   for (const name of ["apply_over_attr_arrays", "apply_over_attr_arrays_live"]) {
     const profile = observations[name];

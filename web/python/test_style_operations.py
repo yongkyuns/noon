@@ -333,6 +333,58 @@ class StyleOperationsTests(unittest.TestCase):
                 vector.init_colors()
             set_fill.assert_not_called()
 
+    def test_update_rgbas_array_routes_solid_channels_to_shared_paint(self):
+        self.assertEqual(
+            list(inspect.signature(compat.VMobject.update_rgbas_array).parameters),
+            ["self", "array_name", "color", "opacity"],
+        )
+        self.assertIs(
+            compat.VGroup.update_rgbas_array,
+            compat.VMobject.update_rgbas_array,
+        )
+        vector = identity_only_wrapper(compat.VMobject)
+        alpha_color = compat._base.Color(0.1, 0.2, 0.3, 0.4)
+        rgb_color = compat._base.Color(0.1, 0.2, 0.3, 1.0)
+        with (
+            patch.object(vector, "set_fill", return_value=vector) as set_fill,
+            patch.object(vector, "set_stroke", return_value=vector) as set_stroke,
+        ):
+            self.assertIs(
+                vector.update_rgbas_array("fill_rgbas", alpha_color, [0.7]),
+                vector,
+            )
+            set_fill.assert_called_once_with(
+                color=rgb_color, opacity=0.7, family=False
+            )
+            self.assertIs(
+                vector.update_rgbas_array("stroke_rgbas", "#FF8000", None),
+                vector,
+            )
+            self.assertEqual(set_stroke.call_args.kwargs["family"], False)
+            self.assertEqual(set_stroke.call_args.kwargs["background"], False)
+            self.assertEqual(set_stroke.call_args.kwargs["opacity"], None)
+            self.assertIs(
+                vector.update_rgbas_array(
+                    "background_stroke_rgbas", compat._base.BLACK, 1.0
+                ),
+                vector,
+            )
+            self.assertEqual(set_stroke.call_args.kwargs["background"], True)
+
+        with patch.object(vector, "set_fill") as set_fill:
+            with self.assertRaisesRegex(NotImplementedError, "multi-color RGBA"):
+                vector.update_rgbas_array("fill_rgbas", ["#FF0000", "#0000FF"])
+            with self.assertRaisesRegex(NotImplementedError, "unsupported RGBA array"):
+                vector.update_rgbas_array("custom_rgbas", "#FF0000")
+            set_fill.assert_not_called()
+
+        vector.sheen_factor = 0.25
+        with self.assertRaisesRegex(NotImplementedError, "shared gradient paint"):
+            vector.update_rgbas_array("fill_rgbas", "#FF0000")
+        del vector.sheen_factor
+        with self.assertRaisesRegex(NotImplementedError, "background strokes"):
+            vector.update_rgbas_array("background_stroke_rgbas", compat._base.RED)
+
     def test_sheen_direction_mutators_use_shared_rust_detached_and_live_routes(self):
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(

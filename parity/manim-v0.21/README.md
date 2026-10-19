@@ -233,7 +233,7 @@ rows from scalar or iterable colors and opacities using the pinned proportional
 named and hex colors, numeric RGB(A) tuples, custom `get_hex()` values, repeated
 single colors/opacities, and float64 array shape/dtype. Noon returns list rows
 when NumPy is absent. This pure color conversion does not mirror object or scene
-state. The product Pyodide differential now passes 254 shared fixtures; exact
+state. The product Pyodide differential now passes 256 shared fixtures; exact
 ManimCE comparison is enrolled for hosted qualification. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L210-L240 and
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/utils/color/core.py#L148-L208.
@@ -247,3 +247,12 @@ background images reject before mutation. Exact ManimCE comparison is included
 in hosted qualification because the pinned package is unavailable locally.
 Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L182-L209.
+
+`VMobject.update_rgbas_array()` now routes scalar solid fill and stroke color
+or opacity updates through root-local Rust paint setters. Color alpha remains
+independent from the explicit opacity argument. Detached/live probes cover
+color-only, opacity-only, no-op, alpha-bearing hex input, VGroup root-only
+changes, and child-style preservation. Multi-color arrays, arbitrary
+Python-owned RGBA arrays, unknown channels, and non-default background strokes
+or nonzero sheen remain explicitly unsupported. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L241-L265.
