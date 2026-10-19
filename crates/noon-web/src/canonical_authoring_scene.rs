@@ -9555,6 +9555,29 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = livePrependFamilyMembers)]
+        pub fn live_prepend_family_members(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(
+                family.integration_store(),
+                self.inner.scene.integration_store(),
+            ) {
+                return Err(typed_js_error(
+                    "family and canonical context belong to different authoring stores",
+                ));
+            }
+            let members = batch.copy_references().map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_prepend_family_members(&family, &members)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShiftFamily)]
         pub fn live_shift_family(
             &mut self,

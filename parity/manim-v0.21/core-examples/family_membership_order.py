@@ -12,4 +12,6 @@ class OrdinaryFamilyMembershipOrder(Scene):
         self.add(family)
         family.add(a)
         assert list(family) == [b, a]
+        family.add_to_back(a, b, a)
+        assert list(family) == [a, b]
         self.wait(0.2)

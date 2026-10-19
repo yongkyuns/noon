@@ -908,6 +908,10 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_add
         return _group_add(self, *mobjects)
 
+    def add_to_back(self, *mobjects: object) -> Group:
+        from _manim_semantic_handles import _group_add_to_back
+        return _group_add_to_back(self, *mobjects)
+
     def remove(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_remove
         return _group_remove(self, *mobjects)

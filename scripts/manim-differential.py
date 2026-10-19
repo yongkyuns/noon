@@ -550,6 +550,35 @@ def _manim_vgroup_add_remove() -> Any:
     return _members_observation(group)
 
 
+def _family_add_to_back(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third, added = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    group = provider.Group(first, second, third)
+    if scene is not None:
+        scene.add(group)
+    returned = group.add_to_back(third, first, added, third)
+    labels = {id(first): "first", id(second): "second", id(third): "third", id(added): "added"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _noon_family_add_to_back() -> Any:
+    return _family_add_to_back(noon)
+
+
+def _manim_family_add_to_back() -> Any:
+    return _family_add_to_back(manim)
+
+
+def _noon_family_add_to_back_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_add_to_back(noon, scene)
+    )
+
+
 def _noon_vgroup_shift() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25).shift(noon.LEFT),
@@ -3514,6 +3543,8 @@ FIXTURES = [
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
+    Fixture("group_add_to_back", _noon_family_add_to_back, _manim_family_add_to_back),
+    Fixture("group_add_to_back_live", _noon_family_add_to_back_live, _manim_family_add_to_back),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))

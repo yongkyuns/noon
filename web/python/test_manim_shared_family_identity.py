@@ -8,6 +8,35 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_group_add_to_back_uses_one_shared_family_order_operation(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        second = identity_only_wrapper(compat.Circle)
+        root._semantic_family_handle = SimpleNamespace(
+            prependMembers=Mock(),
+        )
+        root._semantic_member_wrappers = {}
+        first._semantic_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=2)
+        second._semantic_handle = SimpleNamespace(semanticSlot=3, semanticGeneration=4)
+        batch = object()
+
+        with (
+            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
+        ):
+            self.assertIs(handles._group_add_to_back(root, first, second, first), root)
+
+        make_batch.assert_called_once_with(None, "add", (first, second, first))
+        root._semantic_family_handle.prependMembers.assert_called_once_with(batch)
+        self.assertIs(root._semantic_member_wrappers["1:2"], first)
+        self.assertIs(root._semantic_member_wrappers["3:4"], second)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

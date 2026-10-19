@@ -1073,6 +1073,21 @@ impl<'a> LiveSession<'a> {
         self.edit_family_members(family, members, true)
     }
 
+    /// Move the unique incoming direct members to the front of one live family.
+    pub fn prepend_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<(), LiveSessionError> {
+        self.require_family(family)?;
+        let transaction = crate::family_authoring::family_prepend_transaction(family, members)
+            .map_err(LiveSessionError::from)?;
+        if !transaction.mutations().is_empty() {
+            self.apply(transaction)?;
+        }
+        Ok(())
+    }
+
     pub fn remove_family_members(
         &mut self,
         family: &MobjectFamily,

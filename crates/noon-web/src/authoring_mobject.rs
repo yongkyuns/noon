@@ -1920,6 +1920,17 @@ mod wasm {
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = prependMembers)]
+        pub fn prepend_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            self.semantic_family()?
+                .prepend_many(&members)
+                .map_err(js_error)
+        }
     }
 
     #[wasm_bindgen]

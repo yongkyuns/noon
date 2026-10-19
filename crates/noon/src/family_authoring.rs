@@ -532,6 +532,64 @@ pub(crate) fn family_membership_transaction(
     Ok((transaction, changed))
 }
 
+/// Prepare Manim `Mobject.add_to_back` ordering for one family root.
+///
+/// Incoming identities keep their first-occurrence order, matching
+/// `dict.fromkeys(mobjects)`, and are moved ahead of the existing direct members
+/// in one semantic transaction. Existing child identities and parent edges are
+/// retained.
+pub(crate) fn family_prepend_transaction(
+    family: &MobjectFamily,
+    members: &[MobjectTarget<'_>],
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    family.validate()?;
+    for member in members {
+        member.require_store(family.integration_store())?;
+    }
+
+    let (current, incoming) = {
+        let store = family.integration_store().borrow();
+        let node = store
+            .semantic_family_checked(family.node_id())
+            .map_err(AuthoringError::from)?;
+        let current = node.members().to_vec();
+        let mut seen = BTreeSet::new();
+        let incoming = members
+            .iter()
+            .map(MobjectTarget::node_id)
+            .filter(|member| seen.insert(*member))
+            .collect::<Vec<_>>();
+        (current, incoming)
+    };
+
+    let incoming_set = incoming.iter().copied().collect::<BTreeSet<_>>();
+    let mut desired = incoming.clone();
+    desired.extend(
+        current
+            .iter()
+            .copied()
+            .filter(|member| !incoming_set.contains(member)),
+    );
+
+    let mut transaction = SemanticMutationTransaction::new();
+    if desired == current {
+        return Ok(transaction);
+    }
+
+    let current_set = current.iter().copied().collect::<BTreeSet<_>>();
+    for member in incoming.iter().copied() {
+        if !current_set.contains(&member) {
+            transaction.add_member(family.node_id(), member);
+        }
+    }
+    let mut before = None;
+    for member in desired.iter().rev().copied() {
+        transaction.reorder_member(family.node_id(), member, before);
+        before = Some(member);
+    }
+    Ok(transaction)
+}
+
 impl MobjectFamily {
     /// Create a detached family, including empty and nested families, atomically.
     pub fn create(
@@ -582,6 +640,18 @@ impl MobjectFamily {
     /// Commit a whole direct-member addition before returning per-input decisions.
     pub fn add_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, true)
+    }
+
+    /// Move the unique incoming members to the front in first-occurrence order,
+    /// matching Manim's `Mobject.add_to_back` behavior.
+    pub fn prepend_many(&self, members: &[MobjectTarget<'_>]) -> Result<(), AuthoringError> {
+        let transaction = family_prepend_transaction(self, members)?;
+        if !transaction.mutations().is_empty() {
+            transaction
+                .apply(&mut self.store.borrow_mut())
+                .map_err(AuthoringError::from)?;
+        }
+        Ok(())
     }
 
     pub fn remove_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
@@ -785,6 +855,62 @@ mod tests {
         assert!(MobjectTarget::from(&copied.mobject(&second).unwrap())
             .updating_suspended()
             .unwrap());
+    }
+
+    #[test]
+    fn family_prepend_matches_add_to_back_order_atomically() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let third = scene.circle(0.3).unwrap();
+        let added = scene.rectangle(0.3, 0.2).unwrap();
+        let family = scene
+            .family(&[(&first).into(), (&second).into(), (&third).into()])
+            .unwrap();
+
+        let before = scene.integration_store().borrow().scene_revision();
+        family
+            .prepend_many(&[
+                (&third).into(),
+                (&first).into(),
+                (&added).into(),
+                (&third).into(),
+            ])
+            .unwrap();
+        let members = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(family.node_id())
+            .unwrap()
+            .members()
+            .to_vec();
+        assert_eq!(
+            members,
+            vec![
+                third.node_id(),
+                first.node_id(),
+                added.node_id(),
+                second.node_id()
+            ]
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+
+        let unchanged = scene.integration_store().borrow().scene_revision();
+        family
+            .prepend_many(&[
+                (&third).into(),
+                (&first).into(),
+                (&added).into(),
+                (&third).into(),
+            ])
+            .unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            unchanged
+        );
     }
 
     #[test]

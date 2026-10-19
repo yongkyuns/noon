@@ -58,3 +58,11 @@ family copies/targets. A product Pyodide comparison against pinned ManimCE passe
 153/153 semantic fixtures, including nested suspension and resume. Scene-owned
 suspension remains unsupported until the canonical callback phase also suppresses
 Rust-selected callbacks and animation effects; the API rejects before mutation.
+
+Group/VGroup `add_to_back()` prepends unique direct members in first-argument order,
+moves existing members to the front, and publishes the order change through one
+shared Rust transaction in detached and live contexts. Product Pyodide fixtures
+match the pinned ManimCE 0.21.0 order in both contexts. The canonical overlapping-
+square family-order fixture matches pinned Cairo exactly on WebGPU and WebGL2
+(zero differing pixels). Generic Mobject-owned child membership remains
+unqualified because Noon currently models child collections as family nodes.

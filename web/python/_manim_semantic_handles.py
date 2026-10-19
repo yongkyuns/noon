@@ -2804,6 +2804,31 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    _validate_group_members(self, mobjects)
+    if not mobjects:
+        return self
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", mobjects)
+    if context is not None:
+        engine_call(
+            context.livePrependFamilyMembers,
+            family_handle,
+            batch,
+            operation="Mobject.add_to_back",
+        )
+    else:
+        engine_call(
+            family_handle.prependMembers,
+            batch,
+            operation="Mobject.add_to_back",
+        )
+    for value in mobjects:
+        self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+    return self
+
+
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self
