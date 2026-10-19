@@ -286,15 +286,6 @@ def add_updater(
 ) -> _base.Mobject:
     if not callable(update_function):
         raise TypeError("updater must be callable")
-    if (
-        call_updater
-        and getattr(self, "_semantic_handle", None) is not None
-        and getattr(self, "_scene", None) is not None
-    ):
-        raise NotImplementedError(
-            "call_updater=True is not supported for canonical callbacks until "
-            "immediate invocation has one atomic shared-semantic operation"
-        )
     callbacks = _updaters(self)
     registrations = _registrations(self)
     registration = _UpdaterRegistration(

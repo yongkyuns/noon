@@ -99,19 +99,34 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.assertEqual(events, [self.mobject])
         self.assertEqual(updaters.get_updaters(self.mobject), [callback])
 
-    def test_immediate_updater_is_rejected_before_registration_for_live_rust_handles(self):
-        callback = lambda mobject: None
-        self.bind()
+    def test_immediate_updater_is_registered_before_invocation_for_live_handles(self):
+        events = []
 
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "^call_updater=True is not supported for canonical callbacks until "
-            "immediate invocation has one atomic shared-semantic operation$",
-        ):
+        def callback(mobject):
+            events.append((mobject, updaters.get_updaters(mobject)))
+
+        self.bind()
+        result = updaters.add_updater(self.mobject, callback, call_updater=True)
+
+        self.assertIs(result, self.mobject)
+        self.assertEqual(updaters.get_updaters(self.mobject), [callback])
+        self.assertEqual(events, [(self.mobject, [callback])])
+        self.assertEqual(
+            self.context.calls,
+            [("add", self.handle, "0", 0.0, None)],
+        )
+
+    def test_live_immediate_callback_does_not_run_when_shared_registration_fails(self):
+        events = []
+        callback = lambda mobject: events.append(mobject)
+        self.bind()
+        self.context.reject = True
+
+        with self.assertRaisesRegex(ValueError, "shared transaction rejected registration"):
             updaters.add_updater(self.mobject, callback, call_updater=True)
 
+        self.assertEqual(events, [])
         self.assertEqual(updaters.get_updaters(self.mobject), [])
-        self.assertEqual(self.context.calls, [])
 
     def test_add_remove_and_clear_delegate_authored_boundaries(self):
         forward = lambda mobject, dt: None

@@ -327,25 +327,20 @@ def _time_based_updaters_probe(api) -> Any:
     }
 
 
-def _always_builder_probe(api) -> Any:
-    mobject = api.Mobject()
-    mobject.always_count = 0
-
-    def increment(amount):
-        mobject.always_count += amount
-        return mobject
-
-    mobject.increment = increment
+def _always_builder_probe(api, scene=None) -> Any:
+    mobject = api.Square()
+    if scene is not None:
+        scene.add(mobject)
     builder = mobject.always
-    returned = builder.increment(2)
-    immediate_count = mobject.always_count
+    returned = builder.shift(api.RIGHT)
+    immediate_center = _point_observation(mobject.get_center())
     callbacks = mobject.get_updaters()
     callbacks[0](mobject)
     return {
         "returns_builder": returned is builder,
-        "immediate_count": immediate_count,
+        "immediate_center": immediate_center,
         "updater_count": len(callbacks),
-        "after_updater_count": mobject.always_count,
+        "after_updater_center": _point_observation(mobject.get_center()),
     }
 
 
@@ -4736,6 +4731,9 @@ FIXTURES = [
             lambda: _time_based_updaters_probe(manim)),
     Fixture("always_builder", lambda: _always_builder_probe(noon),
             lambda: _always_builder_probe(manim)),
+    Fixture("always_builder_live", lambda: _noon_live_scene_probe(
+        lambda scene: _always_builder_probe(noon, scene)
+    ), lambda: _always_builder_probe(manim)),
     Fixture("match_updaters", lambda: _match_updaters_probe(noon),
             lambda: _match_updaters_probe(manim)),
     Fixture("mobject_update", lambda: _mobject_update_probe(noon),

@@ -92,12 +92,13 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotIn(name, policy["overrides"])
 
-    def test_mobject_always_disposition_keeps_the_live_callback_boundary_explicit(self) -> None:
+    def test_mobject_always_disposition_covers_live_callback_invocation(self) -> None:
         policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
         reason = policy["overrides"]["Mobject"]["reason"]
         self.assertIn("Mobject.always returns a builder", reason)
-        self.assertIn("Live scene-owned objects reject call_updater=True", reason)
+        self.assertIn("Detached and scene-owned objects register each updater before its immediate call", reason)
         self.assertIn("scripts/manim-differential.py:always_builder", policy["overrides"]["Mobject"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:always_builder_live", policy["overrides"]["Mobject"]["evidence"])
 
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
