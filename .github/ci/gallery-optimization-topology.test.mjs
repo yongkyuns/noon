@@ -4,6 +4,52 @@ import test from "node:test";
 
 const workflowDir = new URL("../workflows/", import.meta.url);
 
+test("showcase backends share one authenticated producer artifact", async () => {
+  const yaml = await readFile(new URL("playground-showcase-qualification.yml", workflowDir), "utf8");
+  const selection = yaml.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  for (const input of [".github/actions/dev-wasm-build/**", ".github/ci/wasm-build.mjs"]) {
+    assert.ok(selection?.includes(input), `artifact changes must qualify their consumer: ${input}`);
+  }
+  assert.ok(!selection?.includes(".github/ci/gallery-optimization-topology.test.mjs"),
+    "topology-unit-test edits alone must not select the full showcase capture");
+  const job = name => yaml.split(`\n  ${name}:\n`)[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  const build = job("build"), capture = job("capture"), native = job("callback-lifecycle");
+  assert.ok(build && capture && native, "build, native and backend jobs must remain separate");
+  assert.equal(yaml.split("uses: ./.github/actions/dev-wasm-build").length - 1, 1,
+    "both backends must share a single current-source build");
+  assert.match(build, /preflight: 'true'/);
+  assert.match(build, /Source and editorial contracts/);
+  assert.match(build, /uses: actions\/upload-artifact@v7/);
+  for (const file of ["web/pkg/", "web/python-worker.js", "web/python/compat-bundle.*.json",
+    "web/runtime-build-identity.json", "web/ci-artifact.json", "web/ci-Cargo.lock"]) {
+    assert.ok(build.includes(file), `shared runtime is missing ${file}`);
+  }
+  assert.ok(build.includes("name: showcase-runtime-${{ github.run_id }}-${{ github.run_attempt }}"));
+  assert.ok(build.includes("artifact-id: ${{ steps.runtime.outputs.artifact-id }}"));
+  assert.match(build, /id: runtime/);
+  assert.ok(capture.includes("artifact-ids: ${{ needs.build.outputs.artifact-id }}"),
+    "consumers must reuse the producer's immutable artifact, including failed-job retries");
+  assert.match(build, /if-no-files-found: error/);
+  assert.match(build, /retention-days: 1/);
+  assert.match(capture, /needs: build/);
+  assert.doesNotMatch(capture.split("    steps:\n")[0], /if:/,
+    "failed producers must block consumers through the ordinary needs barrier");
+  assert.doesNotMatch(capture, /continue-on-error|dev-wasm-build|cargo test/);
+  assert.match(capture, /backend: \[webgpu, webgl\]/);
+  assert.match(capture, /fail-fast: false/);
+  assert.match(capture, /uses: actions\/download-artifact@v8/);
+  assert.match(capture, /path: web/);
+  const verify = capture.indexOf("node .github/ci/wasm-build.mjs verify");
+  assert.ok(verify > capture.indexOf("uses: actions/download-artifact@v8"));
+  assert.ok(verify < capture.indexOf("npm install"), "reject wrong packages before browser setup");
+  for (const command of ["node scripts/showcase-capture.mjs", "node scripts/showcase-live-review.mjs",
+    "node scripts/showcase-triangle-light-motion.mjs"]) {
+    assert.ok(capture.includes(command), `retain backend qualification: ${command}`);
+  }
+  assert.equal(yaml.split("cargo test -p noon-runtime replay::family_tests").length - 1, 1);
+  assert.match(native, /cargo test -p noon-runtime replay::family_tests/);
+});
+
 test("WebKit browser and gallery jobs retain process stderr without weakening qualification", async () => {
   const yaml = await readFile(new URL("playground-cross-browser.yml", workflowDir), "utf8");
   for (const name of ["browser", "gallery"]) {
