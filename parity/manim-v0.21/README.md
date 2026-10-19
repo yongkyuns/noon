@@ -280,3 +280,12 @@ later curve-length query fails. Regression tests verify final-owner cleanup;
 actual WASM/Pyodide probes cover escaped callables from both generator variants.
 The pinned two-sided comparison for these new error-lifetime probes remains
 pending. This does not qualify source-edit tracking or broader curve contracts.
+
+Recursive `VGroup.set_fill()`, `set_stroke()`, and `set_opacity()` now update
+nested non-rendered root paint as well as unique leaves through the shared Rust
+transaction, including live publication. Opacity changes all enabled leaf paint
+channels and each root's observable background alpha, preserving object opacity
+and unrelated objects. Native regressions cover aliases, one revision per edit,
+disabled leaf paint, and invalid-update rollback; the executable family-paint
+pair asserts the root observations. Fresh product and pinned two-sided checks
+are pending. Recursive root fade and staged callback root updates remain open.

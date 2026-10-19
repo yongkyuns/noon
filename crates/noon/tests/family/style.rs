@@ -58,7 +58,7 @@ fn invalid_combined_edit_changes_nothing_and_empty_families_still_validate() {
 }
 
 #[test]
-fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomically() {
+fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomically() {
     let (mut scene, family, [a, b], _) = family();
     scene.add_many(&[(&family).into()]).unwrap();
     let mut session = scene.execution_session().unwrap();
@@ -66,7 +66,19 @@ fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomica
     let result = live
         .set_family_fill(&family, Some(Color::rgba(1.0, 0.0, 0.0, 1.0)), Some(0.5))
         .unwrap();
-    assert_eq!(result.impacts().len(), 2);
+    assert_eq!(result.impacts().len(), 4);
+    assert_eq!(
+        result
+            .impacts()
+            .iter()
+            .filter(|impact| matches!(
+                impact,
+                noon_core::SemanticMutationImpact::FamilyStyle { .. }
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(family.own_style().unwrap().fill_opacity, 0.5);
     assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.5);
     assert_eq!(live.effective(&b).unwrap().fill_opacity(), 0.5);
     live.set_family_stroke(

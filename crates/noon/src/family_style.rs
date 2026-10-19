@@ -475,8 +475,31 @@ impl MobjectFamily {
         &self,
         update: StyleUpdate,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
-        self.validate()?;
         update.apply(&mut SemanticStyle::default())?;
+        self.style_update_transaction_with(|_, _| update)
+    }
+
+    pub(crate) fn opacity_transaction(
+        &self,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        edit_manim_opacity(&mut SemanticStyle::default(), opacity)?;
+        self.style_update_transaction_with(|style, is_family| StyleUpdate {
+            fill_opacity: style.fill.is_some().then_some(opacity),
+            stroke_opacity: style.stroke.is_some().then_some(opacity),
+            // Non-rendered VMobject roots always expose this channel, even
+            // when its default width is zero. Disabled leaf paint stays disabled.
+            background_stroke_opacity: (is_family || style.background_stroke.is_some())
+                .then_some(opacity),
+            ..StyleUpdate::default()
+        })
+    }
+
+    fn style_update_transaction_with(
+        &self,
+        update_for: impl Fn(&SemanticStyle, bool) -> StyleUpdate,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
         let store = self.integration_store().borrow();
         let nodes = store
             .ordered_authoring_nodes(self.node_id())
@@ -484,6 +507,7 @@ impl MobjectFamily {
         let mut transaction = SemanticMutationTransaction::new();
         for node in nodes {
             if let Some(previous) = store.node(node).and_then(|entry| entry.family_style()) {
+                let update = update_for(previous, true);
                 let mut style = previous.clone();
                 update.apply(&mut style)?;
                 transaction.set_family_style_with_background_stroke_update(
@@ -498,6 +522,7 @@ impl MobjectFamily {
                     .semantic_object_state_checked(node)
                     .map_err(AuthoringError::from)?
                     .style;
+                let update = update_for(previous, false);
                 let mut style = previous.clone();
                 update.apply(&mut style)?;
                 if style != *previous {
@@ -711,7 +736,11 @@ impl MobjectFamily {
         color: Option<Color>,
         opacity: Option<f64>,
     ) -> Result<(), AuthoringError> {
-        self.edit_style(|style| fill(style, color, opacity))
+        self.set_style(StyleUpdate {
+            fill_color: color,
+            fill_opacity: opacity,
+            ..StyleUpdate::default()
+        })
     }
 
     /// Change supplied stroke fields in one transaction. Omitted fields remain unchanged.
@@ -722,12 +751,20 @@ impl MobjectFamily {
         width: Option<f64>,
         opacity: Option<f64>,
     ) -> Result<(), AuthoringError> {
-        self.edit_style(|style| stroke(style, color, width, opacity))
+        self.set_style(StyleUpdate {
+            stroke_color: color,
+            stroke_width: width,
+            stroke_opacity: opacity,
+            ..StyleUpdate::default()
+        })
     }
 
     /// Set enabled fill/stroke opacity, preserving the object-composite multiplier.
     pub fn set_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
-        self.edit_style(|style| edit_manim_opacity(style, opacity))
+        self.opacity_transaction(opacity)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
     }
 
     /// Multiply enabled fill and stroke alpha, matching Manim's `fade`.
@@ -790,16 +827,6 @@ impl MobjectFamily {
             }
         }
         Ok(transaction)
-    }
-
-    fn edit_style(
-        &self,
-        edit: impl Fn(&mut SemanticStyle) -> Result<(), AuthoringError>,
-    ) -> Result<(), AuthoringError> {
-        self.style_transaction(edit)?
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
     }
 
     pub(crate) fn style_transaction(

@@ -1094,6 +1094,36 @@ json.dumps({
         `${message}: ${key} (${actual[key]} vs ${expected[key]})`);
     }
   };
+  for (const name of ["recursive_family_paint", "recursive_family_paint_live"]) {
+    const profile = observations[name];
+    assert.deepEqual(profile.returns, [true, true, true], `${name}: preserves receiver identity`);
+    assertStyleNear(profile.unrelated_after, profile.unrelated_before,
+      `${name}: paint edits stay within the selected family`);
+    for (const member of ["roots", "leaves"]) {
+      for (let index = 0; index < 2; index += 1) {
+        assertStyleNear(profile.after_fill[member][index], {
+          fill_color: profile.expected_colors.green, fill_opacity: 0.4,
+        }, `${name}: ${member} ${index} fill`);
+        assertStyleNear(profile.after_stroke[member][index], {
+          ...profile.after_fill[member][index],
+          stroke_color: profile.expected_colors.blue, stroke_width: 8, stroke_opacity: 0.6,
+        }, `${name}: ${member} ${index} stroke preserves other channels`);
+        assertStyleNear(profile.after_opacity[member][index], {
+          ...profile.after_stroke[member][index],
+          fill_opacity: 0.25, stroke_opacity: 0.25, background_stroke_opacity: 0.25,
+        }, `${name}: ${member} ${index} opacity preserves paint and widths`);
+      }
+    }
+  }
+  for (const phase of ["after_fill", "after_stroke", "after_opacity"]) {
+    for (const member of ["roots", "leaves"]) {
+      for (let index = 0; index < 2; index += 1) {
+        assertStyleNear(observations.recursive_family_paint_live[phase][member][index],
+          observations.recursive_family_paint[phase][member][index],
+          `recursive paint ${phase} ${member} ${index}: authored/live agreement`);
+      }
+    }
+  }
   for (const name of ["vmobject_init_colors", "vmobject_init_colors_live"]) {
     const profile = observations[name];
     assert.equal(profile.propagated.returned_self, true,

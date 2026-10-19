@@ -376,3 +376,99 @@ fn recursive_background_stroke_style_publishes_nested_roots_and_leaves_atomicall
     assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
     assert_eq!(leaf.background_stroke_color().unwrap(), Some(Color::BLUE));
 }
+
+#[test]
+fn recursive_paint_setters_update_roots_and_publish_live_leaves_once() {
+    let mut scene = Scene::new();
+    let mut leaf = scene.square(1.0).unwrap();
+    leaf.set_style(StyleUpdate {
+        background_stroke_color: Some(Color::RED),
+        background_stroke_width: Some(0.06),
+        background_stroke_opacity: Some(0.8),
+        ..StyleUpdate::default()
+    })
+    .unwrap();
+    let unrelated = scene.circle(0.4).unwrap();
+    let unrelated_before = unrelated.state().unwrap();
+    let nested = scene.family(&[(&leaf).into()]).unwrap();
+    let family = scene.family(&[(&nested).into(), (&leaf).into()]).unwrap();
+
+    let before = scene.revision();
+    family.set_fill(Some(Color::GREEN), Some(0.4)).unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    family
+        .set_stroke(Some(Color::BLUE), Some(0.08), Some(0.6))
+        .unwrap();
+    for root in [&family, &nested] {
+        let style = root.own_style().unwrap();
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::GREEN)));
+        assert_eq!(style.fill_opacity, 0.4);
+        assert_eq!(style.stroke, Some(SemanticPaint::Solid(Color::BLUE)));
+        assert_eq!(style.stroke_width, 0.08);
+        assert_eq!(style.stroke_opacity, 0.6);
+    }
+    assert_eq!(leaf.background_stroke_opacity().unwrap(), 0.8);
+    scene.add_many(&[(&family).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    live.set_family_fill(&family, Some(Color::RED), Some(0.7))
+        .unwrap();
+    live.set_family_stroke(&family, Some(Color::GREEN), Some(0.12), Some(0.9))
+        .unwrap();
+    let before = scene.revision();
+    live.set_family_opacity(&family, 0.25).unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    for root in [&family, &nested] {
+        let style = root.own_style().unwrap();
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(style.fill_opacity, 0.25);
+        assert_eq!(style.stroke, Some(SemanticPaint::Solid(Color::GREEN)));
+        assert_eq!(style.stroke_width, 0.12);
+        assert_eq!(style.stroke_opacity, 0.25);
+        assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.25);
+    }
+    let effective = live.effective(&leaf).unwrap();
+    assert_eq!(effective.fill_opacity(), 0.25);
+    assert_eq!(effective.stroke_opacity(), 0.25);
+    assert_eq!(effective.style.background_stroke.unwrap().alpha, 0.25);
+    assert_eq!(unrelated.state().unwrap(), unrelated_before);
+
+    let before = (
+        scene.revision(),
+        family.own_style().unwrap(),
+        leaf.state().unwrap(),
+    );
+    assert!(live.set_family_opacity(&family, f64::NAN).is_err());
+    assert!(live
+        .set_family_stroke(&family, Some(Color::BLUE), Some(-1.0), Some(0.8))
+        .is_err());
+    assert_eq!(
+        (
+            scene.revision(),
+            family.own_style().unwrap(),
+            leaf.state().unwrap()
+        ),
+        before
+    );
+}
+
+#[test]
+fn recursive_opacity_preserves_disabled_leaf_paint_and_composite_opacity() {
+    let mut scene = Scene::new();
+    let mut leaf = scene.square(1.0).unwrap();
+    leaf.disable_fill().unwrap();
+    leaf.disable_stroke().unwrap();
+    leaf.set_object_opacity(0.45).unwrap();
+    let background = leaf.state().unwrap().style.background_stroke;
+    let family = scene.family(&[(&leaf).into()]).unwrap();
+    family.set_opacity(0.3).unwrap();
+    let style = leaf.state().unwrap().style;
+    assert_eq!(style.fill, None);
+    assert_eq!(style.stroke, None);
+    assert_eq!(style.background_stroke, background);
+    assert_eq!(style.background_stroke_opacity, 0.3);
+    assert_eq!(style.object_opacity, 0.45);
+    assert_eq!(family.own_style().unwrap().fill_opacity, 0.3);
+    assert_eq!(family.own_style().unwrap().stroke_opacity, 0.3);
+    assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.3);
+}

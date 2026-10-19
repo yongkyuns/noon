@@ -19,6 +19,12 @@ pub fn session() -> Result<ExecutionSession, String> {
     family
         .set_stroke(Some(Color::rgba(0.0, 0.0, 1.0, 1.0)), Some(0.04), Some(1.0))
         .map_err(|error| error.to_string())?;
+    for root in [&family, &nested] {
+        let style = root.own_style().map_err(|error| error.to_string())?;
+        assert_eq!(style.fill_opacity, 0.8);
+        assert_eq!(style.stroke_opacity, 1.0);
+        assert_eq!(style.stroke_width, 0.04);
+    }
     a.fade(0.5).map_err(|error| error.to_string())?;
     assert_eq!(a.fill_opacity().map_err(|e| e.to_string())?, 0.4);
     scene
@@ -35,6 +41,16 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|e| e.to_string())?;
         live.set_family_opacity(&family, 0.5)
             .map_err(|e| e.to_string())?;
+        for root in [&family, &nested] {
+            let style = root.own_style().map_err(|error| error.to_string())?;
+            assert_eq!(style.fill_opacity, 0.5);
+            assert_eq!(style.stroke_opacity, 0.5);
+            assert_eq!(
+                root.own_background_stroke_opacity()
+                    .map_err(|e| e.to_string())?,
+                0.5
+            );
+        }
         for object in [&a, &b] {
             let effective = live.effective(object).map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), 0.5);

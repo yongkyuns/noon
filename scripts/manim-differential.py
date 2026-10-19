@@ -3517,6 +3517,19 @@ def _paint_rgb(color):
     return [color.red, color.green, color.blue]
 
 
+def _solid_paint_observation(value):
+    return {
+        "fill_color": _paint_rgb(value.get_fill_color()),
+        "fill_opacity": _round_float(value.get_fill_opacity()),
+        "stroke_color": _paint_rgb(value.get_stroke_color()),
+        "stroke_width": _round_float(value.get_stroke_width()),
+        "stroke_opacity": _round_float(value.get_stroke_opacity()),
+        "background_stroke_color": _paint_rgb(value.get_stroke_color(background=True)),
+        "background_stroke_width": _round_float(value.get_stroke_width(background=True)),
+        "background_stroke_opacity": _round_float(value.get_stroke_opacity(background=True)),
+    }
+
+
 def _paint_queries_gradients(api):
     boxes = [api.Square(side_length=1) for _ in range(5)]
     group = api.VGroup(api.VGroup(*boxes), boxes[0])
@@ -3533,6 +3546,43 @@ def _paint_queries_gradients(api):
     first.set_color(first.get_color())
     observations.append([first.get_fill_opacity(), first.get_stroke_opacity()])
     return observations
+
+
+def _recursive_family_paint_probe(api, scene=None):
+    first = api.Square(side_length=1).set_background_stroke(
+        color=api.RED, width=3, opacity=0.8
+    )
+    second = api.Circle(radius=0.5).set_background_stroke(
+        color=api.BLUE, width=2, opacity=0.6
+    )
+    nested = api.VGroup(first, second)
+    family = api.VGroup(nested, first)
+    unrelated = api.Square(side_length=0.4).set_fill(api.PURPLE, opacity=0.2)
+    unrelated_before = _solid_paint_observation(unrelated)
+    if scene is not None:
+        scene.add(family, unrelated)
+
+    def observe():
+        return {
+            "roots": [_solid_paint_observation(value) for value in (family, nested)],
+            "leaves": [_solid_paint_observation(value) for value in (first, second)],
+        }
+
+    returned = [family.set_fill(api.GREEN, opacity=0.4) is family]
+    after_fill = observe()
+    returned.append(family.set_stroke(api.BLUE, width=8, opacity=0.6) is family)
+    after_stroke = observe()
+    returned.append(family.set_opacity(0.25) is family)
+    after_opacity = observe()
+    return {
+        "returns": returned,
+        "after_fill": after_fill,
+        "after_stroke": after_stroke,
+        "after_opacity": after_opacity,
+        "unrelated_before": unrelated_before,
+        "unrelated_after": _solid_paint_observation(unrelated),
+        "expected_colors": {"green": _paint_rgb(api.GREEN), "blue": _paint_rgb(api.BLUE)},
+    }
 
 
 def _family_own_paint_probe(api):
@@ -4695,17 +4745,7 @@ def _vmobject_init_colors_probe(api, scene=None):
 
     family, first, second = make_family()
 
-    def style(value):
-        return {
-            "fill_color": _paint_rgb(value.get_fill_color()),
-            "fill_opacity": _round_float(value.get_fill_opacity()),
-            "stroke_color": _paint_rgb(value.get_stroke_color()),
-            "stroke_width": _round_float(value.get_stroke_width()),
-            "stroke_opacity": _round_float(value.get_stroke_opacity()),
-            "background_stroke_color": _paint_rgb(value.get_stroke_color(background=True)),
-            "background_stroke_width": _round_float(value.get_stroke_width(background=True)),
-            "background_stroke_opacity": _round_float(value.get_stroke_opacity(background=True)),
-        }
+    style = _solid_paint_observation
 
     before = {"root": style(family), "children": [style(first), style(second)]}
     returned_self = family.init_colors() is family
@@ -5512,6 +5552,12 @@ FIXTURES = [
                 lambda scene: _vgroup_root_paint_array_probe(noon, scene)
             ),
             lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
+    Fixture("recursive_family_paint", lambda: _recursive_family_paint_probe(noon),
+            lambda: _recursive_family_paint_probe(manim), 1e-5),
+    Fixture("recursive_family_paint_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _recursive_family_paint_probe(noon, scene)
+            ), lambda: _recursive_family_paint_probe(manim), 1e-5),
     Fixture("cap_style", lambda: _cap_style_probe(noon), lambda: _cap_style_probe(manim)),
     Fixture("cap_style_live",
             lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),

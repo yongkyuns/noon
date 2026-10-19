@@ -3403,9 +3403,14 @@ impl<'a> LiveSession<'a> {
         color: Option<Color>,
         opacity: Option<f64>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| {
-            crate::family_style::fill(style, color, opacity)
-        })
+        self.set_family_style(
+            family,
+            crate::StyleUpdate {
+                fill_color: color,
+                fill_opacity: opacity,
+                ..crate::StyleUpdate::default()
+            },
+        )
     }
 
     pub fn set_family_stroke(
@@ -3415,9 +3420,15 @@ impl<'a> LiveSession<'a> {
         width: Option<f64>,
         opacity: Option<f64>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| {
-            crate::family_style::stroke(style, color, width, opacity)
-        })
+        self.set_family_style(
+            family,
+            crate::StyleUpdate {
+                stroke_color: color,
+                stroke_width: width,
+                stroke_opacity: opacity,
+                ..crate::StyleUpdate::default()
+            },
+        )
     }
 
     pub fn set_family_opacity(
@@ -3425,7 +3436,9 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         opacity: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.opacity_transaction(opacity)?)
     }
 
     /// Fade enabled fill and stroke channels through the live execution owner.
@@ -3492,19 +3505,6 @@ impl<'a> LiveSession<'a> {
         parts
             .font_size_for_height(layout.height)
             .map_err(LiveSessionError::from)
-    }
-
-    fn edit_family_style(
-        &mut self,
-        family: &MobjectFamily,
-        edit: impl Fn(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let transaction = family
-            .style_transaction(edit)
-            .map_err(LiveSessionError::from)?;
-        self.apply(transaction)
     }
 
     fn edit_style(

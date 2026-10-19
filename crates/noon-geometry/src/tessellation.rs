@@ -2141,7 +2141,9 @@ mod tests {
         .unwrap();
         let layers = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|triangle| mesh.vertices[triangle[0] as usize].surface)
             .fold(Vec::new(), |mut layers, surface| {
                 if layers.last() != Some(&surface) {
