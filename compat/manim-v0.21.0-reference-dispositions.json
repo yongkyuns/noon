@@ -4796,7 +4796,7 @@
     {
       "id": "reference-32ccd9416c553cdc",
       "status": "blocked",
-      "reason": "Axes now supports native Text include_numbers/numbers_to_include configuration, per-axis overrides, exclusions, label direction, spacing, font size, and decimal precision. This fixture remains blocked because LogBase(custom_labels=True) requests TeX-generated custom labels, which are outside the qualified native-Text label profile.",
+      "reason": "Generated LogBase TeX exponent labels remain blocked on shared math-font qualification (#83). The pinned BaKoMa TrueType and Manim Type 1 digit outlines differ; a genuine shared unit-spacing correction reduced the retained literal LogScalingExample raster difference from 1.08% to 0.76%, still above the unchanged 0.6% gate. Source and original failures are preserved on codex/coordinate-log-cairo-hold; no fake native-text fallback is offered.",
       "owners": [
         "#85",
         "#89",
@@ -7022,25 +7022,22 @@
     },
     {
       "id": "reference-49083e27dd1c895b",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Code. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Code exports a shared Rust native highlighting and indentation profile. The exact pinned CodeFromString directive still needs canonical semantic/effective-state, timing, raster and replay qualification; the native/Python examples and exported class alone do not establish full Manim parity.",
       "owners": [
         "#83",
         "#89",
         "#185",
         "#256",
-        "#365"
+        "#365",
+        "#2193"
       ],
       "reference_provenance": {
         "source_path": "manim/mobject/text/code_mobject.py",
         "directive_line": 52,
         "name": "CodeFromString",
         "source_sha256": "327f2202cfcea2b30ebe3b1a81f3bb794835fa107d359a270eb21ae5981103af"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Code"
-      ]
+      }
     },
     {
       "id": "reference-69f08c961aa1a514",

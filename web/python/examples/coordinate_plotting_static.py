@@ -19,5 +19,7 @@ class CoordinatePlotting(Scene):
         ]
         data = axes.plot_samples(samples, color=YELLOW)
         title = Text("Shared axes: function and sampled data", font_size=28).shift(3 * UP)
-        label = Text("Time (s)", font_size=22).shift(2.7 * DOWN)
+        label = axes.get_x_axis_label(
+            Text("Time (s)", font_size=22), edge=RIGHT, direction=RIGHT, buff=0.2,
+        )
         self.add(axes, curve, data, title, label)

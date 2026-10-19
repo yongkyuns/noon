@@ -10,9 +10,13 @@ class NumberPlaneExample(Scene):
     def construct(self):
         plane = NumberPlane(
             x_range=[-3, 3, 1], y_range=[-2, 2, 1], x_length=8, y_length=4.5,
+            axis_config={"include_tip": True},
+            y_axis_config={"tip_width": 0.45, "tip_height": 0.3},
             background_line_style={"stroke_color": GREEN, "stroke_width": 1.0},
             faded_line_ratio=2,
         )
+        assert plane.x_axis.tip is not None and plane.y_axis.tip is not None
+        assert plane.y_axis.tip_width == 0.45 and plane.y_axis.tip_height == 0.3
         curve = plane.plot(lambda x: 0.35 * x * x - 1, [-3, 3, 0.05], color=BLUE)
         point = plane.c2p(1, -0.65)
         roundtrip = plane.p2c(point)

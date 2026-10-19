@@ -78,6 +78,25 @@ impl From<&MobjectFamily> for LayoutAnchor {
 }
 
 impl LayoutAnchor {
+    /// Place at a selected target edge and fit the result to the default frame.
+    /// Both adjustments are prepared before one atomic translation.
+    pub fn next_to_edge_in_frame(
+        &self,
+        target: &LayoutAnchor,
+        edge: (f64, f64),
+        args: ManimNextToArgs,
+        frame_buff: f64,
+    ) -> Result<(), AuthoringError> {
+        self.layout()?.place(
+            FamilyLayoutTarget::Anchor(target),
+            RelativePlacement::NextInFrame {
+                args,
+                edge,
+                frame_buff,
+            },
+        )
+    }
+
     /// Check that this anchor belongs to an expected semantic store without
     /// resolving its identity there.
     pub fn belongs_to_store(&self, expected: &Rc<RefCell<SemanticStore>>) -> bool {
@@ -326,8 +345,16 @@ impl FamilyLayout {
 
 /// Shared relative-placement math; publication remains owned by the caller.
 pub(crate) enum RelativePlacement {
-    Move { edge: (f64, f64), mask: (f64, f64) },
+    Move {
+        edge: (f64, f64),
+        mask: (f64, f64),
+    },
     Next(ManimNextToArgs),
+    NextInFrame {
+        args: ManimNextToArgs,
+        edge: (f64, f64),
+        frame_buff: f64,
+    },
     Align((f64, f64)),
 }
 
@@ -337,6 +364,15 @@ impl RelativePlacement {
         bounds: Option<Bounds2D64>,
         target: impl FnOnce(f64, f64) -> Result<(f64, f64), E>,
     ) -> Result<(f64, f64), E> {
+        let fitting = if let Self::NextInFrame {
+            edge, frame_buff, ..
+        } = &self
+        {
+            let edge = authoring_xy_f64(edge.0, edge.1)?;
+            Some(((edge.x, edge.y), *frame_buff))
+        } else {
+            None
+        };
         let (source_axis, target_axis, offset, mask) = match self {
             Self::Move { edge, mask } => {
                 let edge = authoring_xy_f64(edge.0, edge.1)?;
@@ -348,7 +384,7 @@ impl RelativePlacement {
                     (mask.x, mask.y),
                 )
             }
-            Self::Next(args) => {
+            Self::Next(args) | Self::NextInFrame { args, .. } => {
                 let direction = authoring_xy_f64(args.direction.0, args.direction.1)?;
                 let edge = authoring_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
                 let mask = authoring_xy_f64(args.mask.0, args.mask.1)?;
@@ -374,12 +410,47 @@ impl RelativePlacement {
             }
         };
         let source = bounds_critical_point(bounds, source_axis.0, source_axis.1);
+        let target_axis = fitting.map_or(target_axis, |(edge, _)| edge);
         let target = target(target_axis.0, target_axis.1)?;
-        Ok((
+        let mut delta = (
             (target.0 - source.0 + offset.0) * mask.0,
             (target.1 - source.1 + offset.1) * mask.1,
-        ))
+        );
+        if let Some((_, buff)) = fitting {
+            fit_translation_to_default_frame(bounds, &mut delta, buff)?;
+        }
+        Ok(delta)
     }
+}
+
+/// Preserve Manim's UP, DOWN, LEFT, RIGHT correction order, including labels
+/// larger than the frame. This is preparation math; it performs no publication.
+pub(crate) fn fit_translation_to_default_frame(
+    bounds: Option<Bounds2D64>,
+    delta: &mut (f64, f64),
+    buff: f64,
+) -> Result<(), AuthoringError> {
+    let buff = authoring_render_f64("frame buffer", buff)?;
+    if buff < 0.0 {
+        return Err(AuthoringError::NonFiniteTransform);
+    }
+    let half_width = f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5;
+    let half_height = f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5;
+    for (direction, limit) in [
+        ((0.0, 1.0), half_height - buff),
+        ((0.0, -1.0), half_height - buff),
+        ((-1.0, 0.0), half_width - buff),
+        ((1.0, 0.0), half_width - buff),
+    ] {
+        let point = bounds_critical_point(bounds, direction.0, direction.1);
+        let projection = (point.0 + delta.0) * direction.0 + (point.1 + delta.1) * direction.1;
+        if projection > limit {
+            delta.0 += (limit - projection) * direction.0;
+            delta.1 += (limit - projection) * direction.1;
+        }
+    }
+    authoring_xy_f64(delta.0, delta.1)?;
+    Ok(())
 }
 
 pub(crate) fn bounds_critical_point(bounds: Option<Bounds2D64>, x: f64, y: f64) -> (f64, f64) {
@@ -552,6 +623,7 @@ pub(crate) fn effective_anchor_layout_measure(
 
 /// Validate that persistent composite placement can safely use an entry's state.
 /// Existing affine/reactive drivers cannot be baked into a new authored position.
+#[cfg(any(feature = "native-text", feature = "latex", test))]
 pub(crate) fn composite_entry_state(
     store: &Rc<RefCell<SemanticStore>>,
     execution: Option<&ExecutionSession>,
@@ -1047,6 +1119,33 @@ pub(crate) fn publish_next_layout_to_aligned(
         bounds,
         target,
         RelativePlacement::Next(args),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_next_layout_to_edge_in_frame(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: &LayoutAnchor,
+    target: &LayoutAnchor,
+    edge: (f64, f64),
+    args: ManimNextToArgs,
+    frame_buff: f64,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let (leaves, bounds) = effective_anchor_layout_measure(store, execution, source, true)?;
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        leaves,
+        bounds,
+        LiveLayoutTarget::Anchor(target),
+        RelativePlacement::NextInFrame {
+            args,
+            edge,
+            frame_buff,
+        },
     )
 }
 

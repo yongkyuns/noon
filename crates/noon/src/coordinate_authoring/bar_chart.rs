@@ -490,11 +490,11 @@ struct PreparedChart {
     chart: noon_core::SemanticLocalNodeToken,
     axes: noon_core::SemanticLocalNodeToken,
     bars: noon_core::SemanticLocalNodeToken,
-    #[cfg(feature = "latex")]
+    #[cfg(all(feature = "native-text", feature = "latex"))]
     x_axis: noon_core::SemanticLocalNodeToken,
-    #[cfg(feature = "latex")]
+    #[cfg(all(feature = "native-text", feature = "latex"))]
     y_axis: noon_core::SemanticLocalNodeToken,
-    #[cfg(feature = "latex")]
+    #[cfg(all(feature = "native-text", feature = "latex"))]
     frame: noon_geometry::AxesFrame,
 }
 
@@ -561,11 +561,11 @@ fn prepare_chart(
         chart,
         axes,
         bars,
-        #[cfg(feature = "latex")]
+        #[cfg(all(feature = "native-text", feature = "latex"))]
         x_axis: x,
-        #[cfg(feature = "latex")]
+        #[cfg(all(feature = "native-text", feature = "latex"))]
         y_axis: y,
-        #[cfg(feature = "latex")]
+        #[cfg(all(feature = "native-text", feature = "latex"))]
         frame,
     })
 }

@@ -1825,6 +1825,7 @@ _PUBLIC_EXPORTS = {
     "Typst": "_manim_typst",
     "MathTypst": "_manim_typst",
     "Table": "_manim_table",
+    "Code": "_manim_code",
     "MathTable": "_manim_table",
     "IntegerTable": "_manim_table",
     "DecimalTable": "_manim_table",

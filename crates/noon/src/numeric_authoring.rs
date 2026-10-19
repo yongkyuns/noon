@@ -1034,10 +1034,40 @@ mod tests {
                 .unwrap();
 
         let scale = 48.0 * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
-        assert!((resource.bounds.width() - (10.0 * scale + 4.0 * 0.001 * 48.0)).abs() < 1e-6);
+        // Pinned DecimalNumber defaults unit_buff_per_font_unit to zero:
+        // four tokens have three equal gaps, including before the superscript.
+        assert!((resource.bounds.width() - (10.0 * scale + 3.0 * 0.001 * 48.0)).abs() < 1e-6);
         assert!((resource.bounds.height() - 5.0 * scale).abs() < 1e-6);
         assert_eq!(resource.parts.len(), 4);
         assert_eq!(resource.parts[2].source_span, TextSourceSpan::new(2, 3));
+    }
+
+    #[test]
+    fn default_numeric_unit_gap_matches_digits_at_each_font_size() {
+        for unit in ["m", "^{2}"] {
+            for font_size in [24.0, 48.0, 72.0] {
+                let (source, tokens) = numeric_layout_tokens(
+                    8.0,
+                    &DecimalFormat {
+                        decimal_places: 0,
+                        unit: Some(unit.into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let digit = text_box("8", Rect::new(Vec2::ZERO, Vec2::new(2.0, 4.0)));
+                let unit = text_box(unit, Rect::new(Vec2::ZERO, Vec2::new(3.0, 3.0)));
+                let resource = compose_numeric_text_resource_from_children(
+                    source,
+                    &tokens,
+                    &[&digit, &unit],
+                    font_size,
+                )
+                .unwrap();
+                let scale = font_size * crate::latex_authoring::LATEX_POINT_TO_SCENE_SCALE;
+                assert!((resource.bounds.width() - (5.0 * scale + 0.001 * font_size)).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]
@@ -1354,6 +1384,171 @@ mod tests {
                 .unwrap(),
             before_y
         );
+    }
+
+    #[test]
+    fn number_line_decimal_number_labels_keep_value_metadata_and_apply_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([-2.0, 2.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 1,
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers(
+                &mut backend,
+                Some(&[-1.0, 0.0, 1.0]),
+                &NumberLabelOptions {
+                    excluded_numbers: vec![0.0],
+                    ..options
+                },
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["-1.0", "1.0"],
+        );
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.value().unwrap())
+                .collect::<Vec<_>>(),
+            [-1.0, 1.0],
+        );
+        assert!(store
+            .borrow()
+            .semantic_family_members_checked(line.family().node_id())
+            .unwrap()
+            .contains(&labels.node_id()));
+    }
+
+    #[test]
+    fn axes_decimal_coordinate_labels_apply_independent_exact_exclusions() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimAxes, ManimAxesOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let axes = ManimAxes::create(
+            Rc::clone(scene.integration_store()),
+            &ManimAxesOptions::default(),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let [x, y] = axes
+            .add_decimal_coordinates(
+                &mut backend,
+                Some(&[0.0, 1.0, 2.0]),
+                Some(&[-1.0, 0.0, 1.0]),
+                &NumberLabelOptions {
+                    excluded_numbers: vec![0.0, 2.0],
+                    ..options.clone()
+                },
+                &NumberLabelOptions {
+                    excluded_numbers: vec![-1.0],
+                    ..options
+                },
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let values = |family: &crate::MobjectFamily| {
+            store
+                .borrow()
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .into_iter()
+                .map(|member| {
+                    DecimalNumber::from_mobject(
+                        Mobject::from_node(Rc::clone(&store), member).unwrap(),
+                    )
+                    .unwrap()
+                    .value()
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(&x), [1.0]);
+        assert_eq!(values(&y), [0.0, 1.0]);
+    }
+
+    #[test]
+    fn decimal_number_coordinate_labels_keep_common_manim_formatting() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberLine, ManimNumberLineOptions, Mobject};
+
+        let scene = crate::Scene::new();
+        let line = ManimNumberLine::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberLineOptions::new([0.0, 2_000.0, 1.0]),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 0,
+            include_sign: true,
+            group_with_commas: true,
+            show_ellipsis: true,
+            unit: Some("m".into()),
+            exclude_zero: false,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let labels = line
+            .add_decimal_numbers(&mut backend, Some(&[1_234.0, -0.001]), &options)
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let numbers = store
+            .borrow()
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .into_iter()
+            .map(|member| {
+                DecimalNumber::from_mobject(Mobject::from_node(Rc::clone(&store), member).unwrap())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbers
+                .iter()
+                .map(|number| number.text().unwrap())
+                .collect::<Vec<_>>(),
+            ["+1,234...m", "+0...m"]
+        );
+        assert!(numbers.iter().all(|number| {
+            number.format().unwrap()
+                == crate::DecimalFormat {
+                    decimal_places: 0,
+                    include_sign: true,
+                    group_with_commas: true,
+                    show_ellipsis: true,
+                    unit: Some("m".into()),
+                }
+        }));
     }
 
     #[test]

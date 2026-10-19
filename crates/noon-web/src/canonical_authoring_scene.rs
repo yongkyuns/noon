@@ -6,6 +6,8 @@ use crate::authoring_error::AuthoringFailure;
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
 mod camera_profile;
+#[cfg(target_arch = "wasm32")]
+mod code;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(target_arch = "wasm32")]
@@ -843,6 +845,13 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_execution_ownership(&self) -> &'static str {
         self.player_ownership.browser_name()
+    }
+
+    /// Keep ordinary edit routing typed across the language boundary. A
+    /// transferred player still requires the live route, which rejects edits.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn requires_live_mutation_routing(&self) -> bool {
+        !self.player_ownership.is_unstarted()
     }
 
     /// Route bound observations through the single owner of current execution.
@@ -7204,6 +7213,11 @@ mod wasm {
             self.inner.live_execution_ownership().to_owned()
         }
 
+        #[wasm_bindgen(js_name = requiresLiveMutationRouting)]
+        pub fn requires_live_mutation_routing(&self) -> bool {
+            self.inner.requires_live_mutation_routing()
+        }
+
         #[wasm_bindgen(js_name = beginBooleanGeometry)]
         pub fn begin_boolean_geometry(
             &mut self,
@@ -7532,6 +7546,37 @@ mod wasm {
                         aligned_edge: (edge_x, edge_y),
                         mask: (mask_x, mask_y),
                     },
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextLayoutToEdgeInFrame)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to_edge_in_frame(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            edge_x: f64,
+            edge_y: f64,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            frame_buff: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_next_layout_to_edge_in_frame(
+                    &source.anchor,
+                    &target.anchor,
+                    (edge_x, edge_y),
+                    noon::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (0.0, 0.0),
+                        mask: (1.0, 1.0),
+                    },
+                    frame_buff,
                 )
                 .map_err(typed_js_error)
         }
@@ -13944,7 +13989,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_composition_candidate_surfaces_foreign_and_stale_handles_before_bootstrap() {
+    fn ordinary_composition_activation_rejects_foreign_and_stale_handles_before_bootstrap() {
         let mut context = CanonicalAuthoringScene::default();
         let source = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &source).unwrap();
@@ -13960,7 +14005,8 @@ mod tests {
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
 
         assert!(context
-            .validate_ordinary_mixed_composition(
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
                 &[
                     bound_transform_child(&source, unsupported.clone(), child),
                     bound_transform_child(&source, foreign, child),
@@ -13979,7 +14025,8 @@ mod tests {
             .apply(&mut context.scene.integration_store().borrow_mut())
             .unwrap();
         assert!(context
-            .validate_ordinary_mixed_composition(
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
                 &[
                     bound_transform_child(&source, unsupported, child),
                     bound_transform_child(&source, stale, child),
@@ -14367,15 +14414,19 @@ mod tests {
     fn live_execution_ownership_is_derived_from_the_retained_player_lifecycle() {
         let mut context = CanonicalAuthoringScene::default();
         assert_eq!(context.live_execution_ownership(), "none");
+        assert!(!context.requires_live_mutation_routing());
 
         context.live_player(1.0).unwrap();
         assert_eq!(context.live_execution_ownership(), "active");
+        assert!(context.requires_live_mutation_routing());
 
         let player = context.take_execution_player(1.0, 17).unwrap();
         assert_eq!(context.live_execution_ownership(), "transferred");
+        assert!(context.requires_live_mutation_routing());
 
         context.return_execution_player(player).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(context.requires_live_mutation_routing());
         assert!(context.resume_execution_player().is_err());
 
         context.begin_ordinary_wait(0.25).unwrap();

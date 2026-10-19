@@ -105,12 +105,12 @@ class FacadeCommandTests(unittest.TestCase):
         for target in ("x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"):
             for config, selected in features.items():
                 with self.subTest(config=config, target=target):
-                    expected = ["cargo", "check", "--manifest-path", str(module.ROOT / "Cargo.toml"),
+                    expected = ["cargo", "clippy", "--manifest-path", str(module.ROOT / "Cargo.toml"),
                                 "-p", "noon", "--target", target, "--no-default-features"]
                     if selected:
                         expected += ["--features", selected]
                     self.assertEqual(module.facade_check_command(config, target),
-                                     [*expected, "--all-targets"])
+                                     [*expected, "--all-targets", "--", "-D", "warnings"])
         with self.assertRaises(ValueError):
             module.facade_check_command("unknown", "x86_64-unknown-linux-gnu")
 
@@ -133,7 +133,8 @@ class ProviderExampleTests(unittest.TestCase):
 
         def check(config, source):
             example.write_text(source)
-            command = [*module.facade_check_command(config, target), "--message-format=json"]
+            command = module.facade_check_command(config, target)
+            command[command.index("--"):command.index("--")] = ["--message-format=json"]
             print("+", " ".join(command), flush=True)
             return subprocess.run(command, cwd=module.ROOT, env=env, text=True,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)

@@ -102,6 +102,14 @@ jobs:
       - name: Run web preflight
         run: bash scripts/build-web-demo.sh
 
+      # Full Manim raster qualification stays scheduled/manual. Its existing
+      # PR preflight must stay offline and cheap. Run this small independent
+      # pinned lexer/theme oracle here instead of installing Pygments there.
+      - name: Verify pinned Manim Code lexer and color oracle
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-deps 'Pygments==2.19.2'
+          python3 scripts/test_code_pygments_parity.py
+
   web-fast:
     name: Browser fast checks
     runs-on: ubuntu-latest
@@ -134,6 +142,11 @@ jobs:
           node --test scripts/playground-cold-start-calibration.test.mjs
           printf '%s\n' "$changed_paths" | node scripts/pr-risk-classifier.mjs >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed_paths" | node scripts/cold-start-risk-classifier.mjs >> "$GITHUB_OUTPUT"
+          if printf '%s\n' "$changed_paths" | grep -Eq '^(\.github/workflows/pr-fast\.yml|crates/noon/src/example_scenes/line_passing_flash\.rs|crates/noon-web/src/(lib|signal_trains_smoke)\.rs|scripts/signal-trains-browser-smoke\.mjs|web/python/examples/ordinary_signal_trains\.py)$'; then
+            echo 'signal_trains=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'signal_trains=false' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build browser package once
         id: browser-package
@@ -220,6 +233,19 @@ jobs:
           set -e
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
+
+      - name: Check signal-train Rust WASM and Python pixels
+        if: steps.browser-risk.outputs.signal_trains == 'true'
+        run: timeout --signal=TERM 240s node scripts/signal-trains-browser-smoke.mjs
+
+      - name: Retain signal-train browser evidence
+        if: always() && steps.browser-risk.outputs.signal_trains == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: signal-trains-browser-${{ github.event.pull_request.number }}
+          path: browser-smoke-artifacts/signal-trains/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Check shared mixed execution and recovery
         if: steps.browser-risk.outputs.retained_execution == 'true'

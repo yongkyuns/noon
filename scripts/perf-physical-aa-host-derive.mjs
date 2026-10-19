@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TRANSPORT_RECOVERY, validatePlan } from './perf-physical-aa-product.mjs';
 
 export const STUDY_ID = '1933-physical-host-aa-20261010-01';
 
@@ -95,8 +96,10 @@ const PHYSICAL_HEADLESS_TO_HEADED_AND_PROOF = [
   "  assert.equal(appleProof.contextLost, false, \"unexpected GL context loss\");",
 ].join("\n");
 
-export function deriveAAHostDriver(original) {
+export function deriveAAHostDriver(original, studyId = STUDY_ID) {
   assert.equal(typeof original, 'string');
+  assert.ok([STUDY_ID, TRANSPORT_RECOVERY.hostStudyId].includes(studyId),
+    'unregistered host A/A study');
   let source = replaceOnce(original,
     'const role = side === 0 ? "baseline" : "candidate";',
     'const role = "baseline"; // Both roles are the SAME authenticated original baseline.');
@@ -110,7 +113,7 @@ export function deriveAAHostDriver(original) {
   // Original product comparison, intrusive profiling and retained-worker diagnostics
   // are intentionally excluded from this separate A/A precision investigation.
   const metadata = `  await writeFile(path.join(output, "study.json"), stringifyEvidence({\n` +
-    `    schema: 1, studyId: "${STUDY_ID}", diagnosticOnly: true,\n` +
+    `    schema: 1, studyId: "${studyId}", diagnosticOnly: true,\n` +
     '    comparison: "authenticated-baseline-versus-itself",\n' +
     '    acquisitionComplete: rows.length === protocol.workloads.length * protocol.modes.length &&\n' +
     '      rows.every(row => row.pairs.length === protocol.pairs),\n' +
@@ -122,7 +125,7 @@ export function deriveAAHostDriver(original) {
   source = source.slice(0, startIndex) + metadata + source.slice(endIndex);
   source = replaceOnce(source,
     'stringifyEvidence({ schema: 1, protocol, identities, changedBuildInputs,',
-    `stringifyEvidence({ schema: 1, studyId: "${STUDY_ID}", diagnosticOnly: true, qualification: false, performanceAcceptance: false, mergeApproval: false, protocol, identities, changedBuildInputs,`);
+    `stringifyEvidence({ schema: 1, studyId: "${studyId}", diagnosticOnly: true, qualification: false, performanceAcceptance: false, mergeApproval: false, protocol, identities, changedBuildInputs,`);
   source = replaceOnce(source,
     'assert.deepEqual(failures, [], "performance regression or inconclusive qualification; all samples retained");',
     'assert.equal(rows.length, protocol.workloads.length * protocol.modes.length, "missing fixed host A/A rows");\n' +
@@ -143,8 +146,8 @@ export function deriveAAHostDriver(original) {
 }
 
 async function main() {
-  const [srcPath, destPath] = process.argv.slice(2);
-  assert.ok(srcPath && destPath, 'usage: node perf-physical-aa-host-derive.mjs <frozen-harness-file> <derived-driver-file>');
+  const [srcPath, destPath, planPath] = process.argv.slice(2);
+  assert.ok(srcPath && destPath, 'usage: node perf-physical-aa-host-derive.mjs <frozen-harness-file> <derived-driver-file> [registered-plan.json]');
   const original = await readFile(srcPath, 'utf8');
   const crypto = await import("node:crypto");
   const bytes = Buffer.from(original, "utf8");
@@ -152,9 +155,11 @@ async function main() {
     .update("blob " + bytes.length + String.fromCharCode(0)).update(bytes).digest("hex");
   assert.equal(frozenBlob, "30d766b4f9c0b87d9994adb707c47d5dbb84fe4c",
     "original host scorer/source blob changed");
-  const derived = deriveAAHostDriver(original);
+  const plan = planPath ? validatePlan(JSON.parse(await readFile(planPath))) : null;
+  const studyId = plan?.registration?.hostStudyId ?? STUDY_ID;
+  const derived = deriveAAHostDriver(original, studyId);
   await writeFile(destPath, derived);
-  console.log(`Prepared diagnostic-only ${STUDY_ID}: ${path.resolve(destPath)}`);
+  console.log(`Prepared diagnostic-only ${studyId}: ${path.resolve(destPath)}`);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -100,6 +100,9 @@ else: raise AssertionError("compiler error was swallowed")
 
             class LiveContext:
                 def __init__(self): self.calls = []
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "returned"
                 def liveCreateManimMarkupText(self, *args):
                     self.calls.append(args)
@@ -152,6 +155,9 @@ else: raise AssertionError("compiler error was swallowed")
 
             class LiveContext:
                 def __init__(self): self.calls = []
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "returned"
                 def liveCreateManimText(self, *args):
                     self.calls.append(("text", args))

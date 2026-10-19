@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "studyId": "1933-physical-aa-20261018-02",
+  "hostStudyId": "1933-physical-host-aa-20261018-02",
+  "workflow": "perf-physical-aa-transport-recovery.yml",
+  "originalPlanSha256": "fcbba15e111042cb834d6e0b4f20996e8d17e0447e458973310609754cf4f986",
+  "priorRun": 39145683127,
+  "priorArtifact": 12142919221,
+  "priorArtifactSha256": "2f245d267af8088e04425976ce2f378819a8d707aad8a1d2735d0b300f688537",
+  "correctionCommit": "c4b6cb12030a47e95e6fff091b6fa38c27d4d912",
+  "reason": "Original acquisition failed at signed archive download with HTTP 401 before any product or host pair. Correct API authentication transport; retain that zero-sample failure and every original source, workload, sample count, order, deadline and acceptance limit."
+}

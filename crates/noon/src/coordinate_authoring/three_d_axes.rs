@@ -396,7 +396,11 @@ impl ManimThreeDAxes {
                 anchor.x - source_corner.0 + buff * direction.x,
                 anchor.y - source_corner.1 + buff * direction.y,
             );
-            shift_label_onto_default_frame(&layout, &mut delta);
+            crate::family_layout::fit_translation_to_default_frame(
+                layout.boundary_bounds(),
+                &mut delta,
+                f64::from(noon_core::MED_SMALL_BUFF),
+            )?;
             let label_center = layout.critical_point(0.0, 0.0);
             let label_center =
                 SemanticVec3::new(label_center.0 + delta.0, label_center.1 + delta.1, anchor.z);
@@ -939,35 +943,6 @@ fn critical_world_point(
         component(min.y, max.y, direction.y),
         component(min.z, max.z, direction.z),
     )
-}
-
-/// Match Manim's `shift_onto_screen(buff=MED_SMALL_BUFF)` in the default
-/// authored frame. This runs before ThreeDAxes rotates its Y/Z label, as it
-/// does in the pinned get-axis-label methods.
-fn shift_label_onto_default_frame(layout: &crate::FamilyLayout, delta: &mut (f64, f64)) {
-    let edge_buff = f64::from(noon_core::MED_SMALL_BUFF);
-    let half_width = f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5;
-    let half_height = f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5;
-    let top = layout.critical_point(0.0, 1.0).1 + delta.1;
-    let top_limit = half_height - edge_buff;
-    if top > top_limit {
-        delta.1 += top_limit - top;
-    }
-    let bottom = layout.critical_point(0.0, -1.0).1 + delta.1;
-    let bottom_limit = -half_height + edge_buff;
-    if bottom < bottom_limit {
-        delta.1 += bottom_limit - bottom;
-    }
-    let left = layout.critical_point(-1.0, 0.0).0 + delta.0;
-    let left_limit = -half_width + edge_buff;
-    if left < left_limit {
-        delta.0 += left_limit - left;
-    }
-    let right = layout.critical_point(1.0, 0.0).0 + delta.0;
-    let right_limit = half_width - edge_buff;
-    if right > right_limit {
-        delta.0 += right_limit - right;
-    }
 }
 
 #[cfg(test)]

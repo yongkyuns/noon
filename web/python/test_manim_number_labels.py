@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import _manim_number_labels as labels
+import _manim_plotting as plotting
 
 
 class Owned:
@@ -15,6 +16,14 @@ class Owned:
         self.direction = value
     def setExcludeZero(self, value):
         self.exclude = value
+    def setIncludeSign(self, value):
+        self.include_sign = value
+    def setGroupWithCommas(self, value):
+        self.group_with_commas = value
+    def setShowEllipsis(self, value):
+        self.show_ellipsis = value
+    def setUnit(self, value):
+        self.unit = value
     def setExcludedNumbers(self, value):
         self.excluded = value
     def setTickRangeFlags(self, include_tip, exclude_origin_tick):
@@ -47,8 +56,13 @@ class NumericLabelAdapterTests(unittest.TestCase):
         patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)).start()
         self.wrapped = patch.object(labels, '_family', side_effect=lambda handle, *args: handle).start()
         patch.object(labels._shared, '_family_wrapper_key', side_effect=id).start()
+        class VectorGroupFixture(labels._compat.VGroup):
+            def __new__(cls, *families):
+                return families
+        patch.object(labels._compat, 'VGroup', VectorGroupFixture).start()
         self.axis = SimpleNamespace(_semantic_family_handle=SimpleNamespace(
                                         numberLabelFamily=self.commit,
+                                        numberLineDecimalNumberLabelFamily=self.commit,
                                         numberLineCustomLabelFamily=self.commit),
                                     _semantic_member_wrappers={})
 
@@ -67,32 +81,152 @@ class NumericLabelAdapterTests(unittest.TestCase):
                                       excluding=excluding)
 
     def axes(self):
+        self.axis.add_labels = lambda values, **config: labels.custom_labels(
+            self.axis, values, config=config
+        )
+        self.axis.add_numbers = lambda values=None, excluding=None, **config: setattr(
+            self.axis, "numbers", labels.number_mobjects(
+                self.axis, values, attach=True, config=config, excluding=excluding,
+            )
+        )
+        self.axis.numbers_to_exclude = (0.0,)
+        y_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            numbers_to_exclude=(0.0,),
+            _semantic_family_handle=SimpleNamespace(
+                numberLabelFamily=self.commit,
+                numberLineDecimalNumberLabelFamily=self.commit,
+                numberLineCustomLabelFamily=self.commit,
+            ),
+        )
+        y_axis.add_labels = lambda values, **config: labels.custom_labels(
+            y_axis, values, config=config
+        )
+        y_axis.add_numbers = lambda values=None, excluding=None, **config: setattr(
+            y_axis, "numbers", labels.number_mobjects(
+                y_axis, values, attach=True, config=config, excluding=excluding,
+            )
+        )
         return SimpleNamespace(x_axis=self.axis,
-            y_axis=SimpleNamespace(_semantic_member_wrappers={}),
-            _semantic_family_handle=SimpleNamespace(coordinateLabelFamilies=self.commit_axes))
+            y_axis=y_axis,
+            _semantic_family_handle=SimpleNamespace(
+                coordinateLabelFamilies=self.commit_axes,
+                axesDecimalCoordinateLabelFamilies=self.commit_axes,
+            ))
 
     def commit_axes(self, *values):
         self.calls.append(values)
         return Owned(), Owned()
 
+    def test_number_line_precision_overrides_defaults_for_all_label_entrypoints(self):
+        member = object()
+        family = SimpleNamespace(submobjects=[member])
+        self.wrapped.side_effect = lambda *args: family
+        with patch.object(labels, "_line_decimal_labels", side_effect=self.commit), \
+             patch.object(labels, "_decimal_family", return_value=family):
+            for profile in ({}, {"font": "Fixture Sans"}):
+                for precision in ({"decimal_places": 1}, {"num_decimal_places": 1},
+                                  {"decimal_places": 1, "num_decimal_places": 1}):
+                    for method in ("add_numbers", "get_number_mobjects", "get_number_mobject"):
+                        with self.subTest(profile=profile, precision=precision, method=method):
+                            line = object.__new__(plotting.NumberLine)
+                            line._semantic_family_handle = self.axis._semantic_family_handle
+                            line._semantic_member_wrappers = {}
+                            line.decimal_number_config = {"num_decimal_places": 2,
+                                                          "include_sign": True}
+                            line.number_label_decimal_places = 2
+                            line.numbers_to_exclude = ()
+                            value = (1,) if method == "add_numbers" else 1
+                            getattr(line, method)(value, **profile, **precision)
+                            self.assertEqual(self.created[-1][2], 1)
+                            self.assertTrue(self.options[-1].include_sign)
+                            self.assertEqual(line.decimal_number_config,
+                                             {"num_decimal_places": 2, "include_sign": True})
+
+    def test_number_line_explicit_precision_alias_conflict_rejects_before_admission(self):
+        line = object.__new__(plotting.NumberLine)
+        line.decimal_number_config = {"num_decimal_places": 2}
+        with self.assertRaisesRegex(ValueError, "decimal_places and num_decimal_places disagree"):
+            line.add_numbers((1,), font="Fixture Sans",
+                             decimal_places=1, num_decimal_places=3)
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(line.decimal_number_config, {"num_decimal_places": 2})
+
+    def test_coordinate_precision_aliases_obey_each_option_layer(self):
+        families = (Owned(), Owned())
+        with patch.object(labels, "_axes_decimal_labels", return_value=families), \
+             patch.object(labels, "_plane_decimal_labels", return_value=families), \
+             patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle):
+            for method in (labels.add_coordinates, labels.add_number_plane_coordinates):
+                for profile in ({}, {"font": "Fixture Sans"}):
+                    for common, override in (("decimal_places", "num_decimal_places"),
+                                             ("num_decimal_places", "decimal_places")):
+                        with self.subTest(method=method.__name__, profile=profile, common=common):
+                            axes = self.axes()
+                            axes._semantic_family_handle.numberPlaneCoordinateLabelFamilies = self.commit_axes
+                            axes.x_axis.decimal_number_config = {"num_decimal_places": 2}
+                            axes.y_axis.decimal_number_config = {"num_decimal_places": 3}
+                            method(axes, (1,), (1,), config={**profile, common: 1},
+                                   x_config={override: 4})
+                            self.assertEqual([entry[2] for entry in self.created[-2:]], [4, 1])
+                            self.assertEqual(axes.x_axis.decimal_number_config,
+                                             {"num_decimal_places": 2})
+                            self.assertEqual(axes.y_axis.decimal_number_config,
+                                             {"num_decimal_places": 3})
+
     def test_order_duplicates_and_one_pass_values_are_not_recomputed(self):
-        result = self.invoke(iter((2, -1, 2)), font_size='22', decimal_places=2)
+        result = self.invoke(iter((2, -1, 2)), font="Fixture Sans",
+                             font_size='22', decimal_places=2)
         self.assertEqual(self.calls[0][0:2], ([2., -1., 2.], False))
-        self.assertEqual(self.created, [('DejaVu Sans Mono', 22., 2, 0.12)])
+        self.assertEqual(self.created, [('Fixture Sans', 22., 2, 0.12)])
         self.assertIs(self.axis.numbers, result)
         self.assertIs(self.axis._semantic_member_wrappers[id(result)], result)
         self.assertEqual(self.options[0].freed, 0)  # moved, not manually freed
         self.assertEqual(self.options[0].excluded, [])
 
+    def test_number_line_defaults_to_retained_decimal_number_labels(self):
+        family = Owned()
+        bridge = Mock(return_value=family)
+        wrap = patch.object(labels, "_decimal_family", return_value=family).start()
+        patch.object(labels, "_line_decimal_labels", bridge).start()
+        result = self.invoke((1, -1), excluding=(1,))
+        self.assertIs(result, family)
+        bridge.assert_called_once_with(
+            self.axis._semantic_family_handle,
+            [1.0, -1.0], False, self.options[0], True,
+        )
+        self.assertEqual(self.options[0].excluded, [1.0])
+        self.assertIs(self.axis.numbers, family)
+        wrap.assert_called_once_with(family, labels._base.WHITE)
+
+    def test_number_line_numeric_labels_require_the_prepared_tex_backend(self):
+        with patch.object(labels, "_line_decimal_labels", None):
+            with self.assertRaisesRegex(RuntimeError, "prepare_latex"):
+                self.invoke((1,))
+        self.assertEqual(self.options[0].freed, 1)
+        self.assertEqual(self.calls, [])
+
     def test_exclusion_values_are_forwarded_once_through_the_owned_option(self):
-        self.invoke(iter((0, 1, 2)), excluding=iter((1,)))
+        self.invoke(iter((0, 1, 2)), font="Fixture Sans", excluding=iter((1,)))
         self.assertEqual(self.options[0].excluded, [1.0])
 
     def test_automatic_tick_selection_keeps_the_axis_tip_and_origin_policy(self):
         self.axis.include_tip = True
         self.axis.exclude_origin_tick = True
-        self.invoke()
+        self.invoke(font="Fixture Sans")
         self.assertEqual(self.options[0].tick_range_flags, (True, True))
+
+    def test_decimal_number_formatting_options_reach_the_shared_rust_adapter(self):
+        self.invoke(
+            (1234,), font="Fixture Sans", include_sign=True, group_with_commas=False,
+            show_ellipsis=True, unit=r"\text{m}",
+        )
+        options = self.options[0]
+        self.assertTrue(options.include_sign)
+        self.assertFalse(options.group_with_commas)
+        self.assertTrue(options.show_ellipsis)
+        self.assertEqual(options.unit, r"\text{m}")
 
     def test_custom_labels_preserve_mapping_order_and_bind_the_attached_alias(self):
         family = Owned()
@@ -111,6 +245,21 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(self.axis.labels, family)
         self.assertIs(self.axis._semantic_member_wrappers[id(family)], family)
 
+    def test_log_axes_defaults_reject_before_labels_but_explicit_values_stay_numeric(self):
+        axes = self.axes()
+        axes.x_axis.scaling = plotting.LogBase(base=2)
+        axes.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs: setattr(
+            axes.x_axis, "numbers", "explicit-labels"))
+        axes.y_axis.add_numbers = Mock()
+        with self.assertRaisesRegex(NotImplementedError, "generated LogBase exponent labels"):
+            labels.add_coordinates(axes, config={})
+        axes.x_axis.add_numbers.assert_not_called()
+        axes.y_axis.add_numbers.assert_not_called()
+        self.assertEqual(self.options, [])
+        self.assertIs(labels.add_coordinates(axes, (0.5, 4.0), config={}), axes)
+        self.assertEqual(axes.x_axis.add_numbers.call_args.args, ((0.5, 4.0),))
+        self.assertEqual(axes.coordinate_labels, ("explicit-labels",))
+
     def test_custom_labels_reject_unsupported_objects_before_allocating(self):
         with self.assertRaises(NotImplementedError):
             labels.custom_labels(self.axis, {1: object()}, config={})
@@ -118,8 +267,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_none_and_empty_are_distinct_and_detached_does_not_attach(self):
-        self.invoke(None, attach=False)
-        self.invoke((), attach=False)
+        self.invoke(None, attach=False, font="Fixture Sans")
+        self.invoke((), attach=False, font="Fixture Sans")
         self.assertEqual([(call[0], call[1], call[3]) for call in self.calls],
                          [([], True, False), ([], False, False)])
         self.assertFalse(hasattr(self.axis, 'numbers'))
@@ -128,7 +277,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_unknown_options_and_host_coercion_fail_before_allocation(self):
         for config in ({'decimal_places': True}, {'decimal_places': 1.5}, {'label_constructor': object}):
             with self.assertRaises(TypeError):
-                self.invoke((1,), **config)
+                self.invoke((1,), font="Fixture Sans", **config)
         with self.assertRaises(ValueError):
             self.invoke(('bad',))
         self.assertEqual(self.options, [])
@@ -170,7 +319,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
             raise error
         self.axis._semantic_family_handle.numberLabelFamily = reject
         with self.assertRaises(ValueError) as caught:
-            self.invoke((1,))
+            self.invoke((1,), font="Fixture Sans")
         self.assertIs(caught.exception, error)
         self.assertIs(self.axis.numbers, previous)
         self.assertEqual(self.options[0].freed, 0)
@@ -179,7 +328,8 @@ class NumericLabelAdapterTests(unittest.TestCase):
     def test_second_axis_options_failure_releases_first_and_never_commits(self):
         with self.assertRaises(TypeError):
             labels.add_coordinates(self.axes(), None, None, x_config=None,
-                                   y_config={'decimal_places': False}, config={})
+                                   y_config={'font': ''},
+                                   config={'font': 'Fixture Sans'})
         self.assertEqual(len(self.options), 1)
         self.assertEqual(self.options[0].freed, 1)
         self.assertEqual(self.calls, [])
@@ -189,17 +339,184 @@ class NumericLabelAdapterTests(unittest.TestCase):
         axes = self.axes()
         result = labels.add_coordinates(axes, iter((2, 1)), (),
             x_config={'direction': labels._base.UP}, y_config=None,
-            config={'direction': labels._base.RIGHT, 'font_size': 20})
+            config={'direction': labels._base.RIGHT, 'font_size': 20,
+                    'font': 'Fixture Sans'})
         self.assertIs(result, axes)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][:4], ([2., 1.], False, [], False))
         self.assertEqual(self.options[0].direction, (0, 1))
         self.assertEqual(self.options[1].direction, (1, 0))
         self.assertEqual([o.freed for o in self.options], [0, 0])
+        self.assertEqual(axes.coordinate_labels,
+                         (axes.x_axis.numbers, axes.y_axis.numbers))
+
+    def test_axes_default_numeric_coordinates_use_one_decimal_number_commit(self):
+        axes = self.axes()
+        x_family, y_family = Owned(), Owned()
+        bridge = Mock(return_value=(x_family, y_family))
+        patch.object(labels, "_axes_decimal_labels", bridge).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        result = labels.add_coordinates(axes, None, (1, -1), config={})
+        self.assertIs(result, axes)
+        bridge.assert_called_once()
+        self.assertEqual(bridge.call_args.args[:5], (
+            axes._semantic_family_handle, [], True, [1.0, -1.0], False,
+        ))
+        self.assertEqual([options.exclude for options in self.options], [False, False])
+        self.assertEqual([options.excluded for options in self.options], [[0.0], [0.0]])
+        self.assertEqual(axes.coordinate_labels,
+                         (axes.x_axis.numbers, axes.y_axis.numbers))
+        self.assertIs(axes.x_axis.numbers, x_family)
+        self.assertIs(axes.y_axis.numbers, y_family)
+
+    def test_atomic_axis_labels_forward_tip_and_origin_policy_for_both_profiles(self):
+        for config in ({}, {"font": "Fixture Sans"}):
+            axes = self.axes()
+            axes.x_axis.include_tip = True
+            axes.x_axis.exclude_origin_tick = True
+            axes.y_axis.include_tip = False
+            axes.y_axis.exclude_origin_tick = False
+            with self.subTest(config=config), patch.object(
+                labels, "_axes_decimal_labels", return_value=(Owned(), Owned())
+            ), patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle):
+                labels.add_coordinates(axes, config=config)
+            self.assertEqual([option.tick_range_flags for option in self.options[-2:]],
+                             [(True, True), (False, False)])
+
+    def test_axes_constructor_decimal_formatting_is_preserved_per_axis(self):
+        axes = self.axes()
+        axes.x_axis.decimal_number_config = {
+            "num_decimal_places": 2,
+            "include_sign": True,
+            "group_with_commas": False,
+            "unit": "m",
+        }
+        axes.y_axis.decimal_number_config = {
+            "num_decimal_places": 1,
+            "show_ellipsis": True,
+            "unit": "s",
+        }
+        families = (Owned(), Owned())
+        bridge = Mock(return_value=families)
+        patch.object(labels, "_axes_decimal_labels", bridge).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+
+        labels.add_coordinates(axes, (1234,), (2,), config={})
+
+        self.assertEqual(self.created, [
+            ("DejaVu Sans Mono", 18.0, 2, 0.12),
+            ("DejaVu Sans Mono", 18.0, 1, 0.12),
+        ])
+        self.assertTrue(self.options[0].include_sign)
+        self.assertFalse(self.options[0].group_with_commas)
+        self.assertFalse(self.options[0].show_ellipsis)
+        self.assertEqual(self.options[0].unit, "m")
+        self.assertFalse(self.options[1].include_sign)
+        self.assertTrue(self.options[1].group_with_commas)
+        self.assertTrue(self.options[1].show_ellipsis)
+        self.assertEqual(self.options[1].unit, "s")
+
+        labels.add_coordinates(
+            axes, (1234,), (2,), config={"include_sign": False},
+            x_config={"include_sign": True, "unit": "km"},
+        )
+        self.assertTrue(self.options[2].include_sign)
+        self.assertEqual(self.options[2].unit, "km")
+        self.assertFalse(self.options[3].include_sign)
+        self.assertEqual(self.options[3].unit, "s")
+
+    def test_axes_exact_exclusions_follow_axis_config_and_global_override(self):
+        axes = self.axes()
+        axes.x_axis.numbers_to_exclude = (0.0, 2.0)
+        axes.y_axis.numbers_to_exclude = (-1.0,)
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+
+        labels.add_coordinates(axes, (0, 1, 2), (-1, 0, 1), config={})
+        self.assertEqual([option.excluded for option in self.options],
+                         [[0.0, 2.0], [-1.0]])
+
+    def test_axes_explicit_excluding_overrides_both_axis_configs(self):
+        axes = self.axes()
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        labels.add_coordinates(
+            axes, (0, 1, 2), (-1, 0, 1), config={"excluding": iter((2,))},
+        )
+        self.assertEqual([option.excluded for option in self.options], [[2.0], [2.0]])
+
+    def test_axes_explicit_include_zero_overrides_constructor_exclusion(self):
+        axes = self.axes()
+        families = (Owned(), Owned())
+        patch.object(labels, "_axes_decimal_labels", Mock(return_value=families)).start()
+        patch.object(labels, "_decimal_family", side_effect=lambda handle, color: handle).start()
+        labels.add_coordinates(axes, (0, 1), (0, 1), config={"exclude_zero": False})
+        self.assertEqual([option.excluded for option in self.options], [[], []])
+        self.assertEqual([option.exclude for option in self.options], [False, False])
+
+    def test_single_coordinate_argument_labels_only_the_first_axis(self):
+        axes = self.axes()
+        result = labels.add_coordinates(axes, iter((2, 1)), config={'font': 'Fixture Sans'},
+                                        x_config=None, y_config=None)
+        self.assertIs(result, axes)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][0:2], ([2.0, 1.0], False))
+        self.assertEqual(axes.coordinate_labels, (axes.x_axis.numbers,))
+        self.assertFalse(hasattr(axes.y_axis, 'numbers'))
+
+    def test_custom_coordinate_mapping_uses_native_labels_and_keeps_omitted_axes_empty(self):
+        axes = self.axes()
+        result = labels.add_coordinates(axes, {1: "Monday"}, config={"font": "Fixture Sans"},
+                                        x_config=None, y_config=None)
+        self.assertIs(result, axes)
+        self.assertEqual(self.calls[0][0:2], ([1.0], ["Monday"]))
+        self.assertIs(axes.coordinate_labels[0], axes.x_axis.labels)
+        self.assertEqual(len(axes.coordinate_labels), 1)
+        self.assertFalse(hasattr(axes.y_axis, 'numbers'))
+
+    def test_mapping_requires_an_explicit_native_font_before_publication(self):
+        axes = self.axes()
+        with self.assertRaisesRegex(NotImplementedError, "default TeX mappings"):
+            labels.add_coordinates(axes, (1,), {1: "x^2"}, config={})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.options, [])
+
+    def test_custom_mapping_filters_decimal_options_and_preserves_font_on_both_coordinate_types(self):
+        for add in (labels.add_coordinates, labels.add_number_plane_coordinates):
+            owner = self.axes()
+            owner.x_axis.decimal_number_config = {
+                "num_decimal_places": 2, "include_sign": True,
+                "group_with_commas": False, "unit": "m",
+            }
+            calls = []
+            def custom(axis, values, *, config):
+                calls.append((axis, values, config))
+                axis.labels = object()
+                return axis.labels
+            with self.subTest(add=add), patch.object(labels, "custom_labels", side_effect=custom):
+                result = add(owner, {1: "Monday"}, config={
+                    "font": "Fixture Sans", "num_decimal_places": 0,
+                    "include_sign": False, "direction": labels._base.RIGHT,
+                    "buff": 0.4, "font_size": 24,
+                })
+            self.assertIs(result, owner)
+            self.assertEqual(calls, [(owner.x_axis, {1: "Monday"}, {
+                "font": "Fixture Sans", "direction": labels._base.RIGHT,
+                "buff": 0.4, "font_size": 24,
+            })])
+            self.assertFalse(hasattr(owner.y_axis, "labels"))
 
     def test_number_plane_defaults_to_decimal_glyph_families_and_one_decimal(self):
-        x_axis = SimpleNamespace(_semantic_member_wrappers={})
-        y_axis = SimpleNamespace(_semantic_member_wrappers={})
+        x_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            decimal_number_config={"include_sign": True, "unit": "m"},
+        )
+        y_axis = SimpleNamespace(
+            _semantic_member_wrappers={},
+            decimal_number_config={"show_ellipsis": True, "unit": "s"},
+        )
         class FamilyHandle:
             def decimalNumberLabelMembers(self):
                 return ()
@@ -224,7 +541,13 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertIs(result, plane)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1:5], ([1.0], False, [-1.0], False))
+        self.assertEqual([option.exclude for option in self.options], [False, False])
+        self.assertEqual([option.excluded for option in self.options], [[0.0], [0.0]])
         self.assertEqual([entry[2] for entry in self.created], [2, 3])
+        self.assertTrue(self.options[0].include_sign)
+        self.assertFalse(self.options[1].include_sign)
+        self.assertTrue(self.options[1].show_ellipsis)
+        self.assertEqual([option.unit for option in self.options], ["m", "s"])
         self.assertEqual(len(x_axis.numbers), 2)
         self.assertEqual(len(y_axis.numbers), 2)
 
@@ -234,6 +557,64 @@ class NumericLabelAdapterTests(unittest.TestCase):
             config={"num_decimal_places": 0},
         )
         self.assertEqual([entry[2] for entry in self.created], [0, 0])
+
+    def test_number_plane_single_axis_defaults_keep_decimal_number_profile(self):
+        x_axis = SimpleNamespace(_semantic_member_wrappers={}, _semantic_family_handle=object())
+        y_axis = SimpleNamespace(_semantic_member_wrappers={}, _semantic_family_handle=object())
+        plane = SimpleNamespace(
+            x_axis=x_axis, y_axis=y_axis,
+            _semantic_family_handle=object(),
+            _coordinate_decimal_places=(2, 3),
+        )
+        handle = Owned()
+        family = object()
+        bridge = patch.object(labels, "_line_decimal_labels", return_value=handle).start()
+        patch.object(labels, "_decimal_members", object()).start()
+        patch.object(labels, "_decimal_family", return_value=family).start()
+        result = labels.add_number_plane_coordinates(
+            plane, (1.0,), x_config=None, y_config=None,
+            config={"font_size": 24, "buff": 0.1},
+        )
+        self.assertIs(result, plane)
+        self.assertIs(x_axis.numbers, family)
+        self.assertFalse(hasattr(y_axis, "numbers"))
+        self.assertEqual(plane.coordinate_labels, (family,))
+        self.assertEqual(bridge.call_args.args[:3], (x_axis._semantic_family_handle, [1.0], False))
+        self.assertEqual(self.created[0][2], 2)
+
+    def test_mixed_two_axis_label_types_reject_before_either_axis_changes(self):
+        for add in (labels.add_coordinates, labels.add_number_plane_coordinates):
+            owner = self.axes()
+            previous = object()
+            owner.x_axis.numbers = owner.y_axis.numbers = previous
+            owner.coordinate_labels = previous
+            owner.x_axis.add_numbers = Mock(side_effect=lambda *args, **kwargs:
+                                            setattr(owner.x_axis, "numbers", object()))
+            with self.subTest(add=add.__name__), patch.object(
+                labels, "_line_decimal_labels", side_effect=RuntimeError("second axis compile failed")
+            ):
+                with self.assertRaisesRegex(NotImplementedError, "two-axis"):
+                    add(owner, None, (-1.0, 1.0), x_config={"font": "Fixture Sans"},
+                        config={"font_size": 24})
+                owner.x_axis.add_numbers.assert_not_called()
+                self.assertIs(owner.x_axis.numbers, previous)
+                self.assertIs(owner.y_axis.numbers, previous)
+                self.assertIs(owner.coordinate_labels, previous)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.options, [])
+
+    def test_two_axis_custom_labels_reject_before_first_family_is_attached(self):
+        for add in (labels.add_coordinates, labels.add_number_plane_coordinates):
+            owner = self.axes()
+            owner.y_axis.add_numbers = Mock(side_effect=RuntimeError("second axis compile failed"))
+            with self.subTest(add=add.__name__):
+                with self.assertRaisesRegex(NotImplementedError, "two-axis"):
+                    add(owner, {1: "Monday"}, (1,), config={"font": "Fixture Sans"})
+                owner.y_axis.add_numbers.assert_not_called()
+                self.assertFalse(hasattr(owner.x_axis, "labels"))
+                self.assertFalse(hasattr(owner, "coordinate_labels"))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.options, [])
 
     def test_number_plane_requires_prepared_latex_without_native_font_opt_in(self):
         patch.object(labels, "_plane_decimal_labels", None).start()
@@ -266,19 +647,9 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(number.font_size, 18)
         self.assertEqual(number.get_value(), -1)
 
-    def test_number_plane_rejects_single_axis_native_font_fallback(self):
-        plane = SimpleNamespace(x_axis=object(), y_axis=object(),
-                                _semantic_family_handle=object())
-        with self.assertRaisesRegex(NotImplementedError, "both NumberPlane axes"):
-            labels.add_number_plane_coordinates(
-                plane, None, None, x_config={"font": "Fixture Sans"},
-                y_config=None, config={},
-            )
-        self.assertEqual(self.options, [])
-
     def test_number_plane_global_font_keeps_native_text_path(self):
-        x_axis = SimpleNamespace(_semantic_member_wrappers={})
-        y_axis = SimpleNamespace(_semantic_member_wrappers={})
+        x_axis = SimpleNamespace(_semantic_member_wrappers={}, _semantic_family_handle=object())
+        y_axis = SimpleNamespace(_semantic_member_wrappers={}, _semantic_family_handle=object())
         owner = SimpleNamespace(
             x_axis=x_axis, y_axis=y_axis,
             _semantic_family_handle=SimpleNamespace(numberPlaneCoordinateLabelFamilies=self.commit_axes),

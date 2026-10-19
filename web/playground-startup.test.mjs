@@ -1,8 +1,67 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+import { loadShowcaseGallery, normalizeShowcaseManifest } from "./showcase-gallery.js";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+
+// Execute the real entrypoint, including its hoisted error helpers, before the
+// initialized gallery exists. A manifest failure must not read later bindings
+// or leave a Run button that cannot work.
+const entrypoint = main.replace(/^import [\s\S]*? from "[^"]+";\n/gm, "");
+for (const loadGalleryManifest of [
+  () => loadShowcaseGallery(async () => ({ ok: false, status: 503 })),
+  async () => {
+    const manifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
+    manifest.entries[0].path = "../outside.py";
+    return normalizeShowcaseManifest(manifest);
+  },
+  async () => ({ examples: [] }),
+]) {
+  const nodes = new Map();
+  const node = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, {
+      dataset: {}, value: "—", textContent: "Loading…", parentElement: {},
+    });
+    return nodes.get(selector);
+  };
+  const diagnostics = [];
+  const logged = [];
+  const context = {
+    document: {
+      querySelector: node,
+      createElement: () => ({}),
+      head: { append() {} },
+    },
+    window: {},
+    console: { error: error => logged.push(error) },
+    createPlaygroundPreview: () => ({}),
+    createPlaygroundDiagnostics: () => ({
+      show(error, title) { diagnostics.push({ error, title }); return title; },
+    }),
+    installPreviewFullscreen: () => () => {},
+    PresentationRate: class { reset() {} },
+    loadGalleryManifest,
+  };
+  let failure;
+  try {
+    await vm.runInNewContext(`(async () => {\n${entrypoint}\n})()`, context);
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure, "invalid galleries must still reject rather than fall back to another catalog");
+  assert.equal(diagnostics.length, 1, "the existing diagnostic panel must receive the failure");
+  assert.equal(diagnostics[0].error, failure, "retain the original error instead of a secondary initialization error");
+  assert.equal(logged[0], failure);
+  assert.equal(diagnostics[0].title, "Gallery failed");
+  assert.equal(node("#status").dataset.state, "error");
+  assert.equal(node("#status-text").textContent, "Gallery failed");
+  assert.equal(node("#patch-status").dataset.state, "error");
+  assert.match(node("#patch-status").value, /Reload the page/);
+  assert.equal(node("#replace-scene").disabled, true);
+  assert.equal(context.window.__noonExampleGallery, undefined);
+}
 
 const createRuntimeStart = main.indexOf("function createRuntimeClient()");
 const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);

@@ -7,6 +7,7 @@ attestation and not an instruction timeline or performance measurement.
 """
 from __future__ import annotations
 import argparse
+import ast
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -85,6 +86,58 @@ def validate_bundle(bundle, check_sources=True):
     return bundle
 
 
+
+def compare_demo_model(bundle, scene_path=None):
+    """Compare the actual demo model with validated CUDA evidence, outside Noon.
+
+    Compile only the two pure domain helpers from the scene source. This neither
+    imports a fake Noon nor executes/rewrites the Scene. Captured physical shared
+    addresses are translated to the demo's tile-relative (base-zero) addresses;
+    the physical base rotates bank numbers, not conflict multiplicity or values.
+    Call validate_bundle first to check full accesses, outputs, and provenance.
+    """
+    source = (scene_path or ROOT / "web/python/examples/cuda_transpose_banks.py").read_bytes()
+    tree = ast.parse(source)
+    names = {"reference_trace", "service_batches"}
+    helpers = [node for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name in names]
+    need(len(helpers) == len(names) and {node.name for node in helpers} == names,
+         "demo model helpers missing or duplicated")
+    namespace = {}
+    exec(compile(ast.Module(body=helpers, type_ignores=[]), "<demo CUDA model>", "exec"), namespace)
+    cases = 0
+    for column in range(32):
+        for recorded in bundle["columns"][str(column)]["runs"]:
+            stride, base = recorded["stride"], recorded["base_word"]
+            model = namespace["reference_trace"](stride, column)
+            normalized = {
+                "stride": stride, "base_word": 0,
+                "loads": recorded["loads"],
+                "verified_output_words": recorded["verified_output_words"],
+                "reads": [[r, c, word - base, out, value]
+                          for r, c, word, out, value in recorded["reads"]],
+            }
+            need(model == normalized,
+                 "demo model differs from CUDA capture: column %d, stride %d" % (column, stride))
+            # Distinct words per physical bank, independently of the demo helper.
+            banks = [set() for _ in range(32)]
+            for _, _, word, _, _ in recorded["reads"]:
+                banks[word % 32].add(word)
+            batches = namespace["service_batches"](model["reads"])
+            need(len(batches) == max(map(len, banks)) and
+                 sorted(lane for batch in batches for lane in batch) == list(range(32)),
+                 "demo service rounds differ from captured address contention")
+            # One schematic round may service at most one distinct word per bank.
+            for batch in batches:
+                words = [recorded["reads"][lane][2] for lane in batch]
+                need(len({w % 32 for w in words}) == len(set(words)),
+                     "demo round contains conflicting captured addresses")
+            cases += 1
+    need(cases == 64, "demo comparison requires all 32 columns and both layouts")
+    return {"sceneSha256": digest(source), "cases": cases,
+            "columns": 32, "layouts": [32, 33], "addressBasis": "tile-relative"}
+
+
 def run_checked(command, cwd, timeout=300):
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
@@ -106,7 +159,7 @@ def capture(destination):
         binary_hash = digest(binary.read_bytes())
         device = None
         for column in range(32):
-            result = run_checked([str(binary), str(column), "--json"], ROOT)
+            result = run_checked([str(binary), str(column)], ROOT)
             raw = json.loads(result.stdout)
             identity = {k: raw[k] for k in ("device", "compute_capability", "runtime_version", "driver_version", "nvcc_version")}
             if device is None:
@@ -129,6 +182,7 @@ def capture(destination):
         "configuration":{"rows":32, "cols":32, "grid":[1,1], "block":[32,8],
                          "input":"input[r,c]=32*r+c", "word_bytes":4}}, "columns":columns}
     validate_bundle(bundle)
+    compare_demo_model(bundle)
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_name(destination.name + ".tmp")
     tmp.write_text(json.dumps(bundle, separators=(",", ":")) + "\n", encoding="utf-8")
@@ -144,8 +198,10 @@ def main():
     args = parser.parse_args()
     try:
         if args.verify:
-            validate_bundle(json.loads(args.verify.read_text(encoding="utf-8")))
-            print("PASS: full CUDA evidence, original outputs, sanitizer logs and current source fingerprints")
+            bundle = validate_bundle(json.loads(args.verify.read_text(encoding="utf-8")))
+            comparison = compare_demo_model(bundle)
+            print(json.dumps({"status": "passed", "cudaCaptureVerified": True,
+                              "modelComparison": comparison}))
         else:
             print("Saved verified CUDA capture:", capture(args.output.resolve()))
         return 0
