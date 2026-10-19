@@ -1145,12 +1145,12 @@ impl CanonicalAuthoringScene {
             return Err("live execution session is running in the semantic engine".into());
         }
         let target = noon::MobjectTarget::from(family);
-        let root = target
+        target
             .require_store(self.scene.integration_store())
             .map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&root) {
-            return Err("family is not bound to this canonical Scene".into());
-        }
+        // A valid family can group live leaves without having a separate
+        // canonical wrapper binding. The shared effective query validates each
+        // leaf against this session, as the ordinary family layout query does.
         if !self.returned_player_is_stale() {
             if let Some(player) = self.player_ownership.local_mut() {
                 return player.live_effective_length_over_dim(target, dim);

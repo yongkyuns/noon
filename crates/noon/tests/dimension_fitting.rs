@@ -153,9 +153,21 @@ fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
     assert_eq!(noon::LayoutDimension::try_from(2).unwrap(), Depth);
     assert!(noon::LayoutDimension::try_from(3).is_err());
 
-    scene.add_many(&[(&family).into()]).unwrap();
+    // The family is a query scope over live leaves, without its own scene-root
+    // membership or host wrapper binding.
+    scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
     let revision = scene.revision();
     let mut session = scene.execution_session().unwrap();
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            noon::MobjectTarget::from(&family),
+            2,
+        )
+        .unwrap(),
+        0.0
+    );
     {
         let mut live = scene.live(&mut session);
         let before_a = live.effective(&a).unwrap();
