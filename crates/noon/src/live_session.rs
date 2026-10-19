@@ -1088,6 +1088,21 @@ impl<'a> LiveSession<'a> {
         Ok(())
     }
 
+    /// Reverse a live family's order through one authored transaction.
+    pub fn invert_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        recursive: bool,
+    ) -> Result<(), LiveSessionError> {
+        self.require_family(family)?;
+        let transaction = crate::family_authoring::family_invert_transaction(family, recursive)
+            .map_err(LiveSessionError::from)?;
+        if !transaction.mutations().is_empty() {
+            self.apply(transaction)?;
+        }
+        Ok(())
+    }
+
     pub fn remove_family_members(
         &mut self,
         family: &MobjectFamily,

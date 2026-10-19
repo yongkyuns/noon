@@ -37,6 +37,38 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         self.assertIs(root._semantic_member_wrappers["1:2"], first)
         self.assertIs(root._semantic_member_wrappers["3:4"], second)
 
+    def test_group_invert_routes_direct_and_live_family_operations(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(invertMembers=Mock())
+        root._semantic_family_handle = family_handle
+
+        with patch.object(handles, "_live_constructor_context", return_value=None):
+            self.assertIs(handles._group_invert(root, recursive=0), root)
+        family_handle.invertMembers.assert_called_once_with(False)
+
+        live_context = SimpleNamespace(liveInvertFamilyMembers=Mock())
+        with patch.object(handles, "_live_constructor_context", return_value=live_context):
+            self.assertIs(handles._group_invert(root, recursive=1), root)
+        live_context.liveInvertFamilyMembers.assert_called_once_with(family_handle, True)
+
+    def test_group_invert_preserves_pinned_public_signature(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.invert)
+        self.assertEqual(tuple(signature.parameters), ("self", "recursive"))
+        self.assertEqual(signature.parameters["recursive"].default, False)
+        self.assertEqual(signature.parameters["recursive"].annotation, "bool")
+        self.assertEqual(signature.return_annotation, "Self")
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.invert(recursive=True), plain)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

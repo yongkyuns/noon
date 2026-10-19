@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import operator
 from functools import partialmethod
-from typing import Any, Callable
+from typing import Any, Callable, Self
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 
@@ -535,6 +535,10 @@ class Mobject:
         """Return the number of points in this object's path."""
         from _manim_path_queries import point_count
         return point_count(self)
+
+    def invert(self, recursive: bool = False) -> Self:
+        """Reverse child order when this object has a family-aware wrapper."""
+        return self
 
     def has_points(self) -> bool:
         return self.get_num_points() > 0

@@ -579,6 +579,99 @@ def _noon_family_add_to_back_live() -> Any:
     )
 
 
+def _family_invert_direct(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third = [provider.Square(side_length=0.5) for _ in range(3)]
+    group = provider.Group(first, second, third)
+    if scene is not None:
+        scene.add(group)
+    returned = group.invert()
+    labels = {id(first): "first", id(second): "second", id(third): "third"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _family_invert_recursive(provider: Any, scene: Any | None = None) -> Any:
+    even_first, even_second, even_left_only, even_right_only = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    odd_first, odd_second, odd_left_only, odd_right_only = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    even_shared = provider.Group(even_first, even_second)
+    even_left = provider.Group(even_shared, even_left_only)
+    even_right = provider.Group(even_shared, even_right_only)
+    even_root = provider.Group(even_left, even_right)
+    odd_shared = provider.Group(odd_first, odd_second)
+    odd_left = provider.Group(odd_shared, odd_left_only)
+    odd_right = provider.Group(odd_shared, odd_right_only)
+    odd_root = provider.Group(odd_left, odd_right, odd_shared)
+    if scene is not None:
+        scene.add(even_root, odd_root)
+    even_returned = even_root.invert(recursive=True)
+    odd_returned = odd_root.invert(recursive=True)
+    labels = {
+        id(even_first): "even_first",
+        id(even_second): "even_second",
+        id(even_left_only): "even_left_only",
+        id(even_right_only): "even_right_only",
+        id(even_shared): "even_shared",
+        id(even_left): "even_left",
+        id(even_right): "even_right",
+        id(odd_first): "odd_first",
+        id(odd_second): "odd_second",
+        id(odd_left_only): "odd_left_only",
+        id(odd_right_only): "odd_right_only",
+        id(odd_shared): "odd_shared",
+        id(odd_left): "odd_left",
+        id(odd_right): "odd_right",
+    }
+    def order(group: Any) -> list[str]:
+        return [labels[id(member)] for member in group.submobjects]
+
+    return {
+        "even_returns_self": even_returned is even_root,
+        "even_root_order": order(even_root),
+        "even_left_order": order(even_left),
+        "even_right_order": order(even_right),
+        "even_shared_order": order(even_shared),
+        "odd_returns_self": odd_returned is odd_root,
+        "odd_root_order": order(odd_root),
+        "odd_left_order": order(odd_left),
+        "odd_right_order": order(odd_right),
+        "odd_shared_order": order(odd_shared),
+    }
+
+
+def _noon_family_invert_direct() -> Any:
+    return _family_invert_direct(noon)
+
+
+def _manim_family_invert_direct() -> Any:
+    return _family_invert_direct(manim)
+
+
+def _noon_family_invert_direct_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_invert_direct(noon, scene)
+    )
+
+
+def _noon_family_invert_recursive() -> Any:
+    return _family_invert_recursive(noon)
+
+
+def _manim_family_invert_recursive() -> Any:
+    return _family_invert_recursive(manim)
+
+
+def _noon_family_invert_recursive_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_invert_recursive(noon, scene)
+    )
+
+
 def _noon_vgroup_shift() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25).shift(noon.LEFT),
@@ -3545,6 +3638,10 @@ FIXTURES = [
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
     Fixture("group_add_to_back", _noon_family_add_to_back, _manim_family_add_to_back),
     Fixture("group_add_to_back_live", _noon_family_add_to_back_live, _manim_family_add_to_back),
+    Fixture("group_invert_direct", _noon_family_invert_direct, _manim_family_invert_direct),
+    Fixture("group_invert_direct_live", _noon_family_invert_direct_live, _manim_family_invert_direct),
+    Fixture("group_invert_recursive", _noon_family_invert_recursive, _manim_family_invert_recursive),
+    Fixture("group_invert_recursive_live", _noon_family_invert_recursive_live, _manim_family_invert_recursive),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))

@@ -3042,6 +3042,25 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_invert_family_members(
+        &mut self,
+        family: &noon::MobjectFamily,
+        recursive: bool,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        )
+        .invert_family_members(family, recursive)
+        .map_err(AuthoringFailure::from)
+    }
+
     /// Create one detached family through the retained session so its node and
     /// ordered edges share the current semantic/runtime publication.
     #[cfg(any(target_arch = "wasm32", test))]

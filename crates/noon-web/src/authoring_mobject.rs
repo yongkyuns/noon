@@ -1931,6 +1931,11 @@ mod wasm {
                 .prepend_many(&members)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = invertMembers)]
+        pub fn invert_members(&self, recursive: bool) -> Result<(), JsValue> {
+            self.semantic_family()?.invert(recursive).map_err(js_error)
+        }
     }
 
     #[wasm_bindgen]

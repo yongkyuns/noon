@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Self
 
 import noon as _base
 from _manim_iterables import resize_array as _resize_array
@@ -911,6 +911,10 @@ class Group(Mobject):
     def add_to_back(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_add_to_back
         return _group_add_to_back(self, *mobjects)
+
+    def invert(self, recursive: bool = False) -> Self:
+        from _manim_semantic_handles import _group_invert
+        return _group_invert(self, recursive)
 
     def remove(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_remove

@@ -2829,6 +2829,26 @@ def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _group_invert(self: _compat.Group, recursive: bool = False) -> _compat.Group:
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    recursive = bool(recursive)
+    if context is not None:
+        engine_call(
+            context.liveInvertFamilyMembers,
+            family_handle,
+            recursive,
+            operation="Mobject.invert",
+        )
+    else:
+        engine_call(
+            family_handle.invertMembers,
+            recursive,
+            operation="Mobject.invert",
+        )
+    return self
+
+
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self

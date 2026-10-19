@@ -6,12 +6,12 @@ pub(crate) use path_admission::publish_path_family_with;
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
-    Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
-    SemanticSheenDirection, SemanticStore, SemanticVec3,
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
+    SemanticObjectProperty, SemanticSheenDirection, SemanticStore, SemanticVec3,
 };
 use std::{
     cell::RefCell,
-    collections::{btree_map::Entry, BTreeMap, BTreeSet},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
 };
 
@@ -590,6 +590,115 @@ pub(crate) fn family_prepend_transaction(
     Ok(transaction)
 }
 
+/// Prepare Manim `Mobject.invert` member ordering for a family DAG.
+///
+/// Recursive Manim inversion invokes a shared subfamily once for each path that
+/// reaches it. Reversal is an involution, so only nodes with an odd number of
+/// root-to-node paths need one order reversal. The path parity is propagated in
+/// topological order to avoid expanding shared family paths exponentially.
+pub(crate) fn family_invert_transaction(
+    family: &MobjectFamily,
+    recursive: bool,
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    family.validate()?;
+    let root = family.node_id();
+    let families_to_invert = {
+        let store = family.integration_store().borrow();
+        let root_members = store
+            .semantic_family_checked(root)
+            .map_err(AuthoringError::from)?
+            .members()
+            .to_vec();
+        if !recursive {
+            BTreeMap::from([(root, root_members)])
+        } else {
+            let mut graph =
+                BTreeMap::<SemanticNodeId, (Vec<SemanticNodeId>, Vec<SemanticNodeId>)>::new();
+            let mut pending = VecDeque::from([root]);
+            while let Some(current) = pending.pop_front() {
+                if graph.contains_key(&current) {
+                    continue;
+                }
+                let members = store
+                    .semantic_family_checked(current)
+                    .map_err(AuthoringError::from)?
+                    .members()
+                    .to_vec();
+                let children = members
+                    .iter()
+                    .copied()
+                    .filter(|member| {
+                        store
+                            .node(*member)
+                            .is_some_and(|node| matches!(node.kind(), SemanticNodeKind::Family(_)))
+                    })
+                    .collect::<Vec<_>>();
+                pending.extend(children.iter().copied());
+                graph.insert(current, (members, children));
+            }
+
+            let mut indegree = graph
+                .keys()
+                .map(|node| (*node, 0_usize))
+                .collect::<BTreeMap<_, _>>();
+            for (_, children) in graph.values() {
+                for child in children {
+                    *indegree
+                        .get_mut(child)
+                        .expect("discovered family child has a graph entry") += 1;
+                }
+            }
+            let mut ready = indegree
+                .iter()
+                .filter_map(|(node, degree)| (*degree == 0).then_some(*node))
+                .collect::<VecDeque<_>>();
+            let mut path_parity = BTreeMap::from([(root, true)]);
+            let mut visited = 0;
+            while let Some(current) = ready.pop_front() {
+                visited += 1;
+                let current_is_odd = path_parity.get(&current).copied().unwrap_or(false);
+                for child in &graph[&current].1 {
+                    if current_is_odd {
+                        let parity = path_parity.entry(*child).or_default();
+                        *parity = !*parity;
+                    }
+                    let degree = indegree
+                        .get_mut(child)
+                        .expect("discovered family child has an indegree");
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.push_back(*child);
+                    }
+                }
+            }
+            debug_assert_eq!(visited, graph.len(), "semantic family graph is acyclic");
+            graph
+                .into_iter()
+                .filter_map(|(node, (members, _))| {
+                    path_parity
+                        .get(&node)
+                        .copied()
+                        .unwrap_or(false)
+                        .then_some((node, members))
+                })
+                .collect()
+        }
+    };
+
+    let mut transaction = SemanticMutationTransaction::new();
+    for (family, members) in families_to_invert {
+        for member in members
+            .iter()
+            .take(members.len().saturating_sub(1))
+            .rev()
+            .copied()
+        {
+            transaction.reorder_member(family, member, None);
+        }
+    }
+    Ok(transaction)
+}
+
 impl MobjectFamily {
     /// Create a detached family, including empty and nested families, atomically.
     pub fn create(
@@ -646,6 +755,18 @@ impl MobjectFamily {
     /// matching Manim's `Mobject.add_to_back` behavior.
     pub fn prepend_many(&self, members: &[MobjectTarget<'_>]) -> Result<(), AuthoringError> {
         let transaction = family_prepend_transaction(self, members)?;
+        if !transaction.mutations().is_empty() {
+            transaction
+                .apply(&mut self.store.borrow_mut())
+                .map_err(AuthoringError::from)?;
+        }
+        Ok(())
+    }
+
+    /// Reverse this family's direct member order, optionally through nested
+    /// families while preserving Manim's repeated-alias call parity.
+    pub fn invert(&self, recursive: bool) -> Result<(), AuthoringError> {
+        let transaction = family_invert_transaction(self, recursive)?;
         if !transaction.mutations().is_empty() {
             transaction
                 .apply(&mut self.store.borrow_mut())
@@ -910,6 +1031,130 @@ mod tests {
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),
             unchanged
+        );
+    }
+
+    #[test]
+    fn family_invert_matches_recursive_alias_path_parity_atomically() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let third = scene.rectangle(0.3, 0.2).unwrap();
+        let direct = scene
+            .family(&[(&first).into(), (&second).into(), (&third).into()])
+            .unwrap();
+
+        let before = scene.integration_store().borrow().scene_revision();
+        direct.invert(false).unwrap();
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_family_checked(direct.node_id())
+                .unwrap()
+                .members(),
+            vec![third.node_id(), second.node_id(), first.node_id()]
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+
+        let singleton = scene.family(&[(&first).into()]).unwrap();
+        let unchanged = scene.integration_store().borrow().scene_revision();
+        singleton.invert(false).unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            unchanged
+        );
+
+        let shared = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let left_only = scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+        let right_only = scene.line((0.0, 0.0), (0.0, 1.0)).unwrap();
+        let left = scene
+            .family(&[(&shared).into(), (&left_only).into()])
+            .unwrap();
+        let right = scene
+            .family(&[(&shared).into(), (&right_only).into()])
+            .unwrap();
+        let root = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+
+        let before_recursive = scene.integration_store().borrow().scene_revision();
+        root.invert(true).unwrap();
+        let store = scene.integration_store();
+        let store = store.borrow();
+        assert_eq!(
+            store
+                .semantic_family_checked(root.node_id())
+                .unwrap()
+                .members(),
+            vec![right.node_id(), left.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(left.node_id())
+                .unwrap()
+                .members(),
+            vec![left_only.node_id(), shared.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(right.node_id())
+                .unwrap()
+                .members(),
+            vec![right_only.node_id(), shared.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(shared.node_id())
+                .unwrap()
+                .members(),
+            vec![first.node_id(), second.node_id()]
+        );
+        assert_eq!(
+            store.scene_revision(),
+            before_recursive.checked_next().unwrap()
+        );
+        drop(store);
+
+        let odd_root = scene
+            .family(&[(&left).into(), (&right).into(), (&shared).into()])
+            .unwrap();
+        let before_odd_recursive = scene.integration_store().borrow().scene_revision();
+        odd_root.invert(true).unwrap();
+        let store = scene.integration_store();
+        let store = store.borrow();
+        assert_eq!(
+            store
+                .semantic_family_checked(odd_root.node_id())
+                .unwrap()
+                .members(),
+            vec![shared.node_id(), right.node_id(), left.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(left.node_id())
+                .unwrap()
+                .members(),
+            vec![shared.node_id(), left_only.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(right.node_id())
+                .unwrap()
+                .members(),
+            vec![shared.node_id(), right_only.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_checked(shared.node_id())
+                .unwrap()
+                .members(),
+            vec![second.node_id(), first.node_id()]
+        );
+        assert_eq!(
+            store.scene_revision(),
+            before_odd_recursive.checked_next().unwrap()
         );
     }
 

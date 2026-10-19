@@ -63,6 +63,17 @@ Group/VGroup `add_to_back()` prepends unique direct members in first-argument or
 moves existing members to the front, and publishes the order change through one
 shared Rust transaction in detached and live contexts. Product Pyodide fixtures
 match the pinned ManimCE 0.21.0 order in both contexts. The canonical overlapping-
-square family-order fixture matches pinned Cairo exactly on WebGPU and WebGL2
-(zero differing pixels). Generic Mobject-owned child membership remains
-unqualified because Noon currently models child collections as family nodes.
+square family-order fixture passes the unchanged raster tolerance on WebGPU and
+WebGL2: no pixels cross the difference threshold, bounds and duration match, and
+mean absolute channel error is 0.001725 with maximum channel error 9. Generic
+Mobject-owned child membership remains unqualified because Noon currently models
+child collections as family nodes.
+
+`Mobject.invert(recursive=False)` now reverses the direct member order through one
+shared Rust transaction. Recursive inversion propagates root-to-family path parity,
+so a nested family shared by two parents is inverted twice and returns to its
+original order, matching Manim's recursive calls without expanding shared paths.
+Detached and live product fixtures cover this alias case; the overlapping-square
+Manim Cairo raster fixture passes on both backends with no pixels crossing the
+difference threshold, matching bounds and duration, and 0.001789 mean absolute
+channel error (maximum channel error 9).
