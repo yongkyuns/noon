@@ -1209,6 +1209,67 @@ def _family_frame_methods(provider: Any, scene: Any | None = None) -> Any:
     }
 
 
+def _get_pieces_probe(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Line(
+        start=(-2.0, -0.5, 0.0),
+        end=(2.0, 0.5, 0.0),
+        color=provider.BLUE,
+        stroke_width=6.0,
+    )
+    source.set_fill(provider.RED, opacity=0.25)
+    source.rotate(0.2, about_point=(0.0, 0.0)).shift(provider.UP * 0.4)
+    if scene is not None:
+        scene.add(source)
+
+    original_before = [
+        [float(component) for component in point[:2]]
+        for point in source.get_all_points()
+    ]
+    pieces = source.get_pieces(4)
+    empty = source.get_pieces(0)
+
+    def observe_piece(piece: Any) -> dict[str, Any]:
+        return {
+            "points": [
+                [float(component) for component in point[:2]]
+                for point in piece.get_all_points()
+            ],
+            "start": _point_observation(piece.get_start()),
+            "end": _point_observation(piece.get_end()),
+            "fill": _paint_rgb(piece.get_fill_color()),
+            "fill_opacity": float(piece.get_fill_opacity()),
+            "stroke": _paint_rgb(piece.get_stroke_color()),
+            "stroke_opacity": float(piece.get_stroke_opacity()),
+            "stroke_width": float(piece.get_stroke_width()),
+        }
+
+    return {
+        "group_type": type(pieces).__name__,
+        "pieces": [observe_piece(piece) for piece in pieces.submobjects],
+        "empty_type": type(empty).__name__,
+        "empty_count": len(empty.submobjects),
+        "source_before": original_before,
+        "source_after": [
+            [float(component) for component in point[:2]]
+            for point in source.get_all_points()
+        ],
+    }
+
+
+def _noon_get_pieces() -> Any:
+    return _get_pieces_probe(noon)
+
+
+def _manim_get_pieces() -> Any:
+    return _get_pieces_probe(manim)
+
+
+def _noon_get_pieces_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _get_pieces_probe(noon, scene)
+    )
+
+
 def _noon_family_frame_methods() -> Any:
     return _family_frame_methods(noon)
 
@@ -5094,6 +5155,8 @@ FIXTURES = [
     Fixture("family_space_out_submobjects_live", _noon_family_space_out_submobjects_live, _manim_family_space_out_submobjects),
     Fixture("family_frame_methods", _noon_family_frame_methods, _manim_family_frame_methods),
     Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
+    Fixture("mobject_get_pieces", _noon_get_pieces, _manim_get_pieces),
+    Fixture("mobject_get_pieces_live", _noon_get_pieces_live, _manim_get_pieces),
     Fixture("family_position_function_methods", _noon_family_position_function_methods, _manim_family_position_function_methods),
     Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
     Fixture("put_start_and_end_on", _noon_put_start_and_end_on, _manim_put_start_and_end_on),

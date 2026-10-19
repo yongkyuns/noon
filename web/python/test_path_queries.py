@@ -998,7 +998,9 @@ class PathQueryTests(unittest.TestCase):
         value.copy = Mock(return_value=template)
         result = object()
 
-        with patch.object(compat, "Group", return_value=result) as group_type:
+        with patch.object(compat, "_is_shared_family", return_value=False), patch.object(
+            compat, "Group", return_value=result
+        ) as group_type:
             self.assertIs(value.get_pieces(2), result)
 
         value.copy.assert_called_once_with()
@@ -1020,8 +1022,8 @@ class PathQueryTests(unittest.TestCase):
         value.copy = Mock(return_value=template)
         result = object()
         with patch.dict("sys.modules", {"numpy": None}), patch.object(
-            compat, "Group", return_value=result
-        ) as group_type:
+            compat, "_is_shared_family", return_value=False
+        ), patch.object(compat, "Group", return_value=result) as group_type:
             self.assertIs(value.get_pieces(-1), result)
         group_type.assert_called_once_with()
         template.copy.assert_not_called()

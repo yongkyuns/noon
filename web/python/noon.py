@@ -796,6 +796,43 @@ class Mobject:
         from _manim_path_queries import all_points
         return all_points(self)
 
+    def get_pieces(self, n_pieces: float):
+        """Split a vector leaf into equal curve-parameter pieces.
+
+        Path subdivision is delegated to shared VMobject operations and the
+        result uses Manim's base Group constructor.
+        Shared family roots are not supported by this path-only profile.
+        """
+        from operator import index
+        from _manim_compat import Group, _is_shared_family
+
+        if _is_shared_family(self):
+            raise NotImplementedError(
+                "get_pieces for shared-family roots requires shared path ownership"
+            )
+
+        template = self.copy()
+        template.submobjects = []
+
+        sample_count = index(n_pieces + 1)
+        if sample_count < 0:
+            raise ValueError(
+                f"Number of samples, {sample_count}, must be non-negative."
+            )
+        if sample_count == 0:
+            alphas = []
+        elif sample_count == 1:
+            alphas = [0.0]
+        else:
+            alphas = [i / (sample_count - 1) for i in range(sample_count)]
+
+        return Group(
+            *(
+                template.copy().pointwise_become_partial(self, a1, a2)
+                for a1, a2 in zip(alphas[:-1], alphas[1:], strict=True)
+            )
+        )
+
     def get_array_attrs(self) -> list[str]:
         return ["points"]
 

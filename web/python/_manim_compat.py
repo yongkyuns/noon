@@ -315,32 +315,6 @@ class VMobject(Mobject):
         from _manim_semantic_handles import _clone_mobject
         return _clone_mobject(self, subcurve=(float(a), float(b)))
 
-    def get_pieces(self, n_pieces):
-        """Split this path into evenly spaced shared-Rust partial copies."""
-        try:
-            import numpy as np
-        except ImportError:
-            import operator
-
-            sample_count = operator.index(n_pieces + 1)
-            if sample_count < 0:
-                raise ValueError(
-                    f"Number of samples, {sample_count}, must be non-negative."
-                )
-            alphas = [
-                index / (sample_count - 1) if sample_count > 1 else 0.0
-                for index in range(sample_count)
-            ]
-        else:
-            alphas = np.linspace(0, 1, n_pieces + 1)
-
-        template = self.copy()
-        template.submobjects = []
-        return Group(*(
-            template.copy().pointwise_become_partial(self, float(start), float(end))
-            for start, end in zip(alphas[:-1], alphas[1:], strict=True)
-        ))
-
     def get_subpaths(self):
         from _manim_path_queries import subpaths
         return subpaths(self)

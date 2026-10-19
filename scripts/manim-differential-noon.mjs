@@ -1143,6 +1143,19 @@ json.dumps({
   assert.ok(Math.abs(surround.height - 1.2) <= 1e-5,
     "mobject_surround: matched height includes the buffer");
   assertPointNear(surround.center, [0.5, 0], "mobject_surround: centers on the target");
+  for (const name of ["mobject_get_pieces", "mobject_get_pieces_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.group_type, "Group", `${name}: pinned get_pieces returns Group`);
+    assert.equal(profile.pieces.length, 4, `${name}: produces the requested piece count`);
+    assert.equal(profile.empty_type, "Group", `${name}: zero pieces keep the base group class`);
+    assert.equal(profile.empty_count, 0, `${name}: zero pieces yields an empty group`);
+    assert.deepEqual(profile.source_after, profile.source_before,
+      `${name}: building pieces does not change the source path`);
+    assert.equal(profile.pieces[0].fill_opacity, 0.25,
+      `${name}: copied pieces keep source fill opacity`);
+    assert.equal(profile.pieces[0].stroke_width, 6,
+      `${name}: copied pieces keep source stroke width`);
+  }
   for (const name of [
     "mobject_add_background_rectangle",
     "mobject_add_background_rectangle_live",
