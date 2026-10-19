@@ -77,7 +77,23 @@ impl CompiledScene {
         let mut track_overlay: BTreeMap<TrackId, Option<CompiledTrack>> = BTreeMap::new();
         let mut output = Vec::with_capacity(inverse.len());
         for old in inverse.iter().rev() {
-            // Empty revisions denote append-only family plans, not a quiet wait.
+            // A family append is a typed immutable plan event; it has no row
+            // inverse, but must still be paired with exactly one compiler plan.
+            if old.is_prefix_family_append() {
+                if !old.rows.is_empty() || !old.channels.is_empty()
+                    || !old.tracks.is_empty() || old.camera_motion_payloads != 0
+                    || old.path_motion_commands != 0 {
+                    return None;
+                }
+                output.push(CompiledReplayRevision {
+                    rows: Vec::new(), tracks: Vec::new(), channels: Vec::new(),
+                    camera_motion_payloads: 0, path_motion_commands: 0,
+                    family_append: true,
+                });
+                continue;
+            }
+            // All other empty revisions remain unsupported: do not mistake an
+            // unrecorded signal change for a family-plan append.
             if old.rows.is_empty()
                 || old.camera_motion_payloads != 0
                 || old.path_motion_commands != 0
@@ -141,6 +157,7 @@ impl CompiledScene {
                 channels: old.channels.clone(),
                 camera_motion_payloads: 0,
                 path_motion_commands: 0,
+                family_append: false,
             });
         }
         output.reverse();
