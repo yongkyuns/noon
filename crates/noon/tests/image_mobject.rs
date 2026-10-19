@@ -67,7 +67,7 @@ fn image_sizing_layout_copy_and_compilation_share_pixels() -> TestResult {
         let mut live = scene.live(&mut session);
         assert_eq!(
             live.dimension_length(&anchor, LayoutDimension::Width)?,
-            a.width()?
+            live.effective_layout(&a)?.width
         );
         live.rescale_to_fit(&anchor, f64::NAN, LayoutDimension::Depth, false)?;
     }
