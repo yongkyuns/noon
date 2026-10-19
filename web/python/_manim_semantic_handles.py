@@ -2849,6 +2849,28 @@ def _group_invert(self: _compat.Group, recursive: bool = False) -> _compat.Group
     return self
 
 
+def _group_sort(
+    self: _compat.Group,
+    point_to_num_func: Callable[[Any], float] = lambda point: point[0],
+    submob_func: Callable[[_compat.Mobject], Any] | None = None,
+) -> _compat.Group:
+    context = _live_constructor_context("family")
+    members = tuple(self.submobjects)
+    key = submob_func
+    if key is None:
+        key = lambda member: point_to_num_func(member.get_center())
+    ordered = tuple(sorted(members, key=key))
+    if all(before is after for before, after in zip(members, ordered)):
+        return self
+    batch = _family_membership_batch(context, "add", ordered)
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(context.livePrependFamilyMembers, family_handle, batch)
+    else:
+        engine_call(family_handle.prependMembers, batch)
+    return self
+
+
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self

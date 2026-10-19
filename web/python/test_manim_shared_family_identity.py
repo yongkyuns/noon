@@ -69,6 +69,50 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         plain = object.__new__(compat.Mobject)
         self.assertIs(plain.invert(recursive=True), plain)
 
+    def test_group_sort_routes_stable_key_order_through_shared_reorder(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        first = SimpleNamespace(get_center=lambda: (1, 0))
+        tied_first = SimpleNamespace(get_center=lambda: (0, 0))
+        tied_second = SimpleNamespace(get_center=lambda: (0, 1))
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(prependMembers=Mock())
+        root._semantic_family_handle = family_handle
+        batch = object()
+        with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
+             patch.object(handles, "_live_constructor_context", return_value=None):
+            self.assertIs(handles._group_sort(root), root)
+        make_batch.assert_called_once_with(None, "add", (tied_first, tied_second, first))
+        family_handle.prependMembers.assert_called_once_with(batch)
+
+        live_context = SimpleNamespace(livePrependFamilyMembers=Mock())
+        with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch), \
+             patch.object(handles, "_live_constructor_context", return_value=live_context):
+            self.assertIs(handles._group_sort(root, submob_func=lambda member: -member.get_center()[1]), root)
+        live_context.livePrependFamilyMembers.assert_called_once_with(family_handle, batch)
+
+    def test_group_sort_preserves_pinned_public_signatures_and_base_noop(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.sort)
+        self.assertEqual(tuple(signature.parameters), ("self", "point_to_num_func", "submob_func"))
+        self.assertEqual(signature.parameters["point_to_num_func"].annotation, "Callable[[Point3DLike], float]")
+        self.assertEqual(signature.parameters["submob_func"].annotation, "Callable[[Mobject], Any] | None")
+        self.assertEqual(signature.parameters["submob_func"].default, None)
+        self.assertEqual(signature.return_annotation, "Self")
+        alias = inspect.signature(compat.Mobject.sort_submobjects)
+        self.assertEqual(tuple(alias.parameters), ("self", "args", "kwargs"))
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.sort(), plain)
+        self.assertIs(plain.sort_submobjects(), plain)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

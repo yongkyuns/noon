@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Callable, Iterator, Self
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Self
 
 import noon as _base
 from _manim_iterables import resize_array as _resize_array
+
+if TYPE_CHECKING:
+    from manim.typing import Point3DLike
 
 from noon import Mobject, Scene
 _ir = _base._ir
@@ -915,6 +918,14 @@ class Group(Mobject):
     def invert(self, recursive: bool = False) -> Self:
         from _manim_semantic_handles import _group_invert
         return _group_invert(self, recursive)
+
+    def sort(
+        self,
+        point_to_num_func: Callable[[Point3DLike], float] = lambda point: point[0],
+        submob_func: Callable[[Mobject], Any] | None = None,
+    ) -> Self:
+        from _manim_semantic_handles import _group_sort
+        return _group_sort(self, point_to_num_func, submob_func)
 
     def remove(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_remove

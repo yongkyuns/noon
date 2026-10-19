@@ -672,6 +672,66 @@ def _noon_family_invert_recursive_live() -> Any:
     )
 
 
+def _family_sort(
+    provider: Any,
+    scene: Any | None = None,
+    alias: bool = False,
+    by_y: bool = False,
+) -> Any:
+    right = provider.Square(side_length=0.5).shift(provider.RIGHT)
+    top = provider.Square(side_length=0.5).shift(provider.UP)
+    bottom = provider.Square(side_length=0.5).shift(provider.DOWN)
+    center = provider.Square(side_length=0.5)
+    group = provider.Group(right, top, bottom, center)
+    if scene is not None:
+        scene.add(group)
+    if alias:
+        returned = group.sort_submobjects(
+            submob_func=lambda member: (member.get_center()[1], member.get_center()[0])
+        )
+    elif by_y:
+        returned = group.sort(point_to_num_func=lambda point: point[1])
+    else:
+        returned = group.sort()
+    labels = {id(right): "right", id(top): "top", id(bottom): "bottom", id(center): "center"}
+    return {
+        "returns_self": returned is group,
+        "order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _noon_family_sort() -> Any:
+    return _family_sort(noon)
+
+
+def _noon_family_sort_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene))
+
+
+def _noon_family_sort_point_key() -> Any:
+    return _family_sort(noon, by_y=True)
+
+
+def _manim_family_sort_point_key() -> Any:
+    return _family_sort(manim, by_y=True)
+
+
+def _noon_family_sort_point_key_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene, by_y=True))
+
+
+def _noon_family_sort_alias() -> Any:
+    return _family_sort(noon, alias=True)
+
+
+def _manim_family_sort_alias() -> Any:
+    return _family_sort(manim, alias=True)
+
+
+def _noon_family_sort_alias_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene, alias=True))
+
+
 def _noon_vgroup_shift() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25).shift(noon.LEFT),
@@ -3642,6 +3702,12 @@ FIXTURES = [
     Fixture("group_invert_direct_live", _noon_family_invert_direct_live, _manim_family_invert_direct),
     Fixture("group_invert_recursive", _noon_family_invert_recursive, _manim_family_invert_recursive),
     Fixture("group_invert_recursive_live", _noon_family_invert_recursive_live, _manim_family_invert_recursive),
+    Fixture("group_sort_default", _noon_family_sort, lambda: _family_sort(manim)),
+    Fixture("group_sort_default_live", _noon_family_sort_live, lambda: _family_sort(manim)),
+    Fixture("group_sort_point_key", _noon_family_sort_point_key, _manim_family_sort_point_key),
+    Fixture("group_sort_point_key_live", _noon_family_sort_point_key_live, _manim_family_sort_point_key),
+    Fixture("group_sort_submobjects_key", _noon_family_sort_alias, _manim_family_sort_alias),
+    Fixture("group_sort_submobjects_key_live", _noon_family_sort_alias_live, _manim_family_sort_alias),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))

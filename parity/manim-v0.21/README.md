@@ -77,3 +77,12 @@ Detached and live product fixtures cover this alias case; the overlapping-square
 Manim Cairo raster fixture passes on both backends with no pixels crossing the
 difference threshold, matching bounds and duration, and 0.001789 mean absolute
 channel error (maximum channel error 9).
+
+`Mobject.sort()` and `sort_submobjects()` apply Python key callbacks to the current
+member wrappers and submit the resulting stable order through the shared Rust
+family-reorder transaction. The paired product fixtures cover the default
+x-coordinate key, explicit member keys, stable ties, detached/live calls, and
+receiver identity. The overlapping-square Cairo raster fixture qualifies the
+point-key painter-order change after live scene admission on WebGPU and WebGL2
+with zero differing pixels, matching bounds and duration, 0.001725 mean
+absolute channel error, and maximum channel error 9.

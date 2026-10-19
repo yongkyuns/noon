@@ -9,9 +9,12 @@ from __future__ import annotations
 import math
 import operator
 from functools import partialmethod
-from typing import Any, Callable, Self
+from typing import TYPE_CHECKING, Any, Callable, Self
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
+
+if TYPE_CHECKING:
+    from manim.typing import Point3DLike
 
 from _noon_errors import (
     NoonError,
@@ -539,6 +542,17 @@ class Mobject:
     def invert(self, recursive: bool = False) -> Self:
         """Reverse child order when this object has a family-aware wrapper."""
         return self
+
+    def sort(
+        self,
+        point_to_num_func: Callable[[Point3DLike], float] = lambda point: point[0],
+        submob_func: Callable[[Mobject], Any] | None = None,
+    ) -> Self:
+        """Sort family-aware children; a bare point object has no children."""
+        return self
+
+    def sort_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.sort(*args, **kwargs)
 
     def has_points(self) -> bool:
         return self.get_num_points() > 0
