@@ -4,7 +4,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError as error:
+    if error.name != "numpy":
+        raise
+    np = None
 
 import noon
 
@@ -16,13 +21,17 @@ class ManimPositionFunctionMethodTests(unittest.TestCase):
         value.move_to = Mock(return_value=value)
 
         def translate(point):
-            self.assertIsInstance(point, np.ndarray)
-            self.assertEqual(point.shape, (3,))
-            return point + np.asarray((2.0, 3.0, 0.0))
+            if np is not None:
+                self.assertIsInstance(point, np.ndarray)
+                self.assertEqual(point.shape, (3,))
+            return tuple(
+                float(component) + delta
+                for component, delta in zip(point, (2.0, 3.0, 0.0))
+            )
 
         self.assertIs(noon.Mobject.apply_function_to_position(value, translate), value)
         value.get_center.assert_called_once_with()
-        np.testing.assert_array_equal(value.move_to.call_args.args[0], (3.0, 1.0, 0.0))
+        self.assertEqual(tuple(value.move_to.call_args.args[0]), (3.0, 1.0, 0.0))
 
     def test_apply_function_to_position_falls_back_when_numpy_is_not_loaded(self):
         value = SimpleNamespace()

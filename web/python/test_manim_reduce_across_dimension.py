@@ -1,8 +1,6 @@
 import unittest
 from unittest.mock import patch
 
-import numpy as np
-
 import noon
 from _manim_path_queries import (
     _reduce_point_reduction_tree,
@@ -13,10 +11,10 @@ from _manim_path_queries import (
 
 class ManimReduceAcrossDimensionTests(unittest.TestCase):
     def test_reduces_owned_points_then_combines_children_in_order(self):
-        first = (np.array([-2.0, 1.0, -1.0, 3.0]), ())
-        second = (np.array([4.0, -2.0, 5.0, 2.0]), ())
-        nested = (np.array([]), (first, second))
-        root = (np.array([]), (nested, first))
+        first = ((-2.0, 1.0, -1.0, 3.0), ())
+        second = ((4.0, -2.0, 5.0, 2.0), ())
+        nested = ((), (first, second))
+        root = ((), (nested, first))
         calls = []
 
         def reduce_func(values):
@@ -31,8 +29,8 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         )
 
     def test_empty_and_planar_depth_profiles(self):
-        empty = (np.array([]), ())
-        point = (np.array([-2.0, 1.0, -1.0, 3.0]), ())
+        empty = ((), ())
+        point = ((-2.0, 1.0, -1.0, 3.0), ())
         self.assertIsNone(_reduce_point_reduction_tree(empty, max, 0))
         self.assertEqual(_reduce_point_reduction_tree(point, max, 2), 0.0)
         self.assertEqual(_reduce_point_reduction_tree(point, min, 2), 0.0)
@@ -58,10 +56,13 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         self.assertIn("reduce_across_dimension", noon.Mobject.__dict__)
 
     def test_get_merged_array_returns_rust_ordered_points(self):
-        coordinates = np.array([10.0, 1.0, 2.0, 3.0])
+        coordinates = (10.0, 1.0, 2.0, 3.0)
         with patch("_manim_path_queries._merged_points_observation", return_value=coordinates):
             points = merged_array(object(), "points")
-        np.testing.assert_array_equal(points, [[10.0, 1.0], [2.0, 3.0]])
+        self.assertEqual(
+            [[float(component) for component in point] for point in points],
+            [[10.0, 1.0], [2.0, 3.0]],
+        )
 
     def test_get_merged_array_rejects_unmodeled_attributes_before_query(self):
         with patch("_manim_path_queries._merged_points_observation") as query:
