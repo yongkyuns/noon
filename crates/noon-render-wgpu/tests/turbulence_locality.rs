@@ -27,6 +27,7 @@ const PALETTE: [Color; 8] = [
 
 fn style(color: Color) -> Style {
     Style {
+        stroke_pattern: None,
         fill: Some(color),
         stroke: Some(color),
         stroke_width: 0.02,

@@ -18,6 +18,8 @@ mod reactive;
 mod resources;
 mod semantic_store;
 mod spatial3d;
+mod stroke_pattern;
+pub use stroke_pattern::*;
 
 pub use animation::*;
 pub use camera_motion::*;
@@ -504,12 +506,15 @@ pub struct Style {
     pub stroke_join: StrokeJoin,
     #[serde(default)]
     pub stroke_cap: StrokeCap,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_pattern: Option<StrokePattern>,
     pub opacity: f32,
 }
 
 impl Default for Style {
     fn default() -> Self {
         Self {
+            stroke_pattern: None,
             fill: Some(Color::WHITE),
             stroke: None,
             stroke_width: 1.0,

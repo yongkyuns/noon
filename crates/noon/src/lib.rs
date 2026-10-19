@@ -79,6 +79,7 @@ mod coordinate_authoring;
 pub mod coordinate_plotting_example;
 mod cyclic_replace;
 mod dashed_line_authoring;
+pub use noon_core::{StrokePattern, StrokePatternError};
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod dimension_fit;
@@ -382,9 +383,9 @@ pub mod prelude {
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
         NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
         RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
-        SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
-        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        StoredGeometry, StrokePattern, StrokePatternError, StyleUpdate, SvgAuthoringError,
+        SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker,
+        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     #[cfg(feature = "code")]
     pub use crate::{

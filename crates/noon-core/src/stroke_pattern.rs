@@ -24,7 +24,9 @@ pub enum StrokePatternError {
 impl std::fmt::Display for StrokePatternError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::InvalidDashLength => "dash length must be finite and non-negative (zero selects dots)",
+            Self::InvalidDashLength => {
+                "dash length must be finite and non-negative (zero selects dots)"
+            }
             Self::InvalidGapLength => "gap or point spacing must be finite and positive",
             Self::InvalidPhase => "stroke phase must be finite and representable",
             Self::InvalidGapOpacity => "gap opacity must be finite and in [0, 1]",
@@ -40,14 +42,24 @@ impl StrokePattern {
         if dash_length <= 0.0 {
             return Err(StrokePatternError::InvalidDashLength);
         }
-        let result = Self { dash_length, gap_length, phase: 0.0, gap_opacity: 0.2 };
+        let result = Self {
+            dash_length,
+            gap_length,
+            phase: 0.0,
+            gap_opacity: 0.2,
+        };
         result.validate()?;
         Ok(result)
     }
 
     /// Dot diameter follows stroke width; spacing is center-to-center.
     pub fn dotted(spacing: f32) -> Result<Self, StrokePatternError> {
-        let result = Self { dash_length: 0.0, gap_length: spacing, phase: 0.0, gap_opacity: 0.2 };
+        let result = Self {
+            dash_length: 0.0,
+            gap_length: spacing,
+            phase: 0.0,
+            gap_opacity: 0.2,
+        };
         result.validate()?;
         Ok(result)
     }
@@ -64,12 +76,24 @@ impl StrokePattern {
         Ok(self)
     }
 
-    pub const fn dash_length(self) -> f32 { self.dash_length }
-    pub const fn gap_length(self) -> f32 { self.gap_length }
-    pub const fn phase(self) -> f32 { self.phase }
-    pub const fn gap_opacity(self) -> f32 { self.gap_opacity }
-    pub fn period(self) -> f32 { self.dash_length + self.gap_length }
-    pub fn is_dotted(self) -> bool { self.dash_length == 0.0 }
+    pub const fn dash_length(self) -> f32 {
+        self.dash_length
+    }
+    pub const fn gap_length(self) -> f32 {
+        self.gap_length
+    }
+    pub const fn phase(self) -> f32 {
+        self.phase
+    }
+    pub const fn gap_opacity(self) -> f32 {
+        self.gap_opacity
+    }
+    pub fn period(self) -> f32 {
+        self.dash_length + self.gap_length
+    }
+    pub fn is_dotted(self) -> bool {
+        self.dash_length == 0.0
+    }
 
     pub fn validate(self) -> Result<(), StrokePatternError> {
         if !self.dash_length.is_finite() || self.dash_length < 0.0 {
@@ -92,11 +116,18 @@ impl StrokePattern {
 
     /// Unwrapped phase interpolation; changes of pattern shape switch at the end.
     pub fn interpolate(from: Option<Self>, to: Option<Self>, progress: f32) -> Option<Self> {
-        if progress <= 0.0 { return from; }
-        if progress >= 1.0 { return to; }
+        if progress <= 0.0 {
+            return from;
+        }
+        if progress >= 1.0 {
+            return to;
+        }
         match (from, to) {
-            (Some(a), Some(b)) if a.dash_length == b.dash_length
-                && a.gap_length == b.gap_length && a.gap_opacity == b.gap_opacity => {
+            (Some(a), Some(b))
+                if a.dash_length == b.dash_length
+                    && a.gap_length == b.gap_length
+                    && a.gap_opacity == b.gap_opacity =>
+            {
                 let p = f64::from(progress);
                 let phase = ((1.0 - p) * f64::from(a.phase) + p * f64::from(b.phase)) as f32;
                 Some(Self { phase, ..a })
@@ -106,7 +137,12 @@ impl StrokePattern {
     }
 
     pub fn packed(self) -> [f32; 4] {
-        [self.period(), self.dash_length, self.phase.rem_euclid(self.period()), self.gap_opacity]
+        [
+            self.period(),
+            self.dash_length,
+            self.phase.rem_euclid(self.period()),
+            self.gap_opacity,
+        ]
     }
 }
 

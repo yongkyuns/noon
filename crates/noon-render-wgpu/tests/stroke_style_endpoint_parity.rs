@@ -13,6 +13,7 @@ fn path() -> VectorPath {
 
 fn style(join: StrokeJoin, cap: StrokeCap) -> Style {
     Style {
+        stroke_pattern: None,
         fill: None,
         stroke: Some(Color::WHITE),
         stroke_width: 0.4,

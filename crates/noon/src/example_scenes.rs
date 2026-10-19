@@ -12,6 +12,7 @@ pub mod bar_chart;
 pub mod brace_text;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
+pub mod continuous_flow;
 pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;
@@ -2254,6 +2255,7 @@ pub fn ordinary_moving_camera_center_program(
         .line_to(Vec2::new(0.866_025_4, -0.5))
         .close();
     let triangle_style = SemanticStyle {
+        stroke_pattern: None,
         fill: Some(SemanticPaint::Solid(Color::GREEN)),
         fill_opacity: 0.5,
         stroke: Some(SemanticPaint::Solid(Color::GREEN)),

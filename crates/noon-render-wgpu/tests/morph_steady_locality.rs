@@ -11,6 +11,7 @@ const VARIANT_COUNT: usize = 12;
 
 fn style() -> Style {
     Style {
+        stroke_pattern: None,
         fill: Some(Color::WHITE),
         stroke: Some(Color::WHITE),
         stroke_width: 0.02,

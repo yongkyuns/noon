@@ -85,7 +85,7 @@ impl PackedStyle {
             return true;
         }
         self.opacity != 0.0
-            && ((self.fill_enabled != 0 && self.fill[3] != 0.0)
+            && (((self.fill_enabled & 1) != 0 && self.fill[3] != 0.0)
                 || (self.stroke_enabled & 1 != 0 && self.stroke[3] != 0.0))
     }
 }
@@ -2645,6 +2645,10 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
         StrokeCap::Butt => 1 << 2,
         StrokeCap::Square => 2 << 2,
     };
+    if let Some(pattern) = object.style.stroke_pattern {
+        style.fill = pattern.packed();
+        style.fill_enabled = 4; // explicit line-only payload in unused fill lanes
+    }
     LineInstance {
         transform,
         style,
@@ -4198,6 +4202,7 @@ mod tests {
             scale: Vec2::new(2.0, 0.5),
         };
         state.style = Style {
+            stroke_pattern: None,
             fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.4)),
             stroke: Some(Color::rgb(0.8, 0.7, 0.6)),
             stroke_width: 3.0,
@@ -4244,6 +4249,7 @@ mod tests {
             GeometryRef::line(Vec2::new(-2.0, 1.5), Vec2::new(3.0, -0.5)),
         );
         state.style = Style {
+            stroke_pattern: None,
             fill: None,
             stroke: Some(Color::rgb(0.2, 0.8, 0.4)),
             stroke_width: 0.125,

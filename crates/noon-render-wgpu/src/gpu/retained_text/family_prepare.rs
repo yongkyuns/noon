@@ -497,6 +497,7 @@ impl RetainedFramePreparer {
                         GeometryRef::VectorPath(path),
                         object.transform,
                         Style {
+                            stroke_pattern: None,
                             fill: Some(fill),
                             stroke: None,
                             stroke_width: 0.0,

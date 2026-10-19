@@ -444,3 +444,51 @@ fn native_capture_signal_trains_keep_rails_and_reproduce_pixels() {
         .unwrap();
     assert_eq!(capture.capture(&mut session).unwrap().rgba, first[0]);
 }
+
+#[test]
+#[ignore = "requires software Vulkan; run by native output qualification"]
+fn native_capture_continuous_stroke_pattern_replays_retained_pixels() {
+    let mut session = noon::example_scenes::continuous_flow::session().unwrap();
+    let mut capture = noon_export::SessionCapture::new(&session, software(640, 360)).unwrap();
+    let times = [0.0, 0.125, 0.25, 0.5, 1.0, 2.0, 3.75, 4.0, 4.5];
+    let mut images = Vec::new();
+    for (index, time) in times.into_iter().enumerate() {
+        session.advance_to(time).unwrap();
+        assert_eq!(session.frame().objects.len(), 2, "no object per dash");
+        let image = capture.capture(&mut session).unwrap();
+        assert_eq!(image.receipt.published_time, time);
+        let rgb = image.rgba.as_chunks::<4>().0;
+        assert!(rgb.iter().all(|pixel| pixel[3] == 255));
+        assert!(
+            rgb.iter()
+                .filter(|p| p[0] < 64 && p[1] > 160 && p[2] > 160)
+                .count()
+                > 40,
+            "missing cyan dashes at t={time}"
+        );
+        assert!(
+            rgb.iter()
+                .filter(|p| p[0] > 160 && p[1] > 120 && p[2] < 64)
+                .count()
+                > 20,
+            "missing yellow dots at t={time}"
+        );
+        proof(&format!("continuous-flow-{index:02}"), image.rgba, 640, 360);
+        images.push(image.rgba.to_vec());
+    }
+    assert_ne!(images[0], images[1], "pattern must visibly move");
+    assert_eq!(images[7], images[8], "stop must freeze the patterns");
+    assert_eq!(
+        images[0], images[7],
+        "complete cycles recover the initial pixels"
+    );
+    for index in [7, 2, 0, 6, 4, 1, 8, 3, 5, 0] {
+        session.seek(times[index]).unwrap();
+        assert_eq!(
+            capture.capture(&mut session).unwrap().rgba,
+            images[index],
+            "retained seek at t={}",
+            times[index]
+        );
+    }
+}

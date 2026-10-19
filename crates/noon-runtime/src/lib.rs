@@ -3140,6 +3140,11 @@ fn interpolate_transform(from: Transform2D, to: Transform2D, progress: f32) -> T
 
 fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
     Style {
+        stroke_pattern: noon_core::StrokePattern::interpolate(
+            from.stroke_pattern,
+            to.stroke_pattern,
+            progress,
+        ),
         fill: interpolate_optional_color(from.fill, to.fill, progress),
         stroke: interpolate_optional_color(from.stroke, to.stroke, progress),
         stroke_width: lerp(from.stroke_width, to.stroke_width, progress),

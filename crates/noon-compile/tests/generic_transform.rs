@@ -8,6 +8,7 @@ use noon_core::{CompositionTimeMap, ObjectId, TrackDefinition, TrackId};
 
 fn stroke_style() -> Style {
     Style {
+        stroke_pattern: None,
         fill: None,
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,
@@ -279,6 +280,7 @@ fn path_stroke_width_change_is_rejected_even_when_geometry_is_identical() {
 #[test]
 fn certified_closed_filled_path_transform_compiles() {
     let style = Style {
+        stroke_pattern: None,
         fill: Some(Color::rgb(0.4, 0.2, 0.9)),
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,
@@ -332,6 +334,7 @@ fn certified_closed_filled_path_transform_compiles() {
 #[test]
 fn self_intersecting_filled_path_transform_retains_ordered_endpoints() {
     let style = Style {
+        stroke_pattern: None,
         fill: Some(Color::rgb(0.4, 0.2, 0.9)),
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,

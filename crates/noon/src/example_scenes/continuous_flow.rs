@@ -15,10 +15,13 @@ pub fn session() -> Result<crate::ExecutionSession, String> {
         let forward = scene.flow_stroke(&dashes, 0.75, 4.0)?;
         let reverse = scene.flow_stroke(&dots, -0.5, 4.0)?;
         scene.wait(4.0)?;
-        let root = scene.declare_animation(noon_core::SemanticAnimationIntent::Composition {
-            kind: noon_core::SemanticAnimationCompositionKind::Parallel,
-            children: vec![forward.node_id(), reverse.node_id()],
-        }, crate::AnimationOptions::new())?;
+        let root = scene.declare_animation(
+            noon_core::SemanticAnimationIntent::Composition {
+                kind: noon_core::SemanticAnimationCompositionKind::Parallel,
+                children: vec![forward.node_id(), reverse.node_id()],
+            },
+            crate::AnimationOptions::new(),
+        )?;
         Ok(scene.execution_session_with_animation_root(&root)?)
     };
     build().map_err(|error| error.to_string())

@@ -994,6 +994,7 @@ mod tests {
     #[test]
     fn three_d_filled_tip_keeps_inherited_axis_stroke_width() {
         let style = SemanticStyle {
+            stroke_pattern: None,
             fill: None,
             fill_opacity: 0.35,
             stroke: Some(SemanticPaint::Solid(noon_core::Color::RED)),

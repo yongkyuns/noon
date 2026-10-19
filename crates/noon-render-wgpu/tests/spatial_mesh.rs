@@ -2306,6 +2306,7 @@ fn cairo_boundary_test_store(
     let surface_handle = store.insert_geometry_mesh(mesh);
     let mut surface = SemanticObjectState::new(StoredGeometry::Resource(surface_handle));
     surface.style = SemanticStyle {
+        stroke_pattern: None,
         fill: if sloped_unlit {
             Some(SemanticPaint::Solid(Color::BLACK))
         } else if curved_fill {

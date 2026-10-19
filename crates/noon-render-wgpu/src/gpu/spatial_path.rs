@@ -1212,6 +1212,7 @@ fn collect_text_paths<'a>(
                     .checked_mul(2)
                     .ok_or(SpatialPathError::BufferLimit)?;
                 let base_style = Style {
+                    stroke_pattern: None,
                     fill: Some(
                         crate::text::resolve_text_paint(run.fill, object_style.fill)
                             .unwrap_or(Color::WHITE),

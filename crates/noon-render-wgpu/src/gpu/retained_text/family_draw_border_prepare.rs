@@ -566,6 +566,7 @@ pub(super) fn draw_border_style(
 
     match phase {
         RetainedDrawBorderThenFillPhase::Outline { .. } => Style {
+            stroke_pattern: None,
             fill: None,
             stroke: Some(outline_color),
             stroke_width: DEFAULT_DRAW_BORDER_STROKE_WIDTH,
@@ -613,6 +614,7 @@ pub(super) fn draw_border_style(
                     )
                 };
             Style {
+                stroke_pattern: None,
                 fill,
                 stroke,
                 stroke_width,
@@ -865,6 +867,7 @@ mod draw_border_tests {
     fn scaled_strokes_keep_authored_units_and_outline_while_fill_is_introduced() {
         for fill in [None, Some(Color::rgba(0.2, 0.4, 0.8, 0.6))] {
             let authored = Style {
+                stroke_pattern: None,
                 fill,
                 stroke: Some(Color::rgba(0.9, 0.3, 0.2, 0.7)),
                 stroke_width: 0.6,

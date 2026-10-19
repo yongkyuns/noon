@@ -291,6 +291,7 @@ impl GridLayout {
 }
 fn line_style() -> SemanticStyle {
     SemanticStyle {
+        stroke_pattern: None,
         fill: None,
         fill_opacity: 0.0,
         stroke: Some(noon_core::SemanticPaint::Solid(Color::WHITE)),

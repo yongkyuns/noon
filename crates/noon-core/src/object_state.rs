@@ -67,7 +67,8 @@ pub fn validate_style(object: ObjectId, style: Style) -> Result<(), ObjectStateE
     let valid = style.fill.is_none_or(color_is_finite)
         && style.stroke.is_none_or(color_is_finite)
         && style.stroke_width.is_finite()
-        && style.opacity.is_finite();
+        && style.opacity.is_finite()
+        && style.stroke_pattern.is_none_or(|p| p.validate().is_ok());
     valid.then_some(()).ok_or(ObjectStateError {
         object,
         field: ObjectStateField::Style,

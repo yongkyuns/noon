@@ -261,6 +261,7 @@ impl PreparedCode {
         )
         .map_err(|error| invalid("background", error))?;
         let panel_style = SemanticStyle {
+            stroke_pattern: None,
             fill: Some(SemanticPaint::Solid(
                 background.fill_color.unwrap_or(highlighted.background),
             )),
