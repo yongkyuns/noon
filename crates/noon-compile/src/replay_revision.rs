@@ -33,6 +33,10 @@ pub struct CompiledReplayRevision {
     // inverse tracks. Charge each side by its command count in the finite replay
     // payload budget just as camera intervals are charged by payload count.
     path_motion_commands: usize,
+    /// Typed, append-only family-plan event. Empty row data alone is not proof
+    /// that a revision is a family animation (e.g. scalar timelines).
+    #[cfg(feature = "prepared-prefix")]
+    family_append: bool,
 }
 
 impl CompiledReplayRevision {
@@ -42,6 +46,10 @@ impl CompiledReplayRevision {
     pub fn channels(&self) -> impl Iterator<Item = CompiledChannelKey> + '_ {
         self.channels.iter().copied()
     }
+    #[cfg(feature = "prepared-prefix")]
+    pub fn is_prefix_family_append(&self) -> bool {
+        self.family_append
+    }
     /// Reserve one payload for each affected track even when the saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {
@@ -50,6 +58,12 @@ impl CompiledReplayRevision {
             + self.tracks.len()
             + self.camera_motion_payloads
             + self.path_motion_commands
+            + {
+                #[cfg(feature = "prepared-prefix")]
+                { usize::from(self.family_append) }
+                #[cfg(not(feature = "prepared-prefix"))]
+                { 0 }
+            }
     }
 }
 
@@ -165,6 +179,8 @@ impl CompiledScene {
             _ => 0,
         };
         Some(CompiledReplayRevision {
+            #[cfg(feature = "prepared-prefix")]
+            family_append: matches!(patch, ExecutionPatch::AddFamilyAnimation(_)),
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
             rows: rows
