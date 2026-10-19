@@ -1105,6 +1105,18 @@ class Mobject:
     def replace(self, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False) -> Mobject:
         return _semantic_operations()._replace(self, mobject, dim_to_match, stretch)
 
+    def surround(
+        self,
+        mobject: Mobject,
+        dim_to_match: int = 0,
+        stretch: bool = False,
+        buff: float = MED_SMALL_BUFF,
+    ) -> Mobject:
+        self.replace(mobject, dim_to_match, stretch)
+        length = mobject.length_over_dim(dim_to_match)
+        self.scale((length + buff) / length)
+        return self
+
     def __deepcopy__(self, memo):
         from _manim_compat import deepcopy_semantic_wrapper
         return deepcopy_semantic_wrapper(self, memo)

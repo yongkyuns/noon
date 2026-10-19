@@ -1021,6 +1021,14 @@ json.dumps({
   assert.deepEqual(basePathMethods.proportion_from_point, [
     "NotImplementedError", "Please override in a child class.",
   ], "mobject_base_path_methods: base inverse query remains abstract");
+  const surround = observations.mobject_surround;
+  assert.equal(surround.returns_self, true,
+    "mobject_surround: surround returns the receiver");
+  assert.ok(Math.abs(surround.width - 1.2) <= 1e-5,
+    "mobject_surround: width follows matched height and buffer scaling");
+  assert.ok(Math.abs(surround.height - 1.2) <= 1e-5,
+    "mobject_surround: matched height includes the buffer");
+  assertPointNear(surround.center, [0.5, 0], "mobject_surround: centers on the target");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",

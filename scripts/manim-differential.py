@@ -1373,6 +1373,27 @@ def _manim_mobject_base_path_methods() -> Any:
     return _mobject_base_path_methods(manim)
 
 
+def _mobject_surround(provider: Any) -> Any:
+    target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
+    surrounder = provider.Circle(radius=0.25)
+    returned = surrounder.surround(target, dim_to_match=1, buff=0.2)
+    center = surrounder.get_center()
+    return {
+        "returns_self": returned is surrounder,
+        "width": float(surrounder.width),
+        "height": float(surrounder.height),
+        "center": [float(center[0]), float(center[1])],
+    }
+
+
+def _noon_mobject_surround() -> Any:
+    return _mobject_surround(noon)
+
+
+def _manim_mobject_surround() -> Any:
+    return _mobject_surround(manim)
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4420,6 +4441,10 @@ FIXTURES = [
     Fixture("mobject_base_path_methods",
             _noon_mobject_base_path_methods,
             _manim_mobject_base_path_methods),
+    Fixture("mobject_surround",
+            _noon_mobject_surround,
+            _manim_mobject_surround,
+            1e-5),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
