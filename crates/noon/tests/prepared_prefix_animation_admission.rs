@@ -127,11 +127,11 @@ fn late_text_reentry_raster_is_identical_after_preparation_and_source_destructio
         scene.add(&anchor).unwrap();
         let mut source = scene.execution_session().unwrap();
         source.begin_replay_retention(ReplayLimits { revisions: 256, payloads: 8192 }).unwrap();
+        let initial = source.wait_segment(1.0).unwrap();
         let mut source_raster = raster_support::Raster::new().await;
         source.advance_to(0.5).unwrap();
         let mut reference = vec![(0.5, source_raster.capture(&source.take_renderer_publication()))];
         source.advance_to(1.0).unwrap();
-        let initial = source.wait_segment(0.0).unwrap();
         let (mut publisher, mut reader) = source.create_prepared_prefix(initial).unwrap();
         reader.reserve_object_capacity(16).unwrap();
 
