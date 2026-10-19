@@ -457,21 +457,23 @@ fn native_capture_continuous_stroke_pattern_replays_retained_pixels() {
         assert_eq!(session.frame().objects.len(), 2, "no object per dash");
         let image = capture.capture(&mut session).unwrap();
         assert_eq!(image.receipt.published_time, time);
+        assert_eq!(image.rgba.len(), 640 * 360 * 4);
         let rgb = image.rgba.as_chunks::<4>().0;
         assert!(rgb.iter().all(|pixel| pixel[3] == 255));
         // Independent pixel-shape oracle: a periodic pattern must produce
         // multiple separated bright regions, not merely a changing solid Line.
         // Find the most ink-covered scanline independently for each color so
         // the assertion is insensitive to viewport/row origin and antialiasing.
-        let separated_ink_runs = |is_ink: fn(&[u8]) -> bool| {
-            let row = image
-                .rgba
-                .chunks_exact(640 * 4)
-                .max_by_key(|row| row.chunks_exact(4).filter(|pixel| is_ink(pixel)).count())
+        let separated_ink_runs = |is_ink: fn(&[u8; 4]) -> bool| {
+            let row = rgb
+                .as_chunks::<640>()
+                .0
+                .iter()
+                .max_by_key(|row| row.iter().filter(|pixel| is_ink(pixel)).count())
                 .expect("nonempty capture");
             let mut runs = 0;
             let mut width = 0;
-            for pixel in row.chunks_exact(4) {
+            for pixel in row {
                 if is_ink(pixel) {
                     width += 1;
                 } else {
