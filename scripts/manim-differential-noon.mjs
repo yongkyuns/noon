@@ -942,6 +942,30 @@ json.dumps({
   assert.deepEqual(observations.apply_over_attr_arrays.root_points,
     observations.apply_over_attr_arrays_live.root_points,
     "array mapping publishes the same points in authored and live modes");
+  const assertPointNear = (actual, expected, message) => {
+    assert.equal(actual.length, expected.length, `${message}: dimensions`);
+    for (let index = 0; index < expected.length; index += 1) {
+      assert.ok(Math.abs(actual[index] - expected[index]) < 1e-5,
+        `${message}: component ${index}`);
+    }
+  };
+  for (const name of ["point_function_transforms", "point_function_transforms_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.pointwise.returns_self, true, `${name}: apply_function identity`);
+    assert.equal(profile.pointwise.calls.length, 8, `${name}: shared aliases map each unique path once`);
+    assertPointNear(profile.pointwise.calls[0].slice(0, 2), [3, 1], `${name}: late-alias path order`);
+    assertPointNear(profile.pointwise.calls[4].slice(0, 2), [1, -1], `${name}: next unique path order`);
+    assertPointNear(profile.pointwise.second[0], [5, 0], `${name}: pointwise second start`);
+    assertPointNear(profile.pointwise.second[3], [6, 1], `${name}: pointwise second end`);
+    assertPointNear(profile.pointwise.first[0], [3, -2], `${name}: pointwise first start`);
+    assertPointNear(profile.pointwise.first[3], [4, -1], `${name}: pointwise first end`);
+    assert.equal(profile.multi_mapping.returns_self, true, `${name}: multi-map identity`);
+    assertPointNear(profile.multi_mapping.first[0], [4, -1], `${name}: pivoted first start`);
+    assertPointNear(profile.multi_mapping.second[3], [-1, 1], `${name}: pivoted second end`);
+    assert.equal(profile.complex_mapping.returns_self, true, `${name}: complex-map identity`);
+    assertPointNear(profile.complex_mapping.points[0], [0, 1], `${name}: complex first point`);
+    assertPointNear(profile.complex_mapping.points[3], [-1, 2], `${name}: complex last point`);
+  }
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",

@@ -621,6 +621,41 @@ class Mobject:
         from _manim_path_editing import apply_over_attr_arrays
         return apply_over_attr_arrays(self, func)
 
+    def apply_points_function_about_point(
+        self,
+        func: Callable[[Any], Any],
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_points_function_about_point
+        return apply_points_function_about_point(
+            self, func, about_point=about_point, about_edge=about_edge
+        )
+
+    def apply_function(
+        self,
+        function: Callable[[Any], Any],
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_function
+        return apply_function(
+            self, function, about_point=about_point, about_edge=about_edge
+        )
+
+    def apply_complex_function(
+        self,
+        function: Callable[[complex], complex],
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_complex_function
+        return apply_complex_function(
+            self, function, about_point=about_point, about_edge=about_edge
+        )
+
     def get_merged_array(self, array_attr: str):
         from _manim_path_queries import merged_array
         return merged_array(self, array_attr)

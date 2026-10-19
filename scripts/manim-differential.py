@@ -1115,6 +1115,76 @@ def _noon_apply_over_attr_arrays_live() -> Any:
     )
 
 
+def _point_function_transforms(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+
+    first = provider.Line((1, -1, 0), (2, 0, 0))
+    second = provider.Line((3, 1, 0), (4, 2, 0))
+    pointwise_family = provider.Group(provider.Group(first, second), first)
+
+    multi_first = provider.Line((-2, -1, 0), (-1, 1, 0))
+    multi_second = provider.Line((2, -1, 0), (3, 1, 0))
+    multi_family = provider.Group(multi_first, multi_second)
+
+    complex_value = provider.Line((1, 0, 0), (2, 1, 0))
+    if scene is not None:
+        scene.add(pointwise_family, multi_family, complex_value)
+
+    calls = []
+
+    def pointwise(point):
+        observed = [float(component) for component in point]
+        calls.append(observed)
+        return np.asarray(
+            [observed[0] + 2.0, observed[1] - 1.0, observed[2]],
+            dtype=np.float64,
+        )
+
+    pointwise_returned = pointwise_family.apply_function(pointwise)
+    multi_returned = multi_family.apply_points_function_about_point(
+        lambda points: np.column_stack(
+            (-points[:, 0], points[:, 1], points[:, 2])
+        ),
+        about_point=(1.0, -1.0, 0.0),
+    )
+    complex_returned = complex_value.apply_complex_function(lambda value: 1j * value)
+
+    def curve_points(value):
+        return [_point_observation(point) for point in value.get_nth_curve_points(0)]
+
+    return {
+        "pointwise": {
+            "returns_self": pointwise_returned is pointwise_family,
+            "calls": calls,
+            "first": curve_points(first),
+            "second": curve_points(second),
+        },
+        "multi_mapping": {
+            "returns_self": multi_returned is multi_family,
+            "first": curve_points(multi_first),
+            "second": curve_points(multi_second),
+        },
+        "complex_mapping": {
+            "returns_self": complex_returned is complex_value,
+            "points": curve_points(complex_value),
+        },
+    }
+
+
+def _noon_point_function_transforms() -> Any:
+    return _point_function_transforms(noon)
+
+
+def _manim_point_function_transforms() -> Any:
+    return _point_function_transforms(manim)
+
+
+def _noon_point_function_transforms_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _point_function_transforms(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4140,6 +4210,14 @@ FIXTURES = [
             _noon_apply_over_attr_arrays, _manim_apply_over_attr_arrays),
     Fixture("apply_over_attr_arrays_live",
             _noon_apply_over_attr_arrays_live, _manim_apply_over_attr_arrays),
+    Fixture("point_function_transforms",
+            _noon_point_function_transforms,
+            _manim_point_function_transforms,
+            1e-5),
+    Fixture("point_function_transforms_live",
+            _noon_point_function_transforms_live,
+            _manim_point_function_transforms,
+            1e-5),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

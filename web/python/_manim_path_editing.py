@@ -91,6 +91,111 @@ def apply_over_attr_arrays(value, func):
     return value
 
 
+def apply_points_function_about_point(value, func, about_point=None, about_edge=None):
+    """Apply a caller-supplied array mapping to Rust-selected family paths."""
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "family point mappings are unavailable during staged callbacks"
+        )
+
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    if about_point is None:
+        if about_edge is None:
+            about_edge = _base.ORIGIN
+        edge = _planar_critical_direction(about_edge)
+        about_point = value.get_critical_point(edge)
+    pivot = _point3_array(about_point, np)
+
+    def map_about_pivot(points):
+        if np is not None:
+            centered = points - pivot
+            return func(centered) + pivot
+        centered = [
+            [float(point[index]) - pivot[index] for index in range(3)]
+            for point in points
+        ]
+        mapped = func(centered)
+        return [
+            [float(point[index]) + pivot[index] for index in range(3)]
+            for point in mapped
+        ]
+
+    for member in value.family_members_with_points():
+        member.apply_over_attr_arrays(map_about_pivot)
+    return value
+
+
+def apply_function(value, function, *, about_point=None, about_edge=None):
+    """Apply a pointwise callback with Manim's origin default and family scope."""
+    if about_point is None and about_edge is None:
+        about_point = _base.ORIGIN
+
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    def map_points(points):
+        if np is not None:
+            return np.apply_along_axis(function, 1, points)
+        return [function(point) for point in points]
+
+    return apply_points_function_about_point(
+        value,
+        map_points,
+        about_point=about_point,
+        about_edge=about_edge,
+    )
+
+
+def apply_complex_function(value, function, *, about_point=None, about_edge=None):
+    """Map each planar path point through a complex callback, preserving z."""
+    def map_point(point):
+        x, y, z = point
+        result = function(complex(float(x), float(y)))
+        return [float(result.real), float(result.imag), float(z)]
+
+    return apply_function(
+        value,
+        map_point,
+        about_point=about_point,
+        about_edge=about_edge,
+    )
+
+
+def _planar_critical_direction(direction):
+    try:
+        dimensions = len(direction)
+    except (TypeError, AttributeError):
+        return _base._as_vec2(direction)
+    if dimensions == 3:
+        return _base._as_vec2((direction[0], direction[1]))
+    return _base._as_vec2(direction)
+
+
+def _point3_array(point, numpy):
+    try:
+        dimensions = len(point)
+    except (TypeError, AttributeError):
+        raise TypeError("about_point must have two or three coordinates") from None
+    if dimensions == 2:
+        coordinates = (float(point[0]), float(point[1]), 0.0)
+    elif dimensions == 3:
+        coordinates = (float(point[0]), float(point[1]), float(point[2]))
+    else:
+        raise ValueError("about_point must have two or three coordinates")
+    return (
+        numpy.asarray(coordinates, dtype=numpy.float64)
+        if numpy is not None
+        else coordinates
+    )
+
+
 def _mapped_planar_points(points):
     """Validate the planar Rust path boundary before publishing mapped rows."""
     try:
