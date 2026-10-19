@@ -315,11 +315,14 @@ extrapolated darkness remain unqualified.
 through one shared Rust layout transaction, including ordinary `Dot`/`Ellipse`
 inheritance. It retains fitted ellipse aspect ratios and remeasures a target
 that contains the receiver after replacement; signed buffers, zero-width lines,
-negative dimension indices and zero planar depth have detached/live cases.
+zero planar depth and dimension validation have detached/live cases. Negative
+and out-of-range dimensions raise the pinned AssertionError before layout reads;
+noninteger inputs retain the corresponding error classes, and stretching ignores
+the dimension argument.
 Native tests protect one publication, paint/identity preservation, rollback,
 rotated world-axis stretching and active-driver rejection. All 262 actual
-WASM/Pyodide semantic fixtures pass, including 21 cases in each new Circle
-fixture. Staged callbacks, vector buffers, spatial geometry, empty-target error
+WASM/Pyodide semantic fixtures execute successfully, including 26 success/error
+cases in each new Circle fixture. The existing 260 observations remain unchanged. Staged callbacks, vector buffers, spatial geometry, empty-target error
 classes and broader class contracts remain unqualified.
 
 The literal pinned `CircleSurround` directive body is retained unchanged in
@@ -327,7 +330,10 @@ The literal pinned `CircleSurround` directive body is retained unchanged in
 Noon execution renders six objects at duration zero on WebGPU and WebGL2; it
 is enrolled in the raster manifest with unchanged global limits. A native/direct
 Rust-WASM/Python example also covers authored and live sizing around ordinary
-Scene wait barriers. Current full-local, paired and pinned two-sided/raster
-qualification is still in progress. These are bounded profiles. Circle remains partial; Dot/Ellipse retain their
+Scene wait barriers. The integrated implementation at `ad2347ac6` passes the
+complete local gate (4,253 Rust tests / 41 configured ignores, 1,256 Python tests /
+33 configured skips, and the 71,786,772-byte / 294-contract WASM package). Its
+paired render has 20,124 visible pixels and zero differences on both backends.
+Pinned two-sided semantic/raster qualification remains pending. These are bounded profiles. Circle remains partial; Dot/Ellipse retain their
 previously qualified constructor/canonical-geometry status, while the new
 inherited method and its limits are recorded separately.
