@@ -27,6 +27,22 @@ jobs:
           git cat-file -e '55daebead113cf65e163e32e676fbdfe0334e608^{commit}'
           git rev-parse HEAD > family-prefix-artifacts/trigger-commit.txt
           rustc --version --verbose | tee family-prefix-artifacts/rustc.log
+          # Checked one-use source repair. The gate does not suppress the lint;
+          # the ordinary source export moves next to the existing replay exports.
+          # Only a completely passing candidate may commit this repair below.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-runtime/src/lib.rs')
+          text = path.read_text()
+          block = '#[cfg(feature = "prepared-prefix")]\npub use replay::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};'
+          anchor = 'pub use replay::{ReplayError, ReplayLimits, ReplayStats};'
+          assert text.count(block) == 1, 'unexpected prefix export definition'
+          assert text.count(anchor) == 1, 'unexpected replay export anchor'
+          if anchor + '\n' + block not in text:
+              text = text.replace(block, '', 1)
+              text = text.replace(anchor, anchor + '\n' + block, 1)
+              path.write_text(text)
+          PY
       - uses: actions/cache@v6
         with:
           path: |
@@ -70,8 +86,8 @@ jobs:
           test "$GITHUB_REF" = 'refs/heads/experimental/prepared-prefix-family'
           git fetch --no-tags origin experimental/prepared-prefix-family
           test "$(git rev-parse origin/experimental/prepared-prefix-family)" = "$GITHUB_SHA"
-          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs > family-prefix-artifacts/rustfmt.patch
-          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs
+          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/lib.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs > family-prefix-artifacts/rustfmt.patch
+          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/lib.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs
           git rm .github/workflows/prepared-prefix-family-probe.yml
           git diff --cached --check
           git config user.name 'github-actions[bot]'
@@ -87,7 +103,7 @@ jobs:
           git diff --binary -- crates > family-prefix-artifacts/remaining-source.patch
           git rev-parse HEAD > family-prefix-artifacts/checked-out-commit.txt
           if test -f Cargo.lock; then cp Cargo.lock family-prefix-artifacts/selected-Cargo.lock; fi
-          tar -czf family-prefix-artifacts/tested-prefix-source.tar.gz crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision crates/noon-runtime/src/replay.rs crates/noon-runtime/src/replay crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs
+          tar -czf family-prefix-artifacts/tested-prefix-source.tar.gz crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision crates/noon-runtime/src/lib.rs crates/noon-runtime/src/replay.rs crates/noon-runtime/src/replay crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs
       - uses: actions/upload-artifact@v6
         if: always()
         with:
