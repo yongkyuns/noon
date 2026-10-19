@@ -68,8 +68,8 @@ jobs:
           test "$GITHUB_REF" = 'refs/heads/experimental/prepared-prefix-family'
           git fetch --no-tags origin experimental/prepared-prefix-family
           test "$(git rev-parse origin/experimental/prepared-prefix-family)" = "$GITHUB_SHA"
-          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs > family-prefix-artifacts/rustfmt.patch
-          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs
+          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs > family-prefix-artifacts/rustfmt.patch
+          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs crates/noon/tests/prepared_prefix_raster.rs
           git rm .github/workflows/prepared-prefix-family-probe.yml
           git diff --cached --check
           git config user.name 'github-actions[bot]'

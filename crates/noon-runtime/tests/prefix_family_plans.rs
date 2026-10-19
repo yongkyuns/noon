@@ -48,7 +48,7 @@ fn typed_family_append_admits_reader_without_rebuilding_existing_frame() {
     reader.seek(0.5).unwrap();
     let old = reader.frame().clone();
     assert_eq!(old, initial);
-    assert!(reader.take_renderer_publication().frame().objects.len() == 1);
+    assert_eq!(reader.take_renderer_publication().frame().objects.len(), 1);
 
     source.apply_execution_patch(&ExecutionPatch::AddFamilyAnimation(animation)).unwrap();
     source.advance_to(1.5).unwrap();
