@@ -1206,6 +1206,25 @@ json.dumps({
     [observations.mobject_surround.width, observations.mobject_surround.height],
     "mobject_surround_live: matches detached dimensions",
   );
+  for (const [name, stretch] of [
+    ["replace_width_live", false],
+    ["replace_stretch_live", true],
+  ]) {
+    const profile = observations[name];
+    assert.equal(profile.returns_self, true, `${name}: returns the source object`);
+    assertPointNear(profile.source.center, profile.target.center,
+      `${name}: centers on the target`);
+    if (stretch) {
+      assertPointNear([profile.source.width, profile.source.height],
+        [profile.target.width, profile.target.height],
+        `${name}: matches both dimensions`);
+    } else {
+      assert.ok(Math.abs(profile.source.height - profile.target.height) > 1e-3,
+        `${name}: preserves aspect ratio while matching the selected dimension`);
+      assertPointNear([profile.source.width], [profile.target.width],
+        `${name}: matches the default width dimension`);
+    }
+  }
   for (const name of ["mobject_get_pieces", "mobject_get_pieces_live"]) {
     const profile = observations[name];
     assert.equal(profile.group_type, "Group", `${name}: pinned get_pieces returns Group`);

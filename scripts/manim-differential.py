@@ -3204,6 +3204,41 @@ def _manim_replace_stretch() -> Any:
     return _object_observation(source)
 
 
+def _replace_live_probe(provider: Any, stretch: bool, scene: Any | None = None) -> Any:
+    source = provider.Circle(radius=0.25)
+    target = provider.Rectangle(width=2.0, height=1.0).shift(
+        provider.LEFT * 0.7 + provider.UP * 0.2
+    )
+    if scene is not None:
+        scene.add(source, target)
+    returned = source.replace(target, stretch=stretch)
+    return {
+        "returns_self": returned is source,
+        "source": _object_observation(source),
+        "target": _object_observation(target),
+    }
+
+
+def _noon_replace_width_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _replace_live_probe(noon, False, scene)
+    )
+
+
+def _manim_replace_width_live() -> Any:
+    return _replace_live_probe(manim, False)
+
+
+def _noon_replace_stretch_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _replace_live_probe(noon, True, scene)
+    )
+
+
+def _manim_replace_stretch_live() -> Any:
+    return _replace_live_probe(manim, True)
+
+
 
 def _noon_critical_points() -> Any:
     obj = noon.Rectangle(width=2.0, height=1.0).shift(noon.RIGHT * 0.7 + noon.UP * 0.3)
@@ -5582,7 +5617,9 @@ FIXTURES = [
     Fixture("save_restore", _noon_save_restore, _manim_save_restore),
     Fixture("become", _noon_become, _manim_become),
     Fixture("replace_width", _noon_replace_width, _manim_replace_width),
+    Fixture("replace_width_live", _noon_replace_width_live, _manim_replace_width_live),
     Fixture("replace_stretch", _noon_replace_stretch, _manim_replace_stretch),
+    Fixture("replace_stretch_live", _noon_replace_stretch_live, _manim_replace_stretch_live),
     Fixture("critical_points", _noon_critical_points, _manim_critical_points),
     Fixture("set_coord_direction", _noon_set_coord_direction, _manim_set_coord_direction),
     Fixture("scale_to_fit_width", _noon_scale_to_fit_width, _manim_scale_to_fit_width),

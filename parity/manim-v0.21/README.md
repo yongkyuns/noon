@@ -211,3 +211,9 @@ profile. Product Pyodide qualification is included in the current shared fixture
 run. The pinned ManimCE comparison remains enrolled in hosted qualification.
 Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1793-L1803.
+
+`Mobject.replace()` now has active-live fixtures for both proportional matching
+of the default width dimension and `stretch=True`. They check receiver identity,
+target-center alignment, and the expected aspect-ratio behavior. The paired
+ManimCE probes are included in the hosted differential. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1777-L1792.
