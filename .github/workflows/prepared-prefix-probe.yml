@@ -6,6 +6,7 @@ on:
     paths:
       - crates/noon/src/execution_session/replay.rs
       - crates/noon/src/execution_session/replay/**
+      - crates/noon/tests/prepared_prefix_raster.rs
       - .github/workflows/prepared-prefix-probe.yml
 
 permissions:
@@ -13,15 +14,16 @@ permissions:
 
 concurrency:
   group: prepared-prefix-isolation-probe
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   rust-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
+      XDG_RUNTIME_DIR: /tmp/noon-prefix-raster
     steps:
       - uses: actions/checkout@v7
       - name: Pin integration base
@@ -54,6 +56,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo test -p noon --no-default-features --test finite_replay_history --test scalar_timeline_replay --test segment_decimal_endpoints 2>&1 | tee prefix-probe-artifacts/regressions.log
+      - name: Install actual Vulkan fallback renderer
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+      - name: Actual pixels and renderer recreation
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p noon --no-default-features --test prepared_prefix_raster -- --ignored --nocapture --test-threads=1 2>&1 | tee prefix-probe-artifacts/raster.log
       - name: Direct WASM compilation
         if: ${{ !cancelled() }}
         run: |
@@ -62,8 +75,9 @@ jobs:
         if: ${{ always() && steps.format.outcome == 'failure' }}
         run: |
           cargo fmt --all
-          git diff -- crates/noon/src/execution_session/replay.rs crates/noon/src/execution_session/replay/prefix_probe.rs > prefix-probe-artifacts/rustfmt.patch
+          git diff -- crates/noon/src/execution_session/replay.rs crates/noon/src/execution_session/replay/prefix_probe.rs crates/noon/tests/prepared_prefix_raster.rs > prefix-probe-artifacts/rustfmt.patch
           cp crates/noon/src/execution_session/replay/prefix_probe.rs prefix-probe-artifacts/prefix_probe.formatted.rs
+          cp crates/noon/tests/prepared_prefix_raster.rs prefix-probe-artifacts/prepared_prefix_raster.formatted.rs
       - name: Retain exact results, including failures
         if: always()
         uses: actions/upload-artifact@v6
