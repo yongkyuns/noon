@@ -194,3 +194,12 @@ Rust-backed representation. Staged callback-phase queries reject before reading
 a stale snapshot. Pinned sources:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L869 and
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2220-L2229.
+
+`Mobject.next_to()` now has paired active-live observations for both a Mobject
+target and a point target. The Mobject case checks family bounds, aligned-edge
+placement, the coordinate mask, and receiver identity after both objects are
+admitted to a live scene; the point case checks point placement, its mask, and
+identity. Product Pyodide passes all 246 shared Rust/Python fixtures. The pinned
+ManimCE comparison is enrolled in the hosted differential because ManimCE is not
+installed in this checkout. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1558-L1607.

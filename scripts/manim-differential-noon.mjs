@@ -1037,6 +1037,31 @@ json.dumps({
     assertPointNear(profile.right, [profile.point[0], profile.before.center[1]],
       `${name}: aligns x to the point and preserves y`);
   }
+  for (const name of ["next_to_live", "next_to_point_live"]) {
+    assert.equal(observations[name].returns_self, true,
+      `${name}: returns the same Mobject after live placement`);
+  }
+  const nextToLive = observations.next_to_live;
+  assertPointNear(
+    [nextToLive.receiver.center[0] - nextToLive.receiver.width / 2],
+    [nextToLive.target.center[0] + nextToLive.target.width / 2 + 0.25],
+    "next_to_live: places the receiver beyond the target's right bound",
+  );
+  assertPointNear(
+    [nextToLive.receiver.center[1] + nextToLive.receiver.height / 2],
+    [nextToLive.target.center[1] + nextToLive.target.height / 2],
+    "next_to_live: aligns the selected top edges",
+  );
+  assertPointNear(
+    [observations.next_to_point_live.receiver.center[0]], [1.25],
+    "next_to_point_live: preserves point x placement",
+  );
+  assertPointNear(
+    [observations.next_to_point_live.receiver.center[1] -
+      observations.next_to_point_live.receiver.height / 2],
+    [0.95],
+    "next_to_point_live: applies the point buffer to the bottom edge",
+  );
   for (const [directName, liveName] of [
     ["to_edge", "to_edge_live"],
     ["to_corner", "to_corner_live"],

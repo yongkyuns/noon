@@ -7,17 +7,12 @@ import noon
 
 
 class ManimFrameMethodTests(unittest.TestCase):
-    def test_align_on_border_uses_rust_critical_point_and_shift(self):
+    def test_align_on_border_delegates_to_shared_rust_frame_placement(self):
         value = SimpleNamespace()
-        value.get_critical_point = Mock(return_value=noon.Vec2(2.0, -2.0))
-        value.shift = Mock(return_value=value)
+        value._align_on_frame = Mock(return_value=value)
         with patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(noon.Mobject.align_on_border(value, (1.0, -1.0), 0.5), value)
-        value.get_critical_point.assert_called_once_with(noon.Vec2(1.0, -1.0))
-        value.shift.assert_called_once_with(noon.Vec2(
-            noon.DEFAULT_FRAME_WIDTH / 2 - 2.5,
-            -noon.DEFAULT_FRAME_HEIGHT / 2 + 2.5,
-        ))
+        value._align_on_frame.assert_called_once_with(noon.Vec2(1.0, -1.0), 0.5)
 
     def test_shift_onto_screen_checks_edges_in_pinned_order(self):
         value = SimpleNamespace()

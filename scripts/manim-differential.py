@@ -186,6 +186,53 @@ def _manim_next_to() -> Any:
     return {"left": _object_observation(left), "right": _object_observation(right)}
 
 
+def _next_to_live_probe(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Rectangle(width=1.4, height=0.8).shift(
+        provider.LEFT * 1.1 + provider.UP * 0.35
+    )
+    receiver = provider.Square(side_length=0.6).shift(provider.DOWN * 0.8)
+    if scene is not None:
+        scene.add(target, receiver)
+    returned = receiver.next_to(
+        target, provider.RIGHT, buff=0.25, aligned_edge=provider.UP,
+        coor_mask=(1.0, 1.0, 0.0),
+    )
+    return {
+        "returns_self": returned is receiver,
+        "target": _object_observation(target),
+        "receiver": _object_observation(receiver),
+    }
+
+
+def _noon_next_to_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _next_to_live_probe(noon, scene))
+
+
+def _manim_next_to_live() -> Any:
+    return _next_to_live_probe(manim)
+
+
+def _next_to_point_live_probe(provider: Any, scene: Any | None = None) -> Any:
+    receiver = provider.Circle(radius=0.35).shift(provider.LEFT + provider.DOWN)
+    if scene is not None:
+        scene.add(receiver)
+    returned = receiver.next_to(
+        (1.25, 0.75, 0.0), provider.UP, buff=0.2,
+        coor_mask=(1.0, 1.0, 0.0),
+    )
+    return {"returns_self": returned is receiver, "receiver": _object_observation(receiver)}
+
+
+def _noon_next_to_point_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _next_to_point_live_probe(noon, scene)
+    )
+
+
+def _manim_next_to_point_live() -> Any:
+    return _next_to_point_live_probe(manim)
+
+
 def _align_to_top(provider: Any, scene: Any | None = None) -> Any:
     target = provider.Rectangle(width=2.0, height=1.5).shift(
         provider.RIGHT * 0.8 + provider.UP * 0.5
@@ -5437,6 +5484,8 @@ FIXTURES = [
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
     Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
     Fixture("next_to", _noon_next_to, _manim_next_to),
+    Fixture("next_to_live", _noon_next_to_live, _manim_next_to_live),
+    Fixture("next_to_point_live", _noon_next_to_point_live, _manim_next_to_point_live),
     Fixture("align_to_top", _noon_align_to_top, _manim_align_to_top),
     Fixture("align_to_top_live", _noon_align_to_top_live, _manim_align_to_top),
     Fixture("align_to_point_right", _noon_align_to_point_right, _manim_align_to_point_right),
