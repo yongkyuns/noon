@@ -85,11 +85,19 @@ class PaintQueriesGradientsTests(unittest.TestCase):
             self.assertEqual(_as_lists(obj.get_fill_rgbas()), [[0.0, 0.0, 0.0, 0.0]])
             self.assertEqual(obj.get_fill_colors(), [None])
             self.assertIsNone(obj.get_fill_color())
-        self.assertEqual(_as_lists(obj.get_stroke_rgbas(background=True)), [[0.0, 0.0, 0.0, 1.0]])
-        self.assertEqual(obj.get_stroke_colors(background=True), [noon.BLACK])
-        self.assertEqual(_as_lists(obj.get_stroke_opacities(background=True)), [1.0])
-        self.assertEqual(obj.get_stroke_opacity(background=True), 1.0)
-        self.assertEqual(obj.get_stroke_width(background=True), 0.0)
+        def background_observation(_obj, method, *_args, **_kwargs):
+            return {
+                "backgroundStrokeColor": black,
+                "backgroundStrokeWidth": 0.0,
+                "backgroundStrokeOpacity": 1.0,
+            }[method]
+
+        with patch.object(handles, '_typed_manim_observation', side_effect=background_observation):
+            self.assertEqual(_as_lists(obj.get_stroke_rgbas(background=True)), [[0.0, 0.0, 0.0, 1.0]])
+            self.assertEqual(obj.get_stroke_colors(background=True), [noon.BLACK])
+            self.assertEqual(_as_lists(obj.get_stroke_opacities(background=True)), [1.0])
+            self.assertEqual(obj.get_stroke_opacity(background=True), 1.0)
+            self.assertEqual(obj.get_stroke_width(background=True), 0.0)
 
     def test_gradient_is_one_shared_family_request_without_python_interpolation(self):
         group = identity_only_wrapper(compat.VGroup)

@@ -259,6 +259,13 @@ pub struct SemanticStyle {
     pub stroke: Option<SemanticPaint>,
     pub stroke_opacity: f64,
     pub stroke_width: f64,
+    /// Solid stroke painted behind fill and foreground stroke.
+    #[serde(default)]
+    pub background_stroke: Option<SemanticPaint>,
+    #[serde(default = "default_semantic_opacity")]
+    pub background_stroke_opacity: f64,
+    #[serde(default)]
+    pub background_stroke_width: f64,
     pub stroke_width_mode: StrokeWidthMode,
     #[serde(default)]
     pub stroke_join: StrokeJoin,
@@ -275,6 +282,9 @@ impl Default for SemanticStyle {
             stroke: None,
             stroke_opacity: 1.0,
             stroke_width: 0.0,
+            background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: 0.0,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
@@ -297,9 +307,12 @@ impl SemanticStyle {
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
+            && paint(self.background_stroke.as_ref())
             && self.fill_opacity.is_finite()
             && self.stroke_opacity.is_finite()
             && self.stroke_width.is_finite()
+            && self.background_stroke_opacity.is_finite()
+            && self.background_stroke_width.is_finite()
             && self.object_opacity.is_finite()
     }
 
@@ -312,6 +325,9 @@ impl SemanticStyle {
             stroke: style.stroke.map(SemanticPaint::Solid),
             stroke_opacity: 1.0,
             stroke_width: style.stroke_width as f64,
+            background_stroke: style.background_stroke.map(SemanticPaint::Solid),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: style.background_stroke_width as f64,
             stroke_width_mode: style.stroke_width_mode,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
@@ -332,6 +348,9 @@ impl SemanticStyle {
             stroke: Some(SemanticPaint::Solid(color)),
             stroke_opacity: 1.0,
             stroke_width: 0.04,
+            background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: 0.0,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Auto,
@@ -368,6 +387,10 @@ impl SemanticStyle {
     pub fn effective_stroke_opacity(&self) -> f64 {
         self.stroke_opacity * self.object_opacity
     }
+}
+
+fn default_semantic_opacity() -> f64 {
+    1.0
 }
 
 /// Painter metadata is independent from transform hierarchy and style.

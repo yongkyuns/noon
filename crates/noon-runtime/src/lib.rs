@@ -3143,6 +3143,16 @@ fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
         fill: interpolate_optional_color(from.fill, to.fill, progress),
         stroke: interpolate_optional_color(from.stroke, to.stroke, progress),
         stroke_width: lerp(from.stroke_width, to.stroke_width, progress),
+        background_stroke: interpolate_optional_color(
+            from.background_stroke,
+            to.background_stroke,
+            progress,
+        ),
+        background_stroke_width: lerp(
+            from.background_stroke_width,
+            to.background_stroke_width,
+            progress,
+        ),
         stroke_width_mode: if progress >= 1.0 {
             to.stroke_width_mode
         } else {

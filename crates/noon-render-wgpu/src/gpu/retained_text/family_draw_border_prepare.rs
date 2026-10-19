@@ -566,6 +566,8 @@ pub(super) fn draw_border_style(
             fill: None,
             stroke: Some(outline_color),
             stroke_width: DEFAULT_DRAW_BORDER_STROKE_WIDTH,
+            background_stroke: object_style.background_stroke,
+            background_stroke_width: object_style.background_stroke_width,
             stroke_width_mode: StrokeWidthMode::ScreenSpace,
             stroke_join: StrokeJoin::Miter,
             stroke_cap: StrokeCap::Butt,
@@ -613,6 +615,8 @@ pub(super) fn draw_border_style(
                 fill,
                 stroke,
                 stroke_width,
+                background_stroke: object_style.background_stroke,
+                background_stroke_width: object_style.background_stroke_width,
                 stroke_width_mode,
                 stroke_join,
                 stroke_cap,
@@ -869,6 +873,7 @@ mod draw_border_tests {
                 stroke_join: StrokeJoin::Round,
                 stroke_cap: StrokeCap::Round,
                 opacity: 0.4,
+                ..Style::default()
             };
             let outline = draw_border_style(
                 authored,

@@ -186,7 +186,7 @@ fn update_compact_path_vertices(
         }
     }
 }
-const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
+const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -226,6 +226,11 @@ const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
         format: wgpu::VertexFormat::Float32x2,
         offset: 72,
         shader_location: 10,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 80,
+        shader_location: 14,
     },
 ];
 

@@ -148,6 +148,7 @@ fn combined_style_is_atomic_and_omission_is_a_noop() {
         stroke_color: Some(Color::BLUE),
         stroke_width: Some(0.08),
         stroke_opacity: Some(0.7),
+        ..StyleUpdate::default()
     };
     family.set_style(update).unwrap();
     assert_eq!(scene.revision(), before.checked_next().unwrap());
@@ -185,6 +186,7 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
             stroke_color: Some(Color::RED),
             stroke_width: Some(0.03),
             stroke_opacity: Some(0.7),
+            ..StyleUpdate::default()
         })
         .unwrap();
     target
@@ -202,6 +204,7 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
             stroke_color: Some(Color::BLUE),
             stroke_width: Some(0.2),
             stroke_opacity: Some(0.35),
+            ..StyleUpdate::default()
         })
         .unwrap();
     let a_before = a.state().unwrap();
@@ -288,6 +291,7 @@ fn recursive_style_matching_copies_nested_family_root_paint() {
             stroke_color: Some(Color::BLUE),
             stroke_width: Some(0.11),
             stroke_opacity: Some(0.45),
+            ..StyleUpdate::default()
         })
         .unwrap();
 
@@ -322,6 +326,7 @@ fn empty_family_style_matches_fan_out_over_receiver_roots_and_leaves() {
             stroke_color: Some(Color::BLUE),
             stroke_width: Some(0.12),
             stroke_opacity: Some(0.45),
+            ..StyleUpdate::default()
         })
         .unwrap();
 
@@ -359,6 +364,7 @@ fn live_empty_family_style_matching_updates_receiver_subtree_atomically() {
             stroke_color: Some(Color::BLUE),
             stroke_width: Some(0.12),
             stroke_opacity: Some(0.45),
+            ..StyleUpdate::default()
         })
         .unwrap();
     scene.add_many(&[(&receiver).into()]).unwrap();
@@ -442,13 +448,11 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
         stroke_width: Some(0.05),
         ..Default::default()
     };
-    assert_eq!(
-        live.set_family_style(&source, update)
-            .unwrap()
-            .impacts()
-            .len(),
-        2
-    );
+    let updated = live.set_family_style(&source, update).unwrap();
+    assert_eq!(updated.impacts().len(), 3);
+    assert!(updated.impacts().iter().any(|impact| matches!(impact,
+        noon_core::SemanticMutationImpact::FamilyStyle { node } if *node == source.node_id())));
+    assert_eq!(source.own_style().unwrap().stroke_width, 0.05);
     let before = live.effective(&a).unwrap();
     assert!(live
         .set_style(

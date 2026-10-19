@@ -229,8 +229,8 @@ class VMobject(Mobject):
 
         Noon stores paint on the semantic object, so this re-applies the
         current root profile through the normal typed setters. The non-propagating
-        form remains root-local. Background strokes, nonzero sheen, and
-        background images are rejected before any writes.
+        form remains root-local. Nonzero sheen and background images are rejected
+        before any writes.
         """
         def current(name, getter):
             try:
@@ -258,14 +258,6 @@ class VMobject(Mobject):
             background_stroke_width = self.get_stroke_width(background=True)
         if background_stroke_opacity is None:
             background_stroke_opacity = self.get_stroke_opacity(background=True)
-        if (
-            background_stroke_color != _base.BLACK
-            or background_stroke_width != 0
-            or background_stroke_opacity != 1
-        ):
-            raise NotImplementedError(
-                "VMobject.init_colors requires shared background-stroke paint"
-            )
         if sheen_factor != 0:
             raise NotImplementedError(
                 "VMobject.init_colors requires shared gradient paint"

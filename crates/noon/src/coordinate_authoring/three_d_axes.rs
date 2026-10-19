@@ -1028,6 +1028,7 @@ mod tests {
             stroke_join: noon_core::StrokeJoin::Bevel,
             stroke_cap: noon_core::StrokeCap::Butt,
             object_opacity: 0.8,
+            ..SemanticStyle::default()
         };
 
         let tip = filled_tip_style(&style).unwrap();

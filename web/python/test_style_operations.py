@@ -10,6 +10,16 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class StyleOperationsTests(unittest.TestCase):
+    def test_background_queries_reject_staged_callbacks_before_reading_authored_state(self):
+        obj = identity_only_wrapper(compat.VMobject)
+        with (
+            patch("_manim_updaters._canonical_phase_context", return_value=object()),
+            patch.object(handles, "_typed_manim_observation") as query,
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "staged style observation"):
+                obj.get_stroke_opacity(background=True)
+            query.assert_not_called()
+
     def test_planar_shading_profile_is_shared_without_python_state(self):
         self.assertEqual(
             list(inspect.signature(compat.VMobject.set_shade_in_3d).parameters),
@@ -325,13 +335,29 @@ class StyleOperationsTests(unittest.TestCase):
             patch.object(vector, "get_stroke_color", side_effect=lambda background=False: compat._base.BLUE if background else black),
             patch.object(vector, "get_stroke_width", side_effect=lambda background=False: 2 if background else 4),
             patch.object(vector, "get_stroke_opacity", side_effect=lambda background=False: 0.5 if background else 0.7),
+            patch.object(vector, "get_fill_color", return_value=compat._base.RED),
+            patch.object(vector, "get_fill_opacity", return_value=0.6),
             patch.object(vector, "get_sheen_factor", return_value=0),
+            patch.object(vector, "get_sheen_direction", return_value=[-1, 1, 0]),
             patch.object(vector, "get_background_image", return_value=None),
             patch.object(vector, "set_fill") as set_fill,
+            patch.object(vector, "set_stroke") as set_stroke,
+            patch.object(vector, "set_background_stroke") as set_background_stroke,
+            patch.object(vector, "set_sheen") as set_sheen,
         ):
-            with self.assertRaisesRegex(NotImplementedError, "background-stroke paint"):
-                vector.init_colors()
-            set_fill.assert_not_called()
+            self.assertIs(vector.init_colors(), vector)
+            set_fill.assert_called_once_with(
+                color=compat._base.RED, opacity=0.6, family=True
+            )
+            set_background_stroke.assert_called_once_with(
+                color=compat._base.BLUE, width=2, opacity=0.5, family=True
+            )
+            set_stroke.assert_called_once_with(
+                color=black, width=4, opacity=0.7, family=True
+            )
+            set_sheen.assert_called_once_with(
+                factor=0, direction=[-1, 1, 0], family=True
+            )
 
     def test_update_rgbas_array_routes_solid_channels_to_shared_paint(self):
         self.assertEqual(
@@ -371,19 +397,32 @@ class StyleOperationsTests(unittest.TestCase):
             )
             self.assertEqual(set_stroke.call_args.kwargs["background"], True)
 
-        with patch.object(vector, "set_fill") as set_fill:
+        with (
+            patch.object(vector, "set_fill") as set_fill,
+            patch.object(vector, "set_stroke", return_value=vector) as set_stroke,
+        ):
             with self.assertRaisesRegex(NotImplementedError, "multi-color RGBA"):
                 vector.update_rgbas_array("fill_rgbas", ["#FF0000", "#0000FF"])
             with self.assertRaisesRegex(NotImplementedError, "unsupported RGBA array"):
                 vector.update_rgbas_array("custom_rgbas", "#FF0000")
             set_fill.assert_not_called()
+            set_stroke.assert_not_called()
+
+            self.assertIs(
+                vector.update_rgbas_array("background_stroke_rgbas", compat._base.RED),
+                vector,
+            )
+            set_stroke.assert_called_once_with(
+                color=compat._base.RED,
+                opacity=None,
+                background=True,
+                family=False,
+            )
 
         vector.sheen_factor = 0.25
         with self.assertRaisesRegex(NotImplementedError, "shared gradient paint"):
             vector.update_rgbas_array("fill_rgbas", "#FF0000")
         del vector.sheen_factor
-        with self.assertRaisesRegex(NotImplementedError, "background strokes"):
-            vector.update_rgbas_array("background_stroke_rgbas", compat._base.RED)
 
     def test_sheen_direction_mutators_use_shared_rust_detached_and_live_routes(self):
         obj = identity_only_wrapper(compat.VMobject)
@@ -566,14 +605,28 @@ class StyleOperationsTests(unittest.TestCase):
             [compat._base.RIGHT, compat._base.UP],
         )
 
-        unsupported = (
-            lambda: obj.set_stroke(color=compat._base.RED, width=2, background=True),
-            lambda: obj.set_background_stroke(color=compat._base.RED, width=2),
-            lambda: obj.set_sheen(0.5),
-        )
+        unsupported = (lambda: obj.set_sheen(0.5),)
         for operation in unsupported:
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
                 operation()
+        bridge = SimpleNamespace(setStyle=Mock())
+        with patch.object(handles, "_style_target", return_value=(bridge, None, "")):
+            self.assertIs(
+                obj.set_stroke(color=compat._base.RED, width=2, background=True), obj
+            )
+            self.assertIs(
+                obj.set_background_stroke(color=compat._base.BLUE, width=3, opacity=0.4), obj
+            )
+        self.assertEqual(bridge.setStyle.call_count, 2)
+        red, blue = compat._base.RED, compat._base.BLUE
+        self.assertEqual(
+            bridge.setStyle.call_args_list[0].args[-7:],
+            (True, red.red, red.green, red.blue, red.alpha, 0.02, None),
+        )
+        self.assertEqual(
+            bridge.setStyle.call_args_list[1].args[-7:],
+            (True, blue.red, blue.green, blue.blue, blue.alpha, 0.03, 0.4),
+        )
         with self.assertRaises(TypeError):
             obj.set_background_stroke(unrecognized_option=True)
 
@@ -602,20 +655,23 @@ class StyleOperationsTests(unittest.TestCase):
             self.assertIs(obj.set_style(fill_color='#FF0000', fill_opacity=0.4,
                                         stroke_color='#0000FF', stroke_width=6), obj)
             bridge.setStyle.assert_called_once_with(True, 1, 0, 0, 1, 0.4,
-                                                   True, 0, 0, 1, 1, 0.06, None)
+                                                   True, 0, 0, 1, 1, 0.06, None,
+                                                   False, 0, 0, 0, 1, None, None)
             with self.assertRaises(ValueError):
                 obj.set_style(fill_color='#00FF00', stroke_opacity=2)
             self.assertEqual(bridge.setStyle.call_count, 1)
-            with self.assertRaises(NotImplementedError):
-                obj.set_style(fill_color='#00FF00', background_stroke_opacity=0.5)
-            self.assertEqual(bridge.setStyle.call_count, 1)
+            self.assertIs(
+                obj.set_style(fill_color='#00FF00', background_stroke_opacity=0.5), obj
+            )
+            self.assertEqual(bridge.setStyle.call_count, 2)
+            self.assertEqual(bridge.setStyle.call_args.args[-7:], (False, 0, 0, 0, 1, None, 0.5))
             with self.assertRaises(NotImplementedError):
                 obj.set_style(
                     fill_color='#00FF00',
                     sheen_factor=0.5,
                     sheen_direction=compat._base.UP,
                 )
-            self.assertEqual(bridge.setStyle.call_count, 1)
+            self.assertEqual(bridge.setStyle.call_count, 2)
             self.assertIs(obj.set_style(sheen_direction=compat._base.UP), obj)
             self.assertIs(obj.set_style(
                 sheen_factor=0.0,

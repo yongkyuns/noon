@@ -3846,6 +3846,47 @@ def _family_own_paint_probe(api):
         [rgb(member) for member in restorable_style.submobjects],
     ]
 
+    leaf_background = api.Square(color=api.RED)
+    leaf_background_returned_self = leaf_background.set_stroke(
+        color=api.BLUE, width=3, opacity=0.4, background=True
+    ) is leaf_background
+    leaf_background_observation = {
+        "returned_self": leaf_background_returned_self,
+        "color": _paint_rgb(leaf_background.get_stroke_color(background=True)),
+        "width": leaf_background.get_stroke_width(background=True),
+        "opacity": leaf_background.get_stroke_opacity(background=True),
+        "rgba": [
+            [float(channel) for channel in row]
+            for row in leaf_background.get_stroke_rgbas(background=True)
+        ],
+    }
+    leaf_background.set_opacity(0.6)
+    leaf_background_observation["set_opacity"] = leaf_background.get_stroke_opacity(
+        background=True
+    )
+    leaf_background.fade(0.5)
+    leaf_background_observation["fade"] = leaf_background.get_stroke_opacity(
+        background=True
+    )
+
+    recursive_background = api.VGroup(
+        api.Circle(color=api.RED), api.VGroup(api.Square(color=api.BLUE))
+    )
+    recursive_background_returned_self = recursive_background.set_background_stroke(
+        color=api.GREEN, width=2, opacity=0.35
+    ) is recursive_background
+    recursive_background_observation = [
+        recursive_background_returned_self,
+        [
+            [
+                _paint_rgb(member.get_stroke_color(background=True)),
+                member.get_stroke_width(background=True),
+                member.get_stroke_opacity(background=True),
+            ]
+            for member in recursive_background.get_family()
+        ],
+    ]
+
     return {
         "plain_default": [rgb(plain), [rgb(member) for member in plain.submobjects]],
         "explicit_constructor_color": [
@@ -3859,6 +3900,8 @@ def _family_own_paint_probe(api):
         ],
         "vgroup_root_only_set_style": root_style_observation,
         "vgroup_root_only_background_stroke_setter": root_background_stroke_observation,
+        "leaf_background_stroke": leaf_background_observation,
+        "recursive_background_stroke": recursive_background_observation,
         "vgroup_root_full_style": full_style_observation,
         "vgroup_root_only_match_style": root_only_match,
         "vgroup_recursive_match_style": recursive_match,
@@ -4625,6 +4668,9 @@ def _vmobject_init_colors_probe(api, scene=None):
             stroke_opacity=0.7,
             family=False,
         )
+        first.set_background_stroke(color=api.BLUE, width=2, opacity=0.2)
+        second.set_background_stroke(color=api.RED, width=3, opacity=0.3)
+        family.set_background_stroke(color=api.GREEN, width=5, opacity=0.6, family=False)
         if scene is not None:
             scene.add(family)
         return family, first, second
@@ -4638,6 +4684,9 @@ def _vmobject_init_colors_probe(api, scene=None):
             "stroke_color": _paint_rgb(value.get_stroke_color()),
             "stroke_width": _round_float(value.get_stroke_width()),
             "stroke_opacity": _round_float(value.get_stroke_opacity()),
+            "background_stroke_color": _paint_rgb(value.get_stroke_color(background=True)),
+            "background_stroke_width": _round_float(value.get_stroke_width(background=True)),
+            "background_stroke_opacity": _round_float(value.get_stroke_opacity(background=True)),
         }
 
     before = {"root": style(family), "children": [style(first), style(second)]}
@@ -4788,7 +4837,20 @@ def _update_rgbas_array_probe(api, scene=None):
         "fill_rgbas", color=api.GREEN, opacity=0.35
     ) is family
     family_after = {"root": style(family), "child": style(child)}
+    value.set_background_stroke(color=api.BLUE, width=4, opacity=0.2)
+    background_returns = [
+        value.update_rgbas_array("background_stroke_rgbas", color=api.GREEN) is value,
+        value.update_rgbas_array("background_stroke_rgbas", opacity=0.45) is value,
+        value.update_rgbas_array("background_stroke_rgbas") is value,
+    ]
+    background = {
+        "returns": background_returns,
+        "color": _paint_rgb(value.get_stroke_color(background=True)),
+        "width": _round_float(value.get_stroke_width(background=True)),
+        "opacity": _round_float(value.get_stroke_opacity(background=True)),
+    }
     return {
+        "background": background,
         "returns": returned,
         "expected": {
             "yellow": _paint_rgb(api.YELLOW),
@@ -5838,10 +5900,10 @@ UNSUPPORTED = {
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "vmobject_shade_in_3d": "VMobject and VGroup accept the pinned planar default shade_in_3d=False, expose the false state, and preserve set_shade_in_3d(False) identity in detached/live fixtures. Enabling 3D vector shading or z_index_as_group is rejected before mutation because spatial shading and group-z-index semantics are not backed by shared renderer/runtime state. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L119-L149 and #L735-L742.",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
-    "background_stroke_and_sheen": "Default background-stroke behavior is supported for leaves. VGroup root-only family=False background color, width, and opacity are retained in shared Rust metadata, but non-default leaf/recursive background paint, staged callback reads/writes, and nonzero sheen factors/gradient rendering still require shared style/renderer channels. Sheen direction set/query/rotation metadata is covered by detached and live differential fixtures.",
+    "background_stroke_and_sheen": "Solid leaf and recursive background-stroke paint uses shared Rust style and layered path rendering. Detached/live fixtures exercise background setters/getters, nested family roots and leaves, init_colors, scalar RGBA updates, leaf opacity, and fade. Staged callback background reads/writes, nonzero sheen factors, and gradient rendering remain unsupported; pinned background-stroke raster parity remains unqualified. Sheen direction set/query/rotation metadata has detached/live fixtures.",
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
-    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style/set_background_stroke(family=False) in detached/live fixtures. Root background color, width, and opacity publish atomically with foreground style and leave children unchanged; copy and become retain the metadata. The family root has no points, so this retained background-stroke profile has no raster effect. Staged callback reads/writes, recursive leaf background-stroke paint, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
+    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style/set_background_stroke(family=False) in detached/live fixtures. Root background color, width, and opacity publish atomically with foreground style and leave children unchanged; copy and become retain the metadata. The family root has no points, so this retained background-stroke profile has no raster effect. Recursive solid background-stroke setters now update nested family roots and leaves atomically. Staged callback background reads/writes, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported.",
 }
 
 

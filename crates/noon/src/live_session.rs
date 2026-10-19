@@ -3091,7 +3091,9 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         update: crate::StyleUpdate,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| update.apply(style))
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.style_update_transaction(update)?)
     }
 
     /// Publish a sheen-direction update on one object or its full semantic
@@ -3832,6 +3834,7 @@ mod tests {
                 stroke_join: style.stroke_join,
                 stroke_cap: style.stroke_cap,
                 object_opacity: f64::from(style.opacity),
+                ..SemanticStyle::default()
             }
         );
         assert!(live.session.take_frame_changes().is_empty());

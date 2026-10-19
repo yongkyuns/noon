@@ -60,6 +60,7 @@ impl SvgDefaultStyle {
             stroke_color: self.stroke_color.or(self.color),
             stroke_width: self.stroke_width,
             stroke_opacity: self.stroke_opacity.or(self.opacity),
+            ..StyleUpdate::default()
         }
     }
 

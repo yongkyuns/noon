@@ -24,7 +24,9 @@ struct VertexInput {
     @location(12) extrusion: vec2<f32>,
     @location(13) screen_stroke_width: f32,
     @location(14) stroke_metadata: vec3<f32>,
+    @location(15) background_stroke: vec4<f32>,
 };
+const PATH_BACKGROUND_STROKE_FLAG: u32 = 0x80000000u;
 
 fn projected_tangent(world: mat4x4<f32>, tangent: vec2<f32>, clip: vec4<f32>, fixed: u32) -> vec2<f32> {
     if fixed != 0u {
@@ -142,6 +144,9 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     var output: VertexOutput;
     output.position = clip;
     output.color = select(input.fill, input.stroke, (input.surface & 1u) != 0u);
+    if (input.surface & PATH_BACKGROUND_STROKE_FLAG) != 0u {
+        output.color = input.background_stroke;
+    }
     output.opacity = input.opacity;
     return output;
 }

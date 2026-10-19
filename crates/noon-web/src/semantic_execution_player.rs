@@ -1448,6 +1448,48 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_stroke_width(target))
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| {
+            target.background_stroke_color()?;
+            let color = live
+                .effective(target)?
+                .style
+                .background_stroke
+                .map(|color| noon_core::Color {
+                    alpha: 1.0,
+                    ..color
+                });
+            Ok(color)
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_width(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(f64::from(
+                live.effective(target)?.style.background_stroke_width,
+            ))
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_opacity(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(live
+                .effective(target)?
+                .style
+                .background_stroke
+                .map_or(1.0, |color| f64::from(color.alpha)))
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_stroke_cap(
         &mut self,
         target: &noon::Mobject,

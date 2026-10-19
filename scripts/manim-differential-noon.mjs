@@ -397,9 +397,6 @@ def rejected_without_style_change(operation):
         return style_query_contract(point_owner) == before
     return False
 style_mutator_rejections = {
-    "background_stroke": rejected_without_style_change(
-        lambda: point_owner.set_background_stroke(color=noon.BLUE, width=2)
-    ),
     "sheen_factor": rejected_without_style_change(
         lambda: point_owner.set_sheen(0.5)
     ),
@@ -690,6 +687,30 @@ assert abs(float(root_background_stroke[2]) - 0.4) <= 1e-6, root_background_stro
 assert not _compare(root_background_stroke[3], root_background_stroke[4], 1e-6), (
     root_background_stroke[3], root_background_stroke[4]
 )
+leaf_background_stroke = family_paint["leaf_background_stroke"]
+assert leaf_background_stroke["returned_self"] is True, leaf_background_stroke
+assert not _compare(
+    leaf_background_stroke["color"],
+    [float(noon.BLUE.red), float(noon.BLUE.green), float(noon.BLUE.blue)],
+    1e-6,
+), (
+    leaf_background_stroke
+)
+assert abs(float(leaf_background_stroke["width"]) - 3.0) <= 1e-6, leaf_background_stroke
+assert abs(float(leaf_background_stroke["opacity"]) - 0.4) <= 1e-6, leaf_background_stroke
+assert abs(float(leaf_background_stroke["set_opacity"]) - 0.6) <= 1e-6, leaf_background_stroke
+assert abs(float(leaf_background_stroke["fade"]) - 0.3) <= 1e-6, leaf_background_stroke
+recursive_background_stroke = family_paint["recursive_background_stroke"]
+assert recursive_background_stroke[0] is True, recursive_background_stroke
+assert len(recursive_background_stroke[1]) == 4, recursive_background_stroke
+for color, width, opacity in recursive_background_stroke[1]:
+    assert not _compare(
+        color,
+        [float(noon.GREEN.red), float(noon.GREEN.green), float(noon.GREEN.blue)],
+        1e-6,
+    ), recursive_background_stroke
+    assert abs(float(width) - 2.0) <= 1e-6, recursive_background_stroke
+    assert abs(float(opacity) - 0.35) <= 1e-6, recursive_background_stroke
 family_paint_play = observations["family_own_paint_play_live"]
 def color_components(color):
     return (color.red, color.green, color.blue)
@@ -940,7 +961,6 @@ json.dumps({
   assert.deepEqual(product.style_queries.round_trip.sheen_direction, [-1, 1, 0]);
   assert.deepEqual(product.style_mutator_returns_self, [true, true, true, true, true, true]);
   assert.deepEqual(product.style_mutator_rejections, {
-    background_stroke: true,
     sheen_factor: true,
     cap_style: false,
   });
@@ -1052,7 +1072,8 @@ json.dumps({
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
   const assertStyleNear = (actual, expected, message) => {
-    for (const key of ["fill_color", "stroke_color"]) {
+    for (const key of ["fill_color", "stroke_color", "background_stroke_color"]) {
+      if (!(key in expected)) continue;
       assert.equal(actual[key].length, expected[key].length,
         `${message}: ${key} dimensions`);
       for (let index = 0; index < expected[key].length; index += 1) {
@@ -1060,7 +1081,8 @@ json.dumps({
           `${message}: ${key}[${index}] (${actual[key][index]} vs ${expected[key][index]})`);
       }
     }
-    for (const key of ["fill_opacity", "stroke_width", "stroke_opacity"]) {
+    for (const key of ["fill_opacity", "stroke_width", "stroke_opacity", "background_stroke_width", "background_stroke_opacity"]) {
+      if (!(key in expected)) continue;
       assert.ok(Math.abs(actual[key] - expected[key]) <= 1e-5,
         `${message}: ${key} (${actual[key]} vs ${expected[key]})`);
     }
@@ -1099,6 +1121,11 @@ json.dumps({
   }
   for (const name of ["update_rgbas_array", "update_rgbas_array_live"]) {
     const profile = observations[name];
+    assert.deepEqual(profile.background.returns, [true, true, true]);
+    assert.ok(profile.background.color.every((channel, index) =>
+      Math.abs(channel - profile.expected.green[index]) <= 1e-5));
+    assert.ok(Math.abs(profile.background.width - 4) <= 1e-5);
+    assert.ok(Math.abs(profile.background.opacity - 0.45) <= 1e-5);
     assert.deepEqual(profile.returns, [true, true, true, true, true],
       `${name}: each scalar update returns the same VMobject`);
     assertStyleNear(profile.after_fill_color, {

@@ -25,6 +25,10 @@ pub(crate) fn eligible(mesh: &TessellatedPath) -> bool {
             .vertices
             .iter()
             .any(|v| v.surface == PathSurface::Stroke)
+        && !mesh
+            .vertices
+            .iter()
+            .any(|v| v.surface == PathSurface::BackgroundStroke)
         && mesh.vertices.iter().all(|v| {
             v.position == v.target_position
                 && v.position.x.is_finite()

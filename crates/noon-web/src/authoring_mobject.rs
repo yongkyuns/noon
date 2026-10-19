@@ -69,7 +69,23 @@ pub(crate) fn style_update(
         )?,
         stroke_width,
         stroke_opacity,
+        ..noon::StyleUpdate::default()
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn style_update_with_background_stroke(
+    mut update: noon::StyleUpdate,
+    enabled: bool,
+    rgba: [f64; 4],
+    width: Option<f64>,
+    opacity: Option<f64>,
+) -> Result<noon::StyleUpdate, String> {
+    let [red, green, blue, alpha] = rgba;
+    update.background_stroke_color = family_color(enabled, red, green, blue, alpha)?;
+    update.background_stroke_width = width;
+    update.background_stroke_opacity = opacity;
+    Ok(update)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1398,6 +1414,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = super::style_update(
                 fill_enabled,
@@ -1413,6 +1436,19 @@ mod wasm {
                 stroke_alpha,
                 stroke_width,
                 stroke_opacity,
+            )
+            .map_err(js_error)?;
+            let update = super::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
             )
             .map_err(js_error)?;
             self.semantic_family()?.set_style(update).map_err(js_error)
@@ -2614,9 +2650,22 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = backgroundStrokeColor)]
+        pub fn background_stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .background_stroke_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(getter, js_name = strokeWidth)]
         pub fn stroke_width(&self) -> Result<f64, JsValue> {
             self.handle.stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = backgroundStrokeWidth)]
+        pub fn background_stroke_width(&self) -> Result<f64, JsValue> {
+            self.handle.background_stroke_width().map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = strokeCap)]
@@ -2709,6 +2758,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = super::style_update(
                 fill_enabled,
@@ -2724,6 +2780,19 @@ mod wasm {
                 stroke_alpha,
                 stroke_width,
                 stroke_opacity,
+            )
+            .map_err(js_error)?;
+            let update = super::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
             )
             .map_err(js_error)?;
             self.handle.set_style(update).map_err(js_error)
@@ -3397,6 +3466,11 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = strokeOpacity)]
         pub fn stroke_opacity(&self) -> Result<f64, JsValue> {
             Ok(self.handle.stroke_opacity().map_err(js_error)?)
+        }
+
+        #[wasm_bindgen(getter, js_name = backgroundStrokeOpacity)]
+        pub fn background_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.handle.background_stroke_opacity().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setOpacity)]

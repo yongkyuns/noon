@@ -2,6 +2,7 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
+        edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
         edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
         edit_stroke_width, interpolate_manim_color, interpolate_manim_scalar,
@@ -20,6 +21,9 @@ pub struct StyleUpdate {
     pub stroke_color: Option<Color>,
     pub stroke_width: Option<f64>,
     pub stroke_opacity: Option<f64>,
+    pub background_stroke_color: Option<Color>,
+    pub background_stroke_width: Option<f64>,
+    pub background_stroke_opacity: Option<f64>,
 }
 
 impl StyleUpdate {
@@ -30,6 +34,12 @@ impl StyleUpdate {
             self.stroke_color,
             self.stroke_width,
             self.stroke_opacity,
+        )?;
+        background_stroke(
+            style,
+            self.background_stroke_color,
+            self.background_stroke_width,
+            self.background_stroke_opacity,
         )
     }
 }
@@ -41,6 +51,9 @@ pub(crate) fn match_paint(source: &mut SemanticStyle, target: &SemanticStyle) {
     source.stroke = target.stroke.clone();
     source.stroke_opacity = target.stroke_opacity;
     source.stroke_width = target.stroke_width;
+    source.background_stroke = target.background_stroke.clone();
+    source.background_stroke_opacity = target.background_stroke_opacity;
+    source.background_stroke_width = target.background_stroke_width;
 }
 
 impl Mobject {
@@ -100,6 +113,30 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
     }
     if let Some(opacity) = opacity {
         edit_stroke_opacity(style, opacity)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn background_stroke<S: PaintStyleEdit>(
+    style: &mut S,
+    color: Option<Color>,
+    width: Option<f64>,
+    opacity: Option<f64>,
+) -> Result<(), AuthoringError> {
+    if let Some(color) = color {
+        edit_background_stroke_color(
+            style,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )?;
+    }
+    if let Some(width) = width {
+        edit_background_stroke_width(style, width)?;
+    }
+    if let Some(opacity) = opacity {
+        edit_background_stroke_opacity(style, opacity)?;
     }
     Ok(())
 }
@@ -426,9 +463,49 @@ impl MobjectFamily {
         .map_err(AuthoringError::from)
     }
 
-    /// Atomically update supplied paint fields on each unique leaf.
+    /// Atomically update supplied paint fields on every family root and leaf.
     pub fn set_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
-        self.edit_style(|style| update.apply(style))
+        self.style_update_transaction(update)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn style_update_transaction(
+        &self,
+        update: StyleUpdate,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        update.apply(&mut SemanticStyle::default())?;
+        let store = self.integration_store().borrow();
+        let nodes = store
+            .ordered_authoring_nodes(self.node_id())
+            .map_err(AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        for node in nodes {
+            if let Some(previous) = store.node(node).and_then(|entry| entry.family_style()) {
+                let mut style = previous.clone();
+                update.apply(&mut style)?;
+                transaction.set_family_style_with_background_stroke_update(
+                    node,
+                    style,
+                    update.background_stroke_color,
+                    update.background_stroke_width,
+                    update.background_stroke_opacity,
+                );
+            } else {
+                let previous = &store
+                    .semantic_object_state_checked(node)
+                    .map_err(AuthoringError::from)?
+                    .style;
+                let mut style = previous.clone();
+                update.apply(&mut style)?;
+                if style != *previous {
+                    transaction.replace_style(node, style);
+                }
+            }
+        }
+        Ok(transaction)
     }
 
     /// Match root and leaf paint through the shared topology/alias pairing contract.
@@ -970,6 +1047,7 @@ mod tests {
                     stroke_color: Some(Color::GREEN),
                     stroke_width: Some(3.0),
                     stroke_opacity: Some(0.5),
+                    ..StyleUpdate::default()
                 },
                 Some(Color::BLACK),
                 Some(0.0),
@@ -984,6 +1062,7 @@ mod tests {
                     stroke_color: Some(Color::rgba(0.0, 0.0, 1.0, 1.0)),
                     stroke_width: Some(2.0),
                     stroke_opacity: Some(0.25),
+                    ..StyleUpdate::default()
                 },
                 Some(Color::rgba(0.0, 1.0, 0.0, 1.0)),
                 Some(2.0),
@@ -997,6 +1076,7 @@ mod tests {
                 stroke_color: Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
                 stroke_width: Some(6.0),
                 stroke_opacity: Some(0.75),
+                ..StyleUpdate::default()
             },
             Some(Color::WHITE),
             Some(6.0),
@@ -1095,6 +1175,7 @@ mod tests {
                     stroke_color: Some(Color::BLUE),
                     stroke_width: Some(4.0),
                     stroke_opacity: Some(0.45),
+                    ..StyleUpdate::default()
                 },
                 Some(Color::BLUE),
                 Some(0.06),
@@ -1218,6 +1299,7 @@ mod tests {
                 stroke_color: Some(Color::GREEN),
                 stroke_opacity: Some(0.75),
                 stroke_width: Some(2.5),
+                ..StyleUpdate::default()
             })
             .unwrap();
         let expected = target.own_style().unwrap();

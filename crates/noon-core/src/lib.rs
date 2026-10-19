@@ -511,6 +511,12 @@ pub struct Style {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    /// Solid stroke painted beneath the fill and foreground stroke.
+    #[serde(default)]
+    pub background_stroke: Option<Color>,
+    /// Background width uses `stroke_width_mode`, like the foreground stroke.
+    #[serde(default)]
+    pub background_stroke_width: f32,
     #[serde(default, skip_serializing_if = "StrokeWidthMode::is_scale_with_object")]
     pub stroke_width_mode: StrokeWidthMode,
     #[serde(default)]
@@ -526,6 +532,8 @@ impl Default for Style {
             fill: Some(Color::WHITE),
             stroke: None,
             stroke_width: 1.0,
+            background_stroke: Some(Color::BLACK),
+            background_stroke_width: 0.0,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,

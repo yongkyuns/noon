@@ -22,6 +22,7 @@ pub(crate) use bounds::{
     transformed_rect_layout_bounds,
 };
 pub(crate) use style::{
+    edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fade_occurrences,
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
@@ -1481,6 +1482,9 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke: Some(SemanticPaint::Solid(color)),
         stroke_opacity: 1.0,
         stroke_width: 0.04,
+        background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+        background_stroke_opacity: 1.0,
+        background_stroke_width: 0.0,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
         // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
@@ -1527,6 +1531,21 @@ pub(crate) fn interpolate_manim_vmobject_style_values(
     style.stroke_opacity =
         interpolate_manim_scalar(start.stroke_opacity, end.stroke_opacity, alpha)?;
     style.stroke_width = interpolate_manim_scalar(start.stroke_width, end.stroke_width, alpha)?;
+    style.background_stroke = interpolate_manim_paint(
+        start.background_stroke.as_ref(),
+        end.background_stroke.as_ref(),
+        alpha,
+    )?;
+    style.background_stroke_opacity = interpolate_manim_scalar(
+        start.background_stroke_opacity,
+        end.background_stroke_opacity,
+        alpha,
+    )?;
+    style.background_stroke_width = interpolate_manim_scalar(
+        start.background_stroke_width,
+        end.background_stroke_width,
+        alpha,
+    )?;
 
     if start_direction.dimensions != end_direction.dimensions {
         return Err(AuthoringError::Unsupported(

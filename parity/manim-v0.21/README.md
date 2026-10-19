@@ -239,20 +239,32 @@ https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectori
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/utils/color/core.py#L148-L208.
 
 `VMobject.init_colors(propagate_colors=True)` now reapplies the family root's
-fill and stroke through shared Rust family paint operations. With
+fill, foreground stroke, and background stroke through shared Rust family paint operations. With
 `propagate_colors=False`, each member keeps its existing Rust-owned style. The
 detached and active-live product fixtures check root/child paint and receiver
-identity; unsupported non-default background strokes, nonzero sheen, and
-background images reject before mutation. Exact ManimCE comparison is included
+identity; nonzero sheen and background images reject before mutation. Exact ManimCE comparison is included
 in hosted qualification because the pinned package is unavailable locally.
 Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L182-L209.
 
-`VMobject.update_rgbas_array()` now routes scalar solid fill and stroke color
+`VMobject.update_rgbas_array()` now routes scalar solid fill, foreground stroke,
+and background stroke color
 or opacity updates through root-local Rust paint setters. Color alpha remains
 independent from the explicit opacity argument. Detached/live probes cover
 color-only, opacity-only, no-op, alpha-bearing hex input, VGroup root-only
 changes, and child-style preservation. Multi-color arrays, arbitrary
-Python-owned RGBA arrays, unknown channels, and non-default background strokes
-or nonzero sheen remain explicitly unsupported. Pinned source:
+Python-owned RGBA arrays, unknown channels, and nonzero sheen remain explicitly
+unsupported. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L241-L265.
+
+
+Solid background strokes now have shared Rust color, opacity, and width fields
+and render beneath fill and foreground strokes. `set_stroke(background=True)`,
+`set_background_stroke()`, and atomic `set_style()` apply to leaves and recursive
+family roots/members; `family=False` on a VGroup updates only its point-free root.
+Detached/live product probes exercise nested root and leaf paint, scalar background
+RGBA updates, color propagation, and leaf opacity/fade. Native tests protect
+rollback, primitive-to-path rendering, width-cache invalidation, GPU attribute
+layout, and raster layer order. Staged callback background reads/writes,
+nonzero sheen, multi-color per-object arrays, and background images remain
+unsupported. Pinned ManimCE raster parity for this channel is still unqualified.

@@ -19,6 +19,7 @@ const ROUND_CAP_SEGMENTS: usize = 8;
 pub enum PathSurface {
     Fill,
     Stroke,
+    BackgroundStroke,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,6 +209,68 @@ pub fn tessellate_styled_with_fill(
         fill_enabled,
         false,
     )
+}
+
+/// Tessellate a Manim-style background stroke beneath the fill and foreground
+/// stroke. Both widths use the path's coordinate space and the same join/cap
+/// style.
+pub fn tessellate_styled_with_background_stroke(
+    path: &VectorPath,
+    stroke_width: f32,
+    background_stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, GeometryError> {
+    if !background_stroke_width.is_finite() || background_stroke_width < 0.0 {
+        return Err(GeometryError::InvalidStrokeWidth(background_stroke_width));
+    }
+    let tessellate = |width, fill| {
+        if path.morph_target().is_some() {
+            tessellate_styled_with_fill_preserving_morph_order(
+                path,
+                width,
+                stroke_join,
+                stroke_cap,
+                fill,
+            )
+        } else {
+            tessellate_styled_with_fill(path, width, stroke_join, stroke_cap, fill)
+        }
+    };
+    let mut foreground = tessellate(stroke_width, fill_enabled)?;
+    if background_stroke_width == 0.0 {
+        return Ok(foreground);
+    }
+
+    let mut background = tessellate(background_stroke_width, false)?;
+    if background.indices.is_empty() {
+        return Ok(foreground);
+    }
+    for vertex in &mut background.vertices {
+        vertex.surface = PathSurface::BackgroundStroke;
+    }
+    let foreground_offset = u32::try_from(background.vertices.len()).map_err(|_| {
+        GeometryError::Tessellation("background stroke vertex count overflow".to_owned())
+    })?;
+    let mut vertices = background.vertices;
+    vertices.append(&mut foreground.vertices);
+    let mut indices = background.indices;
+    indices.extend(foreground.indices.into_iter().map(|index| {
+        index
+            .checked_add(foreground_offset)
+            .expect("foreground path index overflow validated by vertex count")
+    }));
+    let bounds = mesh_bounds(&vertices);
+    Ok(TessellatedPath {
+        vertices,
+        indices,
+        bounds,
+        stroke_length: foreground.stroke_length,
+        morphing: foreground.morphing,
+        polygonal_stroke: foreground.polygonal_stroke,
+        reveal_points: foreground.reveal_points,
+    })
 }
 
 /// Tessellate a unit-width stroke while retaining Lyon's centerline and local
@@ -2059,6 +2122,55 @@ fn mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_stroke_is_layered_under_fill_and_foreground_stroke() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        let mesh = tessellate_styled_with_background_stroke(
+            &path,
+            0.1,
+            0.3,
+            StrokeJoin::Round,
+            StrokeCap::Round,
+            true,
+        )
+        .unwrap();
+        let layers = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|triangle| mesh.vertices[triangle[0] as usize].surface)
+            .fold(Vec::new(), |mut layers, surface| {
+                if layers.last() != Some(&surface) {
+                    layers.push(surface);
+                }
+                layers
+            });
+        assert_eq!(
+            layers,
+            vec![
+                PathSurface::BackgroundStroke,
+                PathSurface::Fill,
+                PathSurface::Stroke,
+            ]
+        );
+        assert!(mesh
+            .vertices
+            .iter()
+            .all(|vertex| { vertex.position.x.is_finite() && vertex.position.y.is_finite() }));
+        assert!(tessellate_styled_with_background_stroke(
+            &path,
+            0.1,
+            f32::NAN,
+            StrokeJoin::Round,
+            StrokeCap::Round,
+            true,
+        )
+        .is_err());
+    }
 
     #[test]
     fn compound_fill_matches_nonzero_winding_for_overlap_and_opposing_holes() {

@@ -1243,6 +1243,44 @@ impl CanonicalAuthoringScene {
         )
     }
     #[cfg(target_arch = "wasm32")]
+    fn mobject_background_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::background_stroke_color,
+            crate::SemanticExecutionPlayer::live_effective_background_stroke_color,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_background_stroke_width(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::background_stroke_width,
+            crate::SemanticExecutionPlayer::live_effective_background_stroke_width,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_background_stroke_opacity(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            noon::Mobject::background_stroke_opacity,
+            |player, handle| {
+                handle
+                    .background_stroke_opacity()
+                    .map_err(AuthoringFailure::from)?;
+                player.live_effective_background_stroke_opacity(handle)
+            },
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
     fn mobject_stroke_cap(
         &mut self,
         target: &noon::Mobject,
@@ -7806,6 +7844,34 @@ mod wasm {
                 .mobject_stroke_width(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = queryMobjectBackgroundStrokeColor)]
+        pub fn query_mobject_background_stroke_color(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Option<crate::WasmManimColor>, JsValue> {
+            self.inner
+                .mobject_background_stroke_color(target.semantic_mobject())
+                .map(|color| color.map(crate::WasmManimColor::from_color))
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectBackgroundStrokeWidth)]
+        pub fn query_mobject_background_stroke_width(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_background_stroke_width(target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectBackgroundStrokeOpacity)]
+        pub fn query_mobject_background_stroke_opacity(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_background_stroke_opacity(target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = queryMobjectStrokeCap)]
         pub fn query_mobject_stroke_cap(
             &mut self,
@@ -9797,6 +9863,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = crate::authoring_mobject::style_update(
                 fill_enabled,
@@ -9812,6 +9885,19 @@ mod wasm {
                 stroke_alpha,
                 stroke_width,
                 stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            let update = crate::authoring_mobject::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
             )
             .map_err(typed_js_error)?;
             self.inner
@@ -9945,6 +10031,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = crate::authoring_mobject::style_update(
                 fill_enabled,
@@ -9960,6 +10053,19 @@ mod wasm {
                 stroke_alpha,
                 stroke_width,
                 stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            let update = crate::authoring_mobject::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
             )
             .map_err(typed_js_error)?;
             self.inner

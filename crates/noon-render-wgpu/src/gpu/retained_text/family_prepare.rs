@@ -499,6 +499,8 @@ impl RetainedFramePreparer {
                             fill: Some(fill),
                             stroke: None,
                             stroke_width: 0.0,
+                            background_stroke: object.style.background_stroke,
+                            background_stroke_width: object.style.background_stroke_width,
                             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                             stroke_join: StrokeJoin::Round,
                             stroke_cap: StrokeCap::Round,

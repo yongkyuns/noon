@@ -272,7 +272,7 @@ enum PersistentTargetNode {
     Family {
         members: Vec<SemanticNodeId>,
         own_color: crate::Color,
-        own_style: noon_core::SemanticStyle,
+        own_style: Box<noon_core::SemanticStyle>,
         own_background_stroke_color: crate::Color,
         own_background_stroke_width: f64,
         own_background_stroke_opacity: f64,
@@ -336,7 +336,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
             SemanticNodeKind::Family(state) => Ok(PersistentTargetNode::Family {
                 members: node.members_iter().collect(),
                 own_color: state.own_color,
-                own_style: state.own_style.clone(),
+                own_style: Box::new(state.own_style.clone()),
                 own_background_stroke_color: state.own_background_stroke_color,
                 own_background_stroke_width: state.own_background_stroke_width,
                 own_background_stroke_opacity: state.own_background_stroke_opacity,
@@ -462,7 +462,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 self.transaction
                     .set_family_style_with_background_stroke_update(
                         receiver,
-                        own_style,
+                        *own_style,
                         Some(own_background_stroke_color),
                         Some(own_background_stroke_width),
                         Some(own_background_stroke_opacity),

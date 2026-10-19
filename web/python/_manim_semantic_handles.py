@@ -1317,7 +1317,7 @@ def _paint_color(self, channel):
 
 def _get_stroke_width(self, background=False):
     if background:
-        raise NotImplementedError("background strokes require shared background paint")
+        return _get_background_stroke_width(self)
     from _manim_updaters import _canonical_phase_context
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError("stroke width getters in host callbacks require staged width observation")
@@ -1605,8 +1605,8 @@ def _set_style(
         background_stroke_opacity, "background stroke opacity"
     )
 
-    # Family roots retain background paint as shared Rust metadata. Rendered
-    # leaves still require a distinct background-stroke renderer channel.
+    # VGroup family=False addresses the point-free family root, whose style is
+    # stored separately from its rendered leaves.
     root_background_stroke = None
     if not family and isinstance(self, _compat.VGroup) and any(
         value is not None
@@ -1625,19 +1625,6 @@ def _set_style(
             if background_stroke_opacity is None
             else _compat._opacity("background stroke opacity", background_stroke_opacity),
         )
-    else:
-        if (
-            background_stroke_color is not None
-            and background_stroke_color != _base.BLACK
-        ) or (
-            background_stroke_width is not None
-            and _compat._manim_stroke_width(background_stroke_width) != 0.0
-        ) or (
-            background_stroke_opacity is not None
-            and _compat._opacity("background stroke opacity", background_stroke_opacity)
-            != 1.0
-        ):
-            raise NotImplementedError("background strokes require shared background paint")
     if sheen_factor is not None and _ir._finite_number("sheen factor", sheen_factor) != 0.0:
         raise NotImplementedError("2D sheen requires shared gradient paint")
     if background_image:
@@ -1652,6 +1639,15 @@ def _set_style(
                  *_family_color_arguments(stroke_color),
                  None if stroke_width is None else _compat._manim_stroke_width(stroke_width),
                  None if stroke_opacity is None else _compat._opacity("stroke opacity", stroke_opacity))
+    background_arguments = (
+        *_family_color_arguments(background_stroke_color),
+        None
+        if background_stroke_width is None
+        else _compat._manim_stroke_width(background_stroke_width),
+        None
+        if background_stroke_opacity is None
+        else _compat._opacity("background stroke opacity", background_stroke_opacity),
+    )
     handle, context, suffix = _style_target(self)
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
@@ -1674,74 +1670,38 @@ def _set_style(
         )
     elif context is None:
         method_name = "setOwnStyle" if own_family_style else "setStyle"
-        engine_call(getattr(handle, method_name), *arguments)
+        if own_family_style:
+            engine_call(getattr(handle, method_name), *arguments)
+        else:
+            engine_call(getattr(handle, method_name), *arguments, *background_arguments)
     else:
         method_suffix = f"{suffix}Own" if own_family_style else suffix
-        engine_call(getattr(context, f"liveSet{method_suffix}Style"), handle, *arguments)
+        if own_family_style:
+            engine_call(getattr(context, f"liveSet{method_suffix}Style"), handle, *arguments)
+        else:
+            engine_call(
+                getattr(context, f"liveSet{method_suffix}Style"),
+                handle,
+                *arguments,
+                *background_arguments,
+            )
     return self
 
 
 def _set_background_stroke(self, color=None, width=None, opacity=None, family=True):
-    color = _style_color(color, "background stroke color")
-    width = _style_value(width, "background stroke width")
-    opacity = _style_value(opacity, "background stroke opacity")
-    normalized_width = None if width is None else _compat._manim_stroke_width(width)
-    normalized_opacity = None if opacity is None else _compat._opacity(
-        "background stroke opacity", opacity
+    if color is None and width is None and opacity is None:
+        return self
+    return _set_style(
+        self,
+        background_stroke_color=color,
+        background_stroke_width=width,
+        background_stroke_opacity=opacity,
+        family=family,
     )
-    root_only = not family and isinstance(self, _compat.VGroup)
-    if root_only and any(value is not None for value in (color, width, opacity)):
-        from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
-
-        if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
-            raise NotImplementedError(
-                "root-only background stroke updates are unavailable inside staged callbacks"
-            )
-        handle = getattr(self, "_semantic_family_handle", None)
-        if handle is None:
-            raise RuntimeError("VGroup paint requires the shared Rust authoring host")
-        context = _group_target_context(self)
-        style_arguments = (
-            *_family_color_arguments(None),
-            None,
-            *_family_color_arguments(None),
-            None,
-            None,
-        )
-        background_arguments = (
-            *_family_color_arguments(color),
-            normalized_width,
-            normalized_opacity,
-        )
-        if context is None:
-            engine_call(
-                handle.setOwnStyleWithBackgroundStroke,
-                *style_arguments,
-                *background_arguments,
-                operation="VMobject.set_background_stroke",
-            )
-        else:
-            engine_call(
-                context.liveSetFamilyOwnStyleWithBackgroundStroke,
-                handle,
-                *style_arguments,
-                *background_arguments,
-                operation="VMobject.set_background_stroke",
-            )
-        return self
-    if (color is not None and color != _base.BLACK) or (
-        normalized_width is not None and normalized_width != 0.0
-    ) or (normalized_opacity is not None and normalized_opacity != 1.0):
-        raise NotImplementedError("background strokes require shared background paint")
-    if not family and isinstance(self, _compat.VGroup):
-        return self
-    return self
 
 
 def _get_background_stroke_style(self):
     family_handle = getattr(self, "_semantic_family_handle", None)
-    if family_handle is None:
-        return _base.BLACK, 0.0, 1.0
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
 
     if (
@@ -1749,18 +1709,43 @@ def _get_background_stroke_style(self):
         or _canonical_phase_context(self) is not None
     ):
         raise NotImplementedError(
-            "family root background-stroke queries require staged style observation"
+            "background-stroke queries require staged style observation"
         )
-    color_method = getattr(family_handle, "ownBackgroundStrokeColor", None)
-    width_method = getattr(family_handle, "ownBackgroundStrokeWidth", None)
-    opacity_method = getattr(family_handle, "ownBackgroundStrokeOpacity", None)
-    if color_method is None or width_method is None or opacity_method is None:
-        return _base.BLACK, 0.0, 1.0
-    color = engine_call(color_method)
+    if family_handle is not None:
+        color_method = getattr(family_handle, "ownBackgroundStrokeColor", None)
+        width_method = getattr(family_handle, "ownBackgroundStrokeWidth", None)
+        opacity_method = getattr(family_handle, "ownBackgroundStrokeOpacity", None)
+        if color_method is not None and width_method is not None and opacity_method is not None:
+            color = engine_call(color_method)
+            return (
+                _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
+                float(engine_call(width_method)),
+                float(engine_call(opacity_method)),
+            )
+
+    color = _typed_manim_observation(
+        self, "backgroundStrokeColor", "queryMobjectBackgroundStrokeColor"
+    )
+    width = _typed_manim_observation(
+        self,
+        "backgroundStrokeWidth",
+        "queryMobjectBackgroundStrokeWidth",
+        handle_property=True,
+    )
+    opacity = _typed_manim_observation(
+        self,
+        "backgroundStrokeOpacity",
+        "queryMobjectBackgroundStrokeOpacity",
+        handle_property=True,
+    )
+    if width is None or opacity is None:
+        raise RuntimeError("background-stroke observations require the shared Rust authoring host")
+    if color is None:
+        color = _base.BLACK
     return (
         _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
-        float(engine_call(width_method)),
-        float(engine_call(opacity_method)),
+        float(width),
+        float(opacity),
     )
 
 

@@ -57,6 +57,7 @@ pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
 pub(crate) trait PaintStyleEdit {
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;
+    fn has_background_stroke(&self) -> bool;
     fn manim_color(&self) -> Result<Color, AuthoringError>;
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64);
     fn set_stroke_color(&mut self, color: Color, opacity_when_enabled: f64);
@@ -66,7 +67,11 @@ pub(crate) trait PaintStyleEdit {
     fn set_stroke_opacity(&mut self, opacity: f64);
     fn scale_fill_opacity(&mut self, factor: f64);
     fn scale_stroke_opacity(&mut self, factor: f64);
+    fn scale_background_stroke_opacity(&mut self, factor: f64);
     fn set_stroke_width(&mut self, width: f64);
+    fn set_background_stroke_color(&mut self, color: Color, opacity_when_enabled: f64);
+    fn set_background_stroke_opacity(&mut self, opacity: f64);
+    fn set_background_stroke_width(&mut self, width: f64);
 }
 
 // A captured effective solid paint can carry alpha in its color as well as
@@ -100,6 +105,10 @@ impl PaintStyleEdit for SemanticStyle {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+
+    fn has_background_stroke(&self) -> bool {
+        self.background_stroke.is_some()
     }
 
     fn manim_color(&self) -> Result<Color, AuthoringError> {
@@ -142,8 +151,32 @@ impl PaintStyleEdit for SemanticStyle {
     fn scale_stroke_opacity(&mut self, factor: f64) {
         self.stroke_opacity *= factor;
     }
+    fn scale_background_stroke_opacity(&mut self, factor: f64) {
+        self.background_stroke_opacity *= factor;
+    }
     fn set_stroke_width(&mut self, width: f64) {
         self.stroke_width = width;
+    }
+
+    fn set_background_stroke_color(&mut self, color: Color, opacity_when_enabled: f64) {
+        replace_paint_color(
+            &mut self.background_stroke,
+            &mut self.background_stroke_opacity,
+            color,
+            opacity_when_enabled,
+        );
+    }
+
+    fn set_background_stroke_opacity(&mut self, opacity: f64) {
+        set_paint_opacity(
+            &mut self.background_stroke,
+            &mut self.background_stroke_opacity,
+            opacity,
+        );
+    }
+
+    fn set_background_stroke_width(&mut self, width: f64) {
+        self.background_stroke_width = width;
     }
 }
 
@@ -154,6 +187,10 @@ impl PaintStyleEdit for Style {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+
+    fn has_background_stroke(&self) -> bool {
+        self.background_stroke.is_some()
     }
 
     fn manim_color(&self) -> Result<Color, AuthoringError> {
@@ -207,8 +244,31 @@ impl PaintStyleEdit for Style {
             stroke.alpha *= factor as f32;
         }
     }
+    fn scale_background_stroke_opacity(&mut self, factor: f64) {
+        if let Some(stroke) = &mut self.background_stroke {
+            stroke.alpha *= factor as f32;
+        }
+    }
     fn set_stroke_width(&mut self, width: f64) {
         self.stroke_width = width as f32;
+    }
+
+    fn set_background_stroke_color(&mut self, color: Color, opacity_when_enabled: f64) {
+        let alpha = self
+            .background_stroke
+            .map_or(opacity_when_enabled as f32, |stroke| stroke.alpha);
+        self.background_stroke = Some(Color { alpha, ..color });
+    }
+
+    fn set_background_stroke_opacity(&mut self, opacity: f64) {
+        self.background_stroke = Some(Color {
+            alpha: opacity as f32,
+            ..self.background_stroke.unwrap_or(Color::BLACK)
+        });
+    }
+
+    fn set_background_stroke_width(&mut self, width: f64) {
+        self.background_stroke_width = width as f32;
     }
 }
 
@@ -293,6 +353,9 @@ pub(crate) fn edit_manim_opacity<S: PaintStyleEdit>(
     }
     if style.has_stroke() {
         style.set_stroke_opacity(opacity);
+    }
+    if style.has_background_stroke() {
+        style.set_background_stroke_opacity(opacity);
     }
     Ok(())
 }
@@ -406,6 +469,9 @@ pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
     if style.has_stroke() {
         style.scale_stroke_opacity(factor);
     }
+    if style.has_background_stroke() {
+        style.scale_background_stroke_opacity(factor);
+    }
     Ok(())
 }
 
@@ -464,6 +530,43 @@ pub(crate) fn edit_stroke_width<S: PaintStyleEdit>(
     Ok(())
 }
 
+pub(crate) fn edit_background_stroke_color<S: PaintStyleEdit>(
+    style: &mut S,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<(), AuthoringError> {
+    let color = opaque_color("background stroke", red, green, blue)?;
+    let opacity = unit_opacity("background stroke.alpha", alpha)?;
+    style.set_background_stroke_color(color, opacity);
+    Ok(())
+}
+
+pub(crate) fn edit_background_stroke_opacity<S: PaintStyleEdit>(
+    style: &mut S,
+    opacity: f64,
+) -> Result<(), AuthoringError> {
+    let opacity = unit_opacity("background stroke opacity", opacity)?;
+    style.set_background_stroke_opacity(opacity);
+    Ok(())
+}
+
+pub(crate) fn edit_background_stroke_width<S: PaintStyleEdit>(
+    style: &mut S,
+    width: f64,
+) -> Result<(), AuthoringError> {
+    let width = authoring_render_f64("background stroke width", width)?;
+    if width < 0.0 {
+        return Err(AuthoringError::NegativeStrokeWidth(width));
+    }
+    style.set_background_stroke_width(width);
+    if !style.has_background_stroke() {
+        style.set_background_stroke_color(Color::BLACK, 1.0);
+    }
+    Ok(())
+}
+
 pub(super) fn parse_stroke_width_mode(mode: &str) -> Result<StrokeWidthMode, AuthoringError> {
     match mode {
         "scale_with_object" => Ok(StrokeWidthMode::ScaleWithObject),
@@ -501,9 +604,18 @@ impl Mobject {
         paint_color(self.state()?.style.stroke.as_ref())
     }
 
+    pub fn background_stroke_color(&self) -> Result<Option<Color>, AuthoringError> {
+        let style = self.state()?.style;
+        Ok(paint_color(style.background_stroke.as_ref())?.or(Some(Color::BLACK)))
+    }
+
     /// Stored stroke width in scene units, independent of object scale.
     pub fn stroke_width(&self) -> Result<f64, AuthoringError> {
         Ok(self.state()?.style.stroke_width)
+    }
+
+    pub fn background_stroke_width(&self) -> Result<f64, AuthoringError> {
+        Ok(self.state()?.style.background_stroke_width)
     }
 
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), AuthoringError> {
@@ -617,6 +729,16 @@ impl Mobject {
     pub fn stroke_opacity(&self) -> Result<f64, AuthoringError> {
         let state = self.state()?;
         manim_paint_opacity(state.style.stroke.as_ref(), state.style.stroke_opacity)
+    }
+    pub fn background_stroke_opacity(&self) -> Result<f64, AuthoringError> {
+        let state = self.state()?;
+        if state.style.background_stroke.is_none() {
+            return Ok(1.0);
+        }
+        manim_paint_opacity(
+            state.style.background_stroke.as_ref(),
+            state.style.background_stroke_opacity,
+        )
     }
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         self.validate()?;

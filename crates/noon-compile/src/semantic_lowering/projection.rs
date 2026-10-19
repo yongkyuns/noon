@@ -444,6 +444,9 @@ pub enum SemanticExecutionField {
     StrokePaint,
     StrokeOpacity,
     StrokeWidth,
+    BackgroundStrokePaint,
+    BackgroundStrokeOpacity,
+    BackgroundStrokeWidth,
     ObjectOpacity,
     GraphArrowBuff,
     GraphArrowTipLength,
@@ -463,6 +466,9 @@ impl std::fmt::Display for SemanticExecutionField {
             Self::StrokePaint => "stroke_paint",
             Self::StrokeOpacity => "stroke_opacity",
             Self::StrokeWidth => "stroke_width",
+            Self::BackgroundStrokePaint => "background_stroke_paint",
+            Self::BackgroundStrokeOpacity => "background_stroke_opacity",
+            Self::BackgroundStrokeWidth => "background_stroke_width",
             Self::ObjectOpacity => "object_opacity",
             Self::GraphArrowBuff => "graph_arrow_buff",
             Self::GraphArrowTipLength => "graph_arrow_tip_length",
@@ -1187,6 +1193,12 @@ pub(crate) fn lower_semantic_style_value(
         state.style.stroke.as_ref(),
         state.style.stroke_opacity,
     )?;
+    let background_stroke = lower_paint(
+        SemanticExecutionField::BackgroundStrokePaint,
+        SemanticExecutionField::BackgroundStrokeOpacity,
+        state.style.background_stroke.as_ref(),
+        state.style.background_stroke_opacity,
+    )?;
     let stroke_width = lower_scalar_f32(
         SemanticExecutionField::StrokeWidth,
         state.style.stroke_width,
@@ -1200,6 +1212,11 @@ pub(crate) fn lower_semantic_style_value(
         fill,
         stroke,
         stroke_width,
+        background_stroke,
+        background_stroke_width: lower_scalar_f32(
+            SemanticExecutionField::BackgroundStrokeWidth,
+            state.style.background_stroke_width,
+        )?,
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,

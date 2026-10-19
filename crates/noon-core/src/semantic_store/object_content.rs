@@ -647,8 +647,14 @@ impl SemanticObjectState {
         (0.0..=1.0).contains(&self.style.object_opacity)
             && self.style.stroke_width.is_finite()
             && (0.0..=f64::from(f32::MAX)).contains(&self.style.stroke_width)
+            && self.style.background_stroke_width.is_finite()
+            && (0.0..=f64::from(f32::MAX)).contains(&self.style.background_stroke_width)
             && paint_supported(self.style.fill.as_ref(), self.style.fill_opacity)
             && paint_supported(self.style.stroke.as_ref(), self.style.stroke_opacity)
+            && paint_supported(
+                self.style.background_stroke.as_ref(),
+                self.style.background_stroke_opacity,
+            )
     }
 
     /// Authored UV-cell identity for one leaf in a sampled Surface family.
