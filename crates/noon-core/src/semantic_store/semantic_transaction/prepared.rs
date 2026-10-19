@@ -1587,6 +1587,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_sheen_direction(direction);
                     written_slots.insert(node);
                 }
+                SemanticMutation::SetUpdatingSuspended { node, suspended } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted authoring node")
+                        .set_updating_suspended(suspended);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::UpdaterSuspension { target: node });
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
                     store

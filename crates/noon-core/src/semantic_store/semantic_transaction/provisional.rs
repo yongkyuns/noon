@@ -420,6 +420,19 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn updating_suspended(&self, node: SemanticTransactionNodeRef) -> Option<bool> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .map(crate::SemanticNode::updating_suspended),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(_) => Some(false),
+                PendingSemanticNode::Animation(_) => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,
@@ -783,6 +796,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::FamilyColor(object)
         | SemanticMutationKey::FamilyStyle(object)
         | SemanticMutationKey::SheenDirection(object)
+        | SemanticMutationKey::UpdaterSuspension(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {

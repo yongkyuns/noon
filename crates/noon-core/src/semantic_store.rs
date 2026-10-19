@@ -401,6 +401,10 @@ pub struct SemanticNode {
     /// families/Line components. It is Semantic Scene state, not wrapper or
     /// renderer state.
     graph_declaration: Option<SemanticGraphDeclaration>,
+    /// Manim's per-object updater suspension flag. This is semantic authoring
+    /// state because detached `Mobject.update()` and live callback lowering must
+    /// observe the same value through their shared node identity.
+    updating_suspended: bool,
     /// Ordered attachment identities; absent effects allocate no collection.
     /// Boxing the Vec header keeps every effect-free node to one pointer of
     /// overhead rather than three words. The first attachment pays the extra
@@ -493,6 +497,13 @@ impl SemanticNode {
                 .map(|state| state.sheen_direction),
             _ => None,
         }
+    }
+    pub const fn updating_suspended(&self) -> bool {
+        self.updating_suspended
+    }
+
+    pub(crate) fn set_updating_suspended(&mut self, suspended: bool) {
+        self.updating_suspended = suspended;
     }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
@@ -1107,6 +1118,7 @@ impl SemanticStore {
             scoped_signals: BTreeSet::new(),
             foreground_members: Vec::new(),
             graph_declaration: None,
+            updating_suspended: false,
             effects: None,
         });
         self.live_nodes += 1;

@@ -175,6 +175,57 @@ impl MobjectTarget<'_> {
             .map_err(AuthoringError::from)
     }
 
+    /// Read Manim's per-node `updating_suspended` state from the shared scene.
+    pub fn updating_suspended(&self) -> Result<bool, AuthoringError> {
+        self.validate()?;
+        self.integration_store()
+            .borrow()
+            .node(self.node_id())
+            .map(noon_core::SemanticNode::updating_suspended)
+            .ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(
+                    self.node_id(),
+                ))
+            })
+    }
+
+    /// Atomically set this node's updater suspension flag and, by default, the
+    /// unique shared-family descendants. Live callback scheduling remains a
+    /// separate ordered phase, so scene-owned subtrees reject before mutation.
+    pub fn set_updating_suspended(
+        &self,
+        suspended: bool,
+        recursive: bool,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store();
+        let mut store = store.borrow_mut();
+        let nodes = if recursive {
+            store
+                .ordered_last_occurrence_authoring_nodes(self.node_id())
+                .map_err(AuthoringError::from)?
+        } else {
+            vec![self.node_id()]
+        };
+        if nodes
+            .iter()
+            .copied()
+            .any(|node| node_or_ancestor_is_scene_owned(&store, node))
+        {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::UpdaterSuspensionLive,
+            ));
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        for node in nodes {
+            transaction.set_updating_suspended(node, suspended);
+        }
+        transaction
+            .apply(&mut store)
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     pub fn sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
         self.validate()?;
         self.integration_store()
@@ -302,7 +353,37 @@ impl MobjectTarget<'_> {
     }
 }
 
+fn node_or_ancestor_is_scene_owned(store: &SemanticStore, node: SemanticNodeId) -> bool {
+    let mut pending = vec![node];
+    let mut seen = BTreeSet::new();
+    while let Some(node) = pending.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        let Some(value) = store.node(node) else {
+            return true;
+        };
+        if value.is_scene_owned() {
+            return true;
+        }
+        pending.extend(value.parents().iter().copied());
+    }
+    false
+}
+
 impl crate::Mobject {
+    pub fn updating_suspended(&self) -> Result<bool, AuthoringError> {
+        MobjectTarget::from(self).updating_suspended()
+    }
+
+    pub fn set_updating_suspended(
+        &self,
+        suspended: bool,
+        recursive: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).set_updating_suspended(suspended, recursive)
+    }
+
     pub fn sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
         MobjectTarget::from(self).sheen_direction()
     }
@@ -326,6 +407,18 @@ impl crate::Mobject {
 }
 
 impl MobjectFamily {
+    pub fn updating_suspended(&self) -> Result<bool, AuthoringError> {
+        MobjectTarget::from(self).updating_suspended()
+    }
+
+    pub fn set_updating_suspended(
+        &self,
+        suspended: bool,
+        recursive: bool,
+    ) -> Result<(), AuthoringError> {
+        MobjectTarget::from(self).set_updating_suspended(suspended, recursive)
+    }
+
     pub fn own_sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
         MobjectTarget::from(self).sheen_direction()
     }
@@ -604,6 +697,95 @@ pub(crate) fn prepare_subset_display_transaction(
 mod tests {
     use super::*;
     use crate::Scene;
+
+    #[test]
+    fn updater_suspension_is_shared_recursive_atomic_and_detached_only() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let outer = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
+
+        let before = scene.integration_store().borrow().scene_revision();
+        MobjectTarget::from(&outer)
+            .set_updating_suspended(true, true)
+            .unwrap();
+        assert!(MobjectTarget::from(&outer).updating_suspended().unwrap());
+        assert!(first.updating_suspended().unwrap());
+        assert!(second.updating_suspended().unwrap());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+
+        let after_suspend = scene.integration_store().borrow().scene_revision();
+        MobjectTarget::from(&outer)
+            .set_updating_suspended(true, true)
+            .unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            after_suspend
+        );
+
+        MobjectTarget::from(&outer)
+            .set_updating_suspended(false, false)
+            .unwrap();
+        assert!(!MobjectTarget::from(&outer).updating_suspended().unwrap());
+        assert!(first.updating_suspended().unwrap());
+        assert!(second.updating_suspended().unwrap());
+
+        scene
+            .integration_store()
+            .borrow_mut()
+            .attach_to_scene(outer.node_id())
+            .unwrap();
+        let before_rejected_live_write = scene.integration_store().borrow().scene_revision();
+        assert!(MobjectTarget::from(&outer)
+            .set_updating_suspended(false, true)
+            .is_err());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_rejected_live_write
+        );
+        assert!(first.updating_suspended().unwrap());
+        assert!(second.updating_suspended().unwrap());
+    }
+
+    #[test]
+    fn updater_suspension_survives_object_and_family_copies() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        MobjectTarget::from(&first)
+            .set_updating_suspended(true, false)
+            .unwrap();
+        MobjectTarget::from(&second)
+            .set_updating_suspended(true, false)
+            .unwrap();
+        let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        MobjectTarget::from(&nested)
+            .set_updating_suspended(true, false)
+            .unwrap();
+
+        let first_copy = first.copy_handle().unwrap();
+        assert!(MobjectTarget::from(&first_copy)
+            .updating_suspended()
+            .unwrap());
+        assert!(MobjectTarget::from(&first.target_editor().unwrap())
+            .updating_suspended()
+            .unwrap());
+
+        let copied = nested.copy_family().unwrap();
+        assert!(MobjectTarget::from(copied.root())
+            .updating_suspended()
+            .unwrap());
+        assert!(MobjectTarget::from(&copied.mobject(&first).unwrap())
+            .updating_suspended()
+            .unwrap());
+        assert!(MobjectTarget::from(&copied.mobject(&second).unwrap())
+            .updating_suspended()
+            .unwrap());
+    }
 
     #[test]
     fn sheen_direction_preserves_dimensions_family_scope_and_rotation_atomically() {

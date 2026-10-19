@@ -1217,6 +1217,24 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = updatingSuspended)]
+        pub fn updating_suspended(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .updating_suspended()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
+            &self,
+            suspended: bool,
+            recursive: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .set_updating_suspended(suspended, recursive)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setSheenDirection)]
         pub fn set_sheen_direction(
             &self,
@@ -2244,6 +2262,24 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = updatingSuspended)]
+        pub fn updating_suspended(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .updating_suspended()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
+            &self,
+            suspended: bool,
+            recursive: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .set_updating_suspended(suspended, recursive)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = cubicBezierPointRanges)]
         pub fn cubic_bezier_point_ranges(
             &self,

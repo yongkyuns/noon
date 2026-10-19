@@ -791,6 +791,22 @@ class Mobject:
         """Clear this family, then copy only the donor root's callbacks."""
         return _callback_operations().match_updaters(self, mobject)
 
+    @property
+    def updating_suspended(self) -> bool:
+        return _callback_operations().updating_suspended(self)
+
+    @updating_suspended.setter
+    def updating_suspended(self, value: object) -> None:
+        # Manim stores this attribute directly; boolean conversion preserves its
+        # truth-value contract while keeping the shared Rust node strongly typed.
+        _callback_operations().set_updating_suspended(self, bool(value), recursive=False)
+
+    def suspend_updating(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().suspend_updating(self, recursive)
+
+    def resume_updating(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().resume_updating(self, recursive)
+
     def update(self, dt: float = 0, recursive: bool = True) -> Mobject:
         """Invoke detached-object updaters; live updates belong to Rust phases."""
         return _callback_operations().update(self, dt, recursive)

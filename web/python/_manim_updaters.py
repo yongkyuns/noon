@@ -404,6 +404,79 @@ def match_updaters(self: _base.Mobject, mobject: _base.Mobject) -> _base.Mobject
     return self
 
 
+def _suspension_target(mobject: _base.Mobject):
+    import _manim_semantic_handles as semantic
+
+    target, context, suffix = semantic._style_target(mobject)
+    if target is None:
+        raise RuntimeError("updater suspension requires a current shared Rust handle")
+    return target, context, suffix
+
+
+def updating_suspended(mobject: _base.Mobject) -> bool:
+    target, _context, _suffix = _suspension_target(mobject)
+    return bool(engine_call(target.updatingSuspended))
+
+
+def _set_updating_suspended(
+    mobject: _base.Mobject, suspended: bool, recursive: bool
+) -> _base.Mobject:
+    target, context, suffix = _suspension_target(mobject)
+    if context is None:
+        engine_call(target.setUpdatingSuspended, suspended, recursive)
+    else:
+        method = "liveSetFamilyUpdatingSuspended" if suffix == "Family" else "liveSetUpdatingSuspended"
+        engine_call(getattr(context, method), target, suspended, recursive)
+    return mobject
+
+
+def _require_detached_suspension_target(
+    mobject: _base.Mobject, recursive: bool
+) -> None:
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(mobject) is not None
+    ):
+        raise NotImplementedError(
+            "updater suspension during a callback requires ordered callback-phase support"
+        )
+    family = mobject.get_family() if recursive else [mobject]
+    if any(getattr(member, "_scene", None) is not None for member in family):
+        raise NotImplementedError(
+            "updater suspension on Scene-bound objects requires the ordered callback phase"
+        )
+
+
+def set_updating_suspended(
+    mobject: _base.Mobject, suspended: bool, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+    return _set_updating_suspended(mobject, bool(suspended), recursive)
+
+
+def suspend_updating(
+    mobject: _base.Mobject, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+    return _set_updating_suspended(mobject, True, recursive)
+
+
+def resume_updating(
+    mobject: _base.Mobject, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+
+    def resume(member: _base.Mobject) -> None:
+        _set_updating_suspended(member, False, recursive=False)
+        if recursive:
+            for child in getattr(member, "submobjects", ()):
+                resume(child)
+        update(member, dt=0, recursive=recursive)
+
+    resume(mobject)
+    return mobject
+
+
 def update(
     self: _base.Mobject, dt: float = 0, recursive: bool = True
 ) -> _base.Mobject:

@@ -210,6 +210,123 @@ class UpdaterLifecycleTests(unittest.TestCase):
         updaters.update(root, dt=0.25, recursive=False)
         self.assertEqual(events, [("root", 0.25)])
 
+    def test_suspension_uses_shared_state_and_resume_matches_pinned_recursion(self):
+        import _manim_semantic_handles as semantic
+
+        class SharedStateHandle:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def updatingSuspended(self):
+                return self.owner.suspended
+
+            def setUpdatingSuspended(self, suspended, recursive):
+                seen = set()
+
+                def write(member):
+                    if id(member) in seen:
+                        return
+                    seen.add(id(member))
+                    member.suspended = suspended
+                    if recursive:
+                        for child in member.submobjects:
+                            write(child)
+
+                write(self.owner)
+
+        class Mobject:
+            def __init__(self, name, children=()):
+                self.name = name
+                self.submobjects = list(children)
+                self._scene = None
+                self.suspended = False
+                self._noon_updaters = []
+                self._handle = SharedStateHandle(self)
+
+            def get_family(self):
+                members = [self]
+                for child in self.submobjects:
+                    members.extend(child.get_family())
+                return members
+
+            @property
+            def updating_suspended(self):
+                return updaters.updating_suspended(self)
+
+            @updating_suspended.setter
+            def updating_suspended(self, value):
+                updaters.set_updating_suspended(self, bool(value), recursive=False)
+
+            def suspend_updating(self, recursive=True):
+                return updaters.suspend_updating(self, recursive)
+
+            def resume_updating(self, recursive=True):
+                return updaters.resume_updating(self, recursive)
+
+        events = []
+        leaf = Mobject("leaf")
+        child = Mobject("child", [leaf])
+        root = Mobject("root", [child])
+        for member in (root, child, leaf):
+            member._noon_updaters.append(
+                lambda target, member=member: events.append(member.name)
+            )
+
+        with patch.object(
+            semantic,
+            "_style_target",
+            side_effect=lambda member: (member._handle, None, ""),
+        ):
+            self.assertFalse(root.updating_suspended)
+            root.updating_suspended = True
+            self.assertTrue(root.updating_suspended)
+            self.assertFalse(child.updating_suspended)
+            root.suspend_updating(recursive=True)
+            self.assertTrue(root.updating_suspended)
+            self.assertTrue(child.updating_suspended)
+            self.assertTrue(leaf.updating_suspended)
+            self.assertEqual(events, [])
+
+            self.assertIs(root.resume_updating(), root)
+            self.assertFalse(root.updating_suspended)
+            self.assertFalse(child.updating_suspended)
+            self.assertFalse(leaf.updating_suspended)
+            # Manim recursively resumes each child (including its immediate
+            # update), then runs update(0) from the root.
+            self.assertEqual(events, ["leaf", "child", "leaf", "root", "child", "leaf"])
+
+    def test_recursive_suspension_rejects_scene_owned_descendant_before_mutation(self):
+        import _manim_semantic_handles as semantic
+
+        class Handle:
+            def __init__(self, owner):
+                self.owner = owner
+                self.calls = []
+
+            def setUpdatingSuspended(self, suspended, recursive):
+                self.calls.append((suspended, recursive))
+
+        class Mobject:
+            def __init__(self, children=()):
+                self.submobjects = list(children)
+                self._scene = None
+                self._handle = Handle(self)
+
+            def get_family(self):
+                return [self, *(member for child in self.submobjects for member in child.get_family())]
+
+        child = Mobject()
+        child._scene = object()
+        root = Mobject([child])
+        with patch.object(
+            semantic,
+            "_style_target",
+            side_effect=lambda member: (member._handle, None, ""),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "Scene-bound"):
+                updaters.suspend_updating(root, recursive=True)
+        self.assertEqual(root._handle.calls, [])
+
     def test_update_rejects_scene_bound_targets_before_invoking_callbacks(self):
         calls = []
 

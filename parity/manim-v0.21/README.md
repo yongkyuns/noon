@@ -49,3 +49,12 @@ the same assignments without changing its paths. Pending callback phases reject
 nominal-value writes through the existing publication barrier; callback-local
 Angle metadata overlays are not supported. This non-visual operation does not qualify
 the still-open dot-child, non-planar, or wider constructor behavior in #2012.
+
+Detached updater suspension now uses per-object flags in shared Rust node state.
+The `updating_suspended` property writes only the root; `suspend_updating()` uses
+Rust's unique family traversal, and `resume_updating()` preserves ManimCE's nested
+immediate `update(dt=0)` callback order. The state survives object copies and
+family copies/targets. A product Pyodide comparison against pinned ManimCE passes
+153/153 semantic fixtures, including nested suspension and resume. Scene-owned
+suspension remains unsupported until the canonical callback phase also suppresses
+Rust-selected callbacks and animation effects; the API rejects before mutation.

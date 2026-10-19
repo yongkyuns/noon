@@ -173,6 +173,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             family_background_stroke_opacity,
             family_sheen_direction,
             graph_declaration,
+            updating_suspended,
         ) = {
             let store = store.borrow();
             let node = store.node(id).ok_or_else(|| {
@@ -189,10 +190,20 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                     Some(presentation.own_background_stroke_opacity),
                     Some(presentation.own_sheen_direction),
                     node.graph_declaration().cloned(),
+                    node.updating_suspended(),
                 ),
-                SemanticNodeKind::AuthoringObject => {
-                    (None, None, None, None, None, None, None, None, None)
-                }
+                SemanticNodeKind::AuthoringObject => (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    node.updating_suspended(),
+                ),
                 _ => {
                     return Err(AuthoringError::from(
                         noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
@@ -227,6 +238,9 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             SemanticNodeCreation::object(state)
         };
         let pending = transaction.create_node(creation);
+        if updating_suspended {
+            transaction.set_updating_suspended(pending, true);
+        }
         store
             .borrow()
             .copy_effects_into(id, pending, &mut transaction)

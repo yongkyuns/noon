@@ -167,6 +167,10 @@ pub enum SemanticMutation {
         node: SemanticTransactionNodeRef,
         direction: crate::SemanticSheenDirection,
     },
+    SetUpdatingSuspended {
+        node: SemanticTransactionNodeRef,
+        suspended: bool,
+    },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
@@ -251,6 +255,7 @@ impl SemanticMutation {
             Self::SetFamilyColor { node: object, .. }
             | Self::SetFamilyStyle { node: object, .. }
             | Self::SetSheenDirection { node: object, .. }
+            | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -338,6 +343,7 @@ impl SemanticMutation {
             Self::SetFamilyColor { node: object, .. }
             | Self::SetFamilyStyle { node: object, .. }
             | Self::SetSheenDirection { node: object, .. }
+            | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -414,6 +420,9 @@ impl SemanticMutation {
             Self::SetSheenDirection { node, .. } => {
                 Some(SemanticMutationKey::SheenDirection(*node))
             }
+            Self::SetUpdatingSuspended { node, .. } => {
+                Some(SemanticMutationKey::UpdaterSuspension(*node))
+            }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -472,6 +481,7 @@ pub(super) enum SemanticMutationKey {
     FamilyColor(SemanticTransactionNodeRef),
     FamilyStyle(SemanticTransactionNodeRef),
     SheenDirection(SemanticTransactionNodeRef),
+    UpdaterSuspension(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
@@ -570,6 +580,9 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     UpdaterRegistrations {
+        target: SemanticNodeId,
+    },
+    UpdaterSuspension {
         target: SemanticNodeId,
     },
     SignalScoped {
@@ -1123,6 +1136,19 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetSheenDirection {
             node: node.into(),
             direction,
+        });
+        self
+    }
+
+    /// Set the shared per-node Manim updater suspension state atomically.
+    pub fn set_updating_suspended(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        suspended: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetUpdatingSuspended {
+            node: node.into(),
+            suspended,
         });
         self
     }
@@ -2201,6 +2227,7 @@ impl SemanticMutationTransaction {
         let mut staged_family_colors = HashMap::new();
         let mut staged_family_styles = HashMap::new();
         let mut staged_sheen_directions = HashMap::new();
+        let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
@@ -2952,6 +2979,16 @@ impl SemanticMutationTransaction {
                         .expect("validated authoring node sheen direction");
                     changed.push(previous != *direction);
                     staged_sheen_directions.insert(*node, *direction);
+                }
+                SemanticMutation::SetUpdatingSuspended { node, suspended } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    let previous = staged_updating_suspended
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.updating_suspended(*node))
+                        .expect("validated authoring node suspension state");
+                    changed.push(previous != *suspended);
+                    staged_updating_suspended.insert(*node, *suspended);
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;

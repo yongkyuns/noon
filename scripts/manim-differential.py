@@ -384,6 +384,36 @@ def _mobject_update_probe(api) -> Any:
     }
 
 
+def _updater_suspension_probe(api) -> Any:
+    root = api.Group(api.Dot(), api.Group(api.Dot()))
+    labels = [(root, "root"), (root[0], "first"), (root[1], "nested"), (root[1][0], "last")]
+    events = []
+    for member, label in labels:
+        member.add_updater(
+            lambda target, dt, label=label: events.append((label, float(dt)))
+        )
+
+    root.updating_suspended = True
+    root_only_flags = [member.updating_suspended for member in root.get_family()]
+    root.updating_suspended = False
+
+    suspended_result = root.suspend_updating()
+    suspended_flags = [member.updating_suspended for member in root.get_family()]
+    root.update(dt=0.5)
+    events_while_suspended = list(events)
+
+    resumed_result = root.resume_updating()
+    return {
+        "property_set_root_only": root_only_flags,
+        "suspend_returns_self": suspended_result is root,
+        "suspended_flags": suspended_flags,
+        "events_while_suspended": events_while_suspended,
+        "resume_returns_self": resumed_result is root,
+        "resumed_flags": [member.updating_suspended for member in root.get_family()],
+        "resume_events": events,
+    }
+
+
 def _to_original_color_probe(api) -> Any:
     family = api.Group(
         api.Dot(color=api.BLUE),
@@ -3526,6 +3556,8 @@ FIXTURES = [
             lambda: _match_updaters_probe(manim)),
     Fixture("mobject_update", lambda: _mobject_update_probe(noon),
             lambda: _mobject_update_probe(manim)),
+    Fixture("updater_suspension", lambda: _updater_suspension_probe(noon),
+            lambda: _updater_suspension_probe(manim)),
     Fixture("to_original_color", lambda: _to_original_color_probe(noon),
             lambda: _to_original_color_probe(manim)),
     Fixture("base_mobject_color_gradient", lambda: _base_mobject_color_gradient_probe(noon),
