@@ -28,7 +28,7 @@ fn capture(session: &mut ExecutionSession, raster: &mut Raster) -> Vec<u8> {
     );
     assert!(
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
             .count()
             > 128
