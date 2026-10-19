@@ -33,14 +33,23 @@ fn semantic_runtime(with_signal: bool, bound: bool) -> SceneInstance {
     let lowered = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
     let mut runtime = SceneInstance::from_semantic_execution(lowered);
     runtime
-        .begin_replay_retention(ReplayLimits { revisions: 64, payloads: 256 })
+        .begin_replay_retention(ReplayLimits {
+            revisions: 64,
+            payloads: 256,
+        })
         .unwrap();
     runtime.advance_to(1.0).unwrap();
     runtime
 }
 
 fn assert_unsupported<T: std::fmt::Debug>(result: Result<T, PrefixError>) {
-    assert!(matches!(result, Err(PrefixError::Replay(ReplayError::UnsupportedDomain))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -81,7 +90,10 @@ fn later_single_signal_enrollment_blocks_extension_but_preserves_delivered_histo
         .prepare_reactive_signal_enrollment(Some(signal), ReactiveValue::Scalar(2.0))
         .unwrap();
     source.commit_reactive_signal_enrollment(prepared, signal);
-    assert_eq!(source.reactive_value(signal), Some(&ReactiveValue::Scalar(2.0)));
+    assert_eq!(
+        source.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(2.0))
+    );
     source.advance_to(2.0).unwrap();
     let source_frame = source.frame().clone();
     let source_publication = source.publication_context();
@@ -101,19 +113,28 @@ fn failed_and_empty_enrollment_leave_admission_open_but_committed_batch_closes_i
     assert!(source
         .prepare_reactive_signal_enrollment_batch(&[(signal, ReactiveValue::Scalar(f32::NAN))])
         .is_err());
-    let empty = source.prepare_reactive_signal_enrollment_batch(&[]).unwrap();
+    let empty = source
+        .prepare_reactive_signal_enrollment_batch(&[])
+        .unwrap();
     source.commit_reactive_signal_enrollment_batch(empty);
     source.advance_to(2.0).unwrap();
-    reader.append(source.prepare_prefix_update(&mut publisher).unwrap()).unwrap();
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
     let preserved = reader.seek(1.5).unwrap().clone();
     let pending = source
         .prepare_reactive_signal_enrollment_batch(&[(signal, ReactiveValue::Scalar(3.0))])
         .unwrap();
     // Preparation alone has not installed any signal in the compute VM.
     source.advance_to(3.0).unwrap();
-    reader.append(source.prepare_prefix_update(&mut publisher).unwrap()).unwrap();
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
     source.commit_reactive_signal_enrollment_batch(pending);
-    assert_eq!(source.reactive_value(signal), Some(&ReactiveValue::Scalar(3.0)));
+    assert_eq!(
+        source.reactive_value(signal),
+        Some(&ReactiveValue::Scalar(3.0))
+    );
     source.advance_to(4.0).unwrap();
     assert_unsupported(source.prepare_prefix_update(&mut publisher));
     assert_eq!(reader.frontier(), 3.0);

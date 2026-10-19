@@ -10,3 +10,7 @@ readme = "README.md"
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 serde = { version = "1", features = ["derive"] }
+
+[features]
+# Experimental #2211; not enabled by default.
+prepared-prefix = []
