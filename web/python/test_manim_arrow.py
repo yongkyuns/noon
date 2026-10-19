@@ -209,6 +209,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
             # retains that context on the newly wrapped target.
             static_publishes = sum(call[0] == "publish" for call in calls)
             live_context = types.SimpleNamespace(
+                liveExecutionOwnership=lambda: "active",
                 liveCreateManimArrow=lambda options: (
                     calls.append(("live_publish", options.kind))
                     or FakeCreatedArrow(options.kind == "double")

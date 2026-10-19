@@ -8,6 +8,15 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class FamilyMembershipOrderTests(unittest.TestCase):
+    def test_empty_family_keeps_its_registered_live_mutation_owner(self):
+        group = identity_only_wrapper(compat.VGroup)
+        group._semantic_family_handle = SimpleNamespace(memberKeys=Mock(return_value=[]))
+        group._semantic_member_wrappers = {}
+        context = SimpleNamespace(liveExecutionOwnership=Mock(return_value="active"))
+        group._canonical_live_target_context = context
+        with patch.object(handles, "_live_constructor_context", side_effect=AssertionError("unexpected fallback")):
+            self.assertIs(handles._group_target_context(group), context)
+
     def test_mutations_update_identity_references_without_querying_sibling_order(self):
         a = identity_only_wrapper(compat.Mobject)
         b = identity_only_wrapper(compat.Mobject)

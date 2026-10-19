@@ -556,6 +556,13 @@ fn fading_an_empty_family_changes_only_its_root_paint() {
     assert_eq!(root.own_style().unwrap().fill_opacity, 0.0);
     assert_eq!(root.own_style().unwrap().stroke_opacity, 0.5);
     assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.5);
+    scene.add_many(&[(&root).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    assert!(session.frame().objects.is_empty());
+    scene.live(&mut session).fade_family(&root, 0.5).unwrap();
+    assert_eq!(root.own_style().unwrap().stroke_opacity, 0.25);
+    assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.25);
+    drop(session);
     let leaf = scene.square(1.0).unwrap();
     let before = leaf.state().unwrap();
     root.add((&leaf).into()).unwrap();

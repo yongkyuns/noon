@@ -292,14 +292,20 @@ fixtures pass, including the detached/live setter profiles. The family-paint
 pair produces identical nonblank pixels on WebGPU and WebGL2 (1,970 visible
 pixels each); the rendered result was inspected. The local fast gate passes
 3,449 library tests / 17 configured ignores; 93 family/paint tests and the native
-example also pass. Pinned ManimCE qualification, recursive root fade, and staged
-callback root updates remain open.
+example also pass. The pinned semantic run at `7fb1a3e13` matches all 258
+profiles; its wider raster qualification remains pending. Staged callback root
+updates remain open.
 
 For finite darkness in [0, 1], recursive `VGroup.fade()` now updates non-rendered
 root paint as well as leaf paint. Shared Rust computes membership-path counts
 without expanding aliased family paths, applies the same bounded fade factor to
 all three channels, and publishes each unique node once. Native tests cover
 aliased roots, empty families, live publication, rollback, zero-darkness no-op,
-and geometry/object-opacity preservation. Fresh browser and pinned ManimCE
-qualification are pending; staged root callbacks and extrapolated darkness
-remain unqualified.
+and geometry/object-opacity preservation. All 260 release-WASM/Pyodide semantic
+fixtures pass, including detached/live aliased-root fades, empty-family Scene
+admission, and mixed plain Group traversal. Empty families retain their live
+mutation owner without allocating leaf bindings; failed admission leaves wrapper
+registration unchanged. The updated family-paint pair has identical pixels on
+WebGPU and WebGL2 (1,970 visible pixels each), with rendered-image inspection.
+Pinned ManimCE qualification of these fade profiles, staged root callbacks, and
+extrapolated darkness remain unqualified.

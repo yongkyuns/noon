@@ -213,6 +213,8 @@ def _register_membership_wrappers(
         registry = _membership_registry(scene)
     registry[_semantic_wrapper_key(value)] = value
     if _semantic_handles._is_shared_family(value):
+        # Keep the family's mutation owner even when it has no leaf wrappers.
+        value._canonical_live_target_context = _context(scene)
         for member in value.submobjects:
             _register_membership_wrappers(scene, member, registry=registry)
 
@@ -238,8 +240,8 @@ def _membership_leaf_bindings(
     # This walk reserves Python wrapper IDs only. The family handle below remains
     # the sole membership/order input; Rust resolves authoritative family leaves.
     leaves = list(_membership_wrapper_leaves(value))
-    if not leaves:
-        raise ValueError("Scene membership target must contain at least one Mobject")
+    # An empty family still has a semantic root. It needs no Python leaf IDs;
+    # appendFamily below lets Rust decide its admission and later growth.
     reservations = []
     for member in leaves:
         handle = getattr(member, "_semantic_handle", None)

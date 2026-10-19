@@ -3175,13 +3175,13 @@ def _group_target_context(value: object) -> object | None:
         if id(member) in seen:
             return
         seen.add(id(member))
+        context = _live_mutation_context(member)
+        if context is not None:
+            contexts.append(context)
         if _is_shared_family(member):
             for child in member.submobjects:
                 collect(child)
             return
-        context = _live_mutation_context(member)
-        if context is not None:
-            contexts.append(context)
 
     collect(value)
     if not contexts:
