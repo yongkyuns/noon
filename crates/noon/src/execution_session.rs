@@ -60,12 +60,12 @@ use crate::execution_segment::{
 };
 use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
-    derive_prepared_scalar_animation_tracks, lower_prepared_family_transform_channels,
-    lower_prepared_matching_family_transform_payload, lower_prepared_path_motion_tracks,
-    lower_prepared_scalar_signal_timeline_entries_with_resolver,
-    lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
-    lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
-    lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
+    derive_prepared_scalar_animation_tracks, lower_prepared_animation_activation,
+    lower_prepared_family_transform_channels, lower_prepared_matching_family_transform_payload,
+    lower_prepared_path_motion_tracks, lower_prepared_scalar_signal_timeline_entries_with_resolver,
+    lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_schedule,
+    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
+    lower_semantic_execution, lower_semantic_execution_root,
     lower_semantic_execution_root_with_animation_root_at, lower_semantic_path_motion_tracks,
     prepare_family_transform_activations, prepare_matching_family_transform_activation,
     CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
@@ -4167,35 +4167,26 @@ impl ExecutionSession {
                 )
             })?;
 
-        let projection = lower_prepared_semantic_animation_composition(
-            &prepared,
-            &self.execution_index,
-            root,
-            self.runtime.frame().time,
-            play_options,
-            |object| {
-                let index = self.runtime.frame_index_for_object(object)?;
-                let frame = self.runtime.frame();
-                let row = frame.objects.get(index)?;
-                Some(EffectiveAnimationProperties {
-                    glow: row.glow.as_deref().copied(),
-                    z_index: row.z_index,
-                    transform: row.transform,
-                    style: row.style,
-                    appearance: row.appearance,
-                    reveal: *frame.reveals.get(index)?,
-                    world_transform: row.world_transform(),
-                    camera_profile: row.camera_profile(),
-                })
-            },
-        )?;
+        let projection = lower_prepared_animation_activation(&prepared, schedule, |object| {
+            let index = self.runtime.frame_index_for_object(object)?;
+            let frame = self.runtime.frame();
+            let row = frame.objects.get(index)?;
+            Some(EffectiveAnimationProperties {
+                glow: row.glow.as_deref().copied(),
+                z_index: row.z_index,
+                transform: row.transform,
+                style: row.style,
+                appearance: row.appearance,
+                reveal: *frame.reveals.get(index)?,
+                world_transform: row.world_transform(),
+                camera_profile: row.camera_profile(),
+            })
+        })?;
+        let schedule = projection.schedule();
 
         let mut activation_tracks = projection.tracks().to_vec();
-        let path_tracks = lower_prepared_path_motion_tracks(
-            &prepared,
-            &schedule,
-            &activation_tracks,
-            |object| {
+        let path_tracks =
+            lower_prepared_path_motion_tracks(&prepared, schedule, &activation_tracks, |object| {
                 if self.runtime.object_has_effective_driver(object) {
                     return None;
                 }
@@ -4207,8 +4198,7 @@ impl ExecutionSession {
                     transform: row.transform,
                     bounds_center,
                 })
-            },
-        )?;
+            })?;
         activation_tracks.extend(path_tracks);
 
         if schedule.family_transforms().len() > 1 {
@@ -4231,7 +4221,7 @@ impl ExecutionSession {
                     let activation = prepare_family_transform_activations(
                         &prepared,
                         &self.execution_index,
-                        &schedule,
+                        schedule,
                         |object| {
                             let index = self.runtime.frame_index_for_object(object)?;
                             let frame = self.runtime.frame();

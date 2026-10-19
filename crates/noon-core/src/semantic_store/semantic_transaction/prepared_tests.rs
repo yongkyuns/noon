@@ -56,7 +56,11 @@ fn prepare_and_drop_leave_state_revision_and_work_counters_untouched() {
     store.set_last_mutation_writes(7);
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(target, SemanticObjectProperty::RotationZ, 0.5_f64);
-    let prepared = transaction.prepare(&mut store).unwrap();
+    let prepared = transaction
+        .prepare(&mut store)
+        .unwrap()
+        .with_scalar_signal_tracks(std::iter::empty())
+        .unwrap();
     assert_eq!(
         prepared.proposed_scene_revision(),
         revision.checked_next().unwrap()
