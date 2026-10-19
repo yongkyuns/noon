@@ -1,0 +1,131 @@
+# Research-only source integration qualification. Never merge this workflow.
+# The tested merge is staged in a detached Git worktree; no branch ref is updated.
+name: 2175 current-master source integration proof
+
+on:
+  push:
+    branches:
+      - codex/2175-master-integration-qualify-20261019
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 2175-integration-proof-20261019
+  cancel-in-progress: false
+
+jobs:
+  integrated-qualification:
+    name: Test exact PR plus pinned master on standard Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    env:
+      EXPECTED_PR: 5b4962cf0f490c966c915f5b4557b7e5d328d25b
+      EXPECTED_MASTER: eea9df8ffeac2fe163d59b80171f0ab95f84167d
+      EXPECTED_MERGE_BASE: 85b67388db42a073493583b341babd6fac1cfd5d
+      PROOF_DIR: /tmp/noon-2175-integrated
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Stage authenticated two-parent source integration without changing refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          git fetch --no-tags origin "$EXPECTED_PR" "$EXPECTED_MASTER"
+          test "$(git rev-parse "$EXPECTED_PR")" = "$EXPECTED_PR"
+          test "$(git rev-parse "$EXPECTED_MASTER")" = "$EXPECTED_MASTER"
+          actual_base="$(git merge-base "$EXPECTED_PR" "$EXPECTED_MASTER")"
+          echo "$actual_base" > "$PROOF_DIR/merge-base.txt"
+          test "$actual_base" = "$EXPECTED_MERGE_BASE"
+          git -c user.name='Noon integration qualification' -c user.email='noreply@github.com' switch --detach "$EXPECTED_PR"
+          git -c user.name='Noon integration qualification' -c user.email='noreply@github.com' merge --no-commit --no-ff "$EXPECTED_MASTER"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PR"
+          test "$(git rev-parse MERGE_HEAD)" = "$EXPECTED_MASTER"
+          test -z "$(git ls-files -u)"
+          git diff --cached --check
+          git write-tree > "$PROOF_DIR/staged-tree.txt"
+          printf '%s\n' "$EXPECTED_PR" > "$PROOF_DIR/pr-head.txt"
+          printf '%s\n' "$EXPECTED_MASTER" > "$PROOF_DIR/master-head.txt"
+          git diff --cached --name-status > "$PROOF_DIR/integrated-paths.txt"
+          git diff --cached --stat > "$PROOF_DIR/integrated-stat.txt"
+          git diff --cached --binary > "$PROOF_DIR/integrated.patch"
+          sha256sum "$PROOF_DIR/integrated.patch" > "$PROOF_DIR/integrated-patch.sha256"
+          git status --short > "$PROOF_DIR/status-before.txt"
+          printf 'INTEGRATED_TREE=%s\n' "$(cat "$PROOF_DIR/staged-tree.txt")"
+          printf 'MASTER_DELTA_PATHS=%s\n' "$(wc -l < "$PROOF_DIR/integrated-paths.txt")"
+          # No research workflow, source-publishing script, or temporary file may
+          # leak into the staged engine merge from the two exact production refs.
+          test ! -f .github/workflows/2175-master-integration-qualify.yml
+
+      - name: Install repository-pinned Rust and native prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          rustc --version --verbose | tee "$PROOF_DIR/toolchain.txt"
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libvulkan1 mesa-vulkan-drivers libasound2-dev libudev-dev
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-2175-integration-sources-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+            ${{ runner.os }}-capture-cargo-sources-
+
+      - name: Run required repository full local gate against the integrated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh full HEAD 2>&1 | tee "$PROOF_DIR/full-gate.log"
+
+      - name: Confirm exact ordinary/packed/limited native pixels and every 4x MSAA sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::tests::mixed_mega_native_exact_pixels_against_individual_paths -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee "$PROOF_DIR/native-mixed-msaa.log"
+          grep -q 'test result: ok. 1 passed' "$PROOF_DIR/native-mixed-msaa.log"
+          test "$(grep -c 'MIXED_MEGA_NATIVE_EXACT step=' "$PROOF_DIR/native-mixed-msaa.log")" -eq 4
+
+      - name: Exercise integrated browser WebGPU and WebGL renderer paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          NOON_BROWSER_SMOKE_BACKEND=webgpu NOON_BROWSER_SMOKE_ARTIFACTS="$PROOF_DIR/browser-webgpu" node scripts/browser-smoke.mjs 2>&1 | tee "$PROOF_DIR/browser-webgpu.log"
+          NOON_BROWSER_SMOKE_BACKEND=webgl NOON_BROWSER_SMOKE_ARTIFACTS="$PROOF_DIR/browser-webgl" node scripts/browser-smoke.mjs 2>&1 | tee "$PROOF_DIR/browser-webgl.log"
+
+      - name: Verify tested staged merge has not changed and preserve exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PR"
+          test "$(git rev-parse MERGE_HEAD)" = "$EXPECTED_MASTER"
+          test "$(git write-tree)" = "$(cat "$PROOF_DIR/staged-tree.txt")"
+          git diff --quiet
+          git diff --cached --check
+          sha256sum crates/noon-render-wgpu/src/gpu/mod.rs > "$PROOF_DIR/integrated-renderer-sha256.txt"
+          printf 'VALIDATED_INTEGRATION_TREE=%s\n' "$(git write-tree)"
+          printf 'NO_BRANCH_REF_UPDATED=true\n' > "$PROOF_DIR/proof-complete.txt"
+
+      - name: Retain source identity, execution logs and failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: 2175-current-master-integration-proof
+          path: ${{ env.PROOF_DIR }}
+          retention-days: 3
+          if-no-files-found: warn
