@@ -113,6 +113,42 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         self.assertIs(plain.sort(), plain)
         self.assertIs(plain.sort_submobjects(), plain)
 
+    def test_group_shuffle_routes_permutation_through_shared_reorder(self):
+        import inspect
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        first, second = object(), object()
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(prependMembers=Mock())
+        root._semantic_family_handle = family_handle
+        batch = object()
+        with patch.object(handles, "_group_members", return_value=[first, second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
+             patch.object(handles, "_live_constructor_context", return_value=None), \
+             patch("random.shuffle", side_effect=lambda members: members.reverse()):
+            self.assertIs(handles._group_shuffle(root), root)
+        make_batch.assert_called_once_with(None, "add", (second, first))
+        family_handle.prependMembers.assert_called_once_with(batch)
+
+        signature = inspect.signature(compat.Group.shuffle)
+        self.assertEqual(tuple(signature.parameters), ("self", "recursive"))
+        self.assertEqual(signature.parameters["recursive"].default, False)
+        alias = inspect.signature(compat.Mobject.shuffle_submobjects)
+        self.assertEqual(tuple(alias.parameters), ("self", "args", "kwargs"))
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.shuffle(recursive=True), plain)
+        self.assertIs(plain.shuffle_submobjects(), plain)
+        root = identity_only_wrapper(compat.Group)
+        root._semantic_family_handle = SimpleNamespace(prependMembers=Mock())
+        with patch.object(handles, "_group_members", side_effect=AssertionError("must reject before reading")), \
+             patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before context")):
+            with self.assertRaisesRegex(NotImplementedError, "Rust owns its family traversal"):
+                handles._group_shuffle(root, recursive=True)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

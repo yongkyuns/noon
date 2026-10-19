@@ -2871,6 +2871,27 @@ def _group_sort(
     return self
 
 
+def _group_shuffle(self: _compat.Group, recursive: bool = False) -> _compat.Group:
+    import random
+
+    if recursive:
+        raise NotImplementedError(
+            "recursive family shuffle is not supported until Rust owns its family traversal"
+        )
+    context = _live_constructor_context("family")
+    members = list(self.submobjects)
+    random.shuffle(members)
+    if all(before is after for before, after in zip(self.submobjects, members)):
+        return self
+    batch = _family_membership_batch(context, "add", tuple(members))
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(context.livePrependFamilyMembers, family_handle, batch)
+    else:
+        engine_call(family_handle.prependMembers, batch)
+    return self
+
+
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self

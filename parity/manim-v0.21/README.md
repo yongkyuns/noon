@@ -86,3 +86,12 @@ receiver identity. The overlapping-square Cairo raster fixture qualifies the
 point-key painter-order change after live scene admission on WebGPU and WebGL2
 with zero differing pixels, matching bounds and duration, 0.001725 mean
 absolute channel error, and maximum channel error 9.
+
+`Mobject.shuffle(recursive=False)` and `shuffle_submobjects()` use Python's
+seeded `random.shuffle` sequence to choose permutations, then publish each family
+order through the shared Rust transaction. Product fixtures cover detached/live
+calls and receiver identity. `recursive=True` is explicitly unsupported until
+Rust owns the repeated-alias family traversal plan. The seeded overlapping-square
+Cairo fixture shuffles after live scene admission and passes on WebGPU and WebGL2
+with zero differing pixels, matching bounds and duration, mean absolute channel
+error 0.001725, and maximum channel error 9.

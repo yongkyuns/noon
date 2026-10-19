@@ -927,6 +927,10 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_sort
         return _group_sort(self, point_to_num_func, submob_func)
 
+    def shuffle(self, recursive: bool = False) -> Self:
+        from _manim_semantic_handles import _group_shuffle
+        return _group_shuffle(self, recursive)
+
     def remove(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_remove
         return _group_remove(self, *mobjects)

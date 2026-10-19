@@ -554,6 +554,13 @@ class Mobject:
     def sort_submobjects(self, *args: Any, **kwargs: Any) -> Self:
         return self.sort(*args, **kwargs)
 
+    def shuffle(self, recursive: bool = False) -> Self:
+        """Shuffle children when this object has a family-aware wrapper."""
+        return self
+
+    def shuffle_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.shuffle(*args, **kwargs)
+
     def has_points(self) -> bool:
         return self.get_num_points() > 0
 

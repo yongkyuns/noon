@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import os
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -730,6 +731,50 @@ def _manim_family_sort_alias() -> Any:
 
 def _noon_family_sort_alias_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene, alias=True))
+
+
+def _family_shuffle(
+    provider: Any,
+    scene: Any | None = None,
+    alias: bool = False,
+) -> Any:
+    random.seed(179)
+    members = [provider.Square(side_length=0.5) for _ in range(4)]
+    root = provider.Group(*members)
+    if scene is not None:
+        scene.add(root)
+    returned = (
+        root.shuffle_submobjects()
+        if alias
+        else root.shuffle()
+    )
+    labels = {id(member): str(index) for index, member in enumerate(members)}
+    return {"returns_self": returned is root,
+            "root_order": [labels[id(member)] for member in root.submobjects]}
+
+
+def _noon_family_shuffle() -> Any:
+    return _family_shuffle(noon)
+
+
+def _manim_family_shuffle() -> Any:
+    return _family_shuffle(manim)
+
+
+def _noon_family_shuffle_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene))
+
+
+def _noon_family_shuffle_alias() -> Any:
+    return _family_shuffle(noon, alias=True)
+
+
+def _manim_family_shuffle_alias() -> Any:
+    return _family_shuffle(manim, alias=True)
+
+
+def _noon_family_shuffle_alias_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene, alias=True))
 
 
 def _noon_vgroup_shift() -> Any:
@@ -3708,6 +3753,10 @@ FIXTURES = [
     Fixture("group_sort_point_key_live", _noon_family_sort_point_key_live, _manim_family_sort_point_key),
     Fixture("group_sort_submobjects_key", _noon_family_sort_alias, _manim_family_sort_alias),
     Fixture("group_sort_submobjects_key_live", _noon_family_sort_alias_live, _manim_family_sort_alias),
+    Fixture("group_shuffle", _noon_family_shuffle, _manim_family_shuffle),
+    Fixture("group_shuffle_live", _noon_family_shuffle_live, _manim_family_shuffle),
+    Fixture("group_shuffle_submobjects", _noon_family_shuffle_alias, _manim_family_shuffle_alias),
+    Fixture("group_shuffle_submobjects_live", _noon_family_shuffle_alias_live, _manim_family_shuffle_alias),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
