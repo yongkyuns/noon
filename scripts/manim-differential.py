@@ -1068,6 +1068,53 @@ def _noon_get_merged_points_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _get_merged_points(noon, scene))
 
 
+def _apply_over_attr_arrays(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+
+    root = provider.Line((-2, -0.5, 0), (-1, 0.5, 0))
+    child = provider.Line((3, -1, 0), (4, 1, 0))
+    family = provider.Group(root, child)
+    child_before = [
+        _point_observation(point) for point in child.get_nth_curve_points(0)
+    ]
+    if scene is not None:
+        scene.add(family)
+
+    calls = []
+
+    def translate(points):
+        rows = [[float(component) for component in point] for point in points]
+        calls.append(rows)
+        return points + np.asarray([1.5, -2.0, 0.0])
+
+    returned = root.apply_over_attr_arrays(translate)
+    return {
+        "returns_self": returned is root,
+        "calls": calls,
+        "root_points": [
+            _point_observation(point) for point in root.get_nth_curve_points(0)
+        ],
+        "child_before": child_before,
+        "child_points": [
+            _point_observation(point) for point in child.get_nth_curve_points(0)
+        ],
+    }
+
+
+def _noon_apply_over_attr_arrays() -> Any:
+    return _apply_over_attr_arrays(noon)
+
+
+def _manim_apply_over_attr_arrays() -> Any:
+    return _apply_over_attr_arrays(manim)
+
+
+def _noon_apply_over_attr_arrays_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _apply_over_attr_arrays(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4089,6 +4136,10 @@ FIXTURES = [
     Fixture("reduce_across_dimension_live", _noon_reduce_across_dimension_live, _manim_reduce_across_dimension),
     Fixture("get_merged_array_points", _noon_get_merged_points, _manim_get_merged_points),
     Fixture("get_merged_array_points_live", _noon_get_merged_points_live, _manim_get_merged_points),
+    Fixture("apply_over_attr_arrays",
+            _noon_apply_over_attr_arrays, _manim_apply_over_attr_arrays),
+    Fixture("apply_over_attr_arrays_live",
+            _noon_apply_over_attr_arrays_live, _manim_apply_over_attr_arrays),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

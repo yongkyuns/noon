@@ -616,6 +616,11 @@ class Mobject:
     def get_array_attrs(self) -> list[str]:
         return ["points"]
 
+    def apply_over_attr_arrays(self, func: Callable[[Any], Any]) -> Self:
+        """Map this object's supported point array and publish it through Rust."""
+        from _manim_path_editing import apply_over_attr_arrays
+        return apply_over_attr_arrays(self, func)
+
     def get_merged_array(self, array_attr: str):
         from _manim_path_queries import merged_array
         return merged_array(self, array_attr)

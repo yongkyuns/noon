@@ -43,6 +43,78 @@ def set_points(value, points):
     return edit_points(value, "setPoints", "liveSetPoints", points, array=True)
 
 
+def apply_over_attr_arrays(value, func):
+    """Map the object's Rust-owned point snapshot, then publish it via Rust."""
+    attrs = list(value.get_array_attrs())
+    unsupported = [attr for attr in attrs if attr != "points"]
+    if unsupported:
+        raise NotImplementedError(
+            "apply_over_attr_arrays currently supports only the shared Rust points array"
+        )
+    if not attrs:
+        return value
+
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "array mapping is unavailable during staged callbacks"
+        )
+
+    from _manim_path_queries import _query
+    for attr in attrs:
+        query = _query(value)
+        try:
+            coordinates = engine_call(query.points)
+        finally:
+            query.free()
+
+        try:
+            import numpy as np
+        except ImportError:
+            rows = [
+                [float(coordinates[index]), float(coordinates[index + 1]), 0.0]
+                for index in range(0, len(coordinates), 2)
+            ]
+        else:
+            xy = np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+            rows = np.column_stack((xy, np.zeros(len(xy), dtype=np.float64)))
+
+        mapped = func(rows)
+        mapped = _mapped_planar_points(mapped)
+        edit_points(
+            value,
+            "setPoints",
+            "liveSetPoints",
+            mapped,
+            array=True,
+        )
+    return value
+
+
+def _mapped_planar_points(points):
+    """Validate the planar Rust path boundary before publishing mapped rows."""
+    try:
+        import numpy as np
+    except ImportError:
+        rows = [list(point) for point in points]
+        if not rows:
+            return []
+        if any(len(row) not in (2, 3) for row in rows):
+            raise ValueError("mapped points must have two or three coordinates")
+        if any(len(row) == 3 and float(row[2]) != 0.0 for row in rows):
+            raise NotImplementedError("nonzero-z mapped points are unsupported")
+        return [(float(row[0]), float(row[1])) for row in rows]
+
+    mapped = np.asarray(points, dtype=np.float64)
+    if mapped.ndim == 1 and mapped.size == 0:
+        return []
+    if mapped.ndim != 2 or mapped.shape[1] not in (2, 3):
+        raise ValueError("mapped points must be a two-dimensional point array")
+    if mapped.shape[1] == 3 and np.any(mapped[:, 2] != 0.0):
+        raise NotImplementedError("nonzero-z mapped points are unsupported")
+    return mapped[:, :2]
+
+
 def append_points(value, points):
     return edit_points(value, "appendPoints", "liveAppendPoints", points, array=True)
 

@@ -920,6 +920,28 @@ json.dumps({
   ]);
   assert.equal(product.plain_group_restore_extension.status, "restored");
   const observations = product.observations;
+  for (const name of ["apply_over_attr_arrays", "apply_over_attr_arrays_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.returns_self, true, `${name}: returns the same Mobject`);
+    assert.equal(profile.calls.length, 1, `${name}: maps only the receiver's points`);
+    assert.equal(profile.calls[0].length, 4, `${name}: exposes the receiver's four curve points`);
+    assert.ok(profile.calls[0].every(point => point.length === 3 && point[2] === 0),
+      `${name}: supplies Manim-compatible planar three-column points`);
+    for (let index = 0; index < 4; index += 1) {
+      assert.ok(Math.abs(profile.root_points[index][0] - (profile.calls[0][index][0] + 1.5)) < 1e-6,
+        `${name}: mapped root x point ${index}`);
+      assert.ok(Math.abs(profile.root_points[index][1] - (profile.calls[0][index][1] - 2)) < 1e-6,
+        `${name}: mapped root y point ${index}`);
+    }
+    assert.deepEqual(profile.child_points, profile.child_before,
+      `${name}: receiver mapping leaves siblings unchanged`);
+  }
+  assert.deepEqual(observations.apply_over_attr_arrays.child_points,
+    observations.apply_over_attr_arrays_live.child_points,
+    "array mapping preserves child point arrays in live authoring");
+  assert.deepEqual(observations.apply_over_attr_arrays.root_points,
+    observations.apply_over_attr_arrays_live.root_points,
+    "array mapping publishes the same points in authored and live modes");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
