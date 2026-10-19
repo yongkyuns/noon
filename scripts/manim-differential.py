@@ -2067,7 +2067,8 @@ def _manim_mobject_z_index_by_z() -> Any:
 
 def _mobject_surround(provider: Any, scene: Any | None = None) -> Any:
     target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
-    surrounder = provider.Circle(radius=0.25)
+    # Square inherits Mobject.surround; Circle has a different buffer_factor API.
+    surrounder = provider.Square(side_length=0.5)
     if scene is not None:
         scene.add(target, surrounder)
     returned = surrounder.surround(target, dim_to_match=1, buff=0.2)
