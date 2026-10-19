@@ -442,7 +442,7 @@ impl SceneInstance {
         stats.resource_payloads = resources.prefix_payload_count();
         stats.family_plans = family_plans.len();
         let family_payloads = family_plans.iter().try_fold(0usize, |total, animation| {
-            animation.plan.leaves().iter().try_fold(total.saturating_add(1), |subtotal, leaf| {
+            animation.plan.leaves().iter().try_fold(total.checked_add(1)?, |subtotal, leaf| {
                 subtotal.checked_add(leaf.members().member_count() as usize)
             })
         }).ok_or(ReplayError::RetentionLimit)?;
