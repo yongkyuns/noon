@@ -459,6 +459,37 @@ fn native_capture_continuous_stroke_pattern_replays_retained_pixels() {
         assert_eq!(image.receipt.published_time, time);
         let rgb = image.rgba.as_chunks::<4>().0;
         assert!(rgb.iter().all(|pixel| pixel[3] == 255));
+        // Independent pixel-shape oracle: a periodic pattern must produce
+        // multiple separated bright regions, not merely a changing solid Line.
+        // Find the most ink-covered scanline independently for each color so
+        // the assertion is insensitive to viewport/row origin and antialiasing.
+        let separated_ink_runs = |is_ink: fn(&[u8]) -> bool| {
+            let row = image
+                .rgba
+                .chunks_exact(640 * 4)
+                .max_by_key(|row| row.chunks_exact(4).filter(|pixel| is_ink(pixel)).count())
+                .expect("nonempty capture");
+            let mut runs = 0;
+            let mut width = 0;
+            for pixel in row.chunks_exact(4) {
+                if is_ink(pixel) {
+                    width += 1;
+                } else {
+                    if width >= 2 {
+                        runs += 1;
+                    }
+                    width = 0;
+                }
+            }
+            if width >= 2 {
+                runs += 1;
+            }
+            runs
+        };
+        let cyan_runs = separated_ink_runs(|p| p[0] < 64 && p[1] > 160 && p[2] > 160);
+        let yellow_runs = separated_ink_runs(|p| p[0] > 160 && p[1] > 120 && p[2] < 64);
+        assert!(cyan_runs >= 8, "dashes must be separated at t={time}: {cyan_runs} regions");
+        assert!(yellow_runs >= 8, "dots must be separated at t={time}: {yellow_runs} regions");
         assert!(
             rgb.iter()
                 .filter(|p| p[0] < 64 && p[1] > 160 && p[2] > 160)
