@@ -569,6 +569,52 @@ def _manim_vgroup_add_remove() -> Any:
     return _members_observation(group)
 
 
+def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25)
+    second = provider.Square(side_length=0.5)
+    third = provider.Rectangle(width=0.8, height=0.4)
+    replacement = provider.Circle(radius=0.4)
+    labels = {
+        id(first): "first",
+        id(second): "second",
+        id(third): "third",
+        id(replacement): "replacement",
+    }
+    value = provider.VDict([("first", first), ("second", second)])
+    if scene is not None:
+        scene.add(value)
+    add_result = value.add([("third", third)])
+    value["second"] = replacement
+    direct_after_assignment = [labels[id(member)] for member in value.submobjects]
+    remove_result = value.remove("third")
+    del value["first"]
+    copied = value.copy()
+    return {
+        "returns_self": add_result is value and remove_result is value,
+        "direct_after_assignment": direct_after_assignment,
+        "direct_after_key_delete": [labels[id(member)] for member in value.submobjects],
+        "keys": list(value.submob_dict),
+        "values": [labels[id(member)] for member in value.get_all_submobjects()],
+        "lookup_is_replacement": value["second"] is replacement,
+        "contains_deleted_key": "first" in value,
+        "copy_keys": list(copied.submob_dict),
+        "copy_lookup_is_family_member": copied["second"] is copied.submobjects[-1],
+        "copy_show_keys": copied.show_keys,
+    }
+
+
+def _noon_vdict_mapping() -> Any:
+    return _vdict_mapping(noon)
+
+
+def _manim_vdict_mapping() -> Any:
+    return _vdict_mapping(manim)
+
+
+def _noon_vdict_mapping_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _vdict_mapping(noon, scene))
+
+
 def _family_add_to_back(provider: Any, scene: Any | None = None) -> Any:
     first, second, third, added = [
         provider.Square(side_length=0.5) for _ in range(4)
@@ -4797,6 +4843,8 @@ FIXTURES = [
             lambda: _family_fade_to_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
+    Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),
+    Fixture("vdict_mapping_live", _noon_vdict_mapping_live, _manim_vdict_mapping),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
     Fixture("vgroup_slicing", _noon_vgroup_slicing, _manim_vgroup_slicing),
     Fixture(
@@ -4842,7 +4890,7 @@ UNSUPPORTED = {
     "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
     "plain_group_save_restore": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 Group.restore() delegates to base Mobject.become(), whose base interpolate_color() raises NotImplementedError for a plain Group. Noon restores shared Rust family state for Group; scripts/manim-differential-noon.mjs separately checks root and child colors through actual product Pyodide. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2161-L2166 and #L3172-L3180.",
     "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
-    "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
+    "family_insert_assignment": "Duplicate direct-child Mobject.insert remains unsupported by Noon’s identity-unique Rust family edge model. The pinned Mobject class has no __setitem__; indexed assignment is not part of this API. See #74 for the family-edge identity constraint.",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",

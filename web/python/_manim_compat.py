@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Hashable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Self
 
 import noon as _base
@@ -1201,6 +1202,76 @@ class CurvesAsSubmobjects(VGroup):
                 residue = (target_length - current_length) / length
                 return part.point_from_proportion(residue)
             current_length += length
+
+
+class VDict(VGroup, VMobject):
+    """A shared-family vector group with Manim's key-to-mobject access."""
+
+    def __init__(
+        self,
+        mapping_or_iterable: Mapping[Hashable, VMobject]
+        | Iterable[tuple[Hashable, VMobject]] = {},
+        show_keys: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        if show_keys:
+            raise NotImplementedError(
+                "VDict show_keys requires adding text submobjects to geometry objects"
+            )
+        super().__init__(**kwargs)
+        self.show_keys = show_keys
+        self.submob_dict: dict[Hashable, VMobject] = {}
+        self.add(mapping_or_iterable)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.submob_dict!r})"
+
+    def add(
+        self,
+        mapping_or_iterable: Mapping[Hashable, VMobject]
+        | Iterable[tuple[Hashable, VMobject]],
+    ) -> Self:
+        for key, value in dict(mapping_or_iterable).items():
+            self.add_key_value_pair(key, value)
+        return self
+
+    def remove(self, key: Hashable) -> Self:
+        if key not in self.submob_dict:
+            raise KeyError(f"The given key '{key!s}' is not present in the VDict")
+        super().remove(self.submob_dict[key])
+        del self.submob_dict[key]
+        return self
+
+    def __getitem__(self, key: Hashable) -> VMobject:
+        return self.submob_dict[key]
+
+    def __setitem__(self, key: Hashable, value: VMobject) -> None:
+        if key in self.submob_dict:
+            self.remove(key)
+        self.add([(key, value)])
+
+    def __delitem__(self, key: Hashable) -> None:
+        # Manim deliberately removes only the key here; its family member remains.
+        del self.submob_dict[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.submob_dict
+
+    def get_all_submobjects(self):
+        return self.submob_dict.values()
+
+    def add_key_value_pair(self, key: Hashable, value: VMobject) -> Self:
+        if not isinstance(value, (VMobject, VGroup)):
+            raise TypeError(
+                f"VDict values must be VMobjects, got {type(value).__name__}"
+            )
+        if self.show_keys:
+            raise NotImplementedError(
+                "VDict show_keys requires adding text submobjects to geometry objects"
+            )
+        self.submob_dict[key] = value
+        super().add(value)
+        return self
 
 
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:

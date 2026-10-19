@@ -1668,6 +1668,7 @@ _PUBLIC_EXPORTS = {
     "Path": "_manim_compat",
     "Group": "_manim_compat",
     "VGroup": "_manim_compat",
+    "VDict": "_manim_compat",
     "MoveToTarget": "_manim_compat",
     "Restore": "_manim_compat",
     "OUT": "_manim_compat",
