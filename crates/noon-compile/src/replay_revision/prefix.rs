@@ -1,7 +1,8 @@
 //! Experimental sparse lifecycle/content prefix transfer. Uses the existing compiler
 //! revision representation; no second scene, evaluator, or resource registry.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
-use noon_core::{Property, TrackId};
+use noon_core::{GeometryRef, Property, TrackId, TrackValues};
+use crate::TransformGeometryPlan;
 use std::collections::BTreeMap;
 
 mod order;
@@ -13,6 +14,7 @@ fn local_property(property: Property) -> bool {
     matches!(
         property,
         Property::Presence
+            | Property::Morph
             | Property::ZIndex
             | Property::Transform
             | Property::Position
@@ -29,9 +31,25 @@ fn local_property(property: Property) -> bool {
 
 fn local_track(track: &Option<CompiledTrack>) -> bool {
     track.as_ref().is_none_or(|track| {
-        local_property(track.property)
-            && track.transform_geometry_plan.is_none()
-            && super::path_motion_command_count(&track.values) == 0
+        if !local_property(track.property) || super::path_motion_command_count(&track.values) != 0 {
+            return false;
+        }
+        // Only compiled, inline vector-path morphs are safe in this slice:
+        // both the retained TrackValues and geometry plan are owned by the
+        // track. No external resource or host callback is reconstructed.
+        match (&track.values, &track.transform_geometry_plan) {
+            (
+                TrackValues::PreparedMorph { geometry: GeometryRef::VectorPath(_), .. },
+                Some(TransformGeometryPlan::PathPair { geometry, prestart_geometry, .. }),
+            ) if track.property == Property::Morph => {
+                matches!(geometry.as_ref(), GeometryRef::VectorPath(_))
+                    && prestart_geometry.as_ref().is_none_or(|geometry| {
+                        matches!(geometry.as_ref(), GeometryRef::VectorPath(_))
+                    })
+            }
+            (_, None) => track.property != Property::Morph,
+            _ => false,
+        }
     })
 }
 
