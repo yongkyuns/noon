@@ -112,3 +112,58 @@ fn late_native_text_and_font_closure_survive_preparation() {
     assert!(publication.text_resources().get(handle).is_some(), "late text handle must remain alive");
     assert_eq!(publication.frame(), &expected);
 }
+
+#[cfg(feature = "native-text")]
+mod raster_support;
+
+#[cfg(feature = "native-text")]
+#[test]
+#[ignore = "requires actual Vulkan fallback adapter; invoked explicitly by M2d CI"]
+fn late_text_reentry_raster_is_identical_after_preparation_and_source_destruction() {
+    use noon::Text;
+    pollster::block_on(async {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.15).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source.begin_replay_retention(ReplayLimits { revisions: 256, payloads: 8192 }).unwrap();
+        let mut source_raster = raster_support::Raster::new().await;
+        source.advance_to(0.5).unwrap();
+        let mut reference = vec![(0.5, source_raster.capture(&source.take_renderer_publication()))];
+        source.advance_to(1.0).unwrap();
+        let initial = source.wait_segment(0.0).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(initial).unwrap();
+        reader.reserve_object_capacity(16).unwrap();
+
+        let heading = scene.live(&mut source).create_text(Text::new("Noon prepared text").with_font_size(38.0)).unwrap();
+        scene.live(&mut source).add(&heading).unwrap();
+        for step in 1..=3 {
+            if step == 2 { scene.live(&mut source).remove(&heading).unwrap(); }
+            if step == 3 { scene.live(&mut source).add(&heading).unwrap(); }
+            let boundary = source.wait_segment(1.0).unwrap();
+            source.advance_to(step as f64 + 0.5).unwrap();
+            reference.push((source.frame().time, source_raster.capture(&source.take_renderer_publication())));
+            source.advance_to(boundary.end_time()).unwrap();
+            let batch = source.publish_prepared_prefix(boundary, &mut publisher).unwrap();
+            reader.append(batch).unwrap();
+        }
+        assert_ne!(reference[0].1, reference[1].1, "late text is visible");
+        assert_ne!(reference[1].1, reference[2].1, "removal is visible");
+        assert_eq!(reference[1].1, reference[3].1, "reentry retains original font/geometry");
+        drop(heading);
+        drop(source);
+        drop(scene);
+        drop(publisher);
+        let mut playback_raster = raster_support::Raster::new().await;
+        for _ in 0..3 {
+            for (time, pixels) in reference.iter().rev() {
+                reader.seek(*time).unwrap();
+                assert_eq!(&playback_raster.capture(&reader.take_renderer_publication()), pixels);
+            }
+        }
+        let mut fresh = raster_support::Raster::new().await;
+        reader.seek(1.5).unwrap();
+        assert_eq!(&fresh.capture(&reader.take_renderer_publication()), &reference[1].1);
+        eprintln!("M2D_LATE_TEXT_RASTER: 13 exact comparisons passed across late text, removal/reentry, destroyed source, fresh renderer");
+    });
+}
