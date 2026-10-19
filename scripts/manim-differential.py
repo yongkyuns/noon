@@ -1287,6 +1287,41 @@ def _manim_animation_override_registry() -> Any:
     return _animation_override_registry(manim)
 
 
+def _mobject_lifecycle_hooks(provider: Any) -> Any:
+    mobject = provider.Mobject()
+
+    class Custom(provider.Mobject):
+        def __init__(self):
+            self.hook_calls = []
+            super().__init__()
+
+        def generate_points(self):
+            self.hook_calls.append(["generate_points"])
+            return self
+
+        def init_colors(self, propagate_colors=True):
+            self.hook_calls.append(["init_colors", propagate_colors])
+            return self
+
+    custom = Custom()
+    return {
+        "generate_points_returns_self": mobject.generate_points() is mobject,
+        "init_colors_default_returns_self": mobject.init_colors() is mobject,
+        "init_colors_false_returns_self": (
+            mobject.init_colors(propagate_colors=False) is mobject
+        ),
+        "constructor_hook_order": custom.hook_calls,
+    }
+
+
+def _noon_mobject_lifecycle_hooks() -> Any:
+    return _mobject_lifecycle_hooks(noon)
+
+
+def _manim_mobject_lifecycle_hooks() -> Any:
+    return _mobject_lifecycle_hooks(manim)
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4325,6 +4360,9 @@ FIXTURES = [
     Fixture("animation_override_registry",
             _noon_animation_override_registry,
             _manim_animation_override_registry),
+    Fixture("mobject_lifecycle_hooks",
+            _noon_mobject_lifecycle_hooks,
+            _manim_mobject_lifecycle_hooks),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

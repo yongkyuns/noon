@@ -276,6 +276,8 @@ class Mobject:
         self.name = self.__class__.__name__ if name is None else name
         self.dim = dim
         self.target = target
+        self.generate_points()
+        self.init_colors()
 
     def get_group_class(self):
         from _manim_compat import Group
@@ -625,6 +627,15 @@ class Mobject:
         """Clear this object's authored points through the shared path editor."""
         from _manim_path_editing import clear_points
         return clear_points(self)
+
+    def init_colors(self, propagate_colors: bool = True) -> Mobject:
+        """Base color hook for concrete compatibility classes to override."""
+        del propagate_colors
+        return self
+
+    def generate_points(self) -> Mobject:
+        """Base point hook for concrete compatibility classes to override."""
+        return self
 
     def throw_error_if_no_points(self) -> None:
         if self.has_no_points():

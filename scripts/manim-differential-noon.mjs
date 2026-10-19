@@ -990,6 +990,17 @@ json.dumps({
     "animation_override_registry: marked methods are discovered");
   assert.equal(animationOverrideRegistry.intrinsic_inherited, true,
     "animation_override_registry: marked methods are discovered on subclasses");
+  const lifecycleHooks = observations.mobject_lifecycle_hooks;
+  assert.equal(lifecycleHooks.generate_points_returns_self, true,
+    "mobject_lifecycle_hooks: generate_points is a no-op self-returning hook");
+  assert.equal(lifecycleHooks.init_colors_default_returns_self, true,
+    "mobject_lifecycle_hooks: init_colors default is a no-op self-returning hook");
+  assert.equal(lifecycleHooks.init_colors_false_returns_self, true,
+    "mobject_lifecycle_hooks: init_colors accepts propagate_colors=False");
+  assert.deepEqual(lifecycleHooks.constructor_hook_order, [
+    ["generate_points"],
+    ["init_colors", true],
+  ], "mobject_lifecycle_hooks: construction dispatches base hooks in order");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
