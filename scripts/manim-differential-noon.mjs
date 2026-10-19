@@ -1023,6 +1023,20 @@ json.dumps({
         `${message}: component ${index}`);
     }
   };
+  for (const name of ["align_to_top", "align_to_top_live", "align_to_group_top", "align_to_group_top_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.returns_self, true, `${name}: returns the same Mobject`);
+    assertPointNear(profile.object_top.slice(1), profile.target_top.slice(1),
+      `${name}: aligns the selected top edge`);
+    assertPointNear([profile.object.center[0]], [profile.before.center[0]],
+      `${name}: preserves the unselected x coordinate`);
+  }
+  for (const name of ["align_to_point_right", "align_to_point_right_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.returns_self, true, `${name}: returns the same Mobject`);
+    assertPointNear(profile.right, [profile.point[0], profile.before.center[1]],
+      `${name}: aligns x to the point and preserves y`);
+  }
   for (const name of ["point_function_transforms", "point_function_transforms_live"]) {
     const profile = observations[name];
     assert.equal(profile.pointwise.returns_self, true, `${name}: apply_function identity`);

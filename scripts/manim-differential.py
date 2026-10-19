@@ -186,16 +186,107 @@ def _manim_next_to() -> Any:
     return {"left": _object_observation(left), "right": _object_observation(right)}
 
 
+def _align_to_top(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Rectangle(width=2.0, height=1.5).shift(
+        provider.RIGHT * 0.8 + provider.UP * 0.5
+    )
+    obj = provider.Circle(radius=0.4).shift(provider.LEFT * 2.0)
+    if scene is not None:
+        scene.add(target, obj)
+    target_top = _point_observation(target.get_top())
+    before = _object_observation(obj)
+    returned = obj.align_to(target, provider.UP)
+    return {
+        "returns_self": returned is obj,
+        "target": _object_observation(target),
+        "target_top": target_top,
+        "before": before,
+        "object": _object_observation(obj),
+        "object_top": _point_observation(obj.get_top()),
+    }
+
+
 def _noon_align_to_top() -> Any:
-    target = noon.Rectangle(width=2.0, height=1.5).shift(noon.RIGHT * 0.8 + noon.UP * 0.5)
-    obj = noon.Circle(radius=0.4).shift(noon.LEFT * 2.0).align_to(target, noon.UP)
-    return {"target": _object_observation(target), "object": _object_observation(obj)}
+    return _align_to_top(noon)
 
 
 def _manim_align_to_top() -> Any:
-    target = manim.Rectangle(width=2.0, height=1.5).shift(manim.RIGHT * 0.8 + manim.UP * 0.5)
-    obj = manim.Circle(radius=0.4).shift(manim.LEFT * 2.0).align_to(target, manim.UP)
-    return {"target": _object_observation(target), "object": _object_observation(obj)}
+    return _align_to_top(manim)
+
+
+def _noon_align_to_top_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _align_to_top(noon, scene))
+
+
+def _align_to_point_right(provider: Any, scene: Any | None = None) -> Any:
+    point = (1.25, 2.75, 0.0)
+    obj = provider.Rectangle(width=0.8, height=0.4).shift(
+        provider.LEFT * 2.0 + provider.DOWN
+    )
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.align_to(point, provider.RIGHT)
+    return {
+        "returns_self": returned is obj,
+        "point": list(point[:2]),
+        "before": before,
+        "after": _object_observation(obj),
+        "right": _point_observation(obj.get_right()),
+    }
+
+
+def _noon_align_to_point_right() -> Any:
+    return _align_to_point_right(noon)
+
+
+def _manim_align_to_point_right() -> Any:
+    return _align_to_point_right(manim)
+
+
+def _noon_align_to_point_right_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_to_point_right(noon, scene)
+    )
+
+
+def _align_to_group_top(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Group(
+        provider.Rectangle(width=1.2, height=0.7).shift(
+            provider.RIGHT + provider.UP
+        ),
+        provider.Circle(radius=0.25).shift(
+            provider.RIGHT * 1.5 + provider.UP * 2.0
+        ),
+    )
+    obj = provider.Circle(radius=0.35).shift(provider.LEFT * 1.5 + provider.DOWN)
+    if scene is not None:
+        scene.add(target, obj)
+    target_top = _point_observation(target.get_top())
+    before = _object_observation(obj)
+    returned = obj.align_to(target, provider.UP)
+    return {
+        "returns_self": returned is obj,
+        "target": _members_observation(target),
+        "target_top": target_top,
+        "before": before,
+        "object": _object_observation(obj),
+        "object_top": _point_observation(obj.get_top()),
+    }
+
+
+def _noon_align_to_group_top() -> Any:
+    return _align_to_group_top(noon)
+
+
+def _manim_align_to_group_top() -> Any:
+    return _align_to_group_top(manim)
+
+
+def _noon_align_to_group_top_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_to_group_top(noon, scene)
+    )
 
 
 def _noon_to_edge() -> Any:
@@ -5288,6 +5379,11 @@ FIXTURES = [
     Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
     Fixture("next_to", _noon_next_to, _manim_next_to),
     Fixture("align_to_top", _noon_align_to_top, _manim_align_to_top),
+    Fixture("align_to_top_live", _noon_align_to_top_live, _manim_align_to_top),
+    Fixture("align_to_point_right", _noon_align_to_point_right, _manim_align_to_point_right),
+    Fixture("align_to_point_right_live", _noon_align_to_point_right_live, _manim_align_to_point_right),
+    Fixture("align_to_group_top", _noon_align_to_group_top, _manim_align_to_group_top),
+    Fixture("align_to_group_top_live", _noon_align_to_group_top_live, _manim_align_to_group_top),
     Fixture("to_edge", _noon_to_edge, _manim_to_edge),
     Fixture("to_corner", _noon_to_corner, _manim_to_corner),
     Fixture("vgroup_arrange", _noon_arrange, _manim_arrange),

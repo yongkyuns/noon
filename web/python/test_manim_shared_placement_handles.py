@@ -125,6 +125,31 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             assert abs(aligned.get_right().x - reference.get_right().x) < 1e-12
             assert abs(aligned.get_center().y + 1.0) < 1e-12
 
+            class FakeLiveContext:
+                def __init__(self):
+                    self.calls = []
+                def liveExecutionOwnership(self): return "returned"
+                def liveMoveToLayout(self, *args): self.calls.append(("layout", args))
+                def liveMoveToPoint(self, *args): self.calls.append(("point", args))
+
+            live_context = FakeLiveContext()
+            handles._live_mutation_context = lambda value: live_context
+            handles._live_constructor_context = lambda *args: None
+            live_target = Square(2.0)
+            live_receiver = Square(1.0)
+            assert live_receiver.align_to(live_target, RIGHT + UP) is live_receiver
+            assert live_context.calls[-1][0] == "layout"
+            assert live_context.calls[-1][1] == (
+                live_receiver._semantic_handle, live_target._semantic_handle,
+                1.0, 1.0, 1.0, 1.0,
+            )
+            assert live_receiver.align_to((3.0, 4.0, 0.0), UP) is live_receiver
+            assert live_context.calls[-1][0] == "point"
+            assert live_context.calls[-1][1] == (
+                live_receiver._semantic_handle, 3.0, 4.0,
+                0.0, 1.0, 0.0, 1.0,
+            )
+
             # Invalid identities must reject before any Python-derived edit.
             invalid = Square(1.0)
             invalid._semantic_handle_fresh = False

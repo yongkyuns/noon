@@ -1234,11 +1234,27 @@ def _align_to(
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("alignment requires current shared Rust semantic handles")
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets do not support layout alignment"
-        )
     axis = _base._as_vec2(direction)
+    context = _live_mutation_context(self) or _live_constructor_context()
+    if context is not None:
+        mask_x = 1.0 if axis.x != 0.0 else 0.0
+        mask_y = 1.0 if axis.y != 0.0 else 0.0
+        try:
+            if isinstance(mobject_or_point, (_base.Mobject, _compat.Group)):
+                target = _layout_anchor(mobject_or_point)
+                if target is None:
+                    raise RuntimeError(
+                        "alignment target requires current shared Rust semantic handles"
+                    )
+                engine_call(context.liveMoveToLayout, handle, target,
+                            axis.x, axis.y, mask_x, mask_y)
+            else:
+                point = _base._as_vec2(mobject_or_point)
+                engine_call(context.liveMoveToPoint, handle, point.x, point.y,
+                            axis.x, axis.y, mask_x, mask_y)
+        except Exception as error:
+            raise_engine_error(error)
+        return self
     if _is_shared_family(mobject_or_point):
         target = _layout_anchor(mobject_or_point)
         if target is None:
