@@ -12,6 +12,7 @@ from _manim_semantic_handles import (
     _family_point_count_observation,
     _length_over_dim_observation,
     _path_boundary_points_observation,
+    _point_reduction_tree_observation,
     _typed_manim_observation,
     _handle_for,
 )
@@ -300,6 +301,61 @@ def all_points(value):
     if coordinates is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
     return _format_points(coordinates)
+
+
+def reduce_across_dimension(value, reduce_func, dim):
+    """Reduce Rust-owned point snapshots in Manim's recursive family order."""
+
+    assert dim >= 0
+    assert dim <= 2
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "dimension reduction queries are unavailable during staged callbacks"
+        )
+
+    tree = _point_reduction_tree_observation(value)
+    if tree is None:
+        query = _query(value)
+        try:
+            tree = (engine_call(query.points), ())
+        finally:
+            query.free()
+    return _reduce_point_reduction_tree(tree, reduce_func, dim)
+
+
+def _reduce_point_reduction_tree(tree, reduce_func, dim):
+    """Invoke arbitrary Python reducers over a Rust-supplied semantic tree."""
+    coordinates = [float(value) for value in tree[0]]
+    if len(coordinates) % 2:
+        raise RuntimeError("point reduction tree returned an incomplete planar point")
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as error:
+        if error.name != "numpy":
+            raise
+        np = None
+
+    result = None
+    if coordinates:
+        if np is not None:
+            points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+            values = np.zeros(len(points), dtype=points.dtype) if dim == 2 else points[:, dim]
+        else:
+            points = list(zip(coordinates[::2], coordinates[1::2]))
+            values = [0.0] * len(points) if dim == 2 else [point[dim] for point in points]
+        result = reduce_func(values)
+
+    children = tree[1]
+    for index in range(len(children)):
+        child_value = _reduce_point_reduction_tree(children[index], reduce_func, dim)
+        if result is None:
+            result = child_value
+        elif child_value is not None:
+            result = reduce_func([child_value, result])
+    return result
 
 
 def boundary_points(value):

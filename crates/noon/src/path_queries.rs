@@ -25,6 +25,25 @@ pub struct PathQuery {
     unfinished_anchor: Option<noon_core::Vec2>,
 }
 
+/// A recursive snapshot of owned planar points in Manim family order.
+///
+/// Unlike [`MobjectTarget::all_points`], this preserves object boundaries so
+/// language adapters can invoke their caller-owned reducer once per object and
+/// once per family without owning semantic family traversal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PointReductionTree {
+    /// The object's own points in its current coordinate space.
+    pub points: Vec<(f64, f64)>,
+    /// Direct family members in semantic membership order.
+    pub children: Vec<Self>,
+}
+
+#[derive(Clone, Debug)]
+struct PointReductionTopology {
+    object: Option<SemanticNodeId>,
+    children: Vec<Self>,
+}
+
 impl PathQuery {
     pub(crate) fn prepare(
         path: &VectorPath,
@@ -940,6 +959,51 @@ fn family_point_occurrences(
     Ok(result)
 }
 
+fn point_reduction_topology(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+) -> Result<PointReductionTopology, AuthoringError> {
+    let node = store
+        .node(root)
+        .ok_or_else(|| AuthoringError::from(noon_core::SemanticStoreError::UnknownNode(root)))?;
+    match node.kind() {
+        SemanticNodeKind::AuthoringObject => Ok(PointReductionTopology {
+            object: Some(root),
+            children: Vec::new(),
+        }),
+        SemanticNodeKind::Family(_) => Ok(PointReductionTopology {
+            object: None,
+            children: node
+                .members()
+                .iter()
+                .map(|member| point_reduction_topology(store, *member))
+                .collect::<Result<_, _>>()?,
+        }),
+        SemanticNodeKind::Signal(_)
+        | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::Effect(_) => Ok(PointReductionTopology {
+            object: None,
+            children: Vec::new(),
+        }),
+    }
+}
+
+fn point_reduction_tree_from_topology(
+    topology: &PointReductionTopology,
+    point_query: &mut impl FnMut(SemanticNodeId) -> Result<Vec<(f64, f64)>, AuthoringError>,
+) -> Result<PointReductionTree, AuthoringError> {
+    Ok(PointReductionTree {
+        points: topology
+            .object
+            .map_or_else(|| Ok(Vec::new()), |object| point_query(object))?,
+        children: topology
+            .children
+            .iter()
+            .map(|child| point_reduction_tree_from_topology(child, point_query))
+            .collect::<Result<_, _>>()?,
+    })
+}
+
 fn authored_points_for_occurrences(
     store: &SemanticStore,
     occurrences: &[SemanticNodeId],
@@ -959,6 +1023,25 @@ fn authored_points_for_occurrences(
 }
 
 impl MobjectTarget<'_> {
+    /// Return an immutable recursive point snapshot in semantic family order.
+    /// Repeated aliases remain repeated children, matching Manim's recursive
+    /// reducer call order while keeping traversal in shared Rust semantics.
+    pub fn point_reduction_tree(&self) -> Result<PointReductionTree, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        let topology = point_reduction_topology(&store, self.node_id())?;
+        point_reduction_tree_from_topology(&topology, &mut |object| {
+            let state = store
+                .semantic_object_state_checked(object)
+                .map_err(AuthoringError::from)?;
+            let transform = state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?;
+            prepare_content(&store, state.content, transform)?.points()
+        })
+    }
+
     /// Return authored points for this object/family in Manim's recursive
     /// pre-order, preserving repeated family aliases as repeated point runs.
     pub fn all_points(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
@@ -1019,6 +1102,27 @@ impl MobjectTarget<'_> {
     pub fn length_over_dim(&self, dim: usize) -> Result<f64, AuthoringError> {
         length_over_xy_points(&self.all_points()?, dim)
     }
+}
+
+/// Observe a recursive point snapshot from one execution session, preserving
+/// family order and aliases while reading each object's current effective path.
+pub fn effective_point_reduction_tree(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<PointReductionTree, AuthoringError> {
+    if !Rc::ptr_eq(store, target.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    target.validate()?;
+    let topology = {
+        let semantics = store.borrow();
+        point_reduction_topology(&semantics, target.node_id())?
+    };
+    point_reduction_tree_from_topology(&topology, &mut |id| {
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        effective_path_query(store, execution, &object)?.points()
+    })
 }
 
 /// Observe current effective points for all object occurrences below a target.

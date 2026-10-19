@@ -1055,3 +1055,38 @@ fn native_object_scaled_strokes_use_the_same_morph_controls() {
         (-1.5, -1.),
     );
 }
+
+#[test]
+fn point_reduction_tree_preserves_nested_order_and_repeated_aliases() {
+    let mut scene = Scene::new();
+    let mut first = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            Default::default(),
+        )
+        .unwrap();
+    first.set_translation(4., 2.).unwrap();
+    let second = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(0., 1.))
+                .line_to(Vec2::new(0., 2.)),
+            Default::default(),
+        )
+        .unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&first).into()]).unwrap();
+
+    let tree = noon::MobjectTarget::from(&root)
+        .point_reduction_tree()
+        .unwrap();
+    assert!(tree.points.is_empty());
+    assert_eq!(tree.children.len(), 2);
+    assert_eq!(tree.children[0].children.len(), 2);
+    assert!(tree.children[1].children.is_empty());
+    assert_eq!(tree.children[0].children[0].points[0], (4., 2.));
+    assert_eq!(tree.children[0].children[0].points.last(), Some(&(5., 2.)));
+    assert_eq!(tree.children[0].children[0].points, tree.children[1].points);
+}

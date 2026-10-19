@@ -1004,6 +1004,48 @@ def _noon_put_start_and_end_on_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _put_start_and_end_on(noon, scene))
 
 
+def _reduce_across_dimension(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((-2, -0.5, 0), (-1, 0.5, 0)).shift(provider.UP)
+    second = provider.Line((3, -1, 0), (4, 1, 0)).shift(provider.DOWN)
+    family = provider.Group(provider.Group(first, second), first)
+    if scene is not None:
+        scene.add(family)
+
+    calls = []
+
+    def reducer(values):
+        observed = [float(value) for value in values]
+        calls.append(observed)
+        return sum(observed)
+
+    empty = provider.Group()
+    return {
+        "minimum_x": family.reduce_across_dimension(min, 0),
+        "maximum_x": family.reduce_across_dimension(max, 0),
+        "minimum_y": family.reduce_across_dimension(min, 1),
+        "maximum_y": family.reduce_across_dimension(max, 1),
+        "minimum_z": family.reduce_across_dimension(min, 2),
+        "maximum_z": family.reduce_across_dimension(max, 2),
+        "custom_reduction": family.reduce_across_dimension(reducer, 0),
+        "custom_reducer_calls": calls,
+        "empty": empty.reduce_across_dimension(max, 0),
+    }
+
+
+def _noon_reduce_across_dimension() -> Any:
+    return _reduce_across_dimension(noon)
+
+
+def _manim_reduce_across_dimension() -> Any:
+    return _reduce_across_dimension(manim)
+
+
+def _noon_reduce_across_dimension_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _reduce_across_dimension(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4021,6 +4063,8 @@ FIXTURES = [
     Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
     Fixture("put_start_and_end_on", _noon_put_start_and_end_on, _manim_put_start_and_end_on),
     Fixture("put_start_and_end_on_live", _noon_put_start_and_end_on_live, _manim_put_start_and_end_on),
+    Fixture("reduce_across_dimension", _noon_reduce_across_dimension, _manim_reduce_across_dimension),
+    Fixture("reduce_across_dimension_live", _noon_reduce_across_dimension_live, _manim_reduce_across_dimension),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

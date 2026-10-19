@@ -158,3 +158,16 @@ placement remains unsupported. The Cairo raster fixture passes on WebGPU and
 WebGL2 with duration delta 0, 0.0766% differing pixels, MAE 0.010016, and
 maximum channel error 44. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1948.
+
+`Mobject.reduce_across_dimension(reduce_func, dim)` invokes the supplied reducer
+on each point-owning member's transformed point array from a recursive tree
+produced by shared Rust semantics, then combines descendant results in pinned
+order, including repeated family aliases. Python owns only the caller callback
+and combines its results in the Rust-provided order without resolving Python
+family membership. Empty families return `None`; planar z reductions use zero
+coordinates. Detached and live nested-family probes match pinned ManimCE for
+min/max, custom reducer inputs, alias multiplicity, and empty families (185/185
+semantic fixtures). Staged callback queries reject before reading a stale
+snapshot, and resource-backed Text/Image point arrays remain unqualified. Pinned
+source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2168.

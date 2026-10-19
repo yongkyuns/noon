@@ -1065,6 +1065,28 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn family_point_reduction_tree(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let target = noon::MobjectTarget::from(family);
+        target
+            .require_store(self.scene.integration_store())
+            .map_err(AuthoringFailure::from)?;
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.live_effective_point_reduction_tree(target);
+            }
+        }
+        target
+            .point_reduction_tree()
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn family_extremum_along_dim(
         &mut self,
         family: &noon::MobjectFamily,
@@ -7204,6 +7226,17 @@ mod wasm {
             self.inner
                 .family_all_points(&handle.semantic_family()?)
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyPointReductionTree)]
+        pub fn query_family_point_reduction_tree(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<js_sys::Array, JsValue> {
+            self.inner
+                .family_point_reduction_tree(&handle.semantic_family()?)
+                .map(crate::authoring_mobject::point_reduction_tree_to_js)
                 .map_err(typed_js_error)
         }
 

@@ -312,7 +312,7 @@ pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthor
 pub use path_queries::{
     manim_cubic_bezier_point_ranges, manim_points_2d_close, manim_points_allclose,
     manim_subpath_ranges, manim_subpath_split_indices, reduce_point_boundary,
-    reduce_point_extremum, PathQuery,
+    reduce_point_extremum, PathQuery, PointReductionTree,
 };
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;

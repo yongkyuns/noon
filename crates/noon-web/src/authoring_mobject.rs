@@ -81,6 +81,23 @@ use noon_core::SemanticNodeId;
 use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_sys::Array {
+    let result = js_sys::Array::new();
+    let coordinates: Vec<_> = tree.points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+    result.push(&wasm_bindgen::JsValue::from(js_sys::Float64Array::from(
+        coordinates.as_slice(),
+    )));
+    let children = js_sys::Array::new();
+    for child in tree.children {
+        children.push(&wasm_bindgen::JsValue::from(point_reduction_tree_to_js(
+            child,
+        )));
+    }
+    result.push(&wasm_bindgen::JsValue::from(children));
+    result
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn family_color(
     enabled: bool,
     red: f64,
@@ -1206,6 +1223,15 @@ mod wasm {
             noon::MobjectTarget::from(&family)
                 .all_points()
                 .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointReductionTree)]
+        pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_reduction_tree()
+                .map(super::point_reduction_tree_to_js)
                 .map_err(js_error)
         }
 
