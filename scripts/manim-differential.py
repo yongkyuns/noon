@@ -2064,9 +2064,11 @@ def _manim_mobject_z_index_by_z() -> Any:
     return _mobject_z_index_by_z(manim)
 
 
-def _mobject_surround(provider: Any) -> Any:
+def _mobject_surround(provider: Any, scene: Any | None = None) -> Any:
     target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
     surrounder = provider.Circle(radius=0.25)
+    if scene is not None:
+        scene.add(target, surrounder)
     returned = surrounder.surround(target, dim_to_match=1, buff=0.2)
     center = surrounder.get_center()
     return {
@@ -2082,6 +2084,16 @@ def _noon_mobject_surround() -> Any:
 
 
 def _manim_mobject_surround() -> Any:
+    return _mobject_surround(manim)
+
+
+def _noon_mobject_surround_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _mobject_surround(noon, scene)
+    )
+
+
+def _manim_mobject_surround_live() -> Any:
     return _mobject_surround(manim)
 
 
@@ -5439,6 +5451,10 @@ FIXTURES = [
     Fixture("mobject_surround",
             _noon_mobject_surround,
             _manim_mobject_surround,
+            1e-5),
+    Fixture("mobject_surround_live",
+            _noon_mobject_surround_live,
+            _manim_mobject_surround_live,
             1e-5),
     Fixture("mobject_add_background_rectangle",
             _noon_mobject_add_background_rectangle,

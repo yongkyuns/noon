@@ -1190,14 +1190,22 @@ json.dumps({
     "mobject_z_index_by_z: the planar group z position becomes its z-index");
   assert.deepEqual(zIndexByZ.member_z_indices, [0, 0],
     "mobject_z_index_by_z: default family propagation updates every member");
-  const surround = observations.mobject_surround;
-  assert.equal(surround.returns_self, true,
-    "mobject_surround: surround returns the receiver");
-  assert.ok(Math.abs(surround.width - 1.2) <= 1e-5,
-    "mobject_surround: width follows matched height and buffer scaling");
-  assert.ok(Math.abs(surround.height - 1.2) <= 1e-5,
-    "mobject_surround: matched height includes the buffer");
-  assertPointNear(surround.center, [0.5, 0], "mobject_surround: centers on the target");
+  for (const name of ["mobject_surround", "mobject_surround_live"]) {
+    const surround = observations[name];
+    assert.equal(surround.returns_self, true,
+      `${name}: surround returns the receiver`);
+    assert.ok(Math.abs(surround.width - 1.2) <= 1e-5,
+      `${name}: width follows matched height and buffer scaling`);
+    assert.ok(Math.abs(surround.height - 1.2) <= 1e-5,
+      `${name}: matched height includes the buffer`);
+    assertPointNear(surround.center, [0.5, 0], `${name}: centers on the target`);
+  }
+  assertPointNear(
+    [observations.mobject_surround_live.width,
+      observations.mobject_surround_live.height],
+    [observations.mobject_surround.width, observations.mobject_surround.height],
+    "mobject_surround_live: matches detached dimensions",
+  );
   for (const name of ["mobject_get_pieces", "mobject_get_pieces_live"]) {
     const profile = observations[name];
     assert.equal(profile.group_type, "Group", `${name}: pinned get_pieces returns Group`);

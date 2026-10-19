@@ -203,3 +203,11 @@ identity. Product Pyodide passes all 246 shared Rust/Python fixtures. The pinned
 ManimCE comparison is enrolled in the hosted differential because ManimCE is not
 installed in this checkout. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1558-L1607.
+
+`Mobject.surround()` now has an active-live differential fixture for its
+replace-then-scale layout composition. It checks the returned receiver, target
+center, matched dimension, and buffer-expanded size against the detached product
+profile. Product Pyodide qualification is included in the current shared fixture
+run. The pinned ManimCE comparison remains enrolled in hosted qualification.
+Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1793-L1803.
