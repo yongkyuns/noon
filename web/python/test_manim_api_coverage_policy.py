@@ -86,6 +86,12 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotIn(name, policy["overrides"])
 
+    def test_mobject_methods_are_not_classified_as_top_level_exports(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        for name in ("add_background_rectangle", "match_z"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, policy["overrides"])
+
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())
