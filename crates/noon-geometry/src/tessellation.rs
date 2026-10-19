@@ -1,11 +1,12 @@
 use lyon_path::{
     builder::{Build, PathBuilder},
     math::point,
-    EndpointId, Event, IdEvent, Path,
+    AttributeStore, EndpointId, Event, IdEvent, Path,
 };
 use lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
-    StrokeTessellator, StrokeVertex, VertexBuffers, VertexSource,
+    BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin,
+    StrokeGeometryBuilder, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
+    VertexSource,
 };
 use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
 use std::collections::HashSet;
@@ -288,7 +289,11 @@ pub fn tessellate_screen_stroke(
         .with_miter_limit(MORPH_MITER_LIMIT)
         .with_line_cap(lyon_line_cap(stroke_cap))
         .with_line_join(lyon_line_join(stroke_join));
-    let smooth_anchors = screen_stroke_smooth_anchors(&lyon_path);
+    let smooth_anchors = if stroke_join == StrokeJoin::Miter {
+        HashSet::new()
+    } else {
+        screen_stroke_smooth_anchors(&lyon_path)
+    };
     let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
     let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
         let smooth_endpoint = match vertex.source() {
@@ -330,11 +335,15 @@ pub fn tessellate_screen_stroke(
             metadata: [0.0; 3],
         }
     });
-    // Keep the Path endpoint identities used by the smooth-join prepass.
-    // The attribute-free tessellate_path shortcut generates different IDs.
-    StrokeTessellator::new()
-        .tessellate_with_ids(lyon_path.id_iter(), &lyon_path, None, &options, &mut output)
-        .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    if stroke_join == StrokeJoin::Miter {
+        tessellate_stroke_with_retrace_joins(&lyon_path, &options, &mut output)?;
+    } else {
+        // Keep the Path endpoint identities used by the smooth-join prepass.
+        // The attribute-free tessellate_path shortcut generates different IDs.
+        StrokeTessellator::new()
+            .tessellate_with_ids(lyon_path.id_iter(), &lyon_path, None, &options, &mut output)
+            .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    }
     if buffers.vertices.is_empty() || buffers.indices.is_empty() {
         return Err(GeometryError::Tessellation(
             "screen stroke produced no triangles".to_owned(),
@@ -865,10 +874,6 @@ fn tessellate_styled_with_fill_impl(
     })
 }
 
-// Lyon's miter calculation treats an exact reversal's zero normal as an
-// unclipped miter, collapsing both sides of the stroke at the cusp. A bevel at
-// that singular join is the finite miter-limit result. Keep every ordinary join
-// and endpoint progress attribute unchanged, including the closure seam.
 fn tessellate_stroke(
     path: &Path,
     options: &StrokeOptions,
@@ -888,39 +893,49 @@ fn tessellate_stroke(
             path_progress,
         }
     });
+    tessellate_stroke_with_retrace_joins(path, options, &mut output)
+}
+
+// Lyon's miter calculation treats an exact reversal's zero normal as an
+// unclipped miter, collapsing both sides of the stroke at the cusp. A bevel at
+// that singular join is the finite miter-limit result. Share this correction
+// across world and screen strokes, preserving ordinary joins and attributes.
+fn tessellate_stroke_with_retrace_joins(
+    path: &Path,
+    options: &StrokeOptions,
+    output: &mut dyn StrokeGeometryBuilder,
+) -> Result<(), GeometryError> {
     let mut tessellator = StrokeTessellator::new();
     if options.line_join != LineJoin::Miter && options.line_join != LineJoin::MiterClip {
         return tessellator
-            .tessellate_path(path, options, &mut output)
+            .tessellate_path(path, options, output)
             .map_err(|error| GeometryError::Tessellation(error.to_string()));
     }
     let events: Vec<_> = path.iter_with_attributes().collect();
-    let mut builder = tessellator.builder_with_attributes(1, options, &mut output);
+    let mut builder = tessellator.builder_with_attributes(path.num_attributes(), options, output);
     for contour in events.split_inclusive(|event| matches!(event, Event::End { .. })) {
         let closed = matches!(contour.last(), Some(Event::End { close: true, .. }));
-        let first_line = contour.get(1);
-        let last_line = contour
+        let first_segment = contour.get(1).and_then(stroke_event_tangents);
+        let last_segment = contour
             .len()
             .checked_sub(2)
-            .and_then(|index| contour.get(index));
-        let direction =
-            |event: Option<&Event<(lyon_path::math::Point, &[f32]), lyon_path::math::Point>>| {
-                if let Some(Event::Line { from, to }) = event {
-                    Some(to.0 - from.0)
-                } else {
-                    None
-                }
-            };
+            .and_then(|index| contour.get(index))
+            .and_then(stroke_event_tangents);
+        let closing_segment = contour.last().and_then(stroke_event_tangents);
         for (index, event) in contour.iter().enumerate() {
-            let incoming = if matches!(event, Event::Begin { .. }) && closed {
-                direction(last_line)
+            let incoming = if closed && matches!(event, Event::Begin { .. } | Event::End { .. }) {
+                closing_segment
+                    .or(last_segment)
+                    .map(|(_, incoming)| incoming)
             } else {
-                direction(Some(event))
+                stroke_event_tangents(event).map(|(_, incoming)| incoming)
             };
             let outgoing = match contour.get(index + 1) {
-                Some(Event::End { close: true, .. }) => direction(first_line),
-                next => direction(next),
-            };
+                Some(Event::End { close: true, .. }) => closing_segment.or(first_segment),
+                None if closed => first_segment,
+                next => next.and_then(stroke_event_tangents),
+            }
+            .map(|(outgoing, _)| outgoing);
             let reversal = incoming.zip(outgoing).is_some_and(|(before, after)| {
                 let lengths = before.length() * after.length();
                 lengths > 0.
@@ -954,6 +969,40 @@ fn tessellate_stroke(
     builder
         .build()
         .map_err(|error| GeometryError::Tessellation(error.to_string()))
+}
+
+// Cubics are also the semantic representation of Manim's straight segments.
+// Use endpoint tangents rather than command kinds so their reversals receive
+// the same finite join. Repeated handles use the next nonzero derivative.
+fn stroke_event_tangents(
+    event: &Event<(lyon_path::math::Point, &[f32]), lyon_path::math::Point>,
+) -> Option<(lyon_path::math::Vector, lyon_path::math::Vector)> {
+    let (outgoing, incoming) = match *event {
+        Event::Line { from, to } => ([to.0 - from.0; 3], [to.0 - from.0; 3]),
+        Event::Quadratic { from, ctrl, to } => (
+            [ctrl - from.0, to.0 - from.0, to.0 - from.0],
+            [to.0 - ctrl, to.0 - from.0, to.0 - from.0],
+        ),
+        Event::Cubic {
+            from,
+            ctrl1,
+            ctrl2,
+            to,
+        } => (
+            [ctrl1 - from.0, ctrl2 - from.0, to.0 - from.0],
+            [to.0 - ctrl2, to.0 - ctrl1, to.0 - from.0],
+        ),
+        Event::End {
+            last,
+            first,
+            close: true,
+        } => ([first.0 - last.0; 3], [first.0 - last.0; 3]),
+        _ => return None,
+    };
+    let nonzero = |directions: [lyon_path::math::Vector; 3]| {
+        directions.into_iter().find(|v| v.x != 0. || v.y != 0.)
+    };
+    nonzero(outgoing).zip(nonzero(incoming))
 }
 
 fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryError> {
@@ -2408,6 +2457,60 @@ mod tests {
             .close()
     }
 
+    fn triangle_covers_point([a, b, c]: [Vec2; 3], point: Vec2) -> bool {
+        let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
+        if cross(b - a, c - a).abs() < 1e-10 {
+            return false;
+        }
+        let sides = [
+            cross(b - a, point - a),
+            cross(c - b, point - b),
+            cross(a - c, point - c),
+        ];
+        sides.iter().all(|s| *s >= -1e-7) || sides.iter().all(|s| *s <= 1e-7)
+    }
+
+    #[test]
+    fn screen_miter_retraces_keep_full_width_without_tapering() {
+        let end = Vec2::new(2.0, -1.0);
+        let retrace = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(end)
+            .line_to(Vec2::ZERO);
+        let attached = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::ZERO)
+            .line_to(end)
+            .line_to(Vec2::ZERO)
+            .close();
+        let closing_segment = VectorPath::new().move_to(Vec2::ZERO).line_to(end).close();
+        for path in [retrace.clone(), retrace.close(), closing_segment, attached] {
+            let mesh = tessellate_screen_stroke(&path, StrokeJoin::Miter, StrokeCap::Butt)
+                .expect("a retrace must produce a finite retained screen stroke");
+            let position = |index: u32| {
+                let vertex = mesh.vertices[index as usize];
+                let normal = Vec2::new(-vertex.tangent.y, vertex.tangent.x);
+                vertex.position
+                    + (vertex.tangent * vertex.extrusion.x + normal * vertex.extrusion.y) * 0.1
+            };
+            let normal = Vec2::new(1.0, 2.0) * (0.04 / 5.0_f32.sqrt());
+            for t in [0.1, 0.5, 0.9] {
+                for side in [-1.0, 1.0] {
+                    let point = end * t + normal * side;
+                    assert!(
+                        mesh.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                            triangle_covers_point(triangle.map(position), point)
+                        }),
+                        "screen stroke lost side {side} at {t}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn miter_retraces_keep_full_stroke_width_in_open_and_closed_contours() {
         fn covered(mesh: &TessellatedPath, point: Vec2) -> bool {
@@ -2417,17 +2520,7 @@ mod tests {
                 if vertices.iter().any(|v| v.surface != PathSurface::Stroke) {
                     return false;
                 }
-                let [a, b, c] = vertices.map(|v| v.position);
-                let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
-                if cross(b - a, c - a).abs() < 1e-10 {
-                    return false;
-                }
-                let sides = [
-                    cross(b - a, point - a),
-                    cross(c - b, point - b),
-                    cross(a - c, point - c),
-                ];
-                sides.iter().all(|s| *s >= -1e-7) || sides.iter().all(|s| *s <= 1e-7)
+                triangle_covers_point(vertices.map(|v| v.position), point)
             })
         }
         for close in [false, true] {
@@ -2452,6 +2545,69 @@ mod tests {
                     covered(&mesh, center - normal),
                     "negative side missing at {t}, closed={close}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn bezier_miter_retraces_keep_both_sides_of_the_stroke() {
+        let end = Vec2::new(2., -1.);
+        let quadratic = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .quadratic_to(end * 0.5, end)
+            .quadratic_to(end * 0.5, Vec2::ZERO);
+        let cubic = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(end / 3., end * (2. / 3.), end)
+            .cubic_to(end * (2. / 3.), end / 3., Vec2::ZERO);
+        // Zero endpoint derivatives still have a well-defined limiting tangent.
+        let stationary = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(Vec2::ZERO, end, end)
+            .cubic_to(end, Vec2::ZERO, Vec2::ZERO);
+        let normal = Vec2::new(1., 2.) * (0.04 / 5_f32.sqrt());
+        for path in [quadratic, cubic, stationary] {
+            for path in [path.clone(), path.close()] {
+                let mesh = tessellate_styled_with_fill(
+                    &path,
+                    0.1,
+                    StrokeJoin::Miter,
+                    StrokeCap::Butt,
+                    false,
+                )
+                .unwrap();
+                let screen = tessellate_screen_stroke(&path, StrokeJoin::Miter, StrokeCap::Butt)
+                    .expect("a Bezier retrace must produce a finite screen stroke");
+                for t in [0.1, 0.5, 0.9] {
+                    for side in [-1., 1.] {
+                        let point = end * t + normal * side;
+                        assert!(
+                            mesh.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                                triangle_covers_point(
+                                    triangle.map(|i| mesh.vertices[i as usize].position),
+                                    point,
+                                )
+                            }),
+                            "world Bezier stroke lost side {side} at {t}"
+                        );
+                        assert!(
+                            screen.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                                triangle_covers_point(
+                                    triangle.map(|i| {
+                                        let v = screen.vertices[i as usize];
+                                        v.position
+                                            + (v.tangent * v.extrusion.x
+                                                + Vec2::new(-v.tangent.y, v.tangent.x)
+                                                    * v.extrusion.y)
+                                                * 0.1
+                                    }),
+                                    point,
+                                )
+                            }),
+                            "screen Bezier stroke lost side {side} at {t}"
+                        );
+                    }
+                }
             }
         }
     }
