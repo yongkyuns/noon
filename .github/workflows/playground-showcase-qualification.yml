@@ -28,6 +28,9 @@ on:
       - 'crates/noon-runtime/src/replay.rs'
       - 'crates/noon-runtime/src/replay/**'
       - 'crates/noon-render-wgpu/**'
+      - '.github/actions/dev-wasm-build/**'
+      - '.github/ci/wasm-build.mjs'
+      - '.github/ci/gallery-optimization-topology.test.mjs'
       - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
 
@@ -39,6 +42,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build:
+    name: Build shared showcase runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact-id: ${{ steps.runtime.outputs.artifact-id }}
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Source and editorial contracts
+        run: |
+          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
+          node --check scripts/showcase-capture.mjs
+          node --check scripts/showcase-live-review.mjs
+      - name: Build the existing browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Share the exact-source browser runtime
+        id: runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: showcase-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/pkg/
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+            web/runtime-build-identity.json
+            web/ci-artifact.json
+            web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
+
   callback-lifecycle:
     name: Native callback lifecycle admission
     runs-on: ubuntu-latest
@@ -53,6 +92,7 @@ jobs:
           cargo test -p noon --no-default-features --test callback_lifecycle_admission
           cargo test -p noon-runtime --test display_channel_mutation
           cargo test -p noon --no-default-features --test scalar_timeline_replay
+          cargo test -p noon-runtime replay::family_tests
       - name: Qualify current glyph packing and retained renderer locality
         run: |
           cargo test -p noon-render-wgpu --lib
@@ -61,6 +101,7 @@ jobs:
 
   capture:
     name: Actual showcase frames (${{ matrix.backend }})
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -73,18 +114,13 @@ jobs:
       NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
     steps:
       - uses: actions/checkout@v7
-      - name: Source and editorial contracts
-        run: |
-          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs
-          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
-          node --check scripts/showcase-capture.mjs
-          node --check scripts/showcase-live-review.mjs
-      - name: Build the existing browser runtime
-        uses: ./.github/actions/dev-wasm-build
+      - name: Download the shared browser runtime
+        uses: actions/download-artifact@v8
         with:
-          preflight: 'true'
-      - name: Qualify retained family replay in the shared runtime
-        run: cargo test -p noon-runtime replay::family_tests
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: web
+      - name: Verify the exact-source browser runtime
+        run: node .github/ci/wasm-build.mjs verify
       - name: Install the repository-pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
