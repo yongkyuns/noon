@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
@@ -11,6 +11,8 @@ import { browserArgs } from "./manim-raster-support.mjs";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_PAINTER_ORDER_PORT ?? "4197");
 const source = await readFile(path.join(repoRoot, "web/python/examples/painter_order_overlap.py"), "utf8");
+const artifactDir = path.resolve(repoRoot, process.env.NOON_PAINTER_ORDER_ARTIFACT_DIR
+  ?? "browser-smoke-artifacts/webgpu/painter-order");
 const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
 let browser;
 try {
@@ -18,8 +20,19 @@ try {
   for (const label of ["Rust", "Python"]) {
     const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
     const errors = [];
+    const requests = [];
+    const recordRequest = (details) => {
+      requests.push(details);
+      if (requests.length > 32) requests.shift();
+    };
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.context().on("requestfailed", request => recordRequest({
+      type: "requestfailed", url: request.url(), error: request.failure()?.errorText ?? null,
+    }));
+    page.context().on("response", response => {
+      if (response.status() >= 400) recordRequest({ type: "response", url: response.url(), status: response.status() });
+    });
     await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
     const metrics = await page.evaluate(async ({ label, source }) => {
       const canvas = document.querySelector("#scene");
@@ -66,7 +79,18 @@ try {
       }
       if (metrics.presentedFrames <= before) throw new Error("Python painter-order seek was not presented");
       return { ...metrics, rendererBackend: execution.rendererBackend };
-    }, { label, source });
+    }, { label, source }).catch(async error => {
+      const report = { label, error: String(error), stack: error.stack, errors, requests };
+      console.error(`${label} painter-order evaluation failed: ${JSON.stringify(report)}`);
+      try {
+        await mkdir(artifactDir, { recursive: true });
+        await writeFile(path.join(artifactDir, `${label.toLowerCase()}-failure.json`),
+          `${JSON.stringify(report, null, 2)}\n`);
+      } catch (reportError) {
+        console.error("Could not save painter-order failure report", reportError);
+      }
+      throw error;
+    });
     assert.equal(metrics.rendererBackend, "WebGPU", `${label} must exercise WebGPU`);
     assert.equal(metrics.objectCount, 3, `${label} must retain all three objects`);
     assert.ok(Math.abs(metrics.time - 0.5) < 1e-6, `${label} must sample the animation midpoint`);
