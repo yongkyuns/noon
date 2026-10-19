@@ -257,7 +257,11 @@ impl PreparedSource {
 fn normalize(style: &mut PackedStyle, opacity: f32, silhouette: bool) {
     style.opacity /= opacity;
     if silhouette {
-        style.fill = [1.0; 4];
+        // A patterned Line uses disabled fill lanes as geometric parameters.
+        // Silhouette capture may recolor ink, never rewrite its spacing.
+        if style.fill_enabled & 4 == 0 {
+            style.fill = [1.0; 4];
+        }
         style.stroke = [1.0; 4];
     }
 }

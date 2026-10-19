@@ -2945,7 +2945,7 @@ impl RetainedFramePreparer {
 pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
     let has_stroke = vector.style.stroke_width > 0.0;
     Style {
-        stroke_pattern: vector.style.stroke_pattern,
+        stroke_pattern: None,
         fill: if vector.style.fill.is_some() || !has_stroke {
             crate::text::resolve_text_paint(vector.style.fill, object_style.fill)
         } else {
