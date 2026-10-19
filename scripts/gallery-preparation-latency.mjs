@@ -28,6 +28,7 @@ const report = {
     unsupported: 'Callbacks and manifest-declared nonreplayable input excluded, never silently skipped',
     setup: 'Worker/runtime initialization measured separately; assets may be job-cache warm. Not a cold-network benchmark.',
     rendering: 'Software WebGL2; same 960x540 canvas and renderer build for both conditions',
+    lookaheadModel: 'Optimistic independent-producer estimate from actual authored segment completion times, excludes renderer cost, worker contention and partial-history publication. NOT an end-to-end streaming implementation.',
     repetitions: 3,
     correctness: 'Three exact-time RGBA comparisons against independent source-driven forward sampling; not complete API/parity qualification',
   },
@@ -43,12 +44,12 @@ await save();
 // scales clocks, or bypasses replay admission.
 const wrapper = `import './python-worker.js';
 const send = self.postMessage.bind(self);
-let stats = {segments:0, driveMs:0, firstBarrierMs:null};
+let stats = {segments:0, driveMs:0, firstBarrierMs:null, segmentTrace:[]};
 let runStarted = 0;
 const contexts = new WeakSet();
 self.addEventListener('message', event => {
   if (event.data?.channel === 'noon.authoring' && event.data?.type === 'run') {
-    runStarted = performance.now(); stats = {segments:0, driveMs:0, firstBarrierMs:null};
+    runStarted = performance.now(); stats = {segments:0, driveMs:0, firstBarrierMs:null, segmentTrace:[]};
   }
 });
 self.postMessage = function(message, ...rest) {
@@ -77,7 +78,12 @@ self.postMessage = function(message, ...rest) {
         context.returnExecutionPlayer(player);
         player = null;
         stats.segments++;
-        stats.driveMs += performance.now() - started;
+        const completedMs = performance.now() - runStarted;
+        const driverMs = performance.now() - started;
+        stats.driveMs += driverMs;
+        // Time recorded at the actual shared-Rust segment boundary, not at a
+        // guessed frame interval; used only for an optimistic lookahead model.
+        stats.segmentTrace.push({targetSec:target, beginMs:started-runStarted, completedMs, driverMs});
         return JSON.stringify({kind:'complete'});
       } catch (error) {
         // Terminate this diagnostic worker after reporting an error; do not
@@ -97,6 +103,28 @@ await writeFile('web/gallery-preparation-diagnostic.html', '<!doctype html><meta
 const server = await serveRepository(root, 0);
 const cache = createPyodideResourceCache(workerSource);
 let browser;
+
+// A non-authoritative, best-case lookahead model: if an independent player can
+// start at zero once the first segment is ready, when would it outrun the
+// actually observed producer frontier? No renderer time or CPU contention is
+// charged, and this does not prove segmented replay admission works.
+function modelLookahead(trace) {
+  if (!Array.isArray(trace) || !trace.length) return {valid:false, reason:'no completed barriers'};
+  if (trace.some((x,i) => !Number.isFinite(x.targetSec) || x.targetSec < 0 || !Number.isFinite(x.completedMs)
+    || (i>0 && (x.targetSec < trace[i-1].targetSec || x.completedMs < trace[i-1].completedMs)))) {
+    return {valid:false, reason:'invalid/nonmonotonic recorded frontier'};
+  }
+  const initialReadyMs = trace[0].completedMs;
+  let stallMs = 0, stallEvents = 0;
+  const segments = trace.map(x=>{
+    const neededAtMs = initialReadyMs + x.targetSec*1000 + stallMs;
+    const missingMs = Math.max(0,x.completedMs-neededAtMs);
+    if (missingMs > 0) {stallMs += missingMs; stallEvents++;}
+    return {authoredEndSec:x.targetSec, producerReadyMs:x.completedMs, bufferStallMs:missingMs};
+  });
+  return {valid:true, initialReadyMs, projectedBufferStallMs:stallMs, projectedBufferEvents:stallEvents,
+    finalPreparedAtMs:trace.at(-1).completedMs, segments};
+}
 
 async function execute(entry, mode, trial, checks = false) {
   const source = await readFile(path.join('web', entry.path), 'utf8');
@@ -163,6 +191,7 @@ async function execute(entry, mode, trial, checks = false) {
       return {setupMs:ready-started, firstFrameMs, totalReadyMs:performance.now()-started, sourceMs, headlessStats, sourceCompleted, rendererBackend:execution.rendererBackend, objectCount:frame.metrics.objectCount, memory:performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize} : null};
     }, {source, mode, duration:entry.duration});
     Object.assign(sample, result);
+    if (mode === 'headless') sample.optimisticLookahead = modelLookahead(result.headlessStats?.segmentTrace);
     assert.equal(result.rendererBackend, 'WebGL2');
     if (mode === 'headless') assert.equal(result.sourceCompleted, true);
     if (checks) {
@@ -220,6 +249,8 @@ try {
       result.preparedFirstFrameMs = median(candidates.map(s=>s.firstFrameMs));
       result.preparationMs = median(candidates.map(s=>s.sourceMs));
       result.addedWaitMs = result.preparedFirstFrameMs-result.baselineFirstFrameMs;
+      result.optimisticFirstSegmentReadyMs = median(candidates.map(s=>s.optimisticLookahead?.initialReadyMs ?? Infinity));
+      result.optimisticBufferStallMs = median(candidates.map(s=>s.optimisticLookahead?.projectedBufferStallMs ?? Infinity));
     }
     await save();
   }
