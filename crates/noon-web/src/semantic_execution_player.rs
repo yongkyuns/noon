@@ -1532,6 +1532,19 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_interpolate_family_manim_style(
+        &mut self,
+        receiver: &noon::MobjectFamily,
+        start: &noon::MobjectFamily,
+        end: &noon::MobjectFamily,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.interpolate_family_manim_style(receiver, start, end, alpha)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_style_with_background_stroke(
         &mut self,
         source: &noon::MobjectFamily,

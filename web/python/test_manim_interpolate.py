@@ -15,6 +15,13 @@ class ManimInterpolateTests(unittest.TestCase):
             value._semantic_handle_fresh = True
         return objects
 
+    def _families(self):
+        families = [identity_only_wrapper(compat.VGroup, submobjects=[]) for _ in range(3)]
+        for index, value in enumerate(families):
+            value._semantic_family_handle = Mock(name=f"family_{index}")
+            value._semantic_family_handle.pointCount.return_value = 0
+        return families
+
     def test_default_path_uses_one_shared_rust_mutation(self):
         receiver, start, end = self._objects()
         context_handles = {
@@ -55,6 +62,32 @@ class ManimInterpolateTests(unittest.TestCase):
             0.75,
         )
         receiver._semantic_handle.interpolateManim.assert_not_called()
+
+    def test_vgroup_interpolation_updates_only_its_root_style(self):
+        receiver, start, end = self._families()
+        with patch.object(handles, "_group_target_context", return_value=None), patch.object(
+            updaters, "_canonical_phase_context", return_value=None
+        ):
+            self.assertIs(receiver.interpolate(start, end, 0.25), receiver)
+
+        receiver._semantic_family_handle.interpolateManimStyle.assert_called_once_with(
+            start._semantic_family_handle, end._semantic_family_handle, 0.25
+        )
+
+    def test_live_vgroup_interpolation_updates_root_style_canonically(self):
+        receiver, start, end = self._families()
+        context = Mock()
+        with patch.object(handles, "_group_target_context", return_value=context), patch.object(
+            updaters, "_canonical_phase_context", return_value=None
+        ):
+            self.assertIs(receiver.interpolate(start, end, 0.75), receiver)
+
+        context.liveInterpolateFamilyManimStyle.assert_called_once_with(
+            receiver._semantic_family_handle,
+            start._semantic_family_handle,
+            end._semantic_family_handle,
+            0.75,
+        )
 
     def test_custom_path_and_callback_context_reject_before_publication(self):
         receiver, start, end = self._objects()

@@ -528,6 +528,30 @@ assert abs(interpolateColor["fill_opacity"] - 0.35) < 1e-5
 assert abs(interpolateColor["stroke_opacity"] - 0.375) < 1e-5
 assert abs(interpolateColor["stroke_width"] - 3.0) < 1e-5
 assert _compare(interpolateColor["sheen_direction"], [-0.5, 0.5, 0.0], 1e-5) == []
+expectedVGroupInterpolation = {
+    "returned_self": True,
+    "fill": [[0.82745098, 0.48039216, 0.46666667, 0.35]],
+    "stroke": [[0.50588235, 0.67254902, 0.73333333, 0.375]],
+    "background_stroke": [[0.63529412, 0.81764706, 0.55294118, 0.3]],
+    "stroke_width": 3.0,
+    "background_stroke_width": 3.0,
+    "sheen_direction": [-0.5, 0.5, 0.0],
+    "child_unchanged": True,
+}
+for vgroup_interpolation_key in (
+    "vgroup_interpolate_color",
+    "vgroup_interpolate_color_live",
+    "vgroup_interpolate",
+    "vgroup_interpolate_live",
+):
+    vgroup_interpolation_differences = _compare(
+        observations[vgroup_interpolation_key], expectedVGroupInterpolation, 1e-5
+    )
+    assert not vgroup_interpolation_differences, (
+        vgroup_interpolation_key,
+        observations[vgroup_interpolation_key],
+        vgroup_interpolation_differences,
+    )
 expected_cap_style = {
     "default": "AUTO",
     "constructed": [

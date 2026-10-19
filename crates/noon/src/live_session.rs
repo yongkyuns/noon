@@ -3130,6 +3130,22 @@ impl<'a> LiveSession<'a> {
         self.apply(family.own_style_transaction(update)?)
     }
 
+    /// Interpolate only a VGroup root's authored style and background stroke.
+    /// Source/receiver family membership and descendant styles are untouched.
+    pub fn interpolate_family_manim_style(
+        &mut self,
+        receiver: &MobjectFamily,
+        start: &MobjectFamily,
+        end: &MobjectFamily,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(receiver)?;
+        self.require_family(start)?;
+        self.require_family(end)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(receiver.interpolate_manim_style_transaction(start, end, alpha)?)
+    }
+
     pub fn set_family_own_style_with_background_stroke(
         &mut self,
         family: &MobjectFamily,

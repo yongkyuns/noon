@@ -3928,6 +3928,72 @@ def _interpolate_color_probe(api, scene=None):
     }
 
 
+def _vgroup_interpolation_probe(api, *, full_interpolation=False, scene=None):
+    receiver = api.VGroup(api.Dot())
+    start = api.VGroup(api.Dot())
+    end = api.VGroup(api.Dot())
+    receiver.set_style(
+        fill_color=api.WHITE,
+        fill_opacity=0.65,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.5,
+        background_stroke_color=api.BLACK,
+        background_stroke_width=0,
+        background_stroke_opacity=0.7,
+        family=False,
+    )
+    start.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_width=2,
+        stroke_opacity=0.25,
+        background_stroke_color=api.GREEN,
+        background_stroke_width=2,
+        background_stroke_opacity=0.2,
+        family=False,
+    ).set_sheen_direction((-1.0, 0.0, 0.0), family=False)
+    end.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=6,
+        stroke_opacity=0.75,
+        background_stroke_color=api.WHITE,
+        background_stroke_width=6,
+        background_stroke_opacity=0.6,
+        family=False,
+    ).set_sheen_direction((1.0, 2.0, 0.0), family=False)
+    if scene is not None:
+        scene.add(receiver, start, end)
+
+    child_before = [
+        receiver[0].get_fill_rgbas().tolist(),
+        receiver[0].get_stroke_rgbas().tolist(),
+    ]
+    operation = receiver.interpolate if full_interpolation else receiver.interpolate_color
+    returned = operation(start, end, 0.25)
+
+    def rows(values):
+        return [[float(component) for component in row] for row in values]
+
+    child_after = [
+        receiver[0].get_fill_rgbas().tolist(),
+        receiver[0].get_stroke_rgbas().tolist(),
+    ]
+    return {
+        "returned_self": returned is receiver,
+        "fill": rows(receiver.get_fill_rgbas()),
+        "stroke": rows(receiver.get_stroke_rgbas()),
+        "background_stroke": rows(receiver.get_stroke_rgbas(background=True)),
+        "stroke_width": float(receiver.get_stroke_width()),
+        "background_stroke_width": float(receiver.get_stroke_width(background=True)),
+        "sheen_direction": [float(value) for value in receiver.get_sheen_direction()],
+        "child_unchanged": child_before == child_after,
+    }
+
+
 def _mobject_interpolate_probe(api, scene=None):
     receiver = api.Line(start=(-2, 0, 0), end=(-1, 0, 0), color=api.GREEN)
     start = api.Line(start=(0, 0, 0), end=(3, 0, 0), color=api.RED)
@@ -4820,6 +4886,14 @@ FIXTURES = [
                 lambda scene: _interpolate_color_probe(noon, scene)
             ),
             lambda: _interpolate_color_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate_color",
+            lambda: _vgroup_interpolation_probe(noon),
+            lambda: _vgroup_interpolation_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate_color_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_interpolation_probe(noon, scene=scene)
+            ),
+            lambda: _vgroup_interpolation_probe(manim), 1e-5),
     Fixture("mobject_interpolate", lambda: _mobject_interpolate_probe(noon),
             lambda: _mobject_interpolate_probe(manim), 1e-5),
     Fixture("mobject_interpolate_live",
@@ -4827,6 +4901,16 @@ FIXTURES = [
                 lambda scene: _mobject_interpolate_probe(noon, scene)
             ),
             lambda: _mobject_interpolate_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate",
+            lambda: _vgroup_interpolation_probe(noon, full_interpolation=True),
+            lambda: _vgroup_interpolation_probe(manim, full_interpolation=True), 1e-5),
+    Fixture("vgroup_interpolate_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_interpolation_probe(
+                    noon, full_interpolation=True, scene=scene
+                )
+            ),
+            lambda: _vgroup_interpolation_probe(manim, full_interpolation=True), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),

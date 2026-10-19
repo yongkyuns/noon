@@ -10035,6 +10035,26 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveInterpolateFamilyManimStyle)]
+        pub fn live_interpolate_family_manim_style(
+            &mut self,
+            receiver: &crate::WasmAuthoringFamilyHandle,
+            start: &crate::WasmAuthoringFamilyHandle,
+            end: &crate::WasmAuthoringFamilyHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_interpolate_family_manim_style(
+                    &receiver.semantic_family()?,
+                    &start.semantic_family()?,
+                    &end.semantic_family()?,
+                    alpha,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyOwnStyleWithBackgroundStroke)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_set_family_own_style_with_background_stroke(

@@ -15,6 +15,12 @@ class ManimInterpolateColorTests(unittest.TestCase):
             value._semantic_handle_fresh = True
         return objects
 
+    def _families(self):
+        families = [identity_only_wrapper(compat.VGroup, submobjects=[]) for _ in range(3)]
+        for index, value in enumerate(families):
+            value._semantic_family_handle = Mock(name=f"family_{index}")
+        return families
+
     def test_detached_interpolation_uses_one_shared_rust_mutation(self):
         receiver, start, end = self._objects()
         context_handles = {
@@ -63,9 +69,36 @@ class ManimInterpolateColorTests(unittest.TestCase):
                 receiver.interpolate_color(start, end, 0.5)
 
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = Mock()
         with patch.object(updaters, "_canonical_phase_context", return_value=None):
-            with self.assertRaisesRegex(NotImplementedError, "individual VMobjects"):
+            with self.assertRaisesRegex(NotImplementedError, "three VMobjects"):
                 receiver.interpolate_color(family, end, 0.5)
+
+    def test_vgroup_root_interpolation_uses_family_transaction(self):
+        receiver, start, end = self._families()
+        with patch.object(handles, "_group_target_context", return_value=None), patch.object(
+            updaters, "_canonical_phase_context", return_value=None
+        ):
+            self.assertIs(receiver.interpolate_color(start, end, 0.25), receiver)
+
+        receiver._semantic_family_handle.interpolateManimStyle.assert_called_once_with(
+            start._semantic_family_handle, end._semantic_family_handle, 0.25
+        )
+
+    def test_live_vgroup_root_interpolation_uses_canonical_transaction(self):
+        receiver, start, end = self._families()
+        context = Mock()
+        with patch.object(handles, "_group_target_context", return_value=context), patch.object(
+            updaters, "_canonical_phase_context", return_value=None
+        ):
+            self.assertIs(receiver.interpolate_color(start, end, 0.75), receiver)
+
+        context.liveInterpolateFamilyManimStyle.assert_called_once_with(
+            receiver._semantic_family_handle,
+            start._semantic_family_handle,
+            end._semantic_family_handle,
+            0.75,
+        )
 
     def test_base_mobject_keeps_pinned_override_error(self):
         object_ = identity_only_wrapper(compat.Mobject)

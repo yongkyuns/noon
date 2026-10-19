@@ -1099,6 +1099,8 @@ class Group(Mobject):
 
 class VGroup(Group):
     match_style = VMobject.match_style
+    interpolate = VMobject.interpolate
+    interpolate_color = VMobject.interpolate_color
     # The family wrapper reuses vector-class geometry queries without duplicating them.
     # Paint getters stay on VMobject until the family root has authoritative own-style state.
     cap_style = VMobject.cap_style

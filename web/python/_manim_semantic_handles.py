@@ -1427,12 +1427,17 @@ def _style_color(value, name):
 def _interpolate_manim_style(self, mobject1, mobject2, alpha):
     """Publish VMobject's supported color fields through one Rust operation."""
     objects = (self, mobject1, mobject2)
-    if any(
-        not isinstance(value, _compat.VMobject) or isinstance(value, _compat.Group)
+    family_profile = all(
+        isinstance(value, _compat.VGroup) and _is_shared_family(value)
         for value in objects
-    ):
+    )
+    leaf_profile = all(
+        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        for value in objects
+    )
+    if not family_profile and not leaf_profile:
         raise NotImplementedError(
-            "VMobject.interpolate_color requires three individual VMobjects"
+            "VMobject.interpolate_color requires three VMobjects or three shared VGroups"
         )
     from _manim_updaters import _canonical_phase_context
     if any(_canonical_phase_context(value) is not None for value in objects):
@@ -1441,6 +1446,23 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
         )
 
     amount = _ir._finite_number("alpha", alpha)
+    if family_profile:
+        receiver = self._semantic_family_handle
+        start = mobject1._semantic_family_handle
+        end = mobject2._semantic_family_handle
+        context = _group_target_context(self)
+        if context is None:
+            engine_call(receiver.interpolateManimStyle, start, end, amount)
+        else:
+            engine_call(
+                context.liveInterpolateFamilyManimStyle,
+                receiver,
+                start,
+                end,
+                amount,
+            )
+        return self
+
     target = _handle_for(self)
     start = _handle_for(mobject1)
     end = _handle_for(mobject2)
@@ -1465,15 +1487,21 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
 
 def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
     """Publish VMobject's default straight-path point and style interpolation in Rust."""
-    if not isinstance(self, _compat.VMobject) or isinstance(self, _compat.Group):
+    family_receiver = isinstance(self, _compat.VGroup) and _is_shared_family(self)
+    if not isinstance(self, _compat.VMobject) and not family_receiver:
         raise NotImplementedError("Please override in a child class.")
     objects = (self, mobject1, mobject2)
-    if any(
-        not isinstance(value, _compat.VMobject) or isinstance(value, _compat.Group)
+    family_profile = all(
+        isinstance(value, _compat.VGroup) and _is_shared_family(value)
         for value in objects
-    ):
+    )
+    leaf_profile = all(
+        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        for value in objects
+    )
+    if not family_profile and not leaf_profile:
         raise NotImplementedError(
-            "Mobject.interpolate currently requires three individual VMobjects"
+            "Mobject.interpolate requires three VMobjects or three shared VGroups"
         )
     if type(self).interpolate_color is not _compat.VMobject.interpolate_color:
         raise NotImplementedError(
@@ -1491,6 +1519,16 @@ def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
         )
 
     amount = _ir._finite_number("alpha", alpha)
+    if family_profile:
+        if any(
+            engine_call(value._semantic_family_handle.pointCount) != 0
+            for value in objects
+        ):
+            raise NotImplementedError(
+                "Mobject.interpolate requires point-free shared VGroup roots"
+            )
+        return _interpolate_manim_style(self, mobject1, mobject2, amount)
+
     target = _handle_for(self)
     start = _handle_for(mobject1)
     end = _handle_for(mobject2)

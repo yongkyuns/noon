@@ -1710,6 +1710,18 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = interpolateManimStyle)]
+        pub fn interpolate_manim_style(
+            &self,
+            start: &WasmAuthoringFamilyHandle,
+            end: &WasmAuthoringFamilyHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .interpolate_manim_style(&start.semantic_family()?, &end.semantic_family()?, alpha)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setOwnOpacity)]
         pub fn set_own_opacity(&self, opacity: f64) -> Result<(), JsValue> {
             self.semantic_family()?

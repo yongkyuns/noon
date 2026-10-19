@@ -4,7 +4,8 @@ use crate::{
     semantic_mobject::{
         edit_color, edit_fade, edit_fade_occurrences, edit_fade_to_occurrences, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_stroke_color, edit_stroke_opacity,
-        edit_stroke_width, PaintStyleEdit,
+        edit_stroke_width, interpolate_manim_color, interpolate_manim_scalar,
+        interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -149,6 +150,76 @@ impl MobjectFamily {
             .expect("validated family")
             .family_background_stroke_width()
             .expect("family background stroke width"))
+    }
+
+    /// Interpolate a VGroup root's VMobject style from two family roots.
+    /// Family members remain unchanged, matching VMobject.interpolate_color(),
+    /// which interpolates only this object's style arrays.
+    pub fn interpolate_manim_style(
+        &self,
+        start: &Self,
+        end: &Self,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.interpolate_manim_style_transaction(start, end, alpha)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn interpolate_manim_style_transaction(
+        &self,
+        start: &Self,
+        end: &Self,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        start.validate()?;
+        end.validate()?;
+        if !std::rc::Rc::ptr_eq(self.integration_store(), start.integration_store())
+            || !std::rc::Rc::ptr_eq(self.integration_store(), end.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore);
+        }
+
+        let receiver_style = self.own_style()?;
+        let start_style = start.own_style()?;
+        let end_style = end.own_style()?;
+        let (style, direction) = interpolate_manim_vmobject_style_values(
+            &receiver_style,
+            &start_style,
+            &end_style,
+            start.own_sheen_direction()?,
+            end.own_sheen_direction()?,
+            alpha,
+        )?;
+        let background_color = interpolate_manim_color(
+            start.own_background_stroke_color()?,
+            end.own_background_stroke_color()?,
+            alpha,
+        )?;
+        let background_width = interpolate_manim_scalar(
+            start.own_background_stroke_width()?,
+            end.own_background_stroke_width()?,
+            alpha,
+        )?;
+        let background_opacity = interpolate_manim_scalar(
+            start.own_background_stroke_opacity()?,
+            end.own_background_stroke_opacity()?,
+            alpha,
+        )?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_family_style_with_background_stroke_update(
+                self.node_id(),
+                style,
+                Some(background_color),
+                Some(background_width),
+                Some(background_opacity),
+            )
+            .set_sheen_direction(self.node_id(), direction);
+        Ok(transaction)
     }
 
     pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
@@ -880,6 +951,131 @@ mod tests {
         let root_before = family.own_background_stroke_opacity().unwrap();
         assert!(family.set_own_background_stroke_opacity(1.2).is_err());
         assert_eq!(family.own_background_stroke_opacity().unwrap(), root_before);
+    }
+
+    #[test]
+    fn family_root_interpolation_matches_vmobject_style_channels_atomically() {
+        let mut scene = Scene::new();
+        let leaf = scene.square(1.0).unwrap();
+        let receiver = scene.family(&[(&leaf).into()]).unwrap();
+        let start = scene.family(&[(&leaf).into()]).unwrap();
+        let end = scene.family(&[(&leaf).into()]).unwrap();
+        let child_before = leaf.state().unwrap();
+
+        receiver
+            .set_own_style_with_background_stroke(
+                StyleUpdate {
+                    fill_color: Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
+                    fill_opacity: Some(0.65),
+                    stroke_color: Some(Color::GREEN),
+                    stroke_width: Some(3.0),
+                    stroke_opacity: Some(0.5),
+                },
+                Some(Color::BLACK),
+                Some(0.0),
+                Some(0.7),
+            )
+            .unwrap();
+        start
+            .set_own_style_with_background_stroke(
+                StyleUpdate {
+                    fill_color: Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
+                    fill_opacity: Some(0.2),
+                    stroke_color: Some(Color::rgba(0.0, 0.0, 1.0, 1.0)),
+                    stroke_width: Some(2.0),
+                    stroke_opacity: Some(0.25),
+                },
+                Some(Color::rgba(0.0, 1.0, 0.0, 1.0)),
+                Some(2.0),
+                Some(0.2),
+            )
+            .unwrap();
+        end.set_own_style_with_background_stroke(
+            StyleUpdate {
+                fill_color: Some(Color::rgba(0.0, 0.0, 1.0, 1.0)),
+                fill_opacity: Some(0.8),
+                stroke_color: Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
+                stroke_width: Some(6.0),
+                stroke_opacity: Some(0.75),
+            },
+            Some(Color::WHITE),
+            Some(6.0),
+            Some(0.6),
+        )
+        .unwrap();
+        start
+            .set_sheen_direction(
+                noon_core::SemanticSheenDirection::new(
+                    noon_core::SemanticVec3::new(-1.0, 0.0, 0.0),
+                    3,
+                ),
+                false,
+            )
+            .unwrap();
+        end.set_sheen_direction(
+            noon_core::SemanticSheenDirection::new(noon_core::SemanticVec3::new(1.0, 2.0, 0.0), 3),
+            false,
+        )
+        .unwrap();
+
+        let revision = scene.integration_store().borrow().scene_revision();
+        receiver
+            .interpolate_manim_style(&start, &end, 0.25)
+            .unwrap();
+
+        let style = receiver.own_style().unwrap();
+        assert_eq!(
+            style.fill,
+            Some(SemanticPaint::Solid(Color::rgba(0.75, 0.0, 0.25, 1.0)))
+        );
+        assert!((style.fill_opacity - 0.35).abs() < 1e-6);
+        assert_eq!(
+            style.stroke,
+            Some(SemanticPaint::Solid(Color::rgba(0.25, 0.0, 0.75, 1.0)))
+        );
+        assert!((style.stroke_opacity - 0.375).abs() < 1e-6);
+        assert!((style.stroke_width - 3.0).abs() < 1e-6);
+        assert_eq!(
+            receiver.own_background_stroke_color().unwrap(),
+            Color::rgba(0.25, 1.0, 0.25, 1.0)
+        );
+        assert!((receiver.own_background_stroke_width().unwrap() - 3.0).abs() < 1e-6);
+        assert!((receiver.own_background_stroke_opacity().unwrap() - 0.3).abs() < 1e-6);
+        assert_eq!(
+            receiver.own_sheen_direction().unwrap().components(),
+            [-0.5, 0.5, 0.0]
+        );
+        assert_eq!(leaf.state().unwrap(), child_before);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision.checked_next().unwrap()
+        );
+
+        let root_before = (
+            receiver.own_style().unwrap(),
+            receiver.own_background_stroke_color().unwrap(),
+            receiver.own_background_stroke_width().unwrap(),
+            receiver.own_background_stroke_opacity().unwrap(),
+            receiver.own_sheen_direction().unwrap(),
+        );
+        let revision = scene.integration_store().borrow().scene_revision();
+        assert!(receiver
+            .interpolate_manim_style(&start, &end, f64::NAN)
+            .is_err());
+        assert_eq!(
+            (
+                receiver.own_style().unwrap(),
+                receiver.own_background_stroke_color().unwrap(),
+                receiver.own_background_stroke_width().unwrap(),
+                receiver.own_background_stroke_opacity().unwrap(),
+                receiver.own_sheen_direction().unwrap(),
+            ),
+            root_before
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
