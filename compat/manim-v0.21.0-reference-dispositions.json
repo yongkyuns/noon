@@ -2938,7 +2938,7 @@
     {
       "id": "reference-79c4a92e35c2b700",
       "status": "unqualified",
-      "reason": "Exact pinned directive needs canonical execution, semantic/effective-state, timing, raster and replay qualification; exported symbols alone are not support evidence.",
+      "reason": "Shared Rust scalar Circle.surround sizing is implemented with authored/live custom fixtures. The original directive body (unchanged SHA256) is enrolled as circle-surround-upstream in the raster manifest. Its current-head effective-state, original-source raster and replay qualification remain unproven; this disposition stays unqualified under #2011/#2012.",
       "owners": [
         "#77",
         "#89",

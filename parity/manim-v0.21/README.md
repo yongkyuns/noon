@@ -309,3 +309,25 @@ registration unchanged. The updated family-paint pair has identical pixels on
 WebGPU and WebGL2 (1,970 visible pixels each), with rendered-image inspection.
 Pinned ManimCE qualification of these fade profiles, staged root callbacks, and
 extrapolated darkness remain unqualified.
+
+
+`Circle.surround()` uses its pinned multiplicative `buffer_factor` contract
+through one shared Rust layout transaction, including ordinary `Dot`/`Ellipse`
+inheritance. It retains fitted ellipse aspect ratios and remeasures a target
+that contains the receiver after replacement; signed buffers, zero-width lines,
+negative dimension indices and zero planar depth have detached/live cases.
+Native tests protect one publication, paint/identity preservation, rollback,
+rotated world-axis stretching and active-driver rejection. All 262 actual
+WASM/Pyodide semantic fixtures pass, including 21 cases in each new Circle
+fixture. Staged callbacks, vector buffers, spatial geometry, empty-target error
+classes and broader class contracts remain unqualified.
+
+The literal pinned `CircleSurround` directive body is retained unchanged in
+`upstream-examples/circle_surround.py`, protected by its inventory SHA256. Its
+Noon execution renders six objects at duration zero on WebGPU and WebGL2; it
+is enrolled in the raster manifest with unchanged global limits. A native/direct
+Rust-WASM/Python example also covers authored and live sizing around ordinary
+Scene wait barriers. Current full-local, paired and pinned two-sided/raster
+qualification is still in progress. These are bounded profiles. Circle remains partial; Dot/Ellipse retain their
+previously qualified constructor/canonical-geometry status, while the new
+inherited method and its limits are recorded separately.

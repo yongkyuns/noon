@@ -2099,6 +2099,78 @@ def _manim_mobject_surround_live() -> Any:
     return _mobject_surround(manim)
 
 
+def _circle_surround_probe(provider: Any, scene: Any | None = None) -> Any:
+    observations = {}
+
+    def record(name, receiver, target, *, shared=False, **options):
+        if scene is not None:
+            if shared:
+                scene.add(target)
+            else:
+                scene.add(receiver, target)
+        before = _object_observation(receiver)
+        target_before = _object_observation(target)
+        def paint():
+            return [float(receiver.get_fill_opacity()),
+                    float(receiver.get_stroke_opacity()),
+                    float(receiver.get_stroke_width())]
+        paint_before = paint()
+        returned = receiver.surround(target, **options)
+        observations[name] = {
+            "returns_self": returned is receiver, "shared": shared,
+            "before": before, "after": _object_observation(receiver),
+            "target_before": target_before, "target_after": _object_observation(target),
+            "paint_before": paint_before, "paint_after": paint(),
+        }
+
+    def target():
+        return provider.Rectangle(width=4.0, height=2.0).shift(provider.RIGHT + provider.DOWN)
+
+    for name, options in [
+        ("default", {}), ("height", {"dim_to_match": 1}),
+        ("depth", {"dim_to_match": 2}), ("negative_width", {"dim_to_match": -3}),
+        ("negative_height", {"dim_to_match": -2}), ("negative_depth", {"dim_to_match": -1}),
+        ("stretch", {"stretch": True}),
+        ("stretch_ignored_dimension", {"stretch": True, "dim_to_match": object()}),
+        ("negative_buffer", {"buffer_factor": -0.5}),
+        ("zero_buffer", {"buffer_factor": 0.0}),
+    ]:
+        record(name, provider.Circle(radius=0.5).shift(3 * provider.LEFT), target(), **options)
+    record("ellipse", provider.Ellipse(width=4.0, height=2.0), target())
+    record("rotated_stretch", provider.Ellipse(width=4.0, height=2.0).rotate(0.3),
+           target(), stretch=True)
+    record("dot", provider.Dot(radius=0.1), target())
+    record("horizontal_line", provider.Circle(),
+           provider.Line((0.0, 0.0, 0.0), (4.0, 0.0, 0.0)))
+    for name, options in [("vertical_line", {}),
+                          ("vertical_height", {"dim_to_match": 1}),
+                          ("vertical_stretch", {"stretch": True})]:
+        record(name, provider.Circle(),
+               provider.Line((2.0, -1.0, 0.0), (2.0, 3.0, 0.0)), **options)
+    receiver = provider.Circle().shift(provider.RIGHT + provider.UP)
+    record("self", receiver, receiver, shared=True, buffer_factor=1.0)
+    for name, dimension in [("shared_width", 0), ("shared_height", 1), ("shared_depth", 2)]:
+        receiver = provider.Circle()
+        other = provider.Rectangle(width=2.0, height=1.0).shift(4 * provider.RIGHT)
+        family = provider.VGroup(provider.VGroup(receiver), other, receiver)
+        record(name, receiver, family, shared=True,
+               dim_to_match=dimension, buffer_factor=1.0)
+        observations[name]["other_after"] = _object_observation(other)
+    return observations
+
+
+def _noon_circle_surround() -> Any:
+    return _circle_surround_probe(noon)
+
+
+def _manim_circle_surround() -> Any:
+    return _circle_surround_probe(manim)
+
+
+def _noon_circle_surround_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _circle_surround_probe(noon, scene))
+
+
 def _mobject_add_background_rectangle(provider: Any, scene: Any | None = None) -> Any:
     family = provider.Group(
         provider.Circle(radius=0.25).shift(provider.LEFT),
@@ -5871,6 +5943,8 @@ FIXTURES = [
             _noon_mobject_surround_live,
             _manim_mobject_surround_live,
             1e-5),
+    Fixture("circle_surround", _noon_circle_surround, _manim_circle_surround, 1e-5),
+    Fixture("circle_surround_live", _noon_circle_surround_live, _manim_circle_surround, 1e-5),
     Fixture("mobject_add_background_rectangle",
             _noon_mobject_add_background_rectangle,
             _manim_mobject_add_background_rectangle,
@@ -6015,7 +6089,7 @@ FIXTURES = [
 # list close to the harness so unsupported behavior and intentional divergences
 # are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
-    "circle_surround": "Remaining #2012 work: ManimCE Circle.surround uses buffer_factor and diagonal-based sizing; Noon currently inherits generic Mobject.surround with buff. Generic surround fixtures use Square and do not qualify this specialized override. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/geometry/arc.py#L660-L711.",
+    "circle_surround_extended_inputs": "The shared Rust Circle.surround scalar planar profile is enrolled in detached/live comparison, including aliases, signed buffers, stretched ellipses and zero-depth fitting. Staged callbacks, vector buffers, spatial geometry, and exact failure-class equivalence for empty targets remain unqualified under #2011/#2012. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/geometry/arc.py#L660-L711.",
     "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
     "plain_group_save_restore": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 Group.restore() delegates to base Mobject.become(), whose base interpolate_color() raises NotImplementedError for a plain Group. Noon restores shared Rust family state for Group; scripts/manim-differential-noon.mjs separately checks root and child colors through actual product Pyodide. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2161-L2166 and #L3172-L3180.",
     "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",

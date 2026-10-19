@@ -2022,6 +2022,20 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_surround_circle(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.surround_circle(source, target, dimension, stretch, buffer_factor)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_dim_size(
         &mut self,
         source: &noon::LayoutAnchor,

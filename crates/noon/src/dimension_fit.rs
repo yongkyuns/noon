@@ -173,6 +173,8 @@ impl LayoutAnchor {
 /// Target leaves shared with the source observe the staged scale before the
 /// final center shift, matching ordinary sequential replace semantics without
 /// publishing an intermediate revision.
+/// A missing dimension denotes planar zero depth. An optional circle buffer
+/// adds the pinned diagonal fit after remeasuring the replaced target.
 pub(crate) fn replacement_transaction(
     store: &noon_core::SemanticStore,
     leaves: &[crate::SemanticNodeId],
@@ -182,8 +184,9 @@ pub(crate) fn replacement_transaction(
         Option<Bounds2D64>,
         Option<Bounds2D64>,
     )],
-    dimension: LayoutDimension,
+    dimension: Option<LayoutDimension>,
     stretch: bool,
+    circle_buffer_factor: Option<f64>,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
     use crate::semantic_mobject::{scale_state_about_center, stage_state_changes, state_center};
     use std::collections::BTreeSet;
@@ -195,13 +198,16 @@ pub(crate) fn replacement_transaction(
             total
         })
     }
+    if let Some(buffer) = circle_buffer_factor {
+        authoring_render_f64("circle surround buffer factor", buffer)?;
+    }
     let (source_bounds, source_boundary) = source;
     let target_bounds = union(
         target_leaves
             .iter()
             .filter_map(|(_, dimensions, _)| *dimensions),
     );
-    let (x, y) = if stretch {
+    let (mut x, mut y) = if stretch {
         let x = LayoutDimension::Width
             .scale(
                 source_bounds,
@@ -217,10 +223,13 @@ pub(crate) fn replacement_transaction(
             )?
             .map_or(1.0, |scale| scale.1);
         (x, y)
-    } else {
+    } else if let Some(dimension) = dimension {
         dimension
             .scale(source_bounds, dimension.length(target_bounds), false)?
             .unwrap_or((1.0, 1.0))
+    } else {
+        // Planar depth is zero; Manim's depth fit leaves the source unchanged.
+        (1.0, 1.0)
     };
     let center = crate::family_layout::bounds_critical_point(source_boundary, 0.0, 0.0);
     let sources: BTreeSet<_> = leaves.iter().copied().collect();
@@ -236,6 +245,36 @@ pub(crate) fn replacement_transaction(
         })
     }));
     let destination = crate::family_layout::bounds_critical_point(target_after_scale, 0.0, 0.0);
+    if let Some(buffer) = circle_buffer_factor {
+        // Circle.surround re-reads its target after replace. This matters when
+        // the target contains the source; both its size and center may change.
+        let target_after_replace = union(target_leaves.iter().filter_map(|(leaf, bounds, _)| {
+            bounds.map(|mut bounds| {
+                if sources.contains(leaf) {
+                    bounds.min_x = destination.0 + (bounds.min_x - center.0) * x;
+                    bounds.max_x = destination.0 + (bounds.max_x - center.0) * x;
+                    bounds.min_y = destination.1 + (bounds.min_y - center.1) * y;
+                    bounds.max_y = destination.1 + (bounds.max_y - center.1) * y;
+                }
+                bounds
+            })
+        }));
+        let diagonal = LayoutDimension::Width
+            .length(target_after_replace)
+            .hypot(LayoutDimension::Height.length(target_after_replace));
+        let source_width = LayoutDimension::Width.length(source_bounds) * x;
+        // The width setter is a no-op for a collapsed source, then scale still
+        // applies the buffer. Preserve stretched ellipses rather than forcing
+        // a circle: the pinned implementation keeps their current aspect ratio.
+        let fit = if source_width == 0.0 {
+            1.0
+        } else {
+            authoring_render_f64("circle surround width fit", diagonal / source_width)?
+        };
+        let scale = authoring_render_f64("circle surround scale", fit * buffer)?;
+        x = authoring_render_f64("circle surround x scale", x * scale)?;
+        y = authoring_render_f64("circle surround y scale", y * scale)?;
+    }
     let mut transaction = noon_core::SemanticMutationTransaction::new();
     let mut replacements = Vec::new();
     for &leaf in leaves {
@@ -286,6 +325,32 @@ impl LayoutAnchor {
         dimension: LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
+        self.replace_layout_with_circle_buffer(target, Some(dimension), stretch, None)
+    }
+
+    /// Apply ManimCE Circle.surround sizing through one atomic affine edit.
+    ///
+    /// The planar dimensions are 0 (width), 1 (height), and 2 (zero depth).
+    /// Stretch ignores the dimension and retains the fitted aspect ratio.
+    /// The target is remeasured after replacement, including shared source leaves.
+    pub fn surround_circle(
+        &self,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), AuthoringError> {
+        let dimension = circle_surround_dimension(dimension, stretch)?;
+        self.replace_layout_with_circle_buffer(target, dimension, stretch, Some(buffer_factor))
+    }
+
+    fn replace_layout_with_circle_buffer(
+        &self,
+        target: &LayoutAnchor,
+        dimension: Option<LayoutDimension>,
+        stretch: bool,
+        circle_buffer_factor: Option<f64>,
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
@@ -309,6 +374,7 @@ impl LayoutAnchor {
             &target_leaves,
             dimension,
             stretch,
+            circle_buffer_factor,
         )?;
         prepared.publish(
             &mut self.integration_store().borrow_mut(),
@@ -319,5 +385,18 @@ impl LayoutAnchor {
                     .map_err(AuthoringError::from)
             },
         )
+    }
+}
+
+pub(crate) fn circle_surround_dimension(
+    dimension: u32,
+    stretch: bool,
+) -> Result<Option<LayoutDimension>, AuthoringError> {
+    if stretch {
+        Ok(Some(LayoutDimension::Width))
+    } else if dimension == 2 {
+        Ok(None)
+    } else {
+        dimension.try_into().map(Some)
     }
 }

@@ -910,6 +910,16 @@ class Circle(VMobject):
         from _manim_semantic_handles import _circle_init
         _circle_init(self, radius, color=color, **kwargs)
 
+    def surround(
+        self,
+        mobject: _base.Mobject,
+        dim_to_match: int = 0,
+        stretch: bool = False,
+        buffer_factor: float = 1.2,
+    ) -> Circle:
+        from _manim_semantic_handles import _circle_surround
+        return _circle_surround(self, mobject, dim_to_match, stretch, buffer_factor)
+
 
 class Rectangle(VMobject):
     def __init__(

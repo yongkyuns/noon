@@ -116,6 +116,37 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), LiveSessionError> {
+        self.replace_layout_with_circle_buffer(source, target, Some(dimension), stretch, None)
+    }
+
+    /// Publish Circle.surround from coherent live bounds with one revision.
+    /// The source must have resolved affine/content drivers, as with replace.
+    pub fn surround_circle(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), LiveSessionError> {
+        let dimension = crate::dimension_fit::circle_surround_dimension(dimension, stretch)?;
+        self.replace_layout_with_circle_buffer(
+            source,
+            target,
+            dimension,
+            stretch,
+            Some(buffer_factor),
+        )
+    }
+
+    fn replace_layout_with_circle_buffer(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: Option<crate::LayoutDimension>,
+        stretch: bool,
+        circle_buffer_factor: Option<f64>,
+    ) -> Result<(), LiveSessionError> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
         let (target_nodes, target_bounds) = self.anchor_layout_members(target)?;
         if target_bounds.is_none() {
@@ -149,6 +180,7 @@ impl LiveSession<'_> {
             &target_leaves,
             dimension,
             stretch,
+            circle_buffer_factor,
         )
         .map_err(LiveSessionError::from)?;
         self.publish_path_edits(prepared).map(|_| ())

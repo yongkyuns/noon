@@ -7474,6 +7474,28 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSurroundCircle)]
+        pub fn live_surround_circle(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+            buffer_factor: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_surround_circle(
+                    &source.anchor,
+                    &target.anchor,
+                    dimension,
+                    stretch,
+                    buffer_factor,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchDimSize)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_match_dim_size(

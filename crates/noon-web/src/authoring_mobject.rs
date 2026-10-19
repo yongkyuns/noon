@@ -833,6 +833,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = surroundCircle)]
+        pub fn surround_circle(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+            buffer_factor: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .surround_circle(&target.anchor, dimension, stretch, buffer_factor)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = matchDimSize)]
         #[allow(clippy::too_many_arguments)]
         pub fn match_dim_size(

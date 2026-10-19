@@ -1440,6 +1440,46 @@ json.dumps({
     [observations.mobject_surround.width, observations.mobject_surround.height],
     "mobject_surround_live: matches detached dimensions",
   );
+  for (const name of ["circle_surround", "circle_surround_live"]) {
+    const profile = observations[name];
+    const diameter = Math.sqrt(20) * 1.2;
+    const expected = {
+      default: [diameter, diameter], height: [diameter, diameter], depth: [diameter, diameter],
+      negative_width: [diameter, diameter], negative_height: [diameter, diameter], negative_depth: [diameter, diameter],
+      stretch: [diameter, diameter / 2], stretch_ignored_dimension: [diameter, diameter / 2],
+      negative_buffer: [Math.sqrt(20) / 2, Math.sqrt(20) / 2], zero_buffer: [0, 0],
+      ellipse: [diameter, diameter / 2], rotated_stretch: [diameter, diameter / 2],
+      dot: [diameter, diameter], horizontal_line: [4.8, 4.8],
+      vertical_line: [0, 0], vertical_height: [4.8, 4.8], vertical_stretch: [0, 4.8],
+      self: [Math.sqrt(8), Math.sqrt(8)], shared_width: [Math.sqrt(85), Math.sqrt(85)],
+      shared_height: [Math.sqrt(20), Math.sqrt(20)], shared_depth: [Math.sqrt(20), Math.sqrt(20)],
+    };
+    assert.deepEqual(Object.keys(profile).sort(), Object.keys(expected).sort(), `${name}: all cases observed`);
+    for (const [caseName, row] of Object.entries(profile)) {
+      assert.equal(row.returns_self, true, `${name}/${caseName}: returns receiver`);
+      assertPointNear([row.after.width, row.after.height], expected[caseName], `${name}/${caseName}: dimensions`);
+      assert.deepEqual(row.paint_after, row.paint_before, `${name}/${caseName}: paint unchanged`);
+      if (!row.shared) {
+        assertPointNear(row.after.center, row.target_before.center, `${name}/${caseName}: center`);
+        assert.deepEqual(row.target_after, row.target_before, `${name}/${caseName}: target unchanged`);
+      }
+    }
+    assertPointNear(profile.shared_width.after.center, [1, 0], `${name}: shared target center after scale`);
+    for (const caseName of ["shared_width", "shared_height", "shared_depth"]) {
+      assert.deepEqual(profile[caseName].other_after, { center: [4, 0], width: 2, height: 1 },
+        `${name}/${caseName}: unrelated member unchanged`);
+    }
+  }
+  for (const caseName of Object.keys(observations.circle_surround)) {
+    for (const key of ["before", "after", "target_before", "target_after"]) {
+      const authored = observations.circle_surround[caseName][key];
+      const live = observations.circle_surround_live[caseName][key];
+      assertPointNear([live.width, live.height], [authored.width, authored.height],
+        `circle_surround/${caseName}/${key}: authored/live dimensions agree`);
+      assertPointNear(live.center, authored.center,
+        `circle_surround/${caseName}/${key}: authored/live centers agree`);
+    }
+  }
   for (const [name, stretch] of [
     ["replace_width_live", false],
     ["replace_stretch_live", true],

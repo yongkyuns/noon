@@ -1108,7 +1108,16 @@ def _replace(
             raise ValueError("callback replacement target belongs to another Scene")
         callback_context.replace_layout(self, mobject, dim_to_match, stretch)
         return self
-    source, context = _dimension_fit_source(self, dim_to_match)
+    source, target, context = _replacement_anchors(self, mobject, dim_to_match)
+    if context is None:
+        engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
+    else:
+        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
+    return self
+
+
+def _replacement_anchors(self, mobject, dimension):
+    source, context = _dimension_fit_source(self, dimension)
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
@@ -1117,10 +1126,31 @@ def _replace(
                    else _live_mutation_context(mobject))
     if context is None:
         context = _live_constructor_context("replace")
+    return source, target, context
+
+
+def _circle_surround(self, mobject, dim_to_match=0, stretch=False, buffer_factor=1.2):
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("Circle surround target must be a Mobject")
+    from _manim_updaters import _canonical_phase_context
+
+    if (_canonical_phase_context(self) is not None
+            or _canonical_phase_context(mobject) is not None):
+        raise NotImplementedError("Circle.surround requires a non-staged layout")
+    stretch = bool(stretch)
+    # In the pinned implementation stretch ignores dim_to_match entirely.
+    try:
+        dimension = 0 if stretch else operator.index(dim_to_match)
+    except TypeError as error:
+        raise IndexError("Circle surround dimension must be an integer index") from error
+    if not -3 <= dimension < 3:
+        raise IndexError("Circle surround dimension is out of bounds")
+    dimension %= 3
+    source, target, context = _replacement_anchors(self, mobject, 0)
     if context is None:
-        engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
+        engine_call(source.surroundCircle, target, dimension, stretch, float(buffer_factor))
     else:
-        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
+        engine_call(context.liveSurroundCircle, source, target, dimension, stretch, float(buffer_factor))
     return self
 
 
