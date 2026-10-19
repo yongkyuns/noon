@@ -1,7 +1,7 @@
 //! Paired with ordinary_dimension_fitting.py on native and direct Rust/WASM.
 use crate::{
     ExecutionSession, LayoutAnchor,
-    LayoutDimension::{Height, Width},
+    LayoutDimension::{Depth, Height, Width},
     Scene,
 };
 
@@ -19,6 +19,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     b.set_stroke_width(0.0).map_err(|error| error.to_string())?;
     let source = LayoutAnchor::from(&a);
     let target = LayoutAnchor::from(&b);
+    source
+        .rescale_to_fit(f64::NAN, Depth, false)
+        .map_err(|error| error.to_string())?;
     source
         .rescale_to_fit(2.0, Height, false)
         .map_err(|error| error.to_string())?;
@@ -40,6 +43,10 @@ pub fn session() -> Result<ExecutionSession, String> {
     let mut session = scene.execution_session().map_err(|e| e.to_string())?;
     {
         let mut live = scene.live(&mut session);
+        live.rescale_to_fit(&group, f64::INFINITY, Depth, true)
+            .map_err(|e| e.to_string())?;
+        live.match_dim_size(&source, &target, Depth, false)
+            .map_err(|e| e.to_string())?;
         live.match_dim_size(&source, &target, Width, true)
             .map_err(|e| e.to_string())?;
         live.rescale_to_fit(&group, 2.0, Height, false)

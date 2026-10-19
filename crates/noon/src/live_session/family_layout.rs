@@ -37,6 +37,11 @@ impl LiveSession<'_> {
         let (x, y) = match dimension {
             crate::LayoutDimension::Width => (factor, 1.0),
             crate::LayoutDimension::Height => (1.0, factor),
+            crate::LayoutDimension::Depth => {
+                self.anchor_layout_members(source)?;
+                crate::semantic_mobject::authoring_render_f64("stretch factor", factor)?;
+                return Ok(SemanticMutationTransactionResult::default());
+            }
         };
         self.affine_layout(
             source,
@@ -73,17 +78,17 @@ impl LiveSession<'_> {
         pivot: crate::ManimRotationPivot,
     ) -> Result<(), LiveSessionError> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
-        let scale = dimension
+        let Some((x, y)) = dimension
             .scale(bounds, length, stretch)
-            .map_err(LiveSessionError::from)?;
+            .map_err(LiveSessionError::from)?
+        else {
+            return Ok(());
+        };
         for &leaf in &leaves {
             let object =
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
-        let Some((x, y)) = scale else {
-            return Ok(());
-        };
         let table_layout_scope = (!stretch)
             .then(|| source.resolve())
             .transpose()

@@ -825,8 +825,8 @@ def _move_to(
     return self
 
 
-def _dimension_fit_source(self, dim):
-    if dim not in (0, 1):
+def _dimension_fit_source(self, dim, *, planar_depth=False):
+    if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
         raise NotImplementedError("Noon currently exposes width/height fitting only")
     anchor = _layout_anchor(self)
     if anchor is None:
@@ -844,9 +844,15 @@ def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
 
 
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
-    anchor, context = _dimension_fit_source(self, dim)
-    pivot = _pivot_arguments(about_point, about_edge)
-    length = float(length)
+    dim = _fitting_dimension_index(dim)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    # Manim ignores length/pivot arguments when the shared source extent is
+    # zero. Avoid coercing them, but still let Rust validate the anchor and own
+    # the no-op decision from its coherent fitting snapshot.
+    zero_extent = _length_over_dim_observation(self, dim) == 0
+    pivot = ((0., 0., False) if zero_extent
+             else _pivot_arguments(about_point, about_edge))
+    length = 0.0 if zero_extent else float(length)
     try:
         if context is None:
             engine_call(anchor.rescaleToFit, length, dim, bool(stretch), *pivot)
@@ -860,8 +866,11 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
 def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, about_edge=None):
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("dimension match target must be a Mobject")
-    anchor, context = _dimension_fit_source(self, dim)
-    pivot = _pivot_arguments(about_point, about_edge)
+    dim = _fitting_dimension_index(dim)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    zero_extent = _length_over_dim_observation(self, dim) == 0
+    pivot = ((0., 0., False) if zero_extent
+             else _pivot_arguments(about_point, about_edge))
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("dimension matching requires a shared Rust target")
@@ -873,6 +882,17 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
     except Exception as error:
         raise_engine_error(error)
     return self
+
+
+def _fitting_dimension_index(dim):
+    # rescale_to_fit measures length through reduce_across_dimension, whose
+    # range assertions precede NumPy's integer-index validation.
+    assert dim >= 0
+    assert dim <= 2
+    try:
+        return operator.index(dim)
+    except TypeError as error:
+        raise IndexError("only integers are valid dimension indices") from error
 
 
 def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:

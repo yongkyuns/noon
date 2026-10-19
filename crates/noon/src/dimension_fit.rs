@@ -4,11 +4,12 @@ use std::rc::Rc;
 
 use crate::{semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor};
 
-/// The supported planar layout dimensions.
+/// Layout dimensions of planar objects. Their depth extent is always zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutDimension {
     Width,
     Height,
+    Depth,
 }
 
 impl TryFrom<u32> for LayoutDimension {
@@ -18,6 +19,7 @@ impl TryFrom<u32> for LayoutDimension {
         match value {
             0 => Ok(Self::Width),
             1 => Ok(Self::Height),
+            2 => Ok(Self::Depth),
             _ => Err(AuthoringError::InvalidDimension(value)),
         }
     }
@@ -28,6 +30,7 @@ impl LayoutDimension {
         bounds.map_or(0.0, |bounds| match self {
             Self::Width => bounds.width(),
             Self::Height => bounds.height(),
+            Self::Depth => 0.0,
         })
     }
 
@@ -37,16 +40,16 @@ impl LayoutDimension {
         length: f64,
         stretch: bool,
     ) -> Result<Option<(f64, f64)>, AuthoringError> {
-        let length = authoring_render_f64("fit length", length)?;
         let previous = self.length(bounds);
         if previous == 0.0 {
             return Ok(None);
         }
+        let length = authoring_render_f64("fit length", length)?;
         let factor = authoring_render_f64("fit scale", length / previous)?;
         Ok(Some(match (stretch, self) {
-            (false, _) => (factor, factor),
             (true, Self::Width) => (factor, 1.0),
             (true, Self::Height) => (1.0, factor),
+            _ => (factor, factor),
         }))
     }
 }
@@ -79,6 +82,11 @@ impl LayoutAnchor {
         let (x, y) = match dimension {
             LayoutDimension::Width => (factor, 1.0),
             LayoutDimension::Height => (1.0, factor),
+            LayoutDimension::Depth => {
+                self.layout()?;
+                authoring_render_f64("stretch factor", factor)?;
+                return Ok(());
+            }
         };
         self.apply_affine_without_table_layout(crate::family_affine::FamilyAffine::Scale(
             x, y, pivot,

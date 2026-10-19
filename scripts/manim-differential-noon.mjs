@@ -1417,6 +1417,26 @@ json.dumps({
     "mobject_depth_methods: match-depth returns the receiver");
   assert.deepEqual(depthMethods.after, depthMethods.before,
     "mobject_depth_methods: zero-depth fitting leaves planar geometry unchanged");
+  for (const name of ["generic_dimension_fitting", "generic_dimension_fitting_live"]) {
+    const fitting = observations[name];
+    assert.equal(Object.keys(fitting).length, 12, `${name}: retain every bounded case`);
+    const errors = {
+      negative_dimension: "AssertionError", above_range: "AssertionError",
+      fractional_dimension: "IndexError", nonindex_dimension: "TypeError",
+    };
+    for (const [key, value] of Object.entries(fitting)) {
+      assert.equal(value.error_type, errors[key] ?? null, `${name}.${key}: pinned error type`);
+      assert.equal(value.returns_self, !errors[key], `${name}.${key}: receiver identity`);
+      assert.deepEqual(value.target_after, value.target_before, `${name}.${key}: target is unchanged`);
+      if (value.unchanged) {
+        assert.deepEqual(value.after, value.before, `${name}.${key}: no mutation`);
+      }
+    }
+    assert.ok(Math.abs(fitting.width_control.after.width - 4) <= 1e-5, `${name}: width control`);
+    assert.ok(Math.abs(fitting.width_control.after.height - 2) <= 1e-5, `${name}: uniform height control`);
+    assert.ok(Math.abs(fitting.height_stretch_control.after.width - 2) <= 1e-5, `${name}: stretch preserves width`);
+    assert.ok(Math.abs(fitting.height_stretch_control.after.height - 3) <= 1e-5, `${name}: height control`);
+  }
   const zIndexByZ = observations.mobject_z_index_by_z;
   assert.equal(zIndexByZ.returns_self, true,
     "mobject_z_index_by_z: returns the receiver");

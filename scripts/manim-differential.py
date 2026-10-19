@@ -2043,6 +2043,67 @@ def _manim_mobject_depth_methods() -> Any:
     return _mobject_depth_methods(manim)
 
 
+def _generic_dimension_fitting(provider: Any, scene: Any | None = None) -> Any:
+    observations = {}
+
+    def record(name, source, operation, target=None, *, unchanged=True):
+        if scene is not None:
+            scene.add(source)
+            if target is not None:
+                scene.add(target)
+        before = _object_observation(source)
+        target_before = None if target is None else _object_observation(target)
+        try:
+            returned = operation(source, target)
+            error_type = None
+        except Exception as error:
+            returned = None
+            error_type = type(error).__name__
+        observations[name] = {
+            "before": before, "after": _object_observation(source),
+            "target_before": target_before,
+            "target_after": None if target is None else _object_observation(target),
+            "returns_self": returned is source, "error_type": error_type,
+            "unchanged": unchanged,
+        }
+
+    def rectangle():
+        return provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT)
+
+    record("depth", rectangle(), lambda source, _: source.rescale_to_fit(5, 2))
+    record("depth_lazy_arguments", rectangle(), lambda source, _: source.rescale_to_fit(
+        object(), 2, stretch=True, about_point=object()))
+    record("match_depth_lazy_pivot", rectangle(), lambda source, target: source.match_dim_size(
+        target, 2, about_edge=object()), rectangle().scale(3))
+    leaf = rectangle()
+    record("aliased_family_depth", provider.VGroup(leaf, leaf),
+           lambda source, _: source.rescale_to_fit(float("nan"), 2))
+    record("zero_width_lazy_arguments", provider.Line((2, -1, 0), (2, 3, 0)),
+           lambda source, _: source.rescale_to_fit(object(), 0, about_point=object()))
+    record("zero_height_lazy_arguments", provider.Line((-1, 2, 0), (3, 2, 0)),
+           lambda source, _: source.rescale_to_fit(object(), 1, stretch=True, about_edge=object()))
+    record("width_control", rectangle(), lambda source, _: source.rescale_to_fit(4, 0),
+           unchanged=False)
+    record("height_stretch_control", rectangle(),
+           lambda source, _: source.rescale_to_fit(3, 1, stretch=True), unchanged=False)
+    for name, dim in [("negative_dimension", -1), ("above_range", 3),
+                      ("fractional_dimension", 1.0), ("nonindex_dimension", object())]:
+        record(name, rectangle(), lambda source, _, dim=dim: source.rescale_to_fit(3, dim))
+    return observations
+
+
+def _noon_generic_dimension_fitting() -> Any:
+    return _generic_dimension_fitting(noon)
+
+
+def _manim_generic_dimension_fitting() -> Any:
+    return _generic_dimension_fitting(manim)
+
+
+def _noon_generic_dimension_fitting_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _generic_dimension_fitting(noon, scene))
+
+
 def _mobject_z_index_by_z(provider: Any) -> Any:
     left = provider.Square(side_length=1.0).shift(provider.LEFT)
     right = provider.Circle(radius=0.5).shift(provider.RIGHT)
@@ -5944,6 +6005,10 @@ FIXTURES = [
     Fixture("mobject_depth_methods",
             _noon_mobject_depth_methods,
             _manim_mobject_depth_methods),
+    Fixture("generic_dimension_fitting", _noon_generic_dimension_fitting,
+            _manim_generic_dimension_fitting, 1e-5),
+    Fixture("generic_dimension_fitting_live", _noon_generic_dimension_fitting_live,
+            _manim_generic_dimension_fitting, 1e-5),
     Fixture("mobject_z_index_by_z",
             _noon_mobject_z_index_by_z,
             _manim_mobject_z_index_by_z),

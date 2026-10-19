@@ -13,7 +13,10 @@ class DimensionFittingTests(unittest.TestCase):
         result._scene = None
         result._object = None
         result._semantic_handle_fresh = True
-        result._semantic_handle = types.SimpleNamespace(layoutAnchor=lambda index: self.anchor)
+        result._semantic_handle = types.SimpleNamespace(
+            layoutAnchor=lambda index: self.anchor,
+            lengthOverDim=lambda dim: 0.0 if dim == 2 else 1.0,
+        )
         return result
 
     def setUp(self):
@@ -60,9 +63,26 @@ class DimensionFittingTests(unittest.TestCase):
     def test_unsupported_arguments_fail_before_calling_shared_mutation(self):
         source = self.wrapper()
         with self.assertRaises(NotImplementedError):
-            source.rescale_to_fit(2, 2)
+            source.stretch(2, 2)
+        for dimension in (-1, 3):
+            with self.assertRaises(AssertionError):
+                source.rescale_to_fit(2, dimension)
+        with self.assertRaises(IndexError):
+            source.rescale_to_fit(2, 1.0)
         with self.assertRaises(TypeError):
             source.scale_to_fit_width(2, unknown_pivot=noon.ORIGIN)
         with self.assertRaises(TypeError):
             source.match_width(object())
         self.assertEqual(self.calls, [])
+
+    def test_depth_and_zero_extent_skip_length_and_pivot_coercion(self):
+        source, target = self.wrapper(), self.wrapper()
+        self.assertIs(source.rescale_to_fit(object(), 2, about_point=object()), source)
+        self.assertIs(source.match_dim_size(target, 2, about_edge=object()), source)
+        source._semantic_handle.lengthOverDim = lambda dim: 0.0
+        self.assertIs(source.rescale_to_fit(object(), 0, about_point=object()), source)
+        self.assertEqual(self.calls, [
+            ("fit", (0.0, 2, False, 0., 0., False)),
+            ("match", (self.anchor, 2, False, 0., 0., False)),
+            ("fit", (0.0, 0, False, 0., 0., False)),
+        ])

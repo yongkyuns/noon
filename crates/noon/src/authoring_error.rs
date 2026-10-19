@@ -224,7 +224,7 @@ pub enum AuthoringError {
     DegenerateLine,
     /// A requested bounds rectangle has reversed limits.
     UnorderedBounds(noon_core::Bounds2D64),
-    /// An operation requested a dimension other than width or height.
+    /// An operation requested a dimension outside width, height, and planar depth.
     InvalidDimension(u32),
     /// Stretch matching would divide by a zero target extent.
     ZeroStretchTarget,
@@ -393,7 +393,7 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::UnorderedBounds(_) => f.write_str("layout bounds must be ordered"),
             Self::InvalidDimension(_) => {
-                f.write_str("dimension fitting supports width (0) and height (1) only")
+                f.write_str("dimension fitting requires width (0), height (1), or planar depth (2)")
             }
             Self::InvalidPointDimension(dim) => {
                 write!(f, "point dimension {dim} is outside the point coordinate width")
