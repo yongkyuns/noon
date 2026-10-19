@@ -176,6 +176,38 @@ mod tests {
     }
 
     #[test]
+    fn delayed_reverse_stroke_flow_keeps_phase_until_start_and_freezes_after_stop() {
+        let mut scene = crate::Scene::new();
+        let mut line = scene.line((-2.0, 0.0), (2.0, 0.0)).unwrap();
+        line.set_stroke_pattern(Some(
+            StrokePattern::dashed(0.3, 0.2)
+                .unwrap()
+                .with_phase(0.125)
+                .unwrap(),
+        ))
+        .unwrap();
+        scene.add(&line).unwrap();
+        scene.wait(1.25).unwrap();
+        let flow = scene.flow_stroke(&line, -0.5, 2.0).unwrap();
+        scene.wait(2.0).unwrap();
+        let mut execution = session(&scene, &flow);
+        let id = execution.frame().objects[0].id;
+
+        for time in [0.0_f64, 0.5, 1.25, 1.5, 2.25, 3.0, 3.25, 3.5, 1.5, 0.0] {
+            let frame = execution.seek(time).unwrap();
+            assert_eq!(frame.objects.len(), 1);
+            assert_eq!(frame.objects[0].id, id);
+            let elapsed = (time - 1.25).clamp(0.0, 2.0) as f32;
+            let expected = 0.125 - elapsed * 0.5;
+            let actual = frame.objects[0].style.stroke_pattern.unwrap().phase();
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "phase at t={time}: {actual} != {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn stroke_pattern_target_motion_and_phase_share_one_sample() {
         let mut scene = crate::Scene::new();
         let mut line = scene.line((-3.0, 0.0), (3.0, 0.0)).unwrap();
