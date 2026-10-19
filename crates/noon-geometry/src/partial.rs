@@ -3,7 +3,7 @@ pub use alignment::align_paths;
 
 use noon_core::{PathCommand, SemanticVec3, Vec2, VectorPath};
 
-const MANIM_LENGTH_SAMPLE_POINTS: usize = 10;
+pub const MANIM_LENGTH_SAMPLE_POINTS: usize = 10;
 
 #[derive(Clone, Copy, Debug)]
 enum CurveKind {
@@ -132,6 +132,45 @@ impl PathProportionPlan {
 
     pub fn curve_count(&self) -> usize {
         self.curves.len()
+    }
+
+    /// Sample one curve into the straight-line length pieces used by ManimCE.
+    /// `sample_points` is the number of Bezier evaluations, so the result has
+    /// `sample_points - 1` entries when there are at least two samples.
+    pub fn curve_length_pieces(
+        &self,
+        index: usize,
+        sample_points: usize,
+    ) -> Result<Vec<f64>, PathProportionError> {
+        let curve =
+            self.curves
+                .get(index)
+                .copied()
+                .ok_or(PathProportionError::InvalidCurveIndex {
+                    index,
+                    count: self.curves.len(),
+                })?;
+        let mut pieces = Vec::new();
+        if sample_points == 0 {
+            return Err(PathProportionError::InvalidSampleCount);
+        }
+        if sample_points == 1 {
+            return Ok(pieces);
+        }
+        pieces
+            .try_reserve(sample_points - 1)
+            .map_err(|_| PathProportionError::InvalidSampleCount)?;
+        let denominator = (sample_points - 1) as f64;
+        let mut previous = curve_point_f64(curve, 0.0);
+        for sample in 1..sample_points {
+            let point = curve_point_f64(curve, sample as f64 / denominator);
+            pieces.push(
+                ((point.x - previous.x) * self.scale.0)
+                    .hypot((point.y - previous.y) * self.scale.1),
+            );
+            previous = point;
+        }
+        Ok(pieces)
     }
 
     /// Cubic controls for one retained curve, promoting lines and quadratics
@@ -731,6 +770,37 @@ mod tests {
         assert_vec2(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
         assert_vec2(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
         assert_vec2(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
+    }
+
+    #[test]
+    fn curve_length_pieces_match_manim_sample_count_and_scale() {
+        let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+            Vec2::new(0.0, 1.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(1.0, 0.0),
+        );
+        let plan = PathProportionPlan::with_scale(&path, (2.0, 0.5)).unwrap();
+
+        let pieces = plan.curve_length_pieces(0, 5).unwrap();
+        let expected = [
+            0.420_425_751_471_053_43,
+            0.693_862_603_474_203_7,
+            0.693_862_603_474_203_7,
+            0.420_425_751_471_053_43,
+        ];
+        assert_eq!(pieces.len(), expected.len());
+        for (actual, expected) in pieces.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+        }
+        assert!(plan.curve_length_pieces(0, 1).unwrap().is_empty());
+        assert_eq!(
+            plan.curve_length_pieces(0, 0),
+            Err(PathProportionError::InvalidSampleCount)
+        );
+        assert!(matches!(
+            plan.curve_length_pieces(1, 5),
+            Err(PathProportionError::InvalidCurveIndex { index: 1, count: 1 })
+        ));
     }
 
     #[test]

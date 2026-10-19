@@ -19,6 +19,14 @@ pub fn session() -> Result<ExecutionSession, String> {
             scene.add(shape)?;
             let query = shape.path_query()?;
             assert!(query.arc_length(None)? > 0.);
+            let default_pieces = query.curve_length_pieces(0, None)?;
+            assert_eq!(default_pieces.len(), 9);
+            assert!(
+                (query.curve_length(0, None)? - default_pieces.iter().sum::<f64>()).abs() < 1e-10
+            );
+            assert_eq!(query.curve_length_pieces(0, Some(4))?.len(), 3);
+            assert!(query.curve_length_pieces(0, Some(1))?.is_empty());
+            assert_eq!(query.curve_length(0, Some(1))?, 0.0);
             for alpha in [0.125, 0.375, 0.625, 0.875] {
                 let (x, y) = query.point_from_proportion(alpha)?;
                 let mut marker = scene.circle(0.08)?;

@@ -69,6 +69,34 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(ValueError): value.get_nth_curve_points(4)
             self.assertEqual(query.free.call_count, 8)
 
+    def test_curve_length_queries_forward_sample_count_and_free_snapshots(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.curveCount = 2
+        query.curveLengthPieces.return_value = [0.25, 0.5, 0.75]
+        query.curveLength.return_value = 1.5
+        with patch.object(queries, '_typed_manim_observation', return_value=query):
+            self.assertEqual(value.get_nth_curve_length_pieces(0), [0.25, 0.5, 0.75])
+            query.curveLengthPieces.assert_called_once_with(0, None)
+            self.assertEqual(value.get_nth_curve_length_pieces(1, sample_points=4), [0.25, 0.5, 0.75])
+            query.curveLengthPieces.assert_called_with(1, 4)
+            self.assertEqual(value.get_nth_curve_length(0), 1.5)
+            query.curveLength.assert_called_once_with(0, None)
+            self.assertEqual(query.free.call_count, 3)
+            with self.assertRaises(AssertionError):
+                value.get_nth_curve_length_pieces(2)
+            self.assertEqual(query.free.call_count, 4)
+
+        with patch.object(queries, '_typed_manim_observation') as observe:
+            for samples in (-1, 2**32):
+                with self.assertRaises(ValueError):
+                    value.get_nth_curve_length(0, sample_points=samples)
+            with self.assertRaises(TypeError):
+                value.get_nth_curve_length_pieces(0, sample_points=2.5)
+            with self.assertRaises(IndexError):
+                value.get_nth_curve_length(-1)
+            observe.assert_not_called()
+
 
 class SubpathQueryTests(unittest.TestCase):
     def test_subpaths_and_closure_free_the_snapshot_on_success_and_error(self):

@@ -4,7 +4,9 @@ use noon_core::{
     GeometryRef, GeometryResource, SemanticObjectContent, SemanticStore, SemanticTransform2_5D,
     StoredGeometry, VectorPath,
 };
-use noon_geometry::{canonical_outline_path, PathProportionError, PathProportionPlan};
+use noon_geometry::{
+    canonical_outline_path, PathProportionError, PathProportionPlan, MANIM_LENGTH_SAMPLE_POINTS,
+};
 use std::{cell::RefCell, rc::Rc};
 
 /// A reusable snapshot of one path and its coordinate-space transform.
@@ -63,6 +65,32 @@ impl PathQuery {
             .curve_points(index)
             .map_err(AuthoringError::PathQuery)?
             .map(|p| self.transform_point(p.x, p.y)))
+    }
+
+    /// Straight-line sample lengths for one curve, matching ManimCE's
+    /// `get_nth_curve_length_pieces` default of ten Bezier samples.
+    pub fn curve_length_pieces(
+        &self,
+        index: usize,
+        sample_points: Option<usize>,
+    ) -> Result<Vec<f64>, AuthoringError> {
+        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
+            PathProportionError::InvalidCurveIndex { index, count: 0 },
+        ))?;
+        plan.curve_length_pieces(index, sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS))
+            .map_err(AuthoringError::PathQuery)
+    }
+
+    /// Approximate length of one curve using the same samples as its pieces.
+    pub fn curve_length(
+        &self,
+        index: usize,
+        sample_points: Option<usize>,
+    ) -> Result<f64, AuthoringError> {
+        Ok(self
+            .curve_length_pieces(index, sample_points)?
+            .into_iter()
+            .sum())
     }
 
     fn curve_column(&self, column: usize) -> Vec<(f64, f64)> {
