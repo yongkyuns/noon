@@ -20,6 +20,9 @@ test("cross-browser matrix covers all browsers using exactly three gallery shard
 
 test("renderer parity runs both real backends and comparison on one runner", async () => {
   const yaml = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = yaml.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  assert.ok(selection?.includes('      - "scripts/painter-order-browser-smoke.mjs"'),
+    "painter-order harness edits must select their real browser qualification");
   assert.match(yaml, /^  browser-rendering-parity:$/m);
   assert.doesNotMatch(yaml, /^  browser-rendering:$/m);
   assert.ok(yaml.includes("NOON_BROWSER_SMOKE_BACKEND: webgpu"));
