@@ -1157,6 +1157,16 @@ json.dumps({
       `${name}: copied pieces keep source stroke width`);
   }
   for (const name of [
+    "mobject_z_index_reference_point",
+    "mobject_z_index_reference_point_live",
+  ]) {
+    const profile = observations[name];
+    assertPointNear(profile.default_reference, profile.source_center,
+      `${name}: defaults to the receiver center`);
+    assertPointNear(profile.grouped_reference, profile.reference_center,
+      `${name}: follows the explicit z_index_group center`);
+  }
+  for (const name of [
     "mobject_add_background_rectangle",
     "mobject_add_background_rectangle_live",
   ]) {

@@ -1270,6 +1270,43 @@ def _noon_get_pieces_live() -> Any:
     )
 
 
+def _z_index_reference_probe(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Circle(radius=0.35).shift(
+        provider.LEFT * 1.25 + provider.DOWN * 0.4
+    )
+    reference = provider.Square(side_length=0.7).shift(
+        provider.RIGHT * 1.1 + provider.UP * 0.8
+    )
+    if scene is not None:
+        scene.add(source, reference)
+
+    source_center = _point_observation(source.get_center())
+    default_reference = _point_observation(source.get_z_index_reference_point())
+    reference_center = _point_observation(reference.get_center())
+    source.z_index_group = reference
+    grouped_reference = _point_observation(source.get_z_index_reference_point())
+    return {
+        "source_center": source_center,
+        "default_reference": default_reference,
+        "reference_center": reference_center,
+        "grouped_reference": grouped_reference,
+    }
+
+
+def _noon_z_index_reference() -> Any:
+    return _z_index_reference_probe(noon)
+
+
+def _manim_z_index_reference() -> Any:
+    return _z_index_reference_probe(manim)
+
+
+def _noon_z_index_reference_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _z_index_reference_probe(noon, scene)
+    )
+
+
 def _noon_family_frame_methods() -> Any:
     return _family_frame_methods(noon)
 
@@ -5157,6 +5194,8 @@ FIXTURES = [
     Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
     Fixture("mobject_get_pieces", _noon_get_pieces, _manim_get_pieces),
     Fixture("mobject_get_pieces_live", _noon_get_pieces_live, _manim_get_pieces),
+    Fixture("mobject_z_index_reference_point", _noon_z_index_reference, _manim_z_index_reference),
+    Fixture("mobject_z_index_reference_point_live", _noon_z_index_reference_live, _manim_z_index_reference),
     Fixture("family_position_function_methods", _noon_family_position_function_methods, _manim_family_position_function_methods),
     Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
     Fixture("put_start_and_end_on", _noon_put_start_and_end_on, _manim_put_start_and_end_on),
