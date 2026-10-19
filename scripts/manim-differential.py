@@ -777,6 +777,50 @@ def _noon_family_shuffle_alias_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene, alias=True))
 
 
+def _family_reverse_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.VMobject(color=provider.RED, stroke_width=8)
+    first.set_points_as_corners([
+        provider.LEFT * 3 + provider.DOWN,
+        provider.LEFT * 2 + provider.UP,
+        provider.LEFT + provider.DOWN,
+    ])
+    first.start_new_path(provider.DOWN).add_line_to(provider.RIGHT + provider.UP)
+    second = provider.VMobject(color=provider.BLUE, stroke_width=8)
+    second.set_points_as_corners([
+        provider.RIGHT * 2 + provider.DOWN,
+        provider.RIGHT * 3 + provider.UP,
+        provider.RIGHT * 4 + provider.DOWN,
+    ])
+    nested = provider.Group(second)
+    family = provider.Group(first, nested)
+    if scene is not None:
+        scene.add(family)
+    returned = family.reverse_points()
+    endpoints = lambda value: {
+        "start": _point_observation(value.get_start()),
+        "end": _point_observation(value.get_end()),
+    }
+    return {
+        "returns_self": returned is family,
+        "first": endpoints(first),
+        "second": endpoints(second),
+    }
+
+
+def _noon_family_reverse_points() -> Any:
+    return _family_reverse_points(noon)
+
+
+def _manim_family_reverse_points() -> Any:
+    return _family_reverse_points(manim)
+
+
+def _noon_family_reverse_points_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_reverse_points(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -3782,6 +3826,8 @@ FIXTURES = [
     Fixture("group_shuffle_live", _noon_family_shuffle_live, _manim_family_shuffle),
     Fixture("group_shuffle_submobjects", _noon_family_shuffle_alias, _manim_family_shuffle_alias),
     Fixture("group_shuffle_submobjects_live", _noon_family_shuffle_alias_live, _manim_family_shuffle_alias),
+    Fixture("family_reverse_points", _noon_family_reverse_points, _manim_family_reverse_points),
+    Fixture("family_reverse_points_live", _noon_family_reverse_points_live, _manim_family_reverse_points),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

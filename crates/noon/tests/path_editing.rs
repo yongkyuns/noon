@@ -1,5 +1,16 @@
-use noon::{AnimationOptions, AuthoringError, ManimGeometryOptions, Scene};
+use noon::{
+    AnimationOptions, AuthoringError, ManimGeometryOptions, MobjectTarget, Scene,
+    SceneMembershipRequest,
+};
 use noon_core::{Vec2, VectorPath};
+
+fn assert_points_near(actual: &[(f64, f64)], expected: &[(f64, f64)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-6);
+        assert!((actual.1 - expected.1).abs() < 1e-6);
+    }
+}
 
 #[test]
 fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication() {
@@ -164,6 +175,114 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
         assert_eq!(query.start_anchors(), [(0., 0.), (4., 8.), (8., 16.)]);
         assert_eq!(query.end().unwrap(), (8., 16.));
         assert_eq!(query.points().unwrap().last(), Some(&(8., 16.)));
+    }
+}
+
+#[test]
+fn family_reverse_points_is_atomic_and_preserves_member_transforms() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let path = |offset: f32| {
+            VectorPath::new()
+                .move_to(Vec2::new(offset, 0.0))
+                .line_to(Vec2::new(offset + 1.0, 0.0))
+                .move_to(Vec2::new(offset + 2.0, 1.0))
+                .cubic_to(
+                    Vec2::new(offset + 3.0, 2.0),
+                    Vec2::new(offset + 4.0, 2.0),
+                    Vec2::new(offset + 5.0, 1.0),
+                )
+        };
+        let mut first = scene.path(path(-3.0), Default::default()).unwrap();
+        let second = scene.path(path(2.0), Default::default()).unwrap();
+        first.set_translation(3.0, -2.0).unwrap();
+        first.set_scale(1.5, 0.75).unwrap();
+        first.set_rotation(0.35).unwrap();
+        let first_state = first.state().unwrap();
+        let second_state = second.state().unwrap();
+        let family = scene
+            .family(&[MobjectTarget::from(&first), MobjectTarget::from(&second)])
+            .unwrap();
+        if live_mode {
+            scene
+                .edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::from(&family)]))
+                .unwrap();
+        }
+        let first_before = first.path_query().unwrap();
+        let second_before = second.path_query().unwrap();
+        let mut first_points_reversed = first_before.points().unwrap();
+        let mut second_points_reversed = second_before.points().unwrap();
+        first_points_reversed.reverse();
+        second_points_reversed.reverse();
+        let first_start = first_before.start().unwrap();
+        let first_end = first_before.end().unwrap();
+        let second_start = second_before.start().unwrap();
+        let second_end = second_before.end().unwrap();
+        let count = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        let mut session = scene.execution_session().unwrap();
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::FamilyReversePoints { family: &family },
+            )
+            .unwrap();
+        } else {
+            family.reverse_points().unwrap();
+        }
+
+        assert_eq!(first.state().unwrap().transform, first_state.transform);
+        assert_eq!(second.state().unwrap().transform, second_state.transform);
+        assert_eq!(first.path_query().unwrap().start().unwrap(), first_end);
+        assert_eq!(first.path_query().unwrap().end().unwrap(), first_start);
+        assert_eq!(second.path_query().unwrap().start().unwrap(), second_end);
+        assert_eq!(second.path_query().unwrap().end().unwrap(), second_start);
+        assert_points_near(
+            &first.path_query().unwrap().points().unwrap(),
+            &first_points_reversed,
+        );
+        assert_points_near(
+            &second.path_query().unwrap().points().unwrap(),
+            &second_points_reversed,
+        );
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            count
+        );
+        if live_mode {
+            let effective_start = noon::integration::effective_path_query(
+                scene.integration_store(),
+                &session,
+                &first,
+            )
+            .unwrap()
+            .start()
+            .unwrap();
+            assert!((effective_start.0 - first_end.0).abs() < 1e-6);
+            assert!((effective_start.1 - first_end.1).abs() < 1e-6);
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::ReversePoints { object: &first },
+            )
+            .unwrap();
+        } else {
+            first.reverse_points().unwrap();
+        }
+        assert_eq!(first.path_query().unwrap().start().unwrap(), first_start);
+        assert_eq!(first.path_query().unwrap().end().unwrap(), first_end);
+        assert_eq!(first.state().unwrap().transform, first_state.transform);
     }
 }
 

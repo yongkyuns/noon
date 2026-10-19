@@ -1088,6 +1088,26 @@ impl SemanticExecutionPlayer {
             smooth,
         })
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyReversePoints {
+            family,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_points(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ReversePoints {
+            object,
+        })
+    }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(
         &mut self,

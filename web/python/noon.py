@@ -453,6 +453,11 @@ class Mobject:
         """Return point-owning family members in the shared family order."""
         return [mobject for mobject in self.get_family() if mobject.get_num_points() > 0]
 
+    def reverse_points(self) -> Self:
+        """Reverse point order through the shared path and family operations."""
+        from _manim_path_editing import reverse_points
+        return reverse_points(self)
+
     def apply_to_family(self, func: Callable[[Mobject], None]) -> Mobject:
         """Apply ``func`` to every point-owning member in shared family order."""
         for mobject in self.family_members_with_points():

@@ -830,6 +830,13 @@
       }
     },
     {
+      "id": "family-reverse-points",
+      "scene": "OrdinaryFamilyReversePoints",
+      "source": "parity/manim-v0.21/core-examples/family_reverse_points.py",
+      "expected_duration": 0.2,
+      "notes": "Reverse points across a nested family after live scene admission, asserting each VMobject's endpoints reverse while family membership and geometry remain unchanged."
+    },
+    {
       "id": "family-grid-options",
       "scene": "OrdinaryFamilyGrid",
       "source": "parity/manim-v0.21/core-examples/family_grid_options.py",

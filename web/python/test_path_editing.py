@@ -14,6 +14,36 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathEditingTests(unittest.TestCase):
+    def test_reverse_points_dispatches_family_and_leaf_operations(self):
+        family = identity_only_wrapper(compat.Group)
+        family_handle = Mock()
+        family._semantic_family_handle = family_handle
+        value = identity_only_wrapper(compat.VMobject)
+        value_handle = Mock()
+
+        with patch("_manim_semantic_handles._group_target_context", return_value=None), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.reverse_points(family), family)
+            family_handle.reversePoints.assert_called_once_with()
+
+        live_context = Mock()
+        with patch("_manim_semantic_handles._group_target_context", return_value=live_context), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.reverse_points(family), family)
+            live_context.liveReverseFamilyPoints.assert_called_once_with(family_handle)
+
+        with patch.object(editing, "_handle_for", return_value=value_handle), \
+             patch.object(editing, "_live_mutation_context", return_value=None), \
+             patch.object(editing, "_live_constructor_context", return_value=None), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.reverse_points(value), value)
+            value_handle.reversePoints.assert_called_once_with()
+
+        base = object.__new__(compat.Mobject)
+        with patch.object(editing, "_handle_for", return_value=None), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(base.reverse_points(), base)
+
     def test_base_reset_points_uses_shared_path_clear(self):
         value = identity_only_wrapper(compat.Mobject)
         handle = Mock()

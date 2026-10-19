@@ -513,6 +513,44 @@ def change_anchor_mode(value, mode):
     return value
 
 
+def reverse_points(value):
+    from _manim_compat import Group
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    family = isinstance(value, Group)
+    handle = (
+        getattr(value, "_semantic_family_handle", None)
+        if family
+        else _handle_for(value)
+    )
+    # The pinned base Mobject has no point arrays and no children, so its
+    # inherited reverse_points implementation is an identity-preserving no-op.
+    if handle is None and not family:
+        return value
+    if handle is None:
+        raise RuntimeError("family point editing requires a shared Rust semantic handle")
+    from _manim_semantic_handles import _group_target_context
+    context = (
+        _group_target_context(value)
+        if family
+        else (_live_mutation_context(value) or _live_constructor_context("path"))
+    )
+    if context is None:
+        engine_call(
+            handle.reversePoints,
+            operation="Mobject.reverse_points",
+        )
+    else:
+        engine_call(
+            context.liveReverseFamilyPoints if family else context.liveReversePoints,
+            handle,
+            operation="Mobject.reverse_points",
+        )
+    return value
+
+
 def align_points(value, other):
     from _manim_compat import VMobject
     from _manim_updaters import canonical_callback_phase_active

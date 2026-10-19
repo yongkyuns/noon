@@ -166,6 +166,12 @@ pub enum BorrowedPathEdit<'a> {
         family: &'a MobjectFamily,
         smooth: bool,
     },
+    FamilyReversePoints {
+        family: &'a MobjectFamily,
+    },
+    ReversePoints {
+        object: &'a Mobject,
+    },
 }
 
 /// Publish one host-originated edit against the supplied borrowed execution.
@@ -354,6 +360,16 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::FamilyAnchorMode { family, smooth } => {
             return path_editing::publish_running_family_anchor_mode(
                 store, root, execution, family, smooth,
+            );
+        }
+        BorrowedPathEdit::FamilyReversePoints { family } => {
+            return path_editing::publish_running_family_reverse_points(
+                store, root, execution, family,
+            );
+        }
+        BorrowedPathEdit::ReversePoints { object } => {
+            return path_editing::publish_running_object_reverse_points(
+                store, root, execution, object,
             );
         }
     };

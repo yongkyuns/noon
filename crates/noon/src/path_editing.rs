@@ -209,6 +209,130 @@ pub(crate) fn publish_running_family_anchor_mode(
     publish_running_path_edits(store, root, execution, prepared).map(|_| ())
 }
 
+/// Reverse point order for every supported geometry leaf in one authoritative
+/// family transaction. Text and image resources have no shared vector-point
+/// payload in Noon and are left unchanged.
+pub(crate) fn publish_running_family_reverse_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+) -> Result<(), AuthoringError> {
+    require_running_family(store, family)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    let nodes = store
+        .borrow()
+        .ordered_last_occurrence_leaf_nodes(family.node_id())
+        .map_err(AuthoringError::from)?;
+    let states = nodes
+        .into_iter()
+        .map(|node| {
+            let object = Mobject::from_node(Rc::clone(store), node)?;
+            Ok((
+                node,
+                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, AuthoringError>>()?;
+    let prepared = {
+        let store = store.borrow();
+        prepare_family_reverse_points(&store, states)?
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+pub(crate) fn publish_running_object_reverse_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, object)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    let state = crate::effective_capture::capture_mobject_state(store, execution, object)?;
+    let prepared = {
+        let store = store.borrow();
+        prepare_family_reverse_points(&store, [(object.node_id(), state)])?
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+fn prepare_family_reverse_points(
+    store: &SemanticStore,
+    states: impl IntoIterator<Item = (SemanticNodeId, SemanticObjectState)>,
+) -> Result<PreparedPathEdits, AuthoringError> {
+    let mut replacements = Vec::new();
+    for (node, state) in states {
+        let supported = match state.content.geometry() {
+            Some(
+                StoredGeometry::Circle { .. }
+                | StoredGeometry::Rectangle { .. }
+                | StoredGeometry::Line { .. },
+            ) => true,
+            Some(StoredGeometry::Resource(handle)) => matches!(
+                store.geometry_resources().get(handle),
+                Some(noon_core::GeometryResource::VectorPath(_))
+            ),
+            None => false,
+        };
+        if !supported {
+            continue;
+        }
+        let path = crate::path_queries::content_path(store, state.content)?;
+        replacements.push((node, state, reverse_point_order(path.as_ref())?));
+    }
+    PreparedPathEdits::prepare_preserving_transform(store, replacements)
+}
+
+fn reverse_point_order(path: &VectorPath) -> Result<VectorPath, AuthoringError> {
+    let mut points = manim_points_for_path(path)?;
+    points.reverse();
+    let mut reversed = VectorPath::from_manim_points(points);
+    if let Some(target) = path.morph_target() {
+        reversed = reversed.with_morph_target(reverse_point_order(target)?);
+    }
+    Ok(reversed)
+}
+
+impl MobjectFamily {
+    /// Reverse the stored point order of each supported geometry leaf while
+    /// retaining the family's membership, paint, and member transforms.
+    pub fn reverse_points(&self) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let mut store = self.integration_store().borrow_mut();
+        let nodes = store
+            .ordered_last_occurrence_leaf_nodes(self.node_id())
+            .map_err(AuthoringError::from)?;
+        let states = nodes
+            .into_iter()
+            .map(|node| Ok((node, store.semantic_object_state_checked(node)?.clone())))
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+        let prepared = prepare_family_reverse_points(&store, states)?;
+        prepared.publish(&mut store, |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+}
+
+impl Mobject {
+    /// Reverse this object's local point order while retaining its affine state.
+    pub fn reverse_points(&self) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let mut store = self.integration_store().borrow_mut();
+        let state = store.semantic_object_state_checked(self.node_id())?.clone();
+        let prepared = prepare_family_reverse_points(&store, [(self.node_id(), state)])?;
+        prepared.publish(&mut store, |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+}
+
 impl crate::Scene {
     /// Apply a pointwise matrix through this Scene's running publication authority.
     pub fn apply_matrix(

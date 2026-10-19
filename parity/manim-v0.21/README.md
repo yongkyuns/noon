@@ -96,6 +96,17 @@ Cairo fixture shuffles after live scene admission and passes on WebGPU and WebGL
 with zero differing pixels, matching bounds and duration, mean absolute channel
 error 0.001725, and maximum channel error 9.
 
+`Mobject.reverse_points()` and nested `Group.reverse_points()` reverse the
+stored point sequence through Rust-owned leaf selection and one atomic path
+resource transaction, preserving member transforms and family order. Direct and
+live product comparisons match pinned ManimCE for the selected VMobject paths
+(included in 173/173 semantic fixtures). The nested-family raster fixture passes
+on WebGPU and WebGL2 with unchanged duration and no manifest-policy failures
+(0.2008% differing pixels, mean absolute channel error 0.022041, maximum channel
+error 67). Text/image point buffers remain unqualified because their resources
+do not expose shared vector-point arrays. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1549.
+
 `arrange_submobjects()` forwards its positional and keyword arguments to the
 dynamic `arrange()` implementation, reusing the shared Rust family layout path.
 Product comparisons cover detached and live Group calls and preserve receiver
