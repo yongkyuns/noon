@@ -3746,7 +3746,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<CircleInstance>(), 88);
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
-        assert_eq!(std::mem::size_of::<PathInstance>(), 80);
+        assert_eq!(std::mem::size_of::<PathInstance>(), 96);
+        assert_eq!(std::mem::offset_of!(PathInstance, background_stroke), 80);
         assert_eq!(std::mem::size_of::<PathVertex>(), 68);
     }
 

@@ -2651,15 +2651,21 @@ mod tests {
         assert_eq!(triangle_layout.attributes[5].shader_location, 13);
 
         let path_instance_layout = path_instance_layout();
-        assert_eq!(path_instance_layout.array_stride, 80);
+        assert_eq!(path_instance_layout.array_stride, 96);
         assert_eq!(
             path_instance_layout.step_mode,
             wgpu::VertexStepMode::Instance
         );
-        assert_eq!(path_instance_layout.attributes.len(), 8);
+        assert_eq!(path_instance_layout.attributes.len(), 9);
         assert_eq!(path_instance_layout.attributes[0].shader_location, 3);
         assert_eq!(path_instance_layout.attributes[6].shader_location, 9);
         assert_eq!(path_instance_layout.attributes[7].shader_location, 10);
+        assert_eq!(path_instance_layout.attributes[8].shader_location, 14);
+        assert_eq!(path_instance_layout.attributes[8].offset, 80);
+        assert_eq!(
+            path_instance_layout.attributes[8].format,
+            wgpu::VertexFormat::Float32x4
+        );
     }
 
     #[test]
