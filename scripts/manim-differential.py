@@ -25,6 +25,7 @@ import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -4658,6 +4659,29 @@ def _shade_in_3d_probe(api, scene=None):
     }
 
 
+def _generate_rgbas_array_probe(api):
+    value = api.VMobject()
+    cases = (
+        (None, 0.25),
+        ([api.RED, api.BLUE], 0.5),
+        (api.GREEN, [0.2, 0.8]),
+        (["RED", "#FFFF00"], [None, 0.6]),
+        ([(0.1, 0.25, 0.5), (255, 128, 0)], [0.3, 0.6]),
+        ([(0.1, 0.2, 0.3, 0.4), (0.9, 0.8, 0.7, 0.6)], [0.3, 0.5]),
+        (["#F08", "#11223380"], [0.2, 0.4]),
+        (SimpleNamespace(get_hex=lambda: "#123456"), 0.9),
+    )
+    result = []
+    for color, opacity in cases:
+        array = value.generate_rgbas_array(color, opacity)
+        result.append({
+            "values": [[_round_float(component) for component in row] for row in array],
+            "shape": list(array.shape),
+            "dtype": str(array.dtype),
+        })
+    return result
+
+
 def _style_query_probe(api):
     source = api.VMobject(
         fill_color=api.GREEN,
@@ -5296,6 +5320,9 @@ FIXTURES = [
                 lambda scene: _shade_in_3d_probe(noon, scene)
             ),
             lambda: _shade_in_3d_probe(manim)),
+    Fixture("generate_rgbas_array",
+            lambda: _generate_rgbas_array_probe(noon),
+            lambda: _generate_rgbas_array_probe(manim)),
     Fixture(
         "plain_group_fade_family_false",
         lambda: _plain_group_nonrecursive_fade_probe(noon),

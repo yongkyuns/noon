@@ -533,6 +533,33 @@ expectedFamilyPointCounts = {
 }
 assert observations["family_point_counts"] == expectedFamilyPointCounts
 assert observations["family_point_counts_live"] == expectedFamilyPointCounts
+def rgb(color):
+    return [float(color.red), float(color.green), float(color.blue)]
+red_rgbas, blue_rgbas, green_rgbas = rgb(noon.RED), rgb(noon.BLUE), rgb(noon.GREEN)
+expected_generated_rgbas = [
+    {"values": [[0.0, 0.0, 0.0, 0.25]], "shape": [1, 4], "dtype": "float64"},
+    {"values": [red_rgbas + [0.5], blue_rgbas + [0.5]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [green_rgbas + [0.2], green_rgbas + [0.8]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [red_rgbas + [0.0], [1.0, 1.0, 0.0, 0.6]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [[0.1, 0.25, 0.5, 0.3], [1.0, 128.0 / 255.0, 0.0, 0.6]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [[0.1, 0.2, 0.3, 0.3], [0.9, 0.8, 0.7, 0.5]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [[1.0, 0.0, 136.0 / 255.0, 0.2],
+                [17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0, 0.4]],
+     "shape": [2, 4], "dtype": "float64"},
+    {"values": [[18.0 / 255.0, 52.0 / 255.0, 86.0 / 255.0, 0.9]],
+     "shape": [1, 4], "dtype": "float64"},
+]
+assert len(observations["generate_rgbas_array"]) == len(expected_generated_rgbas)
+for actual, expected in zip(observations["generate_rgbas_array"],
+                            expected_generated_rgbas, strict=True):
+    assert actual["shape"] == expected["shape"], (actual, expected)
+    assert actual["dtype"] == expected["dtype"], (actual, expected)
+    assert _compare(actual["values"], expected["values"], 1e-12) == [], (actual, expected)
 pathAlignmentPaint = path_alignment_paint
 assert pathAlignmentPaint["live"] == pathAlignmentPaint["authored"]
 assert pathAlignmentPaint["live"]["counts"][0] == pathAlignmentPaint["live"]["counts"][1]

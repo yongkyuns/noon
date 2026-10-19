@@ -226,3 +226,14 @@ rejects before mutation; these branches need shared spatial-renderer semantics.
 The pinned ManimCE comparator is enrolled for hosted qualification because the
 reference package is unavailable in this checkout. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L119-L149 and #L735-L742.
+
+`VMobject.generate_rgbas_array(color, opacity)` now builds Manim-compatible RGBA
+rows from scalar or iterable colors and opacities using the pinned proportional
+`make_even` pairing. The paired product fixture covers default black for `None`,
+named and hex colors, numeric RGB(A) tuples, custom `get_hex()` values, repeated
+single colors/opacities, and float64 array shape/dtype. Noon returns list rows
+when NumPy is absent. This pure color conversion does not mirror object or scene
+state. The product Pyodide differential now passes 252 shared fixtures; exact
+ManimCE comparison is enrolled for hosted qualification. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L210-L240 and
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/utils/color/core.py#L148-L208.

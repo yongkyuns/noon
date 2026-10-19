@@ -1,5 +1,6 @@
-import unittest
+import builtins
 import inspect
+import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -56,6 +57,129 @@ class StyleOperationsTests(unittest.TestCase):
             with self.assertRaisesRegex(NotImplementedError, "3D-shaded"):
                 compat.VGroup(shade_in_3d=True)
         initialize_group.assert_not_called()
+
+    def test_generate_rgbas_array_pairs_colors_and_opacities(self):
+        self.assertEqual(
+            list(inspect.signature(compat.VMobject.generate_rgbas_array).parameters),
+            ["self", "color", "opacity"],
+        )
+        self.assertIs(
+            compat.VGroup.generate_rgbas_array,
+            compat.VMobject.generate_rgbas_array,
+        )
+
+        vector = identity_only_wrapper(compat.VMobject)
+        family = identity_only_wrapper(compat.VGroup)
+        family_rgbas = family.generate_rgbas_array(compat._base.BLUE, 0.3)
+        family_values = (
+            family_rgbas.tolist()
+            if hasattr(family_rgbas, "tolist")
+            else family_rgbas
+        )
+        self.assertEqual(
+            family_values,
+            [
+                [
+                    compat._base.BLUE.red,
+                    compat._base.BLUE.green,
+                    compat._base.BLUE.blue,
+                    0.3,
+                ]
+            ],
+        )
+
+        generated = vector.generate_rgbas_array(
+            [None, "#FFFF00"], [None, 0.6]
+        )
+        values = generated.tolist() if hasattr(generated, "tolist") else generated
+        self.assertEqual(values, [[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.6]])
+        if hasattr(generated, "dtype"):
+            self.assertEqual(str(generated.dtype), "float64")
+            self.assertEqual(list(generated.shape), [2, 4])
+
+        repeated_color = vector.generate_rgbas_array("RED", [0.2, 0.8])
+        repeated_values = (
+            repeated_color.tolist()
+            if hasattr(repeated_color, "tolist")
+            else repeated_color
+        )
+        self.assertEqual(
+            repeated_values,
+            [
+                [
+                    compat._base.RED.red,
+                    compat._base.RED.green,
+                    compat._base.RED.blue,
+                    0.2,
+                ],
+                [
+                    compat._base.RED.red,
+                    compat._base.RED.green,
+                    compat._base.RED.blue,
+                    0.8,
+                ],
+            ],
+        )
+
+        numeric_colors = vector.generate_rgbas_array(
+            [(0.1, 0.25, 0.5), (255, 128, 0)], [0.3, 0.6]
+        )
+        numeric_values = (
+            numeric_colors.tolist()
+            if hasattr(numeric_colors, "tolist")
+            else numeric_colors
+        )
+        self.assertEqual(
+            numeric_values,
+            [[0.1, 0.25, 0.5, 0.3], [1.0, 128 / 255, 0.0, 0.6]],
+        )
+
+        rgba_color = vector.generate_rgbas_array(
+            SimpleNamespace(get_hex=lambda: "#0000FF"), 0.7
+        )
+        rgba_values = (
+            rgba_color.tolist() if hasattr(rgba_color, "tolist") else rgba_color
+        )
+        self.assertEqual(rgba_values, [[0.0, 0.0, 1.0, 0.7]])
+
+        compatible_color = vector.generate_rgbas_array(
+            SimpleNamespace(to_hex=lambda: "#123456"), 0.9
+        )
+        compatible_values = (
+            compatible_color.tolist()
+            if hasattr(compatible_color, "tolist")
+            else compatible_color
+        )
+        self.assertEqual(
+            compatible_values,
+            [[18 / 255, 52 / 255, 86 / 255, 0.9]],
+        )
+
+        shorthand_hex = vector.generate_rgbas_array("#F08", 0.25)
+        shorthand_values = (
+            shorthand_hex.tolist()
+            if hasattr(shorthand_hex, "tolist")
+            else shorthand_hex
+        )
+        self.assertEqual(
+            shorthand_values,
+            [[1.0, 0.0, 136 / 255, 0.25]],
+        )
+
+        real_import = builtins.__import__
+
+        def without_numpy(name, *args, **kwargs):
+            if name == "numpy":
+                raise ImportError("NumPy intentionally unavailable in this test")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=without_numpy):
+            fallback = vector.generate_rgbas_array(compat._base.GREEN, 0.4)
+        self.assertEqual(
+            fallback,
+            [[compat._base.GREEN.red, compat._base.GREEN.green,
+              compat._base.GREEN.blue, 0.4]],
+        )
 
     def test_vgroup_fill_and_opacity_expose_family_and_root_only_dispatch(self):
         self.assertEqual(list(inspect.signature(compat.VGroup.set_fill).parameters), [

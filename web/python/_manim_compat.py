@@ -489,6 +489,88 @@ class VMobject(Mobject):
     def get_sheen_factor(self):
         return 0.0
 
+    def generate_rgbas_array(self, color, opacity):
+        from _manim_iterables import make_even, tuplify
+
+        def parse_color(value):
+            if value is None:
+                return _base.Color(0.0, 0.0, 0.0)
+            if isinstance(value, _base.Color):
+                return value
+            if isinstance(value, str):
+                text = value.strip()
+                digits = None
+                if text.startswith("#"):
+                    digits = text[1:]
+                elif text.lower().startswith("0x"):
+                    digits = text[2:]
+                if (
+                    digits is not None
+                    and len(digits) in (3, 4, 6, 8)
+                    and all(character in "0123456789abcdefABCDEF" for character in digits)
+                ):
+                    if len(digits) in (3, 4):
+                        digits = "".join(character * 2 for character in digits)
+                    return _base.color_from_hex(int(digits[:6], 16))
+                try:
+                    return _as_color("color", value)
+                except ValueError:
+                    named_color = getattr(_base, value.upper(), None)
+                    if isinstance(named_color, _base.Color):
+                        return named_color
+                    raise
+            get_hex = getattr(value, "get_hex", None)
+            if not callable(get_hex):
+                get_hex = getattr(value, "to_hex", None)
+            if callable(get_hex):
+                return parse_color(get_hex())
+            if hasattr(value, "tolist"):
+                value = value.tolist()
+            if isinstance(value, (list, tuple)):
+                if len(value) not in (3, 4):
+                    raise ValueError(
+                        "ManimColor only accepts lists/tuples/arrays of length 3 or 4"
+                    )
+                scale = (
+                    1.0
+                    if all(isinstance(component, float) for component in value)
+                    else 1.0 / 255.0
+                )
+                return _base.Color(
+                    *(float(component) * scale for component in value[:3])
+                )
+            return _as_color("color", value)
+
+        colors = [parse_color(value) for value in tuplify(color)]
+        opacities = [0.0 if value is None else value for value in tuplify(opacity)]
+        paired_colors, paired_opacities = make_even(colors, opacities)
+        rows = [
+            [float(value.red), float(value.green), float(value.blue), float(alpha)]
+            for value, alpha in zip(paired_colors, paired_opacities, strict=True)
+        ]
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+            rgbas = rows
+        else:
+            rgbas = np.asarray(rows, dtype=np.float64)
+
+        sheen_factor = self.get_sheen_factor()
+        if sheen_factor != 0 and len(rgbas) == 1:
+            light_rgbas = rgbas.copy()
+            if np is not None:
+                light_rgbas[:, :3] += sheen_factor
+                np.clip(light_rgbas, 0.0, 1.0, out=light_rgbas)
+                rgbas = np.append(rgbas, light_rgbas, axis=0)
+            else:
+                for row in light_rgbas:
+                    for index in range(3):
+                        row[index] = min(1.0, max(0.0, row[index] + sheen_factor))
+                    row[3] = min(1.0, max(0.0, row[3]))
+                rgbas = rgbas + light_rgbas
+        return rgbas
+
     def get_sheen_direction(self):
         from _manim_semantic_handles import _get_sheen_direction
         return _get_sheen_direction(self)
@@ -1104,6 +1186,7 @@ class VGroup(Group):
     get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
     get_background_image = VMobject.get_background_image
     get_sheen_factor = VMobject.get_sheen_factor
+    generate_rgbas_array = VMobject.generate_rgbas_array
     get_sheen_direction = VMobject.get_sheen_direction
     set_background_stroke = VMobject.set_background_stroke
     set_cap_style = VMobject.set_cap_style
