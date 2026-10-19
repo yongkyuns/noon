@@ -847,6 +847,13 @@ impl CanonicalAuthoringScene {
         self.player_ownership.browser_name()
     }
 
+    /// Keep ordinary edit routing typed across the language boundary. A
+    /// transferred player still requires the live route, which rejects edits.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn requires_live_mutation_routing(&self) -> bool {
+        !self.player_ownership.is_unstarted()
+    }
+
     /// Route bound observations through the single owner of current execution.
     /// Detached handles are queried directly by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -6861,6 +6868,11 @@ mod wasm {
             self.inner.live_execution_ownership().to_owned()
         }
 
+        #[wasm_bindgen(js_name = requiresLiveMutationRouting)]
+        pub fn requires_live_mutation_routing(&self) -> bool {
+            self.inner.requires_live_mutation_routing()
+        }
+
         #[wasm_bindgen(js_name = beginBooleanGeometry)]
         pub fn begin_boolean_geometry(
             &mut self,
@@ -12818,15 +12830,19 @@ mod tests {
     fn live_execution_ownership_is_derived_from_the_retained_player_lifecycle() {
         let mut context = CanonicalAuthoringScene::default();
         assert_eq!(context.live_execution_ownership(), "none");
+        assert!(!context.requires_live_mutation_routing());
 
         context.live_player(1.0).unwrap();
         assert_eq!(context.live_execution_ownership(), "active");
+        assert!(context.requires_live_mutation_routing());
 
         let player = context.take_execution_player(1.0, 17).unwrap();
         assert_eq!(context.live_execution_ownership(), "transferred");
+        assert!(context.requires_live_mutation_routing());
 
         context.return_execution_player(player).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(context.requires_live_mutation_routing());
         assert!(context.resume_execution_player().is_err());
 
         context.begin_ordinary_wait(0.25).unwrap();

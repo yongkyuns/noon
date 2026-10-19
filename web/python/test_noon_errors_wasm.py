@@ -59,10 +59,12 @@ class WasmErrorProjectionTests(unittest.TestCase):
     def test_foreign_colliding_handle_and_recovery(self):
         first, second = wasm.WasmAuthoringStore.new(), wasm.WasmAuthoringStore.new()
         context, other = first.createSceneContext(), second.createSceneContext()
+        self.assertIs(engine_call(context.requiresLiveMutationRouting), False)
         local, foreign = circle(first), circle(second)
         self.assertEqual((local.semanticSlot, local.semanticGeneration),
                          (foreign.semanticSlot, foreign.semanticGeneration))
         context.beginLiveExecution(1)
+        self.assertIs(engine_call(context.requiresLiveMutationRouting), True)
         before = snapshot(context)
         with self.assertRaises(NoonForeignHandleError) as caught:
             engine_call(context.bindMobject, "0", foreign)
@@ -171,12 +173,16 @@ class WasmErrorProjectionTests(unittest.TestCase):
             self.assertEqual(error.code, "ownership.foreign_scene")
             self.assertTrue(host.isError(error.js_error))
             self.assertEqual([c.liveExecutionOwnership() for c in contexts], ["transferred"] * 3)
+            for context in contexts:
+                self.assertIs(engine_call(context.requiresLiveMutationRouting), True)
             players[index] = error.take_player()
             self.assertEqual(json.loads(players[index].debugFrameJson()), before)
         self.assertEqual([json.loads(p.initialDeltaJson())["session"] for p in players], [41]*3)
         for context, player in zip(contexts, players):
             context.returnExecutionPlayer(player)
         self.assertEqual([c.liveExecutionOwnership() for c in contexts], ["returned"] * 3)
+        for context in contexts:
+            self.assertIs(engine_call(context.requiresLiveMutationRouting), True)
 
     def test_actual_continuation_drive_retains_pending_and_terminal_callback_categories(self):
         store = wasm.WasmAuthoringStore.new()
