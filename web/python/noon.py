@@ -294,6 +294,11 @@ class Mobject:
         from _manim_compat import Group
         return Group
 
+    def set(self, **kwargs: Any) -> Mobject:
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
+        return self
+
     @staticmethod
     def get_mobject_type_class():
         return Mobject

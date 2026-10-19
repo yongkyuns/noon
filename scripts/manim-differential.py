@@ -1324,6 +1324,27 @@ def _manim_mobject_lifecycle_hooks() -> Any:
     return _mobject_lifecycle_hooks(manim)
 
 
+def _mobject_set_attributes(provider: Any) -> Any:
+    mobject = provider.Mobject()
+    empty_set_returns_self = mobject.set() is mobject
+    returned = mobject.set(name="set-probe", z_index=2.5, custom_value={"value": 7})
+    return {
+        "empty_set_returns_self": empty_set_returns_self,
+        "returns_self": returned is mobject,
+        "name": mobject.name,
+        "z_index": mobject.z_index,
+        "custom_value": mobject.custom_value,
+    }
+
+
+def _noon_mobject_set_attributes() -> Any:
+    return _mobject_set_attributes(noon)
+
+
+def _manim_mobject_set_attributes() -> Any:
+    return _mobject_set_attributes(manim)
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4365,6 +4386,9 @@ FIXTURES = [
     Fixture("mobject_lifecycle_hooks",
             _noon_mobject_lifecycle_hooks,
             _manim_mobject_lifecycle_hooks),
+    Fixture("mobject_set_attributes",
+            _noon_mobject_set_attributes,
+            _manim_mobject_set_attributes),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

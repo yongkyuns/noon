@@ -1003,6 +1003,17 @@ json.dumps({
     ["generate_points"],
     ["init_colors", true],
   ], "mobject_lifecycle_hooks: construction dispatches base hooks in order");
+  const setAttributes = observations.mobject_set_attributes;
+  assert.equal(setAttributes.empty_set_returns_self, true,
+    "mobject_set_attributes: empty set returns the receiver");
+  assert.equal(setAttributes.returns_self, true,
+    "mobject_set_attributes: set returns the receiver");
+  assert.equal(setAttributes.name, "set-probe",
+    "mobject_set_attributes: ordinary attributes are assigned");
+  assert.equal(setAttributes.z_index, 2.5,
+    "mobject_set_attributes: property assignments use their setter");
+  assert.deepEqual(setAttributes.custom_value, { value: 7 },
+    "mobject_set_attributes: arbitrary attributes retain their value");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
