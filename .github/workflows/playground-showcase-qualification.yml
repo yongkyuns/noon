@@ -30,7 +30,6 @@ on:
       - 'crates/noon-render-wgpu/**'
       - '.github/actions/dev-wasm-build/**'
       - '.github/ci/wasm-build.mjs'
-      - '.github/ci/gallery-optimization-topology.test.mjs'
       - '.github/workflows/playground-showcase-qualification.yml'
   workflow_dispatch:
 

@@ -6,6 +6,12 @@ const workflowDir = new URL("../workflows/", import.meta.url);
 
 test("showcase backends share one authenticated producer artifact", async () => {
   const yaml = await readFile(new URL("playground-showcase-qualification.yml", workflowDir), "utf8");
+  const selection = yaml.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  for (const input of [".github/actions/dev-wasm-build/**", ".github/ci/wasm-build.mjs"]) {
+    assert.ok(selection?.includes(input), `artifact changes must qualify their consumer: ${input}`);
+  }
+  assert.ok(!selection?.includes(".github/ci/gallery-optimization-topology.test.mjs"),
+    "topology-unit-test edits alone must not select the full showcase capture");
   const job = name => yaml.split(`\n  ${name}:\n`)[1]?.split(/^  [a-z][a-z-]*:/m)[0];
   const build = job("build"), capture = job("capture"), native = job("callback-lifecycle");
   assert.ok(build && capture && native, "build, native and backend jobs must remain separate");
