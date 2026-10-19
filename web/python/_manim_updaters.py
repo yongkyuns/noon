@@ -231,7 +231,10 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
 
     history: list[_UpdaterRegistration] = []
     for mobject in _TRACKED_MOBJECTS:
-        if mobject._scene is scene:
+        # Group/VGroup wrappers intentionally have no typed-Mobject ``_scene``
+        # field. Their callbacks are not yet admitted to the canonical model,
+        # so detached family registrations are ignored during typed binding.
+        if getattr(mobject, "_scene", None) is scene:
             history.extend(_registration_history(mobject))
     if not history:
         return None

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from noon import Mobject
+import _manim_compat as compat
 import _manim_updaters as updaters
 
 
@@ -39,12 +40,24 @@ class UpdaterLifecycleTests(unittest.TestCase):
         if session is not None:
             updaters.release_session(session.session_id)
         updaters._TRACKED_MOBJECTS[:] = [
-            item for item in updaters._TRACKED_MOBJECTS if item is not self.mobject
+            item for item in updaters._TRACKED_MOBJECTS
+            if item is not self.mobject
+            and item is not getattr(self, "family_group", None)
         ]
 
     def bind(self):
         self.mobject._scene = self.scene
         updaters.prepare_canonical_callbacks(self.scene, self.context)
+
+    def test_callback_bootstrap_skips_detached_family_wrappers_without_scene_field(self):
+        group = compat.Group.__new__(compat.Group)
+        group._semantic_family_handle = object()
+        self.family_group = group
+        updaters._TRACKED_MOBJECTS.append(group)
+
+        self.assertIsNone(
+            updaters.prepare_canonical_callbacks(self.scene, self.context)
+        )
 
     def test_always_builder_invokes_methods_now_and_registers_each_as_updater(self):
         mobject = Mobject.__new__(Mobject)
