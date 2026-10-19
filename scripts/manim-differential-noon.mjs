@@ -249,6 +249,40 @@ path_pieces = {
     "live": path_pieces_contract(piece_source),
     "authored": path_pieces_contract(authored_piece_source),
 }
+def make_alignment_pair():
+    left = VMobject(color=noon.RED, fill_opacity=0.25, stroke_color=noon.GREEN,
+                    stroke_opacity=0.4, stroke_width=2)
+    left.set_background_stroke(color=noon.ORANGE, opacity=0.3, width=6)
+    left.set_points_as_corners([(0, 0), (3, 0)])
+    right = VMobject(color=noon.BLUE, fill_opacity=0.75, stroke_color=noon.YELLOW,
+                     stroke_opacity=0.8, stroke_width=5)
+    right.set_background_stroke(color=noon.PURPLE, opacity=0.6, width=8)
+    right.set_points_as_corners([(0, 0), (1, 2), (2, 2), (3, 0)])
+    right.insert_n_curves(2)
+    return left, right
+def align_path_pair(left, right):
+    left.align_points(right)
+    return {
+        "counts": [left.get_num_points(), right.get_num_points()],
+        "fills": [left.get_fill_rgbas().tolist(), right.get_fill_rgbas().tolist()],
+        "strokes": [left.get_stroke_rgbas().tolist(), right.get_stroke_rgbas().tolist()],
+        "background_strokes": [
+            left.get_stroke_rgbas(background=True).tolist(),
+            right.get_stroke_rgbas(background=True).tolist(),
+        ],
+        "widths": [float(left.get_stroke_width()), float(right.get_stroke_width())],
+        "background_widths": [
+            float(left.get_stroke_width(background=True)),
+            float(right.get_stroke_width(background=True)),
+        ],
+    }
+live_alignment_left, live_alignment_right = make_alignment_pair()
+live_scene.add(live_alignment_left, live_alignment_right)
+authored_alignment_left, authored_alignment_right = make_alignment_pair()
+path_alignment_paint = {
+    "live": align_path_pair(live_alignment_left, live_alignment_right),
+    "authored": align_path_pair(authored_alignment_left, authored_alignment_right),
+}
 point_owner = VMobject(
     color=noon.GREEN,
     fill_opacity=0.35,
@@ -479,6 +513,14 @@ expectedFamilyPointCounts = {
 }
 assert observations["family_point_counts"] == expectedFamilyPointCounts
 assert observations["family_point_counts_live"] == expectedFamilyPointCounts
+pathAlignmentPaint = observations["path_alignment_paint"]
+assert pathAlignmentPaint["live"] == pathAlignmentPaint["authored"]
+assert pathAlignmentPaint["live"]["counts"][0] == pathAlignmentPaint["live"]["counts"][1]
+assert pathAlignmentPaint["live"]["fills"][0] != pathAlignmentPaint["live"]["fills"][1]
+assert pathAlignmentPaint["live"]["strokes"][0] != pathAlignmentPaint["live"]["strokes"][1]
+assert pathAlignmentPaint["live"]["background_strokes"][0] != pathAlignmentPaint["live"]["background_strokes"][1]
+assert pathAlignmentPaint["live"]["widths"] == [2, 5]
+assert pathAlignmentPaint["live"]["background_widths"] == [6, 8]
 expected_cap_style = {
     "default": "AUTO",
     "constructed": [
@@ -671,6 +713,7 @@ json.dumps({
     "custom_stride_live_queries": custom_stride_live_queries,
     "custom_stride_authored_queries": custom_stride_authored_queries,
     "path_pieces": path_pieces,
+    "path_alignment_paint": path_alignment_paint,
     "point_mobject": point_mobject,
     "paint_arrays": paint_arrays,
     "style_queries": style_queries,

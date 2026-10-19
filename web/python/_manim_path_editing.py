@@ -853,6 +853,7 @@ def align_points(value, other):
         raise TypeError("align_points requires a VMobject")
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
+    value.align_rgbas(other)
     handle, other_handle = _handle_for(value), _handle_for(other)
     if handle is None or other_handle is None:
         raise RuntimeError("path alignment requires shared semantic handles")
@@ -861,4 +862,29 @@ def align_points(value, other):
         engine_call(handle.alignPoints, other_handle, operation="VMobject.align_points")
     else:
         engine_call(context.liveAlignPoints, handle, other_handle, operation="VMobject.align_points")
+    return value
+
+
+def align_rgbas(value, other):
+    """Validate the shared single-row paint profile used by VMobject alignment.
+
+    Manim stretches fill, stroke, and background-stroke RGBA arrays to equal
+    lengths. Noon currently represents one solid RGBA row per layer in shared
+    Rust; unequal per-object gradient arrays have no shared representation.
+    """
+    left_fill = value.get_fill_rgbas()
+    right_fill = other.get_fill_rgbas()
+    left_stroke = value.get_stroke_rgbas()
+    right_stroke = other.get_stroke_rgbas()
+    left_background_stroke = value.get_stroke_rgbas(background=True)
+    right_background_stroke = other.get_stroke_rgbas(background=True)
+    layers = (
+        (left_fill, right_fill),
+        (left_stroke, right_stroke),
+        (left_background_stroke, right_background_stroke),
+    )
+    if any(len(left) != len(right) for left, right in layers):
+        raise NotImplementedError(
+            "align_rgbas for unequal per-object arrays requires shared gradient paint"
+        )
     return value

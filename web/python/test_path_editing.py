@@ -1,7 +1,7 @@
 import sys
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 try:
     import numpy
@@ -853,14 +853,47 @@ class SmoothingDispatchTests(unittest.TestCase):
             resolve.assert_not_called()
 
 class AlignmentDispatchTests(unittest.TestCase):
+    def test_align_rgbas_preserves_supported_solid_paint_profiles(self):
+        a, b = [identity_only_wrapper(compat.VMobject) for _ in range(2)]
+        a.get_fill_rgbas = Mock(return_value=[[1, 0, 0, 0.25]])
+        b.get_fill_rgbas = Mock(return_value=[[0, 0, 1, 0.75]])
+        a.get_stroke_rgbas = Mock(return_value=[[0, 1, 0, 0.4]])
+        b.get_stroke_rgbas = Mock(return_value=[[1, 1, 0, 0.8]])
+
+        self.assertIs(editing.align_rgbas(a, b), a)
+        a.get_fill_rgbas.assert_called_once_with()
+        b.get_fill_rgbas.assert_called_once_with()
+        a.get_stroke_rgbas.assert_has_calls([
+            call(), call(background=True)
+        ])
+        b.get_stroke_rgbas.assert_has_calls([
+            call(), call(background=True)
+        ])
+
+    def test_align_rgbas_rejects_unequal_array_lengths_before_path_alignment(self):
+        a, b = [identity_only_wrapper(compat.VMobject) for _ in range(2)]
+        a.get_fill_rgbas = Mock(return_value=[[1, 0, 0, 1], [0, 1, 0, 1]])
+        b.get_fill_rgbas = Mock(return_value=[[0, 0, 1, 1]])
+        a.get_stroke_rgbas = Mock(return_value=[[1, 1, 1, 1]])
+        b.get_stroke_rgbas = Mock(return_value=[[1, 1, 1, 1]])
+
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaisesRegex(
+                NotImplementedError, "unequal per-object arrays"
+            ):
+                a.align_points(b)
+            resolve.assert_not_called()
+
     def test_pair_is_aligned_by_one_shared_call_in_either_mode(self):
         a, b = [identity_only_wrapper(compat.VMobject) for _ in range(2)]
+        a.align_rgbas = Mock(return_value=a)
         left, right = Mock(), Mock()
         for context in (None, Mock()):
             with patch.object(editing, '_handle_for', side_effect=lambda v: left if v is a else right), \
                  patch.object(editing, '_live_mutation_context', side_effect=lambda v: context if v is b else None), \
                  patch.object(editing, '_live_constructor_context', return_value=None):
                 self.assertIs(a.align_points(b), a)
+                a.align_rgbas.assert_called_with(b)
                 if context is None:
                     left.alignPoints.assert_called_once_with(right)
                 else:

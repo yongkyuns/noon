@@ -3864,11 +3864,25 @@ def _world_stretch(api):
 def _path_alignment(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     a = api.Line(point(0, 0), point(3, 0)).shift(api.UP)
+    a.set_fill(api.RED, opacity=0.25).set_stroke(api.GREEN, opacity=0.4, width=2)
+    a.set_background_stroke(color=api.ORANGE, opacity=0.3, width=6)
     b = api.VMobject().start_new_path(point(0, 0))
     b.add_cubic_bezier_curve_to(point(1, 2), point(2, 2), point(3, 0))
+    b.set_fill(api.BLUE, opacity=0.75).set_stroke(api.YELLOW, opacity=0.8, width=5)
+    b.set_background_stroke(color=api.PURPLE, opacity=0.6, width=8)
     b.insert_n_curves(4)
     a.align_points(b)
     observations = [[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (a, b)]
+    observations.append([
+        [
+            [list(rgba) for rgba in obj.get_fill_rgbas()],
+            [list(rgba) for rgba in obj.get_stroke_rgbas()],
+            [list(rgba) for rgba in obj.get_stroke_rgbas(background=True)],
+            float(obj.get_stroke_width()),
+            float(obj.get_stroke_width(background=True)),
+        ]
+        for obj in (a, b)
+    ])
     empty = api.VMobject()
     square = api.Square(side_length=2)
     empty.align_points(square)
