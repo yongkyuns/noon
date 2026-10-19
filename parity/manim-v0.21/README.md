@@ -129,3 +129,12 @@ transforms. Detached and live nested-Group fixtures match pinned ManimCE in the
 with zero duration delta, 0.0739% differing pixels, MAE 0.009215, and maximum
 channel error 42. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1898.
+
+The planar frame helpers `align_on_border()`, `shift_onto_screen()`, and
+`is_off_screen()` use Rust-backed family bounds and placement with Noon’s default
+16:9 frame dimensions. Direct and live probes match pinned ManimCE in the
+179/179 semantic suite. Custom Manim frame-config overrides and staged callback
+queries remain unqualified. The nested-family shift fixture passes on WebGPU and
+WebGL2 with duration delta 0, 0.0627% differing pixels, MAE 0.008777, and
+maximum channel error 51. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1604-L1752.

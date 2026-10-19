@@ -641,6 +641,28 @@ class Mobject:
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
 
+    def align_on_border(
+        self,
+        direction: object,
+        buff: float = DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    ) -> Mobject:
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            raise NotImplementedError("frame alignment queries are unavailable during staged callbacks")
+        axis = _as_vec2(direction)
+        sign_x = (axis.x > 0.0) - (axis.x < 0.0)
+        sign_y = (axis.y > 0.0) - (axis.y < 0.0)
+        target = Vec2(
+            sign_x * DEFAULT_FRAME_WIDTH / 2.0,
+            sign_y * DEFAULT_FRAME_HEIGHT / 2.0,
+        )
+        point = self.get_critical_point(axis)
+        shift = Vec2(
+            (target.x - point.x - buff * axis.x) * abs(sign_x),
+            (target.y - point.y - buff * axis.y) * abs(sign_y),
+        )
+        return self.shift(shift)
+
     def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_x(self, x, direction)
 
@@ -763,6 +785,31 @@ class Mobject:
 
     def align_to(self, mobject_or_point: object, direction: object = ORIGIN) -> Mobject:
         return _semantic_operations()._align_to(self, mobject_or_point, direction)
+
+    def shift_onto_screen(self, **kwargs: Any) -> Mobject:
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            raise NotImplementedError("frame-bound queries are unavailable during staged callbacks")
+        for direction in (UP, DOWN, LEFT, RIGHT):
+            horizontal = direction.x != 0.0
+            radius = DEFAULT_FRAME_WIDTH / 2.0 if horizontal else DEFAULT_FRAME_HEIGHT / 2.0
+            max_value = radius - kwargs.get("buff", DEFAULT_MOBJECT_TO_EDGE_BUFFER)
+            edge_center = self.get_edge_center(direction)
+            projection = edge_center.x * direction.x + edge_center.y * direction.y
+            if projection > max_value:
+                self.to_edge(direction, **kwargs)
+        return self
+
+    def is_off_screen(self) -> bool:
+        x_radius = DEFAULT_FRAME_WIDTH / 2.0
+        y_radius = DEFAULT_FRAME_HEIGHT / 2.0
+        if self.get_left().x > x_radius:
+            return True
+        if self.get_right().x < -x_radius:
+            return True
+        if self.get_bottom().y > y_radius:
+            return True
+        return self.get_top().y < -y_radius
 
     def to_edge(
         self,

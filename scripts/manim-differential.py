@@ -890,6 +890,43 @@ def _noon_family_space_out_submobjects_live() -> Any:
     )
 
 
+def _family_frame_methods(provider: Any, scene: Any | None = None) -> Any:
+    offscreen = provider.Group(
+        provider.Circle(radius=0.5, color=provider.RED).shift(provider.RIGHT * 9)
+    )
+    bordered = provider.Group(provider.Square(side_length=0.5, color=provider.BLUE))
+    shifted = provider.Group(
+        provider.Circle(radius=0.5, color=provider.GREEN).shift(provider.RIGHT * 10 + provider.UP * 6),
+        provider.Group(provider.Square(side_length=0.75, color=provider.YELLOW).shift(provider.RIGHT * 12 + provider.UP * 5)),
+    )
+    if scene is not None:
+        scene.add(offscreen, bordered, shifted)
+    initially_offscreen = bool(offscreen.is_off_screen())
+    border_return = bordered.align_on_border(provider.UP + provider.RIGHT, buff=0.3)
+    shift_return = shifted.shift_onto_screen(buff=0.3)
+    return {
+        "initially_offscreen": initially_offscreen,
+        "border_returns_self": border_return is bordered,
+        "border_right": _round_float(bordered.get_right()[0]),
+        "border_top": _round_float(bordered.get_top()[1]),
+        "shift_returns_self": shift_return is shifted,
+        "shifted_family": _object_observation(shifted),
+        "shifted_offscreen": bool(shifted.is_off_screen()),
+    }
+
+
+def _noon_family_frame_methods() -> Any:
+    return _family_frame_methods(noon)
+
+
+def _manim_family_frame_methods() -> Any:
+    return _family_frame_methods(manim)
+
+
+def _noon_family_frame_methods_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_frame_methods(noon, scene))
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -3901,6 +3938,8 @@ FIXTURES = [
     Fixture("family_repeat_points_live", _noon_family_repeat_points_live, _manim_family_repeat_points),
     Fixture("family_space_out_submobjects", _noon_family_space_out_submobjects, _manim_family_space_out_submobjects),
     Fixture("family_space_out_submobjects_live", _noon_family_space_out_submobjects_live, _manim_family_space_out_submobjects),
+    Fixture("family_frame_methods", _noon_family_frame_methods, _manim_family_frame_methods),
+    Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

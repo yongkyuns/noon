@@ -851,6 +851,13 @@
       "notes": "Expand a nested Group, then inversely scale its direct children through the existing shared transforms."
     },
     {
+      "id": "family-shift-onto-screen",
+      "scene": "OrdinaryFamilyShiftOntoScreen",
+      "source": "parity/manim-v0.21/core-examples/family_shift_onto_screen.py",
+      "expected_duration": 0.2,
+      "notes": "Shift a nested family back within the default frame using ordered Rust-backed edge placement."
+    },
+    {
       "id": "family-grid-options",
       "scene": "OrdinaryFamilyGrid",
       "source": "parity/manim-v0.21/core-examples/family_grid_options.py",
