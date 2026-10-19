@@ -10,7 +10,8 @@ use noon_core::{
 
 use super::super::{
     lower_prepared_semantic_animation_schedule, PreparedSemanticAnimationScheduleError,
-    PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
+    PreparedSemanticAnimationScheduleProjection, PreparedSemanticScheduledAnimationPayload,
+    SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
     affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
@@ -59,24 +60,26 @@ impl PreparedSemanticAnimationTrack {
 /// reference through that single transaction result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedSemanticAnimationActivation {
-    root: SemanticTransactionNodeRef,
-    start_time: f64,
-    run_time: f64,
+    schedule: PreparedSemanticAnimationScheduleProjection,
     tracks: Vec<PreparedSemanticAnimationTrack>,
     family_animations: Vec<super::CompiledFamilyAnimation>,
 }
 
 impl PreparedSemanticAnimationActivation {
     pub const fn root(&self) -> SemanticTransactionNodeRef {
-        self.root
+        self.schedule.root()
     }
 
     pub const fn start_time(&self) -> f64 {
-        self.start_time
+        self.schedule.start_time()
     }
 
     pub const fn run_time(&self) -> f64 {
-        self.run_time
+        self.schedule.run_time()
+    }
+
+    pub fn schedule(&self) -> &PreparedSemanticAnimationScheduleProjection {
+        &self.schedule
     }
 
     pub fn tracks(&self) -> &[PreparedSemanticAnimationTrack] {
@@ -265,7 +268,7 @@ pub fn lower_prepared_semantic_animation_composition<F>(
     root: impl Into<SemanticTransactionNodeRef>,
     start_time: f64,
     play_options: AnimationOptions,
-    mut effective_properties: F,
+    effective_properties: F,
 ) -> Result<PreparedSemanticAnimationActivation, PreparedSemanticAnimationLoweringError>
 where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
@@ -274,6 +277,22 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
+    lower_prepared_animation_activation(prepared, schedule, effective_properties)
+}
+
+/// Lower payloads from the schedule of this prepared transaction without scheduling again.
+///
+/// The caller may first extend that same transaction with its derived scalar tracks.
+/// Consuming the projection keeps timing and payloads together in the returned activation.
+pub fn lower_prepared_animation_activation<F>(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    schedule: PreparedSemanticAnimationScheduleProjection,
+    mut effective_properties: F,
+) -> Result<PreparedSemanticAnimationActivation, PreparedSemanticAnimationLoweringError>
+where
+    F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
+{
+    let start_time = schedule.start_time();
     let mut captures = super::scheduled_captures::ScheduledCaptures::default();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
@@ -1113,9 +1132,7 @@ where
     .map_err(PreparedSemanticAnimationLoweringError::TextGlyph)?;
 
     Ok(PreparedSemanticAnimationActivation {
-        root,
-        start_time: schedule.start_time(),
-        run_time: schedule.run_time(),
+        schedule,
         tracks,
         family_animations,
     })
@@ -1549,22 +1566,23 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let mut captures = 0;
-        let projection = lower_prepared_semantic_animation_composition(
+        let schedule = lower_prepared_semantic_animation_schedule(
             &prepared,
             &index,
             root,
             4.0,
             AnimationOptions::new().run_time(6.0),
-            |object| {
-                captures += 1;
-                (object == index.execution_object_id(left).unwrap())
-                    .then_some(effective(Vec2::new(0.5, 0.0)))
-                    .or_else(|| {
-                        (object == index.execution_object_id(right).unwrap())
-                            .then_some(effective(Vec2::new(-0.5, 0.0)))
-                    })
-            },
         )
+        .unwrap();
+        let projection = lower_prepared_animation_activation(&prepared, schedule, |object| {
+            captures += 1;
+            (object == index.execution_object_id(left).unwrap())
+                .then_some(effective(Vec2::new(0.5, 0.0)))
+                .or_else(|| {
+                    (object == index.execution_object_id(right).unwrap())
+                        .then_some(effective(Vec2::new(-0.5, 0.0)))
+                })
+        })
         .unwrap();
 
         assert_eq!(projection.root(), root.into());
@@ -1598,6 +1616,22 @@ mod tests {
             })
             .unwrap();
 
+        assert_eq!(
+            projection.schedule().leaves().len(),
+            published_schedule.leaves().len()
+        );
+        for (prepared, published) in projection
+            .schedule()
+            .leaves()
+            .iter()
+            .zip(published_schedule.leaves())
+        {
+            assert_eq!(resolve(prepared.animation, &committed), published.animation);
+            assert_eq!(resolve(prepared.target, &committed), published.target);
+            assert_eq!(prepared.execution_object_id, published.execution_object_id);
+            assert_eq!(prepared.timing, published.timing);
+            assert_eq!(prepared.time_map, published.time_map);
+        }
         assert_eq!(published.tracks().len(), projection.tracks().len());
         for (prepared, published) in projection.tracks().iter().zip(published.tracks()) {
             assert_eq!(resolve(prepared.animation, &committed), published.animation);
