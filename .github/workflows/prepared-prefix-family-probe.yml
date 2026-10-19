@@ -43,6 +43,15 @@ jobs:
           set -euo pipefail
           cargo test -p noon-runtime --features prepared-prefix --test prefix_family_plans --test prefix_transfer --test prefix_reactive_admission --test finite_replay_locality -- --nocapture 2>&1 | tee family-prefix-artifacts/runtime.log
           cargo test -p noon --no-default-features --features prepared-prefix --test prepared_prefix_incremental --test finite_replay_history -- --nocapture 2>&1 | tee family-prefix-artifacts/source.log
+      - name: Real retained software-Vulkan family plan pixels
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers >/dev/null
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-prefix-family"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_prefix_family_raster -- --ignored --nocapture --test-threads=1 2>&1 | tee family-prefix-artifacts/raster.log
       - name: Lint with strict warnings
         run: |
           set -euo pipefail
@@ -59,8 +68,8 @@ jobs:
           test "$GITHUB_REF" = 'refs/heads/experimental/prepared-prefix-family'
           git fetch --no-tags origin experimental/prepared-prefix-family
           test "$(git rev-parse origin/experimental/prepared-prefix-family)" = "$GITHUB_SHA"
-          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs > family-prefix-artifacts/rustfmt.patch
-          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs
+          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs > family-prefix-artifacts/rustfmt.patch
+          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs
           git rm .github/workflows/prepared-prefix-family-probe.yml
           git diff --cached --check
           git config user.name 'github-actions[bot]'
