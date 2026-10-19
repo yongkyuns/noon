@@ -726,6 +726,54 @@ def _noon_leaf_align_submobjects_live() -> Any:
     )
 
 
+def _group_align_data(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    second = provider.Square(side_length=0.5, color=provider.GREEN).shift(provider.RIGHT)
+    left = provider.VGroup(first, second)
+    right_members = [
+        provider.Triangle(color=provider.BLUE).shift(provider.UP),
+        provider.Rectangle(width=0.8, height=0.4, color=provider.YELLOW).shift(provider.DOWN),
+        provider.Dot(color=provider.PURPLE).shift(provider.LEFT + provider.UP),
+    ]
+    right = provider.VGroup(*right_members)
+    if scene is not None:
+        scene.add(left, right)
+    returned = left.align_data(right)
+    left_children = list(left.submobjects)
+    right_children = list(right.submobjects)
+    return {
+        "returns_self": returned is left,
+        "member_counts": [len(left_children), len(right_children)],
+        "retains_original_positions": [
+            left_children[0] is first,
+            left_children[2] is second,
+            all(actual is expected for actual, expected in zip(right_children, right_members, strict=True)),
+        ],
+        "point_counts": [
+            [member.get_num_points() for member in left_children],
+            [member.get_num_points() for member in right_children],
+        ],
+        "geometry": [
+            [_object_observation(member) for member in left_children],
+            [_object_observation(member) for member in right_children],
+        ],
+    }
+
+
+def _noon_group_align_data() -> Any:
+    return _group_align_data(noon)
+
+
+def _manim_group_align_data() -> Any:
+    return _group_align_data(manim)
+
+
+def _noon_group_align_data_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_align_data(noon, scene)
+    )
+
+
 def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Circle(radius=0.25)
     second = provider.Square(side_length=0.5)
@@ -5007,6 +5055,8 @@ FIXTURES = [
     Fixture("leaf_arrange_submobjects_live", _noon_leaf_arrange_submobjects_live, _manim_leaf_arrange_submobjects),
     Fixture("leaf_align_submobjects", _noon_leaf_align_submobjects, _manim_leaf_align_submobjects),
     Fixture("leaf_align_submobjects_live", _noon_leaf_align_submobjects_live, _manim_leaf_align_submobjects),
+    Fixture("group_align_data", _noon_group_align_data, _manim_group_align_data),
+    Fixture("group_align_data_live", _noon_group_align_data_live, _manim_group_align_data),
     Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),

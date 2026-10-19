@@ -341,6 +341,26 @@ class Mobject:
             other_add(other_growth)
         return self
 
+    def null_point_align(self, mobject: Mobject) -> Self:
+        if self.has_points() != mobject.has_points():
+            raise NotImplementedError(
+                "null_point_align requires shared point-to-family promotion"
+            )
+        return self
+
+    def align_data(
+        self, mobject: Mobject, skip_point_alignment: bool = False
+    ) -> Self:
+        self.null_point_align(mobject)
+        self.align_submobjects(mobject)
+        if not skip_point_alignment:
+            self.align_points(mobject)
+        own_members = getattr(self, "submobjects", ())
+        other_members = getattr(mobject, "submobjects", ())
+        for own_member, other_member in zip(own_members, other_members, strict=True):
+            own_member.align_data(other_member)
+        return self
+
     def align_points_with_larger(self, larger_mobject: Mobject) -> Mobject:
         raise NotImplementedError("Please override in a child class.")
 
