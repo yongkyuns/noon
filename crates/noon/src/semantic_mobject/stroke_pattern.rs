@@ -19,6 +19,13 @@ impl Mobject {
             ) {
                 return Err("periodic strokes currently require an analytic Line".into());
             }
+            // The retained Line renderer uses fill slots for pattern parameters.
+            // Reject a missing stroke rather than rendering those slots as color.
+            if state.style.stroke.is_none() || state.style.stroke_width <= 0.0 {
+                return Err(
+                    "periodic strokes require an enabled stroke and positive width".into(),
+                );
+            }
         }
         state.style.stroke_pattern = pattern;
         self.commit_state(state).map_err(|e| e.to_string())
@@ -66,6 +73,9 @@ impl crate::Scene {
                 SemanticObjectContent::Geometry(StoredGeometry::Line { .. })
             ) {
                 return Err("continuous stroke flow requires analytic Line endpoints".into());
+            }
+            if state.style.stroke.is_none() || state.style.stroke_width <= 0.0 {
+                return Err("continuous stroke flow requires stroked Line endpoints".into());
             }
         }
         if self.effective(line).is_ok() {
@@ -204,5 +214,34 @@ mod tests {
         assert!(scene.flow_stroke(&line, f32::NAN, 1.0).is_err());
         assert!(scene.flow_stroke(&line, 1.0, 0.0).is_err());
         assert_eq!(scene.revision(), revision);
+    }
+
+    #[test]
+    fn missing_stroke_or_width_never_exposes_packed_pattern_as_paint() {
+        let mut scene = crate::Scene::new();
+        let pattern = StrokePattern::dashed(0.25, 0.25).unwrap();
+
+        let mut fill_only = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        fill_only.disable_stroke().unwrap();
+        assert!(fill_only.set_stroke_pattern(Some(pattern)).is_err());
+        assert!(fill_only.stroke_pattern().unwrap().is_none());
+
+        let mut zero_width = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        zero_width.set_stroke_width(0.0).unwrap();
+        assert!(zero_width.set_stroke_pattern(Some(pattern)).is_err());
+
+        let mut source = scene.line((-2.0, 0.0), (2.0, 0.0)).unwrap();
+        source.set_stroke_pattern(Some(pattern)).unwrap();
+        scene.add(&source).unwrap();
+        let mut target = scene.line((-2.0, 0.0), (2.0, 1.0)).unwrap();
+        target.disable_stroke().unwrap();
+        let before = scene.revision();
+        assert!(scene.flow_stroke_to(&source, &target, 1.0, 2.0).is_err());
+        assert_eq!(scene.revision(), before);
+
+        // A formerly valid patterned Line can later lose its stroke through
+        // normal authored styling. Lowering must reject that combination.
+        source.disable_stroke().unwrap();
+        assert!(scene.execution_session().is_err());
     }
 }

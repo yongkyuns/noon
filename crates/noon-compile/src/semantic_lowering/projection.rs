@@ -1186,6 +1186,8 @@ pub(crate) fn lower_semantic_style_value(
 ) -> Result<Style, SemanticExecutionValueError> {
     if let Some(pattern) = state.style.stroke_pattern {
         if pattern.validate().is_err()
+            || state.style.stroke.is_none()
+            || state.style.stroke_width <= 0.0
             || state.transform.planar_rotation().is_none()
             || state.transform.translation.z != 0.0
             || !matches!(

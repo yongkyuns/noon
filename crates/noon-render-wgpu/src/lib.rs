@@ -2645,7 +2645,13 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
         StrokeCap::Butt => 1 << 2,
         StrokeCap::Square => 2 << 2,
     };
-    if let Some(pattern) = object.style.stroke_pattern {
+    // Only a stroked Line has unused fill lanes. Without a stroke the
+    // packed period/phase must never be interpreted as RGBA fallback paint.
+    if let Some(pattern) = object
+        .style
+        .stroke_pattern
+        .filter(|_| object.style.stroke.is_some() && object.style.stroke_width > 0.0)
+    {
         style.fill = pattern.packed();
         style.fill_enabled = 4; // explicit line-only payload in unused fill lanes
     }

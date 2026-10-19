@@ -87,3 +87,27 @@ fn stroke_pattern_updates_one_instance_without_changing_geometry_or_other_rows()
         assert!(!prepared.path_geometry_dirty);
     }
 }
+
+#[test]
+fn fill_only_line_cannot_interpret_pattern_parameters_as_fill_color() {
+    let geometry = GeometryRef::line(Vec2::new(-2.0, 0.0), Vec2::new(2.0, 0.0));
+    let styled = CompiledObject::new(
+        ObjectId::new(0),
+        geometry,
+        Transform2D::IDENTITY,
+        Style {
+            fill: Some(Color::WHITE),
+            stroke: None,
+            stroke_width: 0.0,
+            stroke_pattern: Some(StrokePattern::dashed(0.3, 0.2).unwrap()),
+            ..Style::default()
+        },
+    );
+    let mut runtime =
+        SceneInstance::new(CompiledScene::compile_objects(vec![styled], &[]).unwrap());
+    runtime.advance_to(0.0).unwrap();
+    let prepared = FramePreparer::new().prepare(runtime.frame());
+    assert_eq!(prepared.lines.len(), 1);
+    assert_eq!(prepared.lines[0].style.fill_enabled, 1);
+    assert_eq!(prepared.lines[0].style.fill, [1.0; 4]);
+}
