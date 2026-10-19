@@ -1576,6 +1576,17 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = curvePointsAt)]
+        pub fn curve_points_at(
+            &self,
+            index: u32,
+            parameters: Vec<f64>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .curve_points_at(index as usize, &parameters)
+                .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = curveLengthPieces)]
         pub fn curve_length_pieces(
             &self,

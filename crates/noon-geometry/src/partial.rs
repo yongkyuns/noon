@@ -186,6 +186,28 @@ impl PathProportionPlan {
         Ok(curve_controls(*curve))
     }
 
+    /// Evaluate one retained curve at each supplied parameter. Parameters are
+    /// intentionally not clamped: Manim's Bezier functions extrapolate for
+    /// values outside the unit interval.
+    pub fn curve_points_at(
+        &self,
+        index: usize,
+        parameters: &[f64],
+    ) -> Result<Vec<SemanticVec3>, PathProportionError> {
+        let curve =
+            self.curves
+                .get(index)
+                .copied()
+                .ok_or(PathProportionError::InvalidCurveIndex {
+                    index,
+                    count: self.curves.len(),
+                })?;
+        Ok(parameters
+            .iter()
+            .map(|&parameter| curve_point_f64(curve, parameter))
+            .collect())
+    }
+
     /// Prepare the reusable local-space proportion measure for `path`.
     pub fn new(path: &VectorPath) -> Result<Self, PathProportionError> {
         Self::with_scale(path, (1.0, 1.0))
