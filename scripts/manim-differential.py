@@ -1373,6 +1373,51 @@ def _manim_mobject_base_path_methods() -> Any:
     return _mobject_base_path_methods(manim)
 
 
+def _mobject_base_layout_methods(provider: Any) -> Any:
+    mobject = object.__new__(provider.Mobject)
+
+    def capture_error(call):
+        try:
+            call()
+        except Exception as error:
+            return type(error).__name__, str(error)
+        return None
+
+    def align_probe(count, other_count):
+        left = object.__new__(provider.Mobject)
+        right = object.__new__(provider.Mobject)
+        left.get_num_points = lambda: count
+        right.get_num_points = lambda: other_count
+        dispatches = []
+        left.align_points_with_larger = lambda larger: dispatches.append(
+            "left" if larger is right else "left-other"
+        )
+        right.align_points_with_larger = lambda larger: dispatches.append(
+            "right" if larger is left else "right-other"
+        )
+        returned = left.align_points(right)
+        return returned is left, dispatches
+
+    larger = object.__new__(provider.Mobject)
+    return {
+        "get_point_mobject": capture_error(lambda: mobject.get_point_mobject()),
+        "align_points_with_larger": capture_error(
+            lambda: mobject.align_points_with_larger(larger)
+        ),
+        "align_points_left_smaller": align_probe(2, 5),
+        "align_points_right_smaller": align_probe(5, 2),
+        "align_points_equal": align_probe(3, 3),
+    }
+
+
+def _noon_mobject_base_layout_methods() -> Any:
+    return _mobject_base_layout_methods(noon)
+
+
+def _manim_mobject_base_layout_methods() -> Any:
+    return _mobject_base_layout_methods(manim)
+
+
 def _mobject_surround(provider: Any) -> Any:
     target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
     surrounder = provider.Circle(radius=0.25)
@@ -4441,6 +4486,9 @@ FIXTURES = [
     Fixture("mobject_base_path_methods",
             _noon_mobject_base_path_methods,
             _manim_mobject_base_path_methods),
+    Fixture("mobject_base_layout_methods",
+            _noon_mobject_base_layout_methods,
+            _manim_mobject_base_layout_methods),
     Fixture("mobject_surround",
             _noon_mobject_surround,
             _manim_mobject_surround,

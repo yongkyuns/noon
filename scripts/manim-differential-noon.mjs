@@ -1021,6 +1021,19 @@ json.dumps({
   assert.deepEqual(basePathMethods.proportion_from_point, [
     "NotImplementedError", "Please override in a child class.",
   ], "mobject_base_path_methods: base inverse query remains abstract");
+  const baseLayoutMethods = observations.mobject_base_layout_methods;
+  assert.deepEqual(baseLayoutMethods.get_point_mobject, [
+    "NotImplementedError", "get_point_mobject not implemented for Mobject",
+  ], "mobject_base_layout_methods: base point-mobject query remains abstract");
+  assert.deepEqual(baseLayoutMethods.align_points_with_larger, [
+    "NotImplementedError", "Please override in a child class.",
+  ], "mobject_base_layout_methods: larger-point alignment remains abstract");
+  assert.deepEqual(baseLayoutMethods.align_points_left_smaller, [true, ["left"]],
+    "mobject_base_layout_methods: receiver expands when it has fewer points");
+  assert.deepEqual(baseLayoutMethods.align_points_right_smaller, [true, ["right"]],
+    "mobject_base_layout_methods: other expands when it has fewer points");
+  assert.deepEqual(baseLayoutMethods.align_points_equal, [true, []],
+    "mobject_base_layout_methods: equal point counts need no expansion");
   const surround = observations.mobject_surround;
   assert.equal(surround.returns_self, true,
     "mobject_surround: surround returns the receiver");

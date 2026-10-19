@@ -305,6 +305,22 @@ class Mobject:
     def proportion_from_point(self, point: object) -> float:
         raise NotImplementedError("Please override in a child class.")
 
+    def get_point_mobject(self, center: object | None = None) -> Mobject:
+        message = f"get_point_mobject not implemented for {self.__class__.__name__}"
+        raise NotImplementedError(message)
+
+    def align_points(self, mobject: Mobject) -> Mobject:
+        count = self.get_num_points()
+        other_count = mobject.get_num_points()
+        if count < other_count:
+            self.align_points_with_larger(mobject)
+        elif other_count < count:
+            mobject.align_points_with_larger(self)
+        return self
+
+    def align_points_with_larger(self, larger_mobject: Mobject) -> Mobject:
+        raise NotImplementedError("Please override in a child class.")
+
     @staticmethod
     def get_mobject_type_class():
         return Mobject
