@@ -20,6 +20,13 @@ class CircleSurroundTests(unittest.TestCase):
         reference = next(row["reference_provenance"] for row in inventory["entries"]
                          if row["reference_provenance"]["name"] == "CircleSurround")
         self.assertEqual(hashlib.sha256(body.encode()).hexdigest(), reference["source_sha256"])
+        manifest = json.loads((root / "parity/manim-v0.21/manifest.json").read_text())
+        fixture = next(row for row in manifest["fixtures"] if row["id"] == "circle-surround-upstream")
+        self.assertEqual(fixture["source"], "parity/manim-v0.21/upstream-examples/circle_surround.py")
+        self.assertEqual(fixture["scene"], "CircleSurround")
+        self.assertEqual(fixture["expected_duration"], 0.0)
+        self.assertEqual(fixture["expected_object_count"], 6)
+        self.assertNotIn("raster_tolerance", fixture)
 
     def setUp(self):
         self.circle = identity_only_wrapper(noon.Circle)
