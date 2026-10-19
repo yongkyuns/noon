@@ -5,7 +5,9 @@
 
 mod raster_support;
 
-use noon::{AnimationOptions, ExecutionSession, FadeEndpoint, FadeTranslation, RateFunction, Scene};
+use noon::{
+    AnimationOptions, ExecutionSession, FadeEndpoint, FadeTranslation, RateFunction, Scene,
+};
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::ReplayLimits;
 use raster_support::Raster;
@@ -19,8 +21,18 @@ fn options(duration: f64) -> AnimationOptions {
 fn capture(session: &mut ExecutionSession, raster: &mut Raster) -> Vec<u8> {
     let time = session.frame().time;
     let pixels = raster.capture(&session.take_renderer_publication());
-    assert_eq!(session.frame().time, time, "rendering advanced authored time");
-    assert!(pixels.chunks_exact(4).filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0).count() > 128);
+    assert_eq!(
+        session.frame().time,
+        time,
+        "rendering advanced authored time"
+    );
+    assert!(
+        pixels
+            .chunks_exact(4)
+            .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
+            .count()
+            > 128
+    );
     pixels
 }
 
@@ -28,8 +40,16 @@ fn verify(reader: &mut ExecutionSession, raster: &mut Raster, expected: &[(f64, 
     for index in [2, 0, 1, 0, 2] {
         let (time, pixels) = &expected[index];
         reader.seek(*time).unwrap();
-        assert_eq!(capture(reader, raster), *pixels, "retained render at {time}");
-        assert_eq!(capture(reader, raster), *pixels, "same-time repeated render at {time}");
+        assert_eq!(
+            capture(reader, raster),
+            *pixels,
+            "retained render at {time}"
+        );
+        assert_eq!(
+            capture(reader, raster),
+            *pixels,
+            "same-time repeated render at {time}"
+        );
     }
 }
 
@@ -46,7 +66,9 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
         let later = scene.rectangle(2.5, 0.3).unwrap();
         scene.add(&shape).unwrap();
         let mut producer = scene.execution_session().unwrap();
-        producer.begin_replay_retention(ReplayLimits::default()).unwrap();
+        producer
+            .begin_replay_retention(ReplayLimits::default())
+            .unwrap();
         let segment = scene
             .live(&mut producer)
             .declare_and_activate_transform_to(&shape, &target, options(1.0))
@@ -59,12 +81,16 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
         }
         {
             let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time()).unwrap();
+            live.advance_segment_to(segment, segment.end_time())
+                .unwrap();
             live.complete_segment(segment).unwrap();
         }
         producer.advance_to(1.25).unwrap();
         expected.push((1.25, capture(&mut producer, &mut reference_renderer)));
-        assert_ne!(expected[0].1, expected[1].1, "the reference must actually animate");
+        assert_ne!(
+            expected[0].1, expected[1].1,
+            "the reference must actually animate"
+        );
 
         // Exactly one execution snapshot, only after explicit source completion.
         // The unit-level probe separately rejects pending/unsupported captures.
@@ -80,7 +106,8 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
             .unwrap();
         {
             let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time()).unwrap();
+            live.advance_segment_to(segment, segment.end_time())
+                .unwrap();
             live.complete_segment(segment).unwrap();
         }
         let segment = scene
@@ -88,13 +115,17 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
             .declare_and_activate_fade_with_endpoint(
                 &shape,
                 SemanticFadeDirection::Out,
-                FadeEndpoint::new(0.25, FadeTranslation::Shift(SemanticVec3::new(1.0, 0.0, 0.0))),
+                FadeEndpoint::new(
+                    0.25,
+                    FadeTranslation::Shift(SemanticVec3::new(1.0, 0.0, 0.0)),
+                ),
                 options(0.5),
             )
             .unwrap();
         {
             let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time()).unwrap();
+            live.advance_segment_to(segment, segment.end_time())
+                .unwrap();
             live.complete_segment(segment).unwrap();
         }
         assert!(!scene.live(&mut producer).contains(&shape).unwrap());
@@ -117,6 +148,8 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
         // GPU resources, NOT qualification of #2094's future raster cache.
         let mut fresh_renderer = Raster::new().await;
         verify(&mut reader, &mut fresh_renderer, &expected);
-        eprintln!("prefix raster: 3 first-pass timestamps; 40 historical/repeated captures; real Vulkan");
+        eprintln!(
+            "prefix raster: 3 first-pass timestamps; 40 historical/repeated captures; real Vulkan"
+        );
     });
 }
