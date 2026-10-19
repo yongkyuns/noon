@@ -656,6 +656,18 @@ class Mobject:
             self, function, about_point=about_point, about_edge=about_edge
         )
 
+    def apply_matrix(
+        self,
+        matrix: object,
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_matrix
+        return apply_matrix(
+            self, matrix, about_point=about_point, about_edge=about_edge
+        )
+
     def get_merged_array(self, array_attr: str):
         from _manim_path_queries import merged_array
         return merged_array(self, array_attr)

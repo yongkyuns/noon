@@ -168,6 +168,76 @@ def apply_complex_function(value, function, *, about_point=None, about_edge=None
     )
 
 
+def apply_matrix(value, matrix, *, about_point=None, about_edge=None):
+    """Apply Manim's expanded linear transform over supported family paths."""
+    if about_point is None and about_edge is None:
+        about_point = _base.ORIGIN
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as error:
+        if error.name != "numpy":
+            raise
+        np = None
+
+    dimension = getattr(value, "dim", 3)
+    if np is not None:
+        full_matrix = np.identity(dimension)
+        matrix = np.array(matrix)
+        full_matrix[: matrix.shape[0], : matrix.shape[1]] = matrix
+
+        def map_points(points):
+            return np.dot(points, full_matrix.T)
+    else:
+        full_matrix = _expanded_matrix_without_numpy(dimension, matrix)
+
+        def map_points(points):
+            if len(full_matrix) != 3:
+                raise ValueError("matrix dimension does not match planar point arrays")
+            return [
+                [
+                    sum(
+                        float(point[column]) * full_matrix[row][column]
+                        for column in range(3)
+                    )
+                    for row in range(3)
+                ]
+                for point in points
+            ]
+
+    return apply_points_function_about_point(
+        value,
+        map_points,
+        about_point=about_point,
+        about_edge=about_edge,
+    )
+
+
+def _expanded_matrix_without_numpy(dim, matrix):
+    import operator
+
+    dimension = operator.index(dim)
+    if dimension < 0:
+        raise ValueError("negative dimensions are not allowed")
+    rows = [list(row) for row in matrix]
+    if not rows:
+        raise IndexError("tuple index out of range")
+    columns = len(rows[0])
+    if any(len(row) != columns for row in rows):
+        raise ValueError("matrix rows must all have the same length")
+    if len(rows) > dimension or columns > dimension:
+        raise ValueError("matrix shape does not fit the configured dimension")
+
+    expanded = [
+        [1.0 if row == column else 0.0 for column in range(dimension)]
+        for row in range(dimension)
+    ]
+    for row_index, row in enumerate(rows):
+        for column_index, component in enumerate(row):
+            expanded[row_index][column_index] = float(component)
+    return expanded
+
+
 def _planar_critical_direction(direction):
     try:
         dimensions = len(direction)

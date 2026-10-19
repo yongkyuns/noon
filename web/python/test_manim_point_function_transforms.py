@@ -6,6 +6,7 @@ import noon
 from _manim_path_editing import (
     apply_complex_function,
     apply_function,
+    apply_matrix,
     apply_points_function_about_point,
 )
 
@@ -15,7 +16,12 @@ class _Member:
         self.points = points
 
     def apply_over_attr_arrays(self, func):
-        self.points = func(self.points)
+        from _manim_path_editing import _mapped_planar_points
+        mapped = _mapped_planar_points(func(self.points))
+        self.points = [
+            [float(point[0]), float(point[1]), 0.0]
+            for point in mapped
+        ]
         return self
 
 
@@ -23,6 +29,7 @@ class _Root:
     def __init__(self, members):
         self.members = members
         self.critical_point_calls = []
+        self.dim = 3
 
     def family_members_with_points(self):
         return self.members
@@ -90,6 +97,51 @@ class ManimPointFunctionTransformsTests(unittest.TestCase):
 
         self.assertEqual(member.points, [[1.0, 2.0, 0.0]])
 
+    def test_apply_matrix_expands_a_small_matrix_and_defaults_to_the_origin(self):
+        member = _Member([[1.0, 2.0, 0.0]])
+        root = _Root([member])
+
+        with patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(apply_matrix(root, [[0.0, -1.0], [1.0, 0.0]]), root)
+
+        self.assertEqual(root.critical_point_calls, [])
+        self.assertEqual(
+            [[float(component) for component in point] for point in member.points],
+            [[-2.0, 1.0, 0.0]],
+        )
+
+    def test_apply_matrix_supports_explicit_pivot_without_numpy(self):
+        member = _Member([[2.0, 1.0, 0.0]])
+        root = _Root([member])
+
+        with self._python_array_mode(), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(
+                apply_matrix(
+                    root,
+                    [[0.0, -1.0], [1.0, 0.0]],
+                    about_point=(1.0, 1.0, 0.0),
+                ),
+                root,
+            )
+
+        self.assertEqual(member.points, [[1.0, 2.0, 0.0]])
+
+    def test_apply_matrix_rejects_spatial_results_before_mutation(self):
+        member = _Member([[1.0, 2.0, 0.0]])
+        root = _Root([member])
+        original = [point[:] for point in member.points]
+
+        with self._python_array_mode(), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            with self.assertRaisesRegex(NotImplementedError, "nonzero-z"):
+                apply_matrix(
+                    root,
+                    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]],
+                )
+
+        self.assertEqual(member.points, original)
+
     def test_staged_callback_rejects_before_critical_or_family_queries(self):
         root = _Root([])
         with patch("_manim_updaters.canonical_callback_phase_active", return_value=True):
@@ -102,6 +154,7 @@ class ManimPointFunctionTransformsTests(unittest.TestCase):
             "apply_points_function_about_point",
             "apply_function",
             "apply_complex_function",
+            "apply_matrix",
         ):
             with self.subTest(name=name):
                 self.assertIn(name, noon.Mobject.__dict__)

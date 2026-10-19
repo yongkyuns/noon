@@ -966,6 +966,15 @@ json.dumps({
     assertPointNear(profile.complex_mapping.points[0], [0, 1], `${name}: complex first point`);
     assertPointNear(profile.complex_mapping.points[3], [-1, 2], `${name}: complex last point`);
   }
+  for (const name of ["apply_matrix", "apply_matrix_live"]) {
+    const profile = observations[name];
+    assert.equal(profile.family.returns_self, true, `${name}: family matrix identity`);
+    assertPointNear(profile.family.first[0], [3, 1], `${name}: family first start`);
+    assertPointNear(profile.family.second[3], [0, 4], `${name}: family second end`);
+    assert.equal(profile.rectangular.returns_self, true, `${name}: rectangular matrix identity`);
+    assertPointNear(profile.rectangular.points[0], [2, -1], `${name}: rectangular first point`);
+    assertPointNear(profile.rectangular.points[3], [4, 1], `${name}: rectangular last point`);
+  }
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",

@@ -1185,6 +1185,50 @@ def _noon_point_function_transforms_live() -> Any:
     )
 
 
+def _apply_matrix(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((1, -1, 0), (2, 0, 0))
+    second = provider.Line((3, 1, 0), (4, 2, 0))
+    family = provider.Group(provider.Group(first, second), first)
+    rectangular = provider.Line((2, -1, 0), (3, 1, 0))
+    if scene is not None:
+        scene.add(family, rectangular)
+
+    family_returned = family.apply_matrix(
+        [[0.0, -1.0], [1.0, 0.0]], about_point=(1.0, 1.0, 0.0)
+    )
+    rectangular_returned = rectangular.apply_matrix(
+        [[1.0, 0.5, 1.0], [0.0, 1.0, 0.0]],
+        about_point=(1.0, -1.0, 0.0),
+    )
+
+    def curve_points(value):
+        return [_point_observation(point) for point in value.get_nth_curve_points(0)]
+
+    return {
+        "family": {
+            "returns_self": family_returned is family,
+            "first": curve_points(first),
+            "second": curve_points(second),
+        },
+        "rectangular": {
+            "returns_self": rectangular_returned is rectangular,
+            "points": curve_points(rectangular),
+        },
+    }
+
+
+def _noon_apply_matrix() -> Any:
+    return _apply_matrix(noon)
+
+
+def _manim_apply_matrix() -> Any:
+    return _apply_matrix(manim)
+
+
+def _noon_apply_matrix_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _apply_matrix(noon, scene))
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4218,6 +4262,8 @@ FIXTURES = [
             _noon_point_function_transforms_live,
             _manim_point_function_transforms,
             1e-5),
+    Fixture("apply_matrix", _noon_apply_matrix, _manim_apply_matrix, 1e-5),
+    Fixture("apply_matrix_live", _noon_apply_matrix_live, _manim_apply_matrix, 1e-5),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
