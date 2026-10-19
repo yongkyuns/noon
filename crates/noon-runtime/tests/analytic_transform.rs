@@ -24,6 +24,7 @@ fn build_scene() -> CompiledScene {
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     };
     let style_b = Style {
         fill: Some(Color::rgb(0.8, 0.6, 0.4)),

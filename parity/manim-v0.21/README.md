@@ -268,3 +268,8 @@ rollback, primitive-to-path rendering, width-cache invalidation, GPU attribute
 layout, and raster layer order. Staged callback background reads/writes,
 nonzero sheen, multi-color per-object arrays, and background images remain
 unsupported. Pinned ManimCE raster parity for this channel is still unqualified.
+
+The shared runtime generic-transform regression also checks intermediate
+background RGBA and width, exact endpoints, and equality of direct seek and
+forward playback for point-owning paths. This is native runtime evidence;
+pinned ManimCE timing and raster equivalence remains unqualified.
