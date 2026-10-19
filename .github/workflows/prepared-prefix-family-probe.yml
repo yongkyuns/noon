@@ -1,0 +1,84 @@
+name: M2e typed family-plan append validation
+on:
+  push:
+    branches: [experimental/prepared-prefix-family]
+permissions:
+  contents: write
+concurrency:
+  group: m2e-family-prefix
+  cancel-in-progress: true
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare exact source
+        run: |
+          set -euo pipefail
+          mkdir -p family-prefix-artifacts
+          git rev-parse HEAD > family-prefix-artifacts/trigger-commit.txt
+          rustc --version --verbose | tee family-prefix-artifacts/rustc.log
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: prefix-family-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '**/Cargo.toml') }}
+      - name: Format and check architecture
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          bash scripts/check.sh architecture 55daebead113cf65e163e32e676fbdfe0334e608 2>&1 | tee family-prefix-artifacts/architecture.log
+      - name: Family-plan append and existing replay regressions
+        run: |
+          set -euo pipefail
+          cargo test -p noon-runtime --features prepared-prefix --test prefix_family_plans --test prefix_transfer --test prefix_reactive_admission --test finite_replay_locality -- --nocapture 2>&1 | tee family-prefix-artifacts/runtime.log
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_prefix_incremental --test finite_replay_history -- --nocapture 2>&1 | tee family-prefix-artifacts/source.log
+      - name: Lint with strict warnings
+        run: |
+          set -euo pipefail
+          cargo clippy -p noon-runtime --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee family-prefix-artifacts/clippy-runtime.log
+          cargo clippy -p noon --no-default-features --features prepared-prefix --all-targets -- -D warnings 2>&1 | tee family-prefix-artifacts/clippy-noon.log
+      - name: Default-off and WASM
+        run: |
+          set -euo pipefail
+          cargo test -p noon-runtime --no-default-features --test finite_replay_locality 2>&1 | tee family-prefix-artifacts/default-off.log
+          cargo check -p noon --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee family-prefix-artifacts/wasm.log
+      - name: Commit only verified source and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/experimental/prepared-prefix-family'
+          git fetch --no-tags origin experimental/prepared-prefix-family
+          test "$(git rev-parse origin/experimental/prepared-prefix-family)" = "$GITHUB_SHA"
+          git diff --binary -- crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs > family-prefix-artifacts/rustfmt.patch
+          git add crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_family_plans.rs
+          git rm .github/workflows/prepared-prefix-family-probe.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Qualify and format M2e family-prefix prototype (#2211)'
+          git push origin HEAD:experimental/prepared-prefix-family
+          git rev-parse HEAD > family-prefix-artifacts/validated-commit.txt
+      - name: Preserve any diagnostic failure
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p family-prefix-artifacts
+          git diff --binary -- crates > family-prefix-artifacts/remaining-source.patch
+          git rev-parse HEAD > family-prefix-artifacts/checked-out-commit.txt
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: prepared-prefix-family-probe
+          path: family-prefix-artifacts
+          retention-days: 3
+          if-no-files-found: warn
