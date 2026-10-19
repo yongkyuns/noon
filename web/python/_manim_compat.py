@@ -920,6 +920,10 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_add_to_back
         return _group_add_to_back(self, *mobjects)
 
+    def add_n_more_submobjects(self, n: int) -> Self | None:
+        from _manim_semantic_handles import _group_add_n_more_submobjects
+        return _group_add_n_more_submobjects(self, n)
+
     def invert(self, recursive: bool = False) -> Self:
         from _manim_semantic_handles import _group_invert
         return _group_invert(self, recursive)
@@ -1086,6 +1090,7 @@ class Group(Mobject):
 
 
 class VGroup(Group):
+    match_style = VMobject.match_style
     # The family wrapper reuses vector-class geometry queries without duplicating them.
     # Paint getters stay on VMobject until the family root has authoritative own-style state.
     cap_style = VMobject.cap_style
@@ -1114,6 +1119,13 @@ class VGroup(Group):
     get_stroke_colors = VMobject.get_stroke_colors
     get_stroke_opacities = VMobject.get_stroke_opacities
     get_stroke_width = VMobject.get_stroke_width
+
+    def get_point_mobject(self, center=None):
+        if center is None:
+            center = self.get_center()
+        point = VectorizedPoint(center)
+        point.match_style(self, family=False)
+        return point
 
     def get_fill_opacity(self):
         from _manim_semantic_handles import _get_fill_opacity

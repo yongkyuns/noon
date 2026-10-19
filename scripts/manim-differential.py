@@ -588,6 +588,41 @@ def _manim_repeat_submobject() -> Any:
     return _repeat_submobject_probe(manim)
 
 
+def _group_add_n_more_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    second = provider.Square(side_length=0.5, color=provider.BLUE).shift(provider.RIGHT)
+    group = provider.VGroup(first, second)
+    if scene is not None:
+        scene.add(group)
+    returned = group.add_n_more_submobjects(3)
+    members = group.submobjects
+    return {
+        "returns_self": returned is group,
+        "member_count": len(members),
+        "retains_original_order": members[0] is first and members[3] is second,
+        "geometry": [_object_observation(member) for member in members],
+        "colors": [_paint_rgb(member.get_color()) for member in members],
+        "paint_opacities": [
+            [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+            for member in members
+        ],
+    }
+
+
+def _noon_group_add_n_more_submobjects() -> Any:
+    return _group_add_n_more_submobjects(noon)
+
+
+def _manim_group_add_n_more_submobjects() -> Any:
+    return _group_add_n_more_submobjects(manim)
+
+
+def _noon_group_add_n_more_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_add_n_more_submobjects(noon, scene)
+    )
+
+
 def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Circle(radius=0.25)
     second = provider.Square(side_length=0.5)
@@ -4861,6 +4896,8 @@ FIXTURES = [
     Fixture("family_fade_to", lambda: _family_fade_to_probe(noon),
             lambda: _family_fade_to_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
+    Fixture("group_add_n_more_submobjects", _noon_group_add_n_more_submobjects, _manim_group_add_n_more_submobjects),
+    Fixture("group_add_n_more_submobjects_live", _noon_group_add_n_more_submobjects_live, _manim_group_add_n_more_submobjects),
     Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),

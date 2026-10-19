@@ -2891,6 +2891,65 @@ def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _group_add_n_more_submobjects(
+    self: _compat.Group, n: int
+) -> _compat.Group | None:
+    if n == 0:
+        return None
+    additions = operator.index(n)
+    current = tuple(self.submobjects)
+    current_count = len(current)
+    if current_count == 0:
+        if additions <= 0:
+            return None
+        ordered = tuple(self.get_point_mobject() for _ in range(additions))
+        empty_result = True
+    else:
+        target_count = current_count + additions
+        if target_count <= 0:
+            return self
+        repeat_indices = [
+            (index * current_count) // target_count
+            for index in range(target_count)
+        ]
+        split_factors = [
+            repeat_indices.count(index) for index in range(current_count)
+        ]
+        expanded = []
+        for member, split_factor in zip(current, split_factors, strict=True):
+            expanded.append(member)
+            for _ in range(1, split_factor):
+                repeated = self.repeat_submobject(member)
+                repeated.fade(1)
+                expanded.append(repeated)
+        ordered = tuple(expanded)
+        empty_result = False
+        if len(ordered) == current_count and all(
+            before is after for before, after in zip(current, ordered, strict=True)
+        ):
+            return self
+
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", ordered)
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(
+            context.livePrependFamilyMembers,
+            family_handle,
+            batch,
+            operation="Mobject.add_n_more_submobjects",
+        )
+    else:
+        engine_call(
+            family_handle.prependMembers,
+            batch,
+            operation="Mobject.add_n_more_submobjects",
+        )
+    for member in ordered:
+        self._semantic_member_wrappers[_family_wrapper_key(member)] = member
+    return None if empty_result else self
+
+
 def _group_invert(self: _compat.Group, recursive: bool = False) -> _compat.Group:
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")

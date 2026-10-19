@@ -108,6 +108,14 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertIn("point_from_proportion", disposition["reason"])
         self.assertIn("scripts/manim-differential.py:curves_as_submobjects_live", disposition["evidence"])
 
+    def test_group_membership_growth_is_disposed_with_atomic_rust_evidence(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        reason = policy["overrides"]["Group"]["reason"]
+        self.assertIn("add_n_more_submobjects()", reason)
+        self.assertIn("one shared Rust transaction", reason)
+        self.assertIn("scripts/manim-differential.py:group_add_n_more_submobjects_live",
+                      policy["overrides"]["Group"]["evidence"])
+
     def test_vdict_is_exported_with_shared_family_evidence_and_show_keys_limit(self) -> None:
         policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
         self.assertIn("VDict", coverage.noon_public_exports())
