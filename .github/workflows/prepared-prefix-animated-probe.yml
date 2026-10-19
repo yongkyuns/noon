@@ -3,7 +3,7 @@ on:
   push:
     branches: [experimental/prepared-prefix-animations]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: prefix-animation-probe
   cancel-in-progress: true
@@ -32,12 +32,10 @@ jobs:
           cargo fmt --all
           cargo test -p noon --no-default-features --features prepared-prefix --test prepared_prefix_animation_admission -- --nocapture 2>&1 | tee prefix-animated-artifacts/animation.log
       - name: Native text and immutable font closure
-        if: always()
         run: |
           set -euo pipefail
           cargo test -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --test prepared_prefix_animation_admission -- --nocapture 2>&1 | tee prefix-animated-artifacts/native-text.log
       - name: Real Vulkan late-text lifecycle frames
-        if: always()
         run: |
           set -euo pipefail
           mkdir -p prefix-animated-artifacts
@@ -47,6 +45,30 @@ jobs:
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
           cargo test -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --test prepared_prefix_animation_admission -- --ignored --nocapture --test-threads=1 2>&1 | tee prefix-animated-artifacts/raster.log
+      - name: Focused lint, default-off and WASM gates
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy -p noon --no-default-features --all-targets -- -D warnings 2>&1 | tee prefix-animated-artifacts/clippy-default.log
+          cargo clippy -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --all-targets -- -D warnings 2>&1 | tee prefix-animated-artifacts/clippy-feature.log
+          cargo test -p noon --no-default-features --features prepared-prefix --test finite_replay_history --test prepared_prefix_incremental 2>&1 | tee prefix-animated-artifacts/regression.log
+          cargo check -p noon --no-default-features --features prepared-prefix --target wasm32-unknown-unknown 2>&1 | tee prefix-animated-artifacts/wasm.log
+      - name: Commit only validated Rust source to the experiment branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/experimental/prepared-prefix-animations'
+          git fetch --no-tags origin experimental/prepared-prefix-animations
+          test "$(git rev-parse origin/experimental/prepared-prefix-animations)" = "$GITHUB_SHA"
+          git add crates/noon/tests/prepared_prefix_animation_admission.rs crates/noon/tests/prepared_prefix_raster.rs crates/noon-compile/src/replay_revision/prefix.rs
+          git diff --cached --check
+          git diff --cached --binary > prefix-animated-artifacts/tested-rust.patch
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Format and qualify focused M2d Rust animation and text probes (#2211)'
+            git push origin HEAD:experimental/prepared-prefix-animations
+          fi
+          git rev-parse HEAD > prefix-animated-artifacts/validated-commit.txt
       - name: Preserve candidate formatting
         if: always()
         run: |
@@ -60,4 +82,4 @@ jobs:
           name: prepared-prefix-animated-probe
           path: prefix-animated-artifacts
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3
