@@ -1229,6 +1229,64 @@ def _noon_apply_matrix_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _apply_matrix(noon, scene))
 
 
+def _animation_override_registry(provider: Any) -> Any:
+    class Animation:
+        pass
+
+    class Base(provider.Mobject):
+        pass
+
+    def first_override(*args, **kwargs):
+        return args, kwargs
+
+    def second_override(*args, **kwargs):
+        return args, kwargs
+
+    Base.add_animation_override(Animation, first_override)
+    registered = Base.animation_override_for(Animation)
+
+    class Child(Base):
+        pass
+
+    try:
+        Base.add_animation_override(Animation, second_override)
+    except Exception as error:
+        duplicate_error = (type(error).__name__, str(error))
+    else:
+        duplicate_error = None
+
+    def intrinsic_override(self):
+        return self
+
+    intrinsic_override._override_animation = Animation
+    Intrinsic = type("Intrinsic", (provider.Mobject,), {
+        "intrinsic_override": intrinsic_override,
+    })
+    IntrinsicChild = type("IntrinsicChild", (Intrinsic,), {})
+
+    return {
+        "registered": registered is first_override,
+        "child_isolated": Child.animation_override_for(Animation) is None,
+        "duplicate_error": duplicate_error,
+        "intrinsic_discovered": (
+            Intrinsic.animation_override_for(Animation)
+            is Intrinsic.intrinsic_override
+        ),
+        "intrinsic_inherited": (
+            IntrinsicChild.animation_override_for(Animation)
+            is IntrinsicChild.intrinsic_override
+        ),
+    }
+
+
+def _noon_animation_override_registry() -> Any:
+    return _animation_override_registry(noon)
+
+
+def _manim_animation_override_registry() -> Any:
+    return _animation_override_registry(manim)
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4264,6 +4322,9 @@ FIXTURES = [
             1e-5),
     Fixture("apply_matrix", _noon_apply_matrix, _manim_apply_matrix, 1e-5),
     Fixture("apply_matrix_live", _noon_apply_matrix_live, _manim_apply_matrix, 1e-5),
+    Fixture("animation_override_registry",
+            _noon_animation_override_registry,
+            _manim_animation_override_registry),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

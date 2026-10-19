@@ -28,6 +28,7 @@ from _noon_errors import (
     NoonStalePublicationError,
     NoonCallbackError,
     NoonOwnershipError,
+    MultiAnimationOverrideException,
 )
 import _noon_ir as _ir
 
@@ -257,6 +258,8 @@ def _callback_operations():
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
+    animation_overrides: dict[type[Any], Callable[..., Any]] = {}
+
     def __init__(
         self, color: Color = WHITE, name: str | None = None, dim: int = 3,
         target: Mobject | None = None, z_index: float = 0,
@@ -286,7 +289,38 @@ class Mobject:
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        cls.animation_overrides = {}
+        cls._add_intrinsic_animation_overrides()
         cls._original__init__ = cls.__init__
+
+    @classmethod
+    def animation_override_for(cls, animation_class: type[Any]) -> Callable[..., Any] | None:
+        return cls.animation_overrides.get(animation_class)
+
+    @classmethod
+    def add_animation_override(
+        cls,
+        animation_class: type[Any],
+        override_func: Callable[..., Any],
+    ) -> None:
+        if animation_class not in cls.animation_overrides:
+            cls.animation_overrides[animation_class] = override_func
+        else:
+            existing = cls.animation_overrides[animation_class]
+            raise MultiAnimationOverrideException(
+                f"The animation {animation_class.__name__} for "
+                f"{cls.__name__} is overridden by more than one method: "
+                f"{existing.__qualname__} and {override_func.__qualname__}."
+            )
+
+    @classmethod
+    def _add_intrinsic_animation_overrides(cls) -> None:
+        for method_name in dir(cls):
+            if method_name.startswith("__"):
+                continue
+            method = getattr(cls, method_name)
+            if hasattr(method, "_override_animation"):
+                cls.add_animation_override(method._override_animation, method)
 
     @classmethod
     def set_default(cls, **kwargs: Any) -> None:
@@ -1604,6 +1638,7 @@ __all__ = [
     "NoonStalePublicationError",
     "NoonCallbackError",
     "NoonOwnershipError",
+    "MultiAnimationOverrideException",
 
     "BLACK",
     "BLUE",

@@ -975,6 +975,21 @@ json.dumps({
     assertPointNear(profile.rectangular.points[0], [2, -1], `${name}: rectangular first point`);
     assertPointNear(profile.rectangular.points[3], [4, 1], `${name}: rectangular last point`);
   }
+  const animationOverrideRegistry = observations.animation_override_registry;
+  assert.equal(animationOverrideRegistry.registered, true,
+    "animation_override_registry: direct registration is discoverable");
+  assert.equal(animationOverrideRegistry.child_isolated, true,
+    "animation_override_registry: direct registrations stay on their class");
+  assert.deepEqual(animationOverrideRegistry.duplicate_error, [
+    "MultiAnimationOverrideException",
+    "The animation Animation for Base is overridden by more than one method: "
+      + "_animation_override_registry.<locals>.first_override and "
+      + "_animation_override_registry.<locals>.second_override.",
+  ], "animation_override_registry: duplicate registrations match Manim diagnostics");
+  assert.equal(animationOverrideRegistry.intrinsic_discovered, true,
+    "animation_override_registry: marked methods are discovered");
+  assert.equal(animationOverrideRegistry.intrinsic_inherited, true,
+    "animation_override_registry: marked methods are discovered on subclasses");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
