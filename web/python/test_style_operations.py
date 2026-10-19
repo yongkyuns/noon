@@ -167,6 +167,32 @@ class StyleOperationsTests(unittest.TestCase):
         target.setSheenDirection.assert_not_called()
         target.rotateSheenDirection.assert_not_called()
 
+    def test_vmobject_constructor_sheen_direction_uses_typed_geometry_options(self):
+        options = SimpleNamespace(setSheenDirection=Mock())
+        handles._apply_shared_constructor_options(
+            options,
+            {"sheen_direction": (0.25, -0.5), "sheen_factor": 0.0},
+            allow_sheen_direction=True,
+        )
+        options.setSheenDirection.assert_called_once_with(0.25, -0.5, 0.0, 2)
+
+        options.setSheenDirection.reset_mock()
+        with self.assertRaisesRegex(TypeError, "sheen_direction"):
+            handles._apply_shared_constructor_options(
+                options, {"sheen_direction": (0.25, -0.5, 1.0)}
+            )
+        with self.assertRaises(ValueError):
+            handles._apply_shared_constructor_options(
+                options,
+                {"sheen_direction": (float("nan"), 0.0, 0.0)},
+                allow_sheen_direction=True,
+            )
+        with self.assertRaises(NotImplementedError):
+            handles._apply_shared_constructor_options(
+                options, {"sheen_factor": 0.2}, allow_sheen_direction=True
+            )
+        options.setSheenDirection.assert_not_called()
+
     def test_cap_style_constructor_and_mutations_use_shared_rust_state(self):
         cap = compat._base.CapStyleType
         constructor_handle = SimpleNamespace(setStrokeCap=Mock())

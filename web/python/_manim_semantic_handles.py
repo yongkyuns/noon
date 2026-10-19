@@ -233,7 +233,12 @@ def _constructor_color(name: str, value: object) -> _base.Color:
     return _compat._as_color(name, value)
 
 
-def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) -> None:
+def _apply_shared_constructor_options(
+    handle: object,
+    kwargs: dict[str, Any],
+    *,
+    allow_sheen_direction: bool = False,
+) -> None:
     """Apply Python constructor coercions to one shared typed target.
 
     The target is an inert Rust geometry candidate. Rust validates semantic
@@ -251,12 +256,21 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
         "opacity", "fill_color", "stroke_color", "fill_opacity",
         "stroke_opacity", "z_index",
     }
+    if allow_sheen_direction:
+        allowed.update({"sheen_direction", "sheen_factor"})
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise TypeError(f"unsupported Mobject constructor option(s): {', '.join(unknown)}")
+    if "sheen_factor" in options and _ir._finite_number(
+        "sheen factor", options["sheen_factor"]
+    ) != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
 
     if "z_index" in options:
         engine_call(handle.setZIndex, _ir._finite_number("z_index", options["z_index"]))
+    if "sheen_direction" in options:
+        values, dimensions = _sheen_direction_components(options["sheen_direction"])
+        engine_call(handle.setSheenDirection, *values, dimensions)
     if "position" in options:
         value = _ir._vec2("position", options["position"])
         engine_call(handle.setTranslation, value["x"], value["y"])
@@ -413,7 +427,9 @@ def _empty_path_init(
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     options = engine_call(_geometry_options.emptyPath)
     _apply_constructor_color(options, parsed)
-    _apply_shared_constructor_options(options, kwargs)
+    _apply_shared_constructor_options(
+        options, kwargs, allow_sheen_direction=(kind == "VMobject")
+    )
     _attach_geometry_options(self, options, kind)
 
 

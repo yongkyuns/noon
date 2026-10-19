@@ -154,6 +154,19 @@ impl WasmManimGeometryOptions {
         self.options.set_stroke_cap(cap).map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = setSheenDirection)]
+    pub fn set_sheen_direction(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_sheen_direction(x, y, z, dimensions)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = setObjectOpacity)]
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
         self.options.set_object_opacity(opacity).map_err(js_error)

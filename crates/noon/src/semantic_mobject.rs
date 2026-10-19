@@ -7,9 +7,9 @@ use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOption
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticLocalNodeToken,
     SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Transform2D, Vec2, VectorPath,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticSheenDirection,
+    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -55,6 +55,7 @@ pub struct ManimGeometryOptions {
     geometry: GeometryRef,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
+    sheen_direction: SemanticSheenDirection,
     z_index: f64,
     role: noon_core::SemanticObjectRole,
     explicit_angle_radius: Option<f64>,
@@ -230,6 +231,7 @@ impl ManimGeometryOptions {
             geometry,
             transform: SemanticTransform2_5D::default(),
             style,
+            sheen_direction: SemanticSheenDirection::DEFAULT,
             z_index: 0.0,
             role: noon_core::SemanticObjectRole::Ordinary,
             explicit_angle_radius: None,
@@ -393,6 +395,25 @@ impl ManimGeometryOptions {
         Ok(())
     }
 
+    /// Set authored sheen-direction metadata before geometry publication.
+    pub fn set_sheen_direction(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+    ) -> Result<(), AuthoringError> {
+        let direction = SemanticSheenDirection::new(SemanticVec3::new(x, y, z), dimensions);
+        if !direction.value.is_finite() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        if !matches!(dimensions, 2 | 3) || (dimensions == 2 && z != 0.0) {
+            return Err(AuthoringError::InvalidDimension(u32::from(dimensions)));
+        }
+        self.sheen_direction = direction;
+        Ok(())
+    }
+
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         edit_object_opacity(&mut self.style, opacity)
     }
@@ -412,6 +433,7 @@ impl ManimGeometryOptions {
             geometry,
             transform,
             style,
+            sheen_direction,
             z_index,
             role,
             explicit_angle_radius: _,
@@ -424,16 +446,15 @@ impl ManimGeometryOptions {
                 unreachable!("inline geometry returned from inline_state")
             }
             GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
-                publish(
-                    store,
-                    manim_geometry_state(
-                        StoredGeometry::Resource(handle),
-                        transform,
-                        style,
-                        z_index,
-                        role,
-                    ),
-                )
+                let mut state = manim_geometry_state(
+                    StoredGeometry::Resource(handle),
+                    transform,
+                    style,
+                    z_index,
+                    role,
+                );
+                state.sheen_direction = sheen_direction;
+                publish(store, state)
             }),
             GeometryRef::External(_) => Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::ExternalGeometry,
@@ -454,6 +475,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.sheen_direction.is_valid()
             || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
@@ -462,6 +484,7 @@ impl ManimGeometryOptions {
             geometry,
             transform,
             style,
+            sheen_direction,
             z_index,
             role,
             explicit_angle_radius: _,
@@ -476,11 +499,13 @@ impl ManimGeometryOptions {
         // This transaction-only creation declaration is resolved by the shared
         // prepared resource suffix. It cannot enter durable object content with
         // a local token in place of a store-owned resource handle.
-        Ok(
-            transaction.create_node(SemanticNodeCreation::pending_path_object(
-                resource, transform, style, z_index, role,
-            )),
-        )
+        let node = transaction.create_node(SemanticNodeCreation::pending_path_object(
+            resource, transform, style, z_index, role,
+        ));
+        if sheen_direction != SemanticSheenDirection::DEFAULT {
+            transaction.set_sheen_direction(node, sheen_direction);
+        }
+        Ok(node)
     }
 
     /// Materialize analytic geometry without admitting an arena resource.
@@ -497,6 +522,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.sheen_direction.is_valid()
             || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
@@ -515,13 +541,15 @@ impl ManimGeometryOptions {
                 ));
             }
         };
-        Ok(Some(manim_geometry_state(
+        let mut state = manim_geometry_state(
             geometry,
             self.transform,
             self.style.clone(),
             self.z_index,
             self.role,
-        )))
+        );
+        state.sheen_direction = self.sheen_direction;
+        Ok(Some(state))
     }
 
     /// State-only materialization for remaining callers tracked by #1603.
@@ -710,6 +738,7 @@ impl Mobject {
                 geometry,
                 transform,
                 style,
+                sheen_direction: SemanticSheenDirection::DEFAULT,
                 z_index: 0.0,
                 role: noon_core::SemanticObjectRole::Ordinary,
                 explicit_angle_radius: None,

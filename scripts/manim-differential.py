@@ -2880,6 +2880,27 @@ def _sheen_direction_probe(api, scene=None):
     return {"recursive": recursive, "root_only": root_only, "rotated": rotated}
 
 
+def _sheen_direction_constructor_probe(api, scene=None):
+    two_dimensional = api.VMobject(sheen_factor=0.0, sheen_direction=(0.25, -0.5))
+    three_dimensional = api.VMobject(
+        sheen_factor=0.0, sheen_direction=(0.75, -1.0, 0.5)
+    )
+    if scene is not None:
+        scene.add(two_dimensional, three_dimensional)
+    return {
+        "two_dimensional": [
+            float(component) for component in two_dimensional.get_sheen_direction()
+        ],
+        "three_dimensional": [
+            float(component) for component in three_dimensional.get_sheen_direction()
+        ],
+        "factors": [
+            float(two_dimensional.get_sheen_factor()),
+            float(three_dimensional.get_sheen_factor()),
+        ],
+    }
+
+
 def _gradient_start_end_probe(api):
     value = api.Rectangle(width=2, height=1).shift(0.4 * api.RIGHT + 0.2 * api.UP)
     start, end = value.get_gradient_start_and_end_points()
@@ -3451,6 +3472,14 @@ FIXTURES = [
                 lambda scene: _sheen_direction_probe(noon, scene)
             ),
             lambda: _sheen_direction_probe(manim), 1e-5),
+    Fixture("sheen_direction_constructor",
+            lambda: _sheen_direction_constructor_probe(noon),
+            lambda: _sheen_direction_constructor_probe(manim), 1e-5),
+    Fixture("sheen_direction_constructor_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _sheen_direction_constructor_probe(noon, scene)
+            ),
+            lambda: _sheen_direction_constructor_probe(manim), 1e-5),
 
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),

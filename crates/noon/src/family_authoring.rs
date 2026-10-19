@@ -632,6 +632,8 @@ mod tests {
         let before_invalid = scene.integration_store().borrow().scene_revision();
         let invalid = SemanticSheenDirection::new(SemanticVec3::new(f64::NAN, 0.0, 0.0), 3);
         assert!(outer.set_sheen_direction(invalid, true).is_err());
+        let invalid_2d = SemanticSheenDirection::new(SemanticVec3::new(1.0, 0.0, 1.0), 2);
+        assert!(outer.set_sheen_direction(invalid_2d, true).is_err());
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),
             before_invalid

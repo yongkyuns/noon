@@ -46,6 +46,7 @@ const expectedJavascriptSurface = [
   "createManimRectangle(",
   "createManimLine(",
   "export class WasmManimGeometryOptions",
+  "setSheenDirection(",
   "export class WasmAuthoringVectorPath",
   "createManimGeometry(",
   "beginUnderline(",
@@ -669,6 +670,18 @@ for (const fragment of expectedJavascriptSurface) {
   if (!javascript.includes(fragment)) {
     throw new Error(`Generated JavaScript is missing: ${fragment}`);
   }
+}
+
+const geometryOptionsClassStart = declarations.indexOf("export class WasmManimGeometryOptions");
+const nextDeclarationClass = declarations.indexOf("export class ", geometryOptionsClassStart + 1);
+const geometryOptionsDeclaration = declarations.slice(
+  geometryOptionsClassStart,
+  nextDeclarationClass === -1 ? undefined : nextDeclarationClass,
+);
+if (!geometryOptionsDeclaration.includes(
+  "setSheenDirection(x: number, y: number, z: number, dimensions: number): void;",
+)) {
+  throw new Error("WASM declarations are missing typed VMobject sheen-direction constructor support");
 }
 for (const fragment of expectedTypeSurface) {
   if (!declarations.includes(fragment)) {

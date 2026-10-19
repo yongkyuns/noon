@@ -62,7 +62,9 @@ impl SemanticSheenDirection {
     }
 
     pub fn is_valid(self) -> bool {
-        self.value.is_finite() && matches!(self.dimensions, 2 | 3)
+        self.value.is_finite()
+            && matches!(self.dimensions, 2 | 3)
+            && (self.dimensions == 3 || self.value.z == 0.0)
     }
 
     pub fn components(self) -> Vec<f64> {
