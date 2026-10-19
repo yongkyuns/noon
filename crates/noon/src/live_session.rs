@@ -2893,11 +2893,13 @@ impl<'a> LiveSession<'a> {
                 &store,
                 receiver.node_id(),
                 receiver_state,
-                &start_state,
-                &end_state,
-                &start_points,
-                &end_points,
-                alpha,
+                crate::semantic_mobject::ManimInterpolationInput {
+                    start_state: &start_state,
+                    end_state: &end_state,
+                    start_points: &start_points,
+                    end_points: &end_points,
+                    alpha,
+                },
             )?
         };
         self.publish_path_edits(prepared)

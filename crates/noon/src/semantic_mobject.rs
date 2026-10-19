@@ -909,11 +909,13 @@ impl Mobject {
             &self.store.borrow(),
             self.id,
             receiver_state,
-            &start_state,
-            &end_state,
-            &start_points,
-            &end_points,
-            alpha,
+            ManimInterpolationInput {
+                start_state: &start_state,
+                end_state: &end_state,
+                start_points: &start_points,
+                end_points: &end_points,
+                alpha,
+            },
         )?;
         prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
             transaction
@@ -1572,19 +1574,27 @@ pub(crate) fn interpolate_manim_scalar(
         .ok_or(AuthoringError::NonFiniteObjectState)
 }
 
+pub(crate) struct ManimInterpolationInput<'a> {
+    pub start_state: &'a SemanticObjectState,
+    pub end_state: &'a SemanticObjectState,
+    pub start_points: &'a [(f64, f64)],
+    pub end_points: &'a [(f64, f64)],
+    pub alpha: f64,
+}
+
 pub(crate) fn prepare_manim_interpolation(
     store: &SemanticStore,
     receiver: SemanticNodeId,
     mut receiver_state: SemanticObjectState,
-    start_state: &SemanticObjectState,
-    end_state: &SemanticObjectState,
-    start_points: &[(f64, f64)],
-    end_points: &[(f64, f64)],
-    alpha: f64,
+    input: ManimInterpolationInput<'_>,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
-    let path = interpolate_manim_point_arrays(start_points, end_points, alpha)?;
-    let (style, sheen_direction) =
-        interpolate_manim_vmobject_style(&receiver_state.style, start_state, end_state, alpha)?;
+    let path = interpolate_manim_point_arrays(input.start_points, input.end_points, input.alpha)?;
+    let (style, sheen_direction) = interpolate_manim_vmobject_style(
+        &receiver_state.style,
+        input.start_state,
+        input.end_state,
+        input.alpha,
+    )?;
     receiver_state.style = style;
     receiver_state.sheen_direction = sheen_direction;
     crate::path_editing::PreparedPathEdits::prepare(store, [(receiver, receiver_state, path)])
