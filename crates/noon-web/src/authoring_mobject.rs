@@ -1355,6 +1355,46 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setOwnStyleWithBackgroundStrokeOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_style_with_background_stroke_opacity(
+            &self,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+            background_stroke_opacity: f64,
+        ) -> Result<(), JsValue> {
+            let update = super::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style_with_background_stroke_opacity(update, background_stroke_opacity)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = matchStyle)]
         pub fn match_style(&self, target: &WasmAuthoringFamilyHandle) -> Result<(), JsValue> {
             self.semantic_family()?

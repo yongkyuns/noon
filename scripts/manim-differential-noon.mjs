@@ -550,6 +550,11 @@ assert _compare(root_only_opacity[1:4], [0.6, 0.6, 0.6], 1e-6) == []
 assert not _compare(root_only_opacity[5], root_only_opacity[6], 1e-6), (
     root_only_opacity[5], root_only_opacity[6]
 )
+root_only_style = family_paint["vgroup_root_only_set_style"]
+assert abs(float(root_only_style[5]) - 0.55) <= 1e-6, root_only_style
+assert not _compare(root_only_style[6], root_only_style[7], 1e-6), (
+    root_only_style[6], root_only_style[7]
+)
 family_paint_play = observations["family_own_paint_play_live"]
 def color_components(color):
     return (color.red, color.green, color.blue)

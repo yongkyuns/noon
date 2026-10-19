@@ -209,6 +209,40 @@ impl MobjectFamily {
         Ok(transaction)
     }
 
+    /// Atomically update a family's own foreground style and default-width
+    /// background-stroke opacity.
+    pub fn set_own_style_with_background_stroke_opacity(
+        &self,
+        update: StyleUpdate,
+        background_stroke_opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        self.own_style_with_background_stroke_opacity_transaction(
+            update,
+            background_stroke_opacity,
+        )?
+        .apply(&mut self.integration_store().borrow_mut())
+        .map(|_| ())
+        .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn own_style_with_background_stroke_opacity_transaction(
+        &self,
+        update: StyleUpdate,
+        background_stroke_opacity: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        let mut style = self.own_style()?;
+        update.apply(&mut style)?;
+        let mut validation = noon_core::SemanticStyle::default();
+        edit_fill_opacity(&mut validation, background_stroke_opacity)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style_with_background_stroke_opacity(
+            self.node_id(),
+            style,
+            background_stroke_opacity,
+        );
+        Ok(transaction)
+    }
+
     /// Match Manim VMobject.set_opacity() for this root's foreground and
     /// default-width background-stroke opacity.
     pub fn set_own_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
@@ -792,6 +826,70 @@ mod tests {
         let root_before = family.own_background_stroke_opacity().unwrap();
         assert!(family.set_own_background_stroke_opacity(1.2).is_err());
         assert_eq!(family.own_background_stroke_opacity().unwrap(), root_before);
+    }
+
+    #[test]
+    fn family_root_style_and_background_opacity_update_atomically() {
+        let mut scene = Scene::new();
+        let mut leaf = scene.square(1.0).unwrap();
+        leaf.set_fill(1.0, 0.0, 0.0, 0.6).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        let child_before = leaf.state().unwrap().style;
+        let revision = scene.integration_store().borrow().scene_revision();
+
+        family
+            .set_own_style_with_background_stroke_opacity(
+                StyleUpdate {
+                    fill_color: Some(Color::GREEN),
+                    fill_opacity: Some(0.35),
+                    stroke_color: Some(Color::BLUE),
+                    stroke_width: Some(4.0),
+                    stroke_opacity: Some(0.45),
+                    ..StyleUpdate::default()
+                },
+                0.55,
+            )
+            .unwrap();
+
+        let root_style = family.own_style().unwrap();
+        assert_eq!(root_style.fill, Some(SemanticPaint::Solid(Color::GREEN)));
+        assert_eq!(root_style.fill_opacity, 0.35);
+        assert_eq!(root_style.stroke, Some(SemanticPaint::Solid(Color::BLUE)));
+        assert_eq!(root_style.stroke_width, 4.0);
+        assert_eq!(root_style.stroke_opacity, 0.45);
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
+        assert_eq!(leaf.state().unwrap().style, child_before);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision.checked_next().unwrap()
+        );
+
+        let root_before = (
+            family.own_style().unwrap(),
+            family.own_background_stroke_opacity().unwrap(),
+        );
+        let revision = scene.integration_store().borrow().scene_revision();
+        assert!(family
+            .set_own_style_with_background_stroke_opacity(
+                StyleUpdate {
+                    stroke_width: Some(f64::NAN),
+                    ..StyleUpdate::default()
+                },
+                0.2,
+            )
+            .is_err());
+        assert_eq!(
+            (
+                family.own_style().unwrap(),
+                family.own_background_stroke_opacity().unwrap(),
+            ),
+            root_before
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(leaf.state().unwrap().style, child_before);
     }
 
     #[test]

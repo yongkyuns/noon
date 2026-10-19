@@ -1440,15 +1440,25 @@ def _set_style(
     # Ordinary shared SemanticStyle stores one fill and one stroke. It has no
     # background-stroke, sheen, or image paint fields, so preserve the pinned
     # default profile and reject requested changes before publishing any part
-    # of a combined style update.
+    # of a combined style update. A VGroup root separately retains only its
+    # default-width background-stroke opacity.
     if background_stroke_color is not None and background_stroke_color != _base.BLACK:
         raise NotImplementedError("background strokes require shared background paint")
     if background_stroke_width is not None and float(background_stroke_width) != 0.0:
         raise NotImplementedError("background strokes require shared background paint")
-    if background_stroke_opacity is not None and _compat._opacity(
-        "background stroke opacity", background_stroke_opacity
-    ) != 1.0:
-        raise NotImplementedError("background strokes require shared background paint")
+    root_background_opacity = None
+    if background_stroke_opacity is not None:
+        normalized_background_opacity = _compat._opacity(
+            "background stroke opacity", background_stroke_opacity
+        )
+        if normalized_background_opacity != 1.0 or (
+            not family and isinstance(self, _compat.VGroup)
+        ):
+            if family or not isinstance(self, _compat.VGroup):
+                raise NotImplementedError(
+                    "background strokes require shared background paint"
+                )
+            root_background_opacity = normalized_background_opacity
     if sheen_factor is not None and _ir._finite_number("sheen factor", sheen_factor) != 0.0:
         raise NotImplementedError("2D sheen requires shared gradient paint")
     if background_image:
@@ -1466,7 +1476,20 @@ def _set_style(
     handle, context, suffix = _style_target(self)
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
-    if context is None:
+    if root_background_opacity is not None and context is None:
+        engine_call(
+            handle.setOwnStyleWithBackgroundStrokeOpacity,
+            *arguments,
+            root_background_opacity,
+        )
+    elif root_background_opacity is not None:
+        engine_call(
+            context.liveSetFamilyOwnStyleWithBackgroundStrokeOpacity,
+            handle,
+            *arguments,
+            root_background_opacity,
+        )
+    elif context is None:
         method_name = "setOwnStyle" if own_family_style else "setStyle"
         engine_call(getattr(handle, method_name), *arguments)
     else:
