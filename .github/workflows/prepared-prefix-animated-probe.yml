@@ -1,0 +1,52 @@
+name: M2d prefix animation qualification
+on:
+  push:
+    branches: [experimental/prepared-prefix-animations]
+permissions:
+  contents: read
+concurrency:
+  group: prefix-animation-probe
+  cancel-in-progress: true
+jobs:
+  source-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pin upstream M2c base and inspect tools
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin a214b646d48494dd8f7e3ffb363f7d6751c4655e
+          rustup show active-toolchain
+          mkdir -p prefix-animated-artifacts
+          git rev-parse HEAD > prefix-animated-artifacts/commit.txt
+      - name: Compile baseline feature and run Fade/Morph probes
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo test -p noon --no-default-features --features prepared-prefix --test prepared_prefix_animation_admission -- --nocapture 2>&1 | tee prefix-animated-artifacts/animation.log
+      - name: Native text and immutable font closure
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --features prepared-prefix,native-text,bundled-fonts --test prepared_prefix_animation_admission -- --nocapture 2>&1 | tee prefix-animated-artifacts/native-text.log
+      - name: Preserve candidate formatting
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p prefix-animated-artifacts
+          git diff -- crates/noon/tests/prepared_prefix_animation_admission.rs > prefix-animated-artifacts/rustfmt.patch
+          cp crates/noon/tests/prepared_prefix_animation_admission.rs prefix-animated-artifacts/admission-formatted.rs
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: prepared-prefix-animated-probe
+          path: prefix-animated-artifacts
+          if-no-files-found: warn
+          retention-days: 7
