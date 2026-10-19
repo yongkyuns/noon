@@ -37,6 +37,18 @@ class ManimMobjectDepthTests(unittest.TestCase):
         self.assertIs(group.scale_to_fit_depth(2.0), group)
         self.assertEqual(group.depth, 0.0)
 
+    def test_matching_depth_is_a_noop_for_planar_objects(self):
+        mobject = object.__new__(noon.Mobject)
+        target = object.__new__(noon.Group)
+        rescale_calls = []
+        mobject.rescale_to_fit = lambda *args, **kwargs: rescale_calls.append(
+            (args, kwargs)
+        )
+
+        self.assertEqual(target.depth, 0.0)
+        self.assertIs(mobject.match_depth(target, about_point=object()), mobject)
+        self.assertEqual(rescale_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

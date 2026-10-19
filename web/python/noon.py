@@ -491,6 +491,14 @@ class Mobject:
     ) -> Mobject:
         return self.match_dim_size(mobject, 1, **kwargs)
 
+    def match_depth(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        target_depth = mobject.depth
+        if self.depth == 0:
+            return self
+        return self.rescale_to_fit(target_depth, 2, stretch=False, **kwargs)
+
     def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
         from _manim_semantic_handles import _rescale_to_fit
         return _rescale_to_fit(self, length, dim, stretch, **kwargs)

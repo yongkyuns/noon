@@ -1432,11 +1432,15 @@ def _mobject_depth_methods(provider: Any) -> Any:
     before = geometry_profile()
     scaled = mobject.scale_to_fit_depth(3.0, about_point=object())
     stretched = mobject.stretch_to_fit_depth(4.0, about_edge=object())
+    matched = mobject.match_depth(
+        provider.Rectangle(width=4.0, height=1.0), about_point=object()
+    )
     mobject.depth = 5.0
     return {
         "depth": float(mobject.depth),
         "scale_returns_self": scaled is mobject,
         "stretch_returns_self": stretched is mobject,
+        "match_returns_self": matched is mobject,
         "before": before,
         "after": geometry_profile(),
     }

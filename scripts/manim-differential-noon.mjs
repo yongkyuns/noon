@@ -1041,6 +1041,8 @@ json.dumps({
     "mobject_depth_methods: scale-to-fit-depth returns the receiver");
   assert.equal(depthMethods.stretch_returns_self, true,
     "mobject_depth_methods: stretch-to-fit-depth returns the receiver");
+  assert.equal(depthMethods.match_returns_self, true,
+    "mobject_depth_methods: match-depth returns the receiver");
   assert.deepEqual(depthMethods.after, depthMethods.before,
     "mobject_depth_methods: zero-depth fitting leaves planar geometry unchanged");
   const surround = observations.mobject_surround;
