@@ -1108,6 +1108,30 @@ impl SemanticExecutionPlayer {
             object,
         })
     }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_repeat_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+        count: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyRepeatPoints {
+            family,
+            count,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_repeat_points(
+        &mut self,
+        object: &noon::Mobject,
+        count: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RepeatPoints {
+            object,
+            count,
+        })
+    }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(
         &mut self,

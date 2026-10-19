@@ -14,6 +14,48 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathEditingTests(unittest.TestCase):
+    def test_repeat_points_dispatches_family_and_leaf_operations(self):
+        family = identity_only_wrapper(compat.Group)
+        family_handle = Mock()
+        family._semantic_family_handle = family_handle
+        family.family_members_with_points = Mock(return_value=[object()])
+        value = identity_only_wrapper(compat.VMobject)
+        value_handle = Mock()
+        value.family_members_with_points = Mock(return_value=[value])
+
+        with patch("_manim_semantic_handles._group_target_context", return_value=None), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.repeat_points(family, 2), family)
+            family_handle.repeatPoints.assert_called_once_with(2)
+
+        live_context = Mock()
+        with patch("_manim_semantic_handles._group_target_context", return_value=live_context), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.repeat_points(family, 3), family)
+            live_context.liveRepeatFamilyPoints.assert_called_once_with(family_handle, 3)
+
+        with patch.object(editing, "_handle_for", return_value=value_handle), \
+             patch.object(editing, "_live_mutation_context", return_value=None), \
+             patch.object(editing, "_live_constructor_context", return_value=None), \
+             patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.repeat_points(value, 2), value)
+            value_handle.repeatPoints.assert_called_once_with(2)
+
+    def test_repeat_points_matches_empty_and_nonpositive_point_array_behavior(self):
+        empty = identity_only_wrapper(compat.VMobject)
+        empty.family_members_with_points = Mock(return_value=[])
+        with patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            self.assertIs(editing.repeat_points(empty, 0), empty)
+            self.assertIs(editing.repeat_points(empty, -1), empty)
+
+        value = identity_only_wrapper(compat.VMobject)
+        value.family_members_with_points = Mock(return_value=[value])
+        with patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+            with self.assertRaisesRegex(TypeError, r"reduce\(\) of empty iterable"):
+                editing.repeat_points(value, 0)
+            with self.assertRaisesRegex(TypeError, r"reduce\(\) of empty iterable"):
+                editing.repeat_points(value, -1)
+
     def test_reverse_points_dispatches_family_and_leaf_operations(self):
         family = identity_only_wrapper(compat.Group)
         family_handle = Mock()

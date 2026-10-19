@@ -176,6 +176,8 @@ pub enum AuthoringError {
     NonFiniteGeometry,
     /// Flattened point input has an incomplete coordinate row.
     InvalidPointCoordinates(usize),
+    /// A repeated path point array exceeds addressable allocation capacity.
+    PointArrayCapacityExceeded(usize),
     /// A polygon or star constructor has invalid topology options.
     InvalidPolygonOptions(&'static str),
     /// An Angle constructor has invalid line or geometry options.
@@ -339,6 +341,9 @@ impl std::fmt::Display for AuthoringError {
                 f,
                 "point coordinates do not form complete rows, received {count} values"
             ),
+            Self::PointArrayCapacityExceeded(count) => {
+                write!(f, "repeated path point array exceeds capacity ({count} points)")
+            }
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::InvalidPolygonOptions(reason) => f.write_str(reason),
             Self::InvalidAngleOptions(reason) => f.write_str(reason),

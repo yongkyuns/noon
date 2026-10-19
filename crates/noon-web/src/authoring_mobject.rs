@@ -1941,6 +1941,13 @@ mod wasm {
         pub fn reverse_points(&self) -> Result<(), JsValue> {
             self.semantic_family()?.reverse_points().map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(&self, count: u32) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .repeat_points(count as usize)
+                .map_err(js_error)
+        }
     }
 
     #[wasm_bindgen]
@@ -2997,6 +3004,10 @@ mod wasm {
         #[wasm_bindgen(js_name = reversePoints)]
         pub fn reverse_points(&mut self) -> Result<(), JsValue> {
             self.handle.reverse_points().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(&mut self, count: u32) -> Result<(), JsValue> {
+            self.handle.repeat_points(count as usize).map_err(js_error)
         }
         pub fn subcurve(&self, a: f64, b: f64) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.handle

@@ -294,6 +294,111 @@ fn reverse_point_order(path: &VectorPath) -> Result<VectorPath, AuthoringError> 
     Ok(reversed)
 }
 
+/// Repeat the raw point array as Manim's `apply_over_attr_arrays(repeated)` does.
+fn repeat_point_array(path: &VectorPath, count: usize) -> Result<VectorPath, AuthoringError> {
+    let points = manim_points_for_path(path)?;
+    let total = points
+        .len()
+        .checked_mul(count)
+        .ok_or(AuthoringError::PointArrayCapacityExceeded(usize::MAX))?;
+    let mut repeated = Vec::new();
+    repeated
+        .try_reserve_exact(total)
+        .map_err(|_| AuthoringError::PointArrayCapacityExceeded(total))?;
+    for _ in 0..count {
+        repeated.extend_from_slice(&points);
+    }
+    let mut result = VectorPath::from_manim_points(repeated);
+    if let Some(target) = path.morph_target() {
+        result = result.with_morph_target(repeat_point_array(target, count)?);
+    }
+    Ok(result)
+}
+
+fn prepare_family_repeat_points(
+    store: &SemanticStore,
+    states: impl IntoIterator<Item = (SemanticNodeId, SemanticObjectState)>,
+    count: usize,
+) -> Result<PreparedPathEdits, AuthoringError> {
+    let mut replacements = Vec::new();
+    for (node, state) in states {
+        let supported = match state.content.geometry() {
+            Some(
+                StoredGeometry::Circle { .. }
+                | StoredGeometry::Rectangle { .. }
+                | StoredGeometry::Line { .. },
+            ) => true,
+            Some(StoredGeometry::Resource(handle)) => matches!(
+                store.geometry_resources().get(handle),
+                Some(noon_core::GeometryResource::VectorPath(_))
+            ),
+            None => false,
+        };
+        if !supported {
+            continue;
+        }
+        let path = crate::path_queries::content_path(store, state.content)?;
+        if manim_points_for_path(path.as_ref())?.is_empty() {
+            continue;
+        }
+        replacements.push((node, state, repeat_point_array(path.as_ref(), count)?));
+    }
+    PreparedPathEdits::prepare_preserving_transform(store, replacements)
+}
+
+pub(crate) fn publish_running_family_repeat_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    count: usize,
+) -> Result<(), AuthoringError> {
+    require_running_family(store, family)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    if count == 0 {
+        return Ok(());
+    }
+    let nodes = store
+        .borrow()
+        .ordered_last_occurrence_leaf_nodes(family.node_id())
+        .map_err(AuthoringError::from)?;
+    let states = nodes
+        .into_iter()
+        .map(|node| {
+            let object = Mobject::from_node(Rc::clone(store), node)?;
+            Ok((
+                node,
+                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, AuthoringError>>()?;
+    let prepared = {
+        let store = store.borrow();
+        prepare_family_repeat_points(&store, states, count)?
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+pub(crate) fn publish_running_object_repeat_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    count: usize,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, object)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    if count == 0 {
+        return Ok(());
+    }
+    let state = crate::effective_capture::capture_mobject_state(store, execution, object)?;
+    let prepared = {
+        let store = store.borrow();
+        prepare_family_repeat_points(&store, [(object.node_id(), state)], count)?
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
 impl MobjectFamily {
     /// Reverse the stored point order of each supported geometry leaf while
     /// retaining the family's membership, paint, and member transforms.
@@ -315,6 +420,29 @@ impl MobjectFamily {
                 .map_err(AuthoringError::from)
         })
     }
+
+    /// Repeat each supported vector leaf's raw point array through one family transaction.
+    pub fn repeat_points(&self, count: usize) -> Result<(), AuthoringError> {
+        self.validate()?;
+        if count == 0 {
+            return Ok(());
+        }
+        let mut store = self.integration_store().borrow_mut();
+        let nodes = store
+            .ordered_last_occurrence_leaf_nodes(self.node_id())
+            .map_err(AuthoringError::from)?;
+        let states = nodes
+            .into_iter()
+            .map(|node| Ok((node, store.semantic_object_state_checked(node)?.clone())))
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+        let prepared = prepare_family_repeat_points(&store, states, count)?;
+        prepared.publish(&mut store, |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
 }
 
 impl Mobject {
@@ -324,6 +452,23 @@ impl Mobject {
         let mut store = self.integration_store().borrow_mut();
         let state = store.semantic_object_state_checked(self.node_id())?.clone();
         let prepared = prepare_family_reverse_points(&store, [(self.node_id(), state)])?;
+        prepared.publish(&mut store, |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+
+    /// Repeat this object's local raw point array while retaining its affine state.
+    pub fn repeat_points(&self, count: usize) -> Result<(), AuthoringError> {
+        self.validate()?;
+        if count == 0 {
+            return Ok(());
+        }
+        let mut store = self.integration_store().borrow_mut();
+        let state = store.semantic_object_state_checked(self.node_id())?.clone();
+        let prepared = prepare_family_repeat_points(&store, [(self.node_id(), state)], count)?;
         prepared.publish(&mut store, |store, transaction| {
             transaction
                 .apply(store)

@@ -837,6 +837,13 @@
       "notes": "Reverse points across a nested family after live scene admission, asserting each VMobject's endpoints reverse while family membership and geometry remain unchanged."
     },
     {
+      "id": "family-repeat-points",
+      "scene": "OrdinaryFamilyRepeatPoints",
+      "source": "parity/manim-v0.21/core-examples/family_repeat_points.py",
+      "expected_duration": 0.2,
+      "notes": "Repeat the raw point array of each nested-family VMobject twice after scene admission, preserving family membership while drawing coincident paths."
+    },
+    {
       "id": "family-grid-options",
       "scene": "OrdinaryFamilyGrid",
       "source": "parity/manim-v0.21/core-examples/family_grid_options.py",

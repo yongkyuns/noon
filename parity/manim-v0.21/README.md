@@ -107,6 +107,16 @@ error 67). Text/image point buffers remain unqualified because their resources
 do not expose shared vector-point arrays. Pinned source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1549.
 
+`Mobject.repeat(count)` repeats each selected vector leaf's raw point array in
+one atomic Rust family transaction, preserving transforms and order. Direct and
+live product probes match pinned ManimCE for nested VMobject families, including
+point values, counts, and receiver identity (175/175 semantic fixtures). Zero
+and negative counts preserve the inherited point-free no-op and point-bearing
+`reduce()` error; Text/Image point arrays remain unqualified. The nested-family
+raster fixture passes on WebGPU and WebGL2: duration delta 0, 0.2008% differing
+pixels, MAE 0.022041, maximum channel error 67. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1554.
+
 `arrange_submobjects()` forwards its positional and keyword arguments to the
 dynamic `arrange()` implementation, reusing the shared Rust family layout path.
 Product comparisons cover detached and live Group calls and preserve receiver

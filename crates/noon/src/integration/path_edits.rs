@@ -172,6 +172,14 @@ pub enum BorrowedPathEdit<'a> {
     ReversePoints {
         object: &'a Mobject,
     },
+    FamilyRepeatPoints {
+        family: &'a MobjectFamily,
+        count: usize,
+    },
+    RepeatPoints {
+        object: &'a Mobject,
+        count: usize,
+    },
 }
 
 /// Publish one host-originated edit against the supplied borrowed execution.
@@ -370,6 +378,16 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::ReversePoints { object } => {
             return path_editing::publish_running_object_reverse_points(
                 store, root, execution, object,
+            );
+        }
+        BorrowedPathEdit::FamilyRepeatPoints { family, count } => {
+            return path_editing::publish_running_family_repeat_points(
+                store, root, execution, family, count,
+            );
+        }
+        BorrowedPathEdit::RepeatPoints { object, count } => {
+            return path_editing::publish_running_object_repeat_points(
+                store, root, execution, object, count,
             );
         }
     };

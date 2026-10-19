@@ -821,6 +821,46 @@ def _noon_family_reverse_points_live() -> Any:
     )
 
 
+def _family_repeat_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.VMobject(color=provider.RED, stroke_width=8)
+    first.set_points_as_corners([
+        provider.LEFT * 3 + provider.DOWN,
+        provider.LEFT * 2 + provider.UP,
+        provider.LEFT + provider.DOWN,
+    ])
+    second = provider.VMobject(color=provider.BLUE, stroke_width=8)
+    second.set_points_as_corners([
+        provider.RIGHT * 2 + provider.DOWN,
+        provider.RIGHT * 3 + provider.UP,
+        provider.RIGHT * 4 + provider.DOWN,
+    ])
+    family = provider.Group(first, provider.Group(second))
+    if scene is not None:
+        scene.add(family)
+    returned = family.repeat(2)
+    return {
+        "returns_self": returned is family,
+        "first_points": [_point_observation(point) for point in first.get_all_points()],
+        "second_points": [_point_observation(point) for point in second.get_all_points()],
+        "first_count": first.get_num_points(),
+        "second_count": second.get_num_points(),
+    }
+
+
+def _noon_family_repeat_points() -> Any:
+    return _family_repeat_points(noon)
+
+
+def _manim_family_repeat_points() -> Any:
+    return _family_repeat_points(manim)
+
+
+def _noon_family_repeat_points_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_repeat_points(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -3828,6 +3868,8 @@ FIXTURES = [
     Fixture("group_shuffle_submobjects_live", _noon_family_shuffle_alias_live, _manim_family_shuffle_alias),
     Fixture("family_reverse_points", _noon_family_reverse_points, _manim_family_reverse_points),
     Fixture("family_reverse_points_live", _noon_family_reverse_points_live, _manim_family_reverse_points),
+    Fixture("family_repeat_points", _noon_family_repeat_points, _manim_family_repeat_points),
+    Fixture("family_repeat_points_live", _noon_family_repeat_points_live, _manim_family_repeat_points),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

@@ -287,6 +287,93 @@ fn family_reverse_points_is_atomic_and_preserves_member_transforms() {
 }
 
 #[test]
+fn family_repeat_points_is_atomic_and_preserves_member_transforms() {
+    for live_mode in [false, true] {
+        let mut scene = Scene::new();
+        let path = |offset: f32| {
+            VectorPath::new()
+                .move_to(Vec2::new(offset, 0.0))
+                .line_to(Vec2::new(offset + 1.0, 0.0))
+                .move_to(Vec2::new(offset + 2.0, 1.0))
+                .cubic_to(
+                    Vec2::new(offset + 3.0, 2.0),
+                    Vec2::new(offset + 4.0, 2.0),
+                    Vec2::new(offset + 5.0, 1.0),
+                )
+        };
+        let mut first = scene.path(path(-3.0), Default::default()).unwrap();
+        let second = scene.path(path(2.0), Default::default()).unwrap();
+        first.set_translation(3.0, -2.0).unwrap();
+        first.set_scale(1.5, 0.75).unwrap();
+        first.set_rotation(0.35).unwrap();
+        let first_state = first.state().unwrap();
+        let second_state = second.state().unwrap();
+        let family = scene
+            .family(&[MobjectTarget::from(&first), MobjectTarget::from(&second)])
+            .unwrap();
+        if live_mode {
+            scene
+                .edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::from(&family)]))
+                .unwrap();
+        }
+        let first_before = first.path_query().unwrap().points().unwrap();
+        let second_before = second.path_query().unwrap().points().unwrap();
+        let expected_repeat = |points: &[(f64, f64)], times: usize| {
+            (0..times)
+                .flat_map(|_| points.iter().copied())
+                .collect::<Vec<_>>()
+        };
+        let mut session = scene.execution_session().unwrap();
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::FamilyRepeatPoints {
+                    family: &family,
+                    count: 2,
+                },
+            )
+            .unwrap();
+        } else {
+            family.repeat_points(2).unwrap();
+        }
+
+        assert_points_near(
+            &first.path_query().unwrap().points().unwrap(),
+            &expected_repeat(&first_before, 2),
+        );
+        assert_points_near(
+            &second.path_query().unwrap().points().unwrap(),
+            &expected_repeat(&second_before, 2),
+        );
+        assert_eq!(first.state().unwrap().transform, first_state.transform);
+        assert_eq!(second.state().unwrap().transform, second_state.transform);
+
+        if live_mode {
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::RepeatPoints {
+                    object: &first,
+                    count: 2,
+                },
+            )
+            .unwrap();
+        } else {
+            first.repeat_points(2).unwrap();
+        }
+        assert_points_near(
+            &first.path_query().unwrap().points().unwrap(),
+            &expected_repeat(&first_before, 4),
+        );
+        assert_eq!(first.state().unwrap().transform, first_state.transform);
+    }
+}
+
+#[test]
 fn start_new_path_preserves_raw_points_and_pads_by_the_configured_stride() {
     for live_mode in [false, true] {
         for stride in [4, 5, -4] {

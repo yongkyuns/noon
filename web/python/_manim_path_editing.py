@@ -551,6 +551,54 @@ def reverse_points(value):
     return value
 
 
+def repeat_points(value, count):
+    import operator
+    from _manim_compat import Group
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    members = value.family_members_with_points()
+    if not members:
+        return value
+    try:
+        repeat_count = operator.index(count)
+    except TypeError:
+        # Preserve list repetition's native error type/message for point-owning
+        # objects without allocating a count-sized validation list.
+        [] * count
+        raise AssertionError("unreachable")
+    if repeat_count <= 0:
+        raise TypeError("reduce() of empty iterable with no initial value")
+    if repeat_count > 0xFFFFFFFF:
+        raise OverflowError("Python int too large to convert to C unsigned int")
+
+    family = isinstance(value, Group)
+    handle = (
+        getattr(value, "_semantic_family_handle", None)
+        if family
+        else _handle_for(value)
+    )
+    if handle is None:
+        raise RuntimeError("family point editing requires a shared Rust semantic handle")
+    from _manim_semantic_handles import _group_target_context
+    context = (
+        _group_target_context(value)
+        if family
+        else (_live_mutation_context(value) or _live_constructor_context("path"))
+    )
+    if context is None:
+        engine_call(
+            handle.repeatPoints,
+            repeat_count,
+            operation="Mobject.repeat",
+        )
+    else:
+        method = context.liveRepeatFamilyPoints if family else context.liveRepeatPoints
+        engine_call(method, handle, repeat_count, operation="Mobject.repeat")
+    return value
+
+
 def align_points(value, other):
     from _manim_compat import VMobject
     from _manim_updaters import canonical_callback_phase_active

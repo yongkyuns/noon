@@ -458,6 +458,11 @@ class Mobject:
         from _manim_path_editing import reverse_points
         return reverse_points(self)
 
+    def repeat(self, count: int) -> Self:
+        """Repeat supported point arrays through the shared path/family operation."""
+        from _manim_path_editing import repeat_points
+        return repeat_points(self, count)
+
     def apply_to_family(self, func: Callable[[Mobject], None]) -> Mobject:
         """Apply ``func`` to every point-owning member in shared family order."""
         for mobject in self.family_members_with_points():

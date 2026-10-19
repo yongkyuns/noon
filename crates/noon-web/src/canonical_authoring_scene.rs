@@ -8518,6 +8518,18 @@ mod wasm {
                 .live_reverse_family_points(&family.semantic_family()?)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveRepeatFamilyPoints)]
+        pub fn live_repeat_family_points(
+            &mut self,
+            family: &crate::WasmAuthoringFamilyHandle,
+            count: u32,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_repeat_family_points(&family.semantic_family()?, count as usize)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveInsertNCurves)]
         pub fn live_insert_n_curves(
             &mut self,
@@ -8550,6 +8562,18 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_reverse_points(object.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveRepeatPoints)]
+        pub fn live_repeat_points(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            count: u32,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_repeat_points(object.semantic_mobject(), count as usize)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveSubcurve)]
