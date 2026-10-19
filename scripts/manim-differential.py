@@ -1345,6 +1345,34 @@ def _manim_mobject_set_attributes() -> Any:
     return _mobject_set_attributes(manim)
 
 
+def _mobject_base_path_methods(provider: Any) -> Any:
+    mobject = object.__new__(provider.Mobject)
+
+    def capture_error(call):
+        try:
+            call()
+        except Exception as error:
+            return type(error).__name__, str(error)
+        return None
+
+    return {
+        "point_from_proportion": capture_error(
+            lambda: mobject.point_from_proportion(0.5)
+        ),
+        "proportion_from_point": capture_error(
+            lambda: mobject.proportion_from_point((0.0, 0.0, 0.0))
+        ),
+    }
+
+
+def _noon_mobject_base_path_methods() -> Any:
+    return _mobject_base_path_methods(noon)
+
+
+def _manim_mobject_base_path_methods() -> Any:
+    return _mobject_base_path_methods(manim)
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4389,6 +4417,9 @@ FIXTURES = [
     Fixture("mobject_set_attributes",
             _noon_mobject_set_attributes,
             _manim_mobject_set_attributes),
+    Fixture("mobject_base_path_methods",
+            _noon_mobject_base_path_methods,
+            _manim_mobject_base_path_methods),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

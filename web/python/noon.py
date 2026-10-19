@@ -299,6 +299,12 @@ class Mobject:
             setattr(self, attr, value)
         return self
 
+    def point_from_proportion(self, alpha: float) -> Any:
+        raise NotImplementedError("Please override in a child class.")
+
+    def proportion_from_point(self, point: object) -> float:
+        raise NotImplementedError("Please override in a child class.")
+
     @staticmethod
     def get_mobject_type_class():
         return Mobject

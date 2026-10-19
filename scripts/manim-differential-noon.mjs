@@ -1014,6 +1014,13 @@ json.dumps({
     "mobject_set_attributes: property assignments use their setter");
   assert.deepEqual(setAttributes.custom_value, { value: 7 },
     "mobject_set_attributes: arbitrary attributes retain their value");
+  const basePathMethods = observations.mobject_base_path_methods;
+  assert.deepEqual(basePathMethods.point_from_proportion, [
+    "NotImplementedError", "Please override in a child class.",
+  ], "mobject_base_path_methods: base point query remains abstract");
+  assert.deepEqual(basePathMethods.proportion_from_point, [
+    "NotImplementedError", "Please override in a child class.",
+  ], "mobject_base_path_methods: base inverse query remains abstract");
   for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
