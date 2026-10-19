@@ -171,3 +171,14 @@ semantic fixtures). Staged callback queries reject before reading a stale
 snapshot, and resource-backed Text/Image point arrays remain unqualified. Pinned
 source:
 https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2168.
+
+`Mobject.get_array_attrs()` reports `points`, and
+`get_merged_array("points")` returns the Rust-owned recursive point array in
+depth-first pre-order as a planar Nx2 array, retaining repeated aliases in
+detached and live scenes. The paired product/Pinned-ManimCE suite passes 187/187
+fixtures, including both direct and live nested-alias cases.
+Other arbitrary array attributes remain unsupported until they have a shared
+Rust-backed representation. Staged callback-phase queries reject before reading
+a stale snapshot. Pinned sources:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L869 and
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2220-L2229.

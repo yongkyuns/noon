@@ -1087,6 +1087,19 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn family_merged_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<f64>, AuthoringFailure> {
+        self.family_point_reduction_tree(family).map(|tree| {
+            tree.flattened_points()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn family_extremum_along_dim(
         &mut self,
         family: &noon::MobjectFamily,
@@ -7237,6 +7250,16 @@ mod wasm {
             self.inner
                 .family_point_reduction_tree(&handle.semantic_family()?)
                 .map(crate::authoring_mobject::point_reduction_tree_to_js)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyMergedPoints)]
+        pub fn query_family_merged_points(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_merged_points(&handle.semantic_family()?)
                 .map_err(typed_js_error)
         }
 

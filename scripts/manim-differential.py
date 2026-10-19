@@ -1046,6 +1046,28 @@ def _noon_reduce_across_dimension_live() -> Any:
     )
 
 
+def _get_merged_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((-2, -0.5, 0), (-1, 0.5, 0)).shift(provider.UP)
+    second = provider.Line((3, -1, 0), (4, 1, 0)).shift(provider.DOWN)
+    family = provider.Group(provider.Group(first, second), first)
+    if scene is not None:
+        scene.add(family)
+    points = family.get_merged_array("points")
+    return [[float(coordinate) for coordinate in point[:2]] for point in points]
+
+
+def _noon_get_merged_points() -> Any:
+    return _get_merged_points(noon)
+
+
+def _manim_get_merged_points() -> Any:
+    return _get_merged_points(manim)
+
+
+def _noon_get_merged_points_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _get_merged_points(noon, scene))
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4065,6 +4087,8 @@ FIXTURES = [
     Fixture("put_start_and_end_on_live", _noon_put_start_and_end_on_live, _manim_put_start_and_end_on),
     Fixture("reduce_across_dimension", _noon_reduce_across_dimension, _manim_reduce_across_dimension),
     Fixture("reduce_across_dimension_live", _noon_reduce_across_dimension_live, _manim_reduce_across_dimension),
+    Fixture("get_merged_array_points", _noon_get_merged_points, _manim_get_merged_points),
+    Fixture("get_merged_array_points_live", _noon_get_merged_points_live, _manim_get_merged_points),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",

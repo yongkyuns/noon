@@ -4,7 +4,11 @@ from unittest.mock import patch
 import numpy as np
 
 import noon
-from _manim_path_queries import _reduce_point_reduction_tree, reduce_across_dimension
+from _manim_path_queries import (
+    _reduce_point_reduction_tree,
+    merged_array,
+    reduce_across_dimension,
+)
 
 
 class ManimReduceAcrossDimensionTests(unittest.TestCase):
@@ -52,6 +56,22 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
 
     def test_public_method_is_declared_on_mobject(self):
         self.assertIn("reduce_across_dimension", noon.Mobject.__dict__)
+
+    def test_get_merged_array_returns_rust_ordered_points(self):
+        coordinates = np.array([10.0, 1.0, 2.0, 3.0])
+        with patch("_manim_path_queries._merged_points_observation", return_value=coordinates):
+            points = merged_array(object(), "points")
+        np.testing.assert_array_equal(points, [[10.0, 1.0], [2.0, 3.0]])
+
+    def test_get_merged_array_rejects_unmodeled_attributes_before_query(self):
+        with patch("_manim_path_queries._merged_points_observation") as query:
+            with self.assertRaisesRegex(NotImplementedError, "only the shared Rust points"):
+                merged_array(object(), "rgbas")
+        query.assert_not_called()
+
+    def test_get_array_attrs_reports_the_supported_base_profile(self):
+        self.assertEqual(noon.Mobject.get_array_attrs(object()), ["points"])
+        self.assertIn("get_merged_array", noon.Mobject.__dict__)
 
 
 if __name__ == "__main__":

@@ -1089,4 +1089,8 @@ fn point_reduction_tree_preserves_nested_order_and_repeated_aliases() {
     assert_eq!(tree.children[0].children[0].points[0], (4., 2.));
     assert_eq!(tree.children[0].children[0].points.last(), Some(&(5., 2.)));
     assert_eq!(tree.children[0].children[0].points, tree.children[1].points);
+    let mut expected_flattened = tree.children[0].children[0].points.clone();
+    expected_flattened.extend(tree.children[0].children[1].points.clone());
+    expected_flattened.extend(tree.children[1].points.clone());
+    assert_eq!(tree.flattened_points(), expected_flattened);
 }

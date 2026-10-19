@@ -1226,6 +1226,20 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = mergedPoints)]
+        pub fn merged_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_reduction_tree()
+                .map(|tree| {
+                    tree.flattened_points()
+                        .into_iter()
+                        .flat_map(|(x, y)| [x, y])
+                        .collect()
+                })
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pointReductionTree)]
         pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
             let family = self.semantic_family()?;

@@ -2439,6 +2439,17 @@ def _point_reduction_tree_observation(value: _base.Mobject):
     return engine_call(family.pointReductionTree)
 
 
+def _merged_points_observation(value: _base.Mobject):
+    """Return a Rust-flattened recursive point array for family wrappers."""
+    if not _is_shared_family(value):
+        return None
+    family = value._semantic_family_handle
+    context = _group_live_layout_context(value)
+    if context is not None:
+        return engine_call(context.queryFamilyMergedPoints, family)
+    return engine_call(family.mergedPoints)
+
+
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
     if not _is_shared_family(value):
         return None

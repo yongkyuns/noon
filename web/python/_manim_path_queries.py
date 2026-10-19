@@ -11,6 +11,7 @@ from _manim_semantic_handles import (
     _extremum_from_points_observation,
     _family_point_count_observation,
     _length_over_dim_observation,
+    _merged_points_observation,
     _path_boundary_points_observation,
     _point_reduction_tree_observation,
     _typed_manim_observation,
@@ -300,6 +301,29 @@ def all_points(value):
     coordinates = _all_points_observation(value)
     if coordinates is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
+    return _format_points(coordinates)
+
+
+def merged_array(value, array_attr):
+    """Return Rust-owned points in Manim's recursive pre-order family profile."""
+    if array_attr != "points":
+        raise NotImplementedError(
+            "get_merged_array currently supports only the shared Rust points array"
+        )
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "merged-array queries are unavailable during staged callbacks"
+        )
+
+    coordinates = _merged_points_observation(value)
+    if coordinates is None:
+        query = _query(value)
+        try:
+            coordinates = engine_call(query.points)
+        finally:
+            query.free()
     return _format_points(coordinates)
 
 

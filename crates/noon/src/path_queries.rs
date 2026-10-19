@@ -38,6 +38,17 @@ pub struct PointReductionTree {
     pub children: Vec<Self>,
 }
 
+impl PointReductionTree {
+    /// Flatten every owned point array in semantic pre-order, retaining aliases.
+    pub fn flattened_points(&self) -> Vec<(f64, f64)> {
+        let mut points = self.points.clone();
+        for child in &self.children {
+            points.extend(child.flattened_points());
+        }
+        points
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PointReductionTopology {
     object: Option<SemanticNodeId>,

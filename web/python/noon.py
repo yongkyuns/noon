@@ -613,6 +613,13 @@ class Mobject:
         from _manim_path_queries import all_points
         return all_points(self)
 
+    def get_array_attrs(self) -> list[str]:
+        return ["points"]
+
+    def get_merged_array(self, array_attr: str):
+        from _manim_path_queries import merged_array
+        return merged_array(self, array_attr)
+
     def get_points_defining_boundary(self):
         return self.get_all_points()
 
