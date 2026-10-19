@@ -191,7 +191,7 @@ impl PrefixReader {
                 family.spec.start_time, family.spec.duration, RateFunction::Linear,
             );
             let (start, end) = continuous_time_map_interval(timing, &family.time_map)
-                .ok_or(ReplayError::UnsupportedDomain)?;
+                .map_err(|_| ReplayError::UnsupportedDomain)?;
             if start < batch.from_frontier
                 || !family.plan.leaves().iter().all(|leaf| {
                     self.runtime.compiled.object_index(leaf.span().object).is_some()
@@ -424,7 +424,7 @@ impl SceneInstance {
                 channel.spec.start_time, channel.spec.duration, RateFunction::Linear,
             );
             let (start, _) = continuous_time_map_interval(timing, &channel.time_map)
-                .ok_or(ReplayError::UnsupportedDomain)?;
+                .map_err(|_| ReplayError::UnsupportedDomain)?;
             if start < revision.time || start < publisher.frontier {
                 return Err(ReplayError::UnsupportedDomain.into());
             }
