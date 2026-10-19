@@ -22,9 +22,7 @@ impl Mobject {
             // The retained Line renderer uses fill slots for pattern parameters.
             // Reject a missing stroke rather than rendering those slots as color.
             if state.style.stroke.is_none() || state.style.stroke_width <= 0.0 {
-                return Err(
-                    "periodic strokes require an enabled stroke and positive width".into(),
-                );
+                return Err("periodic strokes require an enabled stroke and positive width".into());
             }
         }
         state.style.stroke_pattern = pattern;
