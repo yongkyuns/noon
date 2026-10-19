@@ -777,6 +777,31 @@ def _noon_family_shuffle_alias_live() -> Any:
     return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene, alias=True))
 
 
+def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    members = [
+        provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
+        provider.Square(side_length=0.5).shift(provider.RIGHT * 0.3),
+        provider.Rectangle(width=0.7, height=0.3).shift(provider.RIGHT),
+    ]
+    group = provider.Group(*members)
+    if scene is not None:
+        scene.add(group)
+    returned = group.arrange_submobjects(direction=provider.UP, buff=0.35, center=False)
+    return {"returns_self": returned is group, "members": _members_observation(group)}
+
+
+def _noon_family_arrange_submobjects() -> Any:
+    return _family_arrange_submobjects(noon)
+
+
+def _manim_family_arrange_submobjects() -> Any:
+    return _family_arrange_submobjects(manim)
+
+
+def _noon_family_arrange_submobjects_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_arrange_submobjects(noon, scene))
+
+
 def _noon_vgroup_shift() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25).shift(noon.LEFT),
@@ -3757,6 +3782,8 @@ FIXTURES = [
     Fixture("group_shuffle_live", _noon_family_shuffle_live, _manim_family_shuffle),
     Fixture("group_shuffle_submobjects", _noon_family_shuffle_alias, _manim_family_shuffle_alias),
     Fixture("group_shuffle_submobjects_live", _noon_family_shuffle_alias_live, _manim_family_shuffle_alias),
+    Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
+    Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))

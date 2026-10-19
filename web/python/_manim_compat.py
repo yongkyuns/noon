@@ -1046,6 +1046,9 @@ class Group(Mobject):
     ) -> Group:
         return _base._semantic_operations()._group_arrange(self, direction, buff, center, **kwargs)
 
+    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.arrange(*args, **kwargs)
+
     def arrange_in_grid(
         self, rows: int | None = None, cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,

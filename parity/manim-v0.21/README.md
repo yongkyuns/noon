@@ -95,3 +95,8 @@ Rust owns the repeated-alias family traversal plan. The seeded overlapping-squar
 Cairo fixture shuffles after live scene admission and passes on WebGPU and WebGL2
 with zero differing pixels, matching bounds and duration, mean absolute channel
 error 0.001725, and maximum channel error 9.
+
+`arrange_submobjects()` forwards its positional and keyword arguments to the
+dynamic `arrange()` implementation, reusing the shared Rust family layout path.
+Product comparisons cover detached and live Group calls and preserve receiver
+identity.

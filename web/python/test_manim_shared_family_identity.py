@@ -149,6 +149,24 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(NotImplementedError, "Rust owns its family traversal"):
                 handles._group_shuffle(root, recursive=True)
 
+    def test_group_arrange_submobjects_forwards_to_dynamic_shared_arrange(self):
+        import inspect
+        from unittest.mock import Mock
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        arrange = Mock(return_value=root)
+        root.arrange = arrange
+        self.assertIs(compat.Group.arrange_submobjects(root, "up", buff=0.4, center=False), root)
+        arrange.assert_called_once_with("up", buff=0.4, center=False)
+
+        signature = inspect.signature(compat.Mobject.arrange_submobjects)
+        self.assertEqual(tuple(signature.parameters), ("self", "args", "kwargs"))
+        self.assertEqual(signature.return_annotation, "Self")
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.arrange_submobjects(), plain)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

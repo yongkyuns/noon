@@ -561,6 +561,9 @@ class Mobject:
     def shuffle_submobjects(self, *args: Any, **kwargs: Any) -> Self:
         return self.shuffle(*args, **kwargs)
 
+    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self
+
     def has_points(self) -> bool:
         return self.get_num_points() > 0
 
