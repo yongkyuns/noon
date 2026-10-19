@@ -240,7 +240,7 @@ pub use family_callback_layout::{
 };
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
-pub use family_copy::FamilyCopy;
+pub use family_copy::{FamilyCopy, MobjectCopy, SemanticCopy};
 pub use family_grid::{FamilyGridOptions, GridFlow};
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
 pub use family_style::StyleUpdate;

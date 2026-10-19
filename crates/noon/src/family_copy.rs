@@ -1,4 +1,4 @@
-//! Atomic copies of the authoritative semantic family graph.
+//! Atomic copies of an addressed authoritative semantic membership graph.
 use crate::AuthoringError;
 use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{
@@ -13,35 +13,35 @@ use std::{
     rc::Rc,
 };
 
-/// A detached copied family and a derived mapping for host wrapper reconstruction.
+/// A detached copied root and a derived mapping for host wrapper reconstruction.
 /// The semantic store owns all copied nodes; dropping this lookup does not change them.
 #[derive(Clone, Debug)]
-pub struct FamilyCopy {
-    root: MobjectFamily,
+pub struct SemanticCopy<R> {
+    root: R,
+    store: Rc<RefCell<SemanticStore>>,
     copied: BTreeMap<SemanticNodeId, SemanticNodeId>,
 }
 
-impl FamilyCopy {
-    pub fn root(&self) -> &MobjectFamily {
+/// A copied family root with its shared identity lookup.
+pub type FamilyCopy = SemanticCopy<MobjectFamily>;
+/// A copied object root, including its own content and ordered descendants.
+pub type MobjectCopy = SemanticCopy<Mobject>;
+
+impl<R> SemanticCopy<R> {
+    pub fn root(&self) -> &R {
         &self.root
     }
 
     pub fn mobject(&self, source: &Mobject) -> Result<Mobject, AuthoringError> {
         self.require_store(source.integration_store())?;
         source.validate()?;
-        Mobject::from_node(
-            Rc::clone(self.root.integration_store()),
-            self.copied_id(source.node_id())?,
-        )
+        Mobject::from_node(Rc::clone(&self.store), self.copied_id(source.node_id())?)
     }
 
     pub fn family(&self, source: &MobjectFamily) -> Result<MobjectFamily, AuthoringError> {
         self.require_store(source.integration_store())?;
         source.validate()?;
-        MobjectFamily::from_node(
-            Rc::clone(self.root.integration_store()),
-            self.copied_id(source.node_id())?,
-        )
+        MobjectFamily::from_node(Rc::clone(&self.store), self.copied_id(source.node_id())?)
     }
 
     /// Rebind an Arrow aggregate to the semantic components created by this
@@ -95,7 +95,7 @@ impl FamilyCopy {
     }
 
     fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
-        if Rc::ptr_eq(self.root.integration_store(), store) {
+        if Rc::ptr_eq(&self.store, store) {
             Ok(())
         } else {
             Err(AuthoringError::ForeignStore)
@@ -110,17 +110,18 @@ impl FamilyCopy {
     }
 }
 
-pub(crate) struct PendingFamilyCopy {
+pub(crate) struct PendingSemanticCopy {
     store: Rc<RefCell<SemanticStore>>,
     source_root: SemanticNodeId,
     copied: BTreeMap<SemanticNodeId, SemanticLocalNodeToken>,
 }
 
-impl PendingFamilyCopy {
-    pub(crate) fn resolve(
+impl PendingSemanticCopy {
+    pub(crate) fn resolve<R>(
         self,
         result: &SemanticMutationTransactionResult,
-    ) -> Result<FamilyCopy, AuthoringError> {
+        from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+    ) -> Result<SemanticCopy<R>, AuthoringError> {
         let copied: BTreeMap<_, _> = self
             .copied
             .into_iter()
@@ -133,21 +134,30 @@ impl PendingFamilyCopy {
                 )
             })
             .collect();
-        let root = MobjectFamily::from_node(self.store, copied[&self.source_root])?;
-        Ok(FamilyCopy { root, copied })
+        let root = from_node(Rc::clone(&self.store), copied[&self.source_root])?;
+        Ok(SemanticCopy {
+            root,
+            store: self.store,
+            copied,
+        })
     }
 }
 
 /// Prepare every copied node and edge before the caller publishes anything.
-/// Shared aliases allocate once; traversal and temporary work stay family-local.
-pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
-    source: &MobjectFamily,
+/// Shared aliases allocate once; traversal and temporary work stay root-local.
+pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
+    source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
-) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), E> {
+    mut copy_effects: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        SemanticLocalNodeToken,
+        &mut SemanticMutationTransaction,
+    ) -> Result<(), E>,
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), E> {
     source.validate()?;
     let store = source.integration_store();
-    let graph_dependency_rows = graph_dependency_copy_rows(source)?;
     let mut transaction = SemanticMutationTransaction::new();
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
@@ -159,11 +169,13 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         queue.push(target.require_store(store)?);
     }
     queue.push(source.node_id());
+    let graph_dependency_rows = graph_dependency_copy_rows(&store.borrow(), &queue)?;
     while let Some(id) = queue.pop() {
         if copied.contains_key(&id) {
             continue;
         }
         let (
+            is_family,
             members,
             family_z,
             family_color,
@@ -181,7 +193,8 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             })?;
             match node.kind() {
                 SemanticNodeKind::Family(presentation) => (
-                    Some(node.members_iter().collect::<Vec<_>>()),
+                    true,
+                    node.members_iter().collect::<Vec<_>>(),
                     Some(presentation.presentation.z_index),
                     Some(presentation.own_color),
                     Some(presentation.own_style.clone()),
@@ -193,7 +206,8 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                     node.updating_suspended(),
                 ),
                 SemanticNodeKind::AuthoringObject => (
-                    None,
+                    false,
+                    node.members_iter().collect::<Vec<_>>(),
                     None,
                     None,
                     None,
@@ -215,7 +229,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if let Some(graph) = graph_declaration {
             graph_declarations.push((id, graph));
         }
-        if members.is_some() {
+        if is_family {
             if let Some(layout) = store
                 .borrow()
                 .semantic_table_layout(id)
@@ -224,9 +238,9 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                 table_layouts.push((id, layout));
             }
         }
-        let creation = if let Some(members) = members {
-            queue.extend(members.iter().rev().copied());
-            edges.push((id, members));
+        queue.extend(members.iter().rev().copied());
+        edges.push((id, members));
+        let creation = if is_family {
             SemanticNodeCreation::family()
         } else {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
@@ -241,10 +255,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }
-        store
-            .borrow()
-            .copy_effects_into(id, pending, &mut transaction)
-            .map_err(AuthoringError::from)?;
+        copy_effects(&store.borrow(), id, pending, &mut transaction)?;
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }
@@ -321,7 +332,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     }
     Ok((
         transaction,
-        PendingFamilyCopy {
+        PendingSemanticCopy {
             store: Rc::clone(store),
             source_root: source.node_id(),
             copied,
@@ -330,12 +341,12 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
 }
 
 fn graph_dependency_copy_rows<E: From<AuthoringError>>(
-    source: &MobjectFamily,
+    store: &SemanticStore,
+    roots: &[SemanticNodeId],
 ) -> Result<HashSet<SemanticNodeId>, E> {
-    let store = source.integration_store().borrow();
     let mut rows = HashSet::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![source.node_id()];
+    let mut stack = roots.to_vec();
     while let Some(node_id) = stack.pop() {
         if !seen.insert(node_id) {
             continue;
@@ -343,9 +354,6 @@ fn graph_dependency_copy_rows<E: From<AuthoringError>>(
         let node = store.node(node_id).ok_or_else(|| {
             AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(node_id))
         })?;
-        let SemanticNodeKind::Family(_) = node.kind() else {
-            continue;
-        };
         if let Some(graph) = node.graph_declaration() {
             for (_, binding) in graph.edges() {
                 rows.insert(binding.line());
@@ -376,11 +384,36 @@ impl MobjectFamily {
         &self,
         references: &[MobjectTarget<'_>],
     ) -> Result<FamilyCopy, AuthoringError> {
-        let (transaction, pending) =
-            prepare_family_copy(self, references, |mobject, _| mobject.state())?;
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(AuthoringError::from)?;
-        pending.resolve(&result)
+        authored_copy(self.into(), references, MobjectFamily::from_node)
     }
+}
+
+impl Mobject {
+    /// Copy this object's own content and ordered descendants in one transaction.
+    /// Additional metadata references share the same once-only identity mapping.
+    pub fn copy_with_references(
+        &self,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<MobjectCopy, AuthoringError> {
+        authored_copy(self.into(), references, Mobject::from_node)
+    }
+}
+
+fn authored_copy<R>(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+) -> Result<SemanticCopy<R>, AuthoringError> {
+    let (transaction, pending) = prepare_semantic_copy(
+        source,
+        references,
+        |mobject, _| mobject.state(),
+        |store, source, target, transaction| {
+            store
+                .copy_effects_into(source, target, transaction)
+                .map_err(AuthoringError::from)
+        },
+    )?;
+    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
+    pending.resolve(&result, from_node)
 }

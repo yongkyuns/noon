@@ -47,7 +47,9 @@ const examples = [
   { name: "Polynomial rate functions", factory: "createDirectPolynomialRatesRenderer", objectCount: 5, duration: 1 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
-  { name: "Object membership", factory: "createDirectObjectMembershipSmokeRenderer", objectCount: 3, duration: 0.2 },
+  // Three painter entries after replacing the two source rows with a live copy;
+  // the execution frame retains the two retired slots.
+  { name: "Object membership", factory: "createDirectObjectMembershipSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },

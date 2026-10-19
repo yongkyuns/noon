@@ -686,27 +686,7 @@ impl Mobject {
     }
 
     pub fn copy_handle(&self) -> Result<Self, AuthoringError> {
-        let updating_suspended = self
-            .store
-            .borrow()
-            .node(self.id)
-            .map(noon_core::SemanticNode::updating_suspended)
-            .ok_or_else(|| {
-                AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(self.id))
-            })?;
-        let mut transaction = SemanticMutationTransaction::new();
-        let copied = transaction.create_node(SemanticNodeCreation::object(self.state()?));
-        if updating_suspended {
-            transaction.set_updating_suspended(copied, true);
-        }
-        self.store
-            .borrow()
-            .copy_effects_into(self.id, copied, &mut transaction)?;
-        let result = transaction.apply(&mut self.store.borrow_mut())?;
-        let id = result
-            .resolve(copied)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(copied))?;
-        Self::from_node(Rc::clone(&self.store), id)
+        Ok(self.copy_with_references(&[])?.root().clone())
     }
     pub fn target_editor(&self) -> Result<Self, AuthoringError> {
         self.copy_handle()

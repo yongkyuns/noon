@@ -879,25 +879,7 @@ impl<'a> LiveSession<'a> {
     /// no execution object or frame work. This keeps later atomic animation declaration valid
     /// without resetting or relowering the active runtime.
     pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
-        self.require_mobject(source)?;
-        self.require_target_capture()?;
-
-        let state = self.capture_mobject_state(source)?;
-
-        let mut transaction = SemanticMutationTransaction::new();
-        let target = transaction.create_node(noon_core::SemanticNodeCreation::object(state));
-        crate::effective_capture::stage_effect_copy(
-            &self.store.borrow(),
-            self.session,
-            source.node_id(),
-            target,
-            &mut transaction,
-        )?;
-        let result = self.apply(transaction)?;
-        let node = result
-            .resolve(target)
-            .ok_or(crate::AuthoringError::UnresolvedCreatedNode(target))?;
-        Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
+        Ok(self.copy_mobject(source)?.root().clone())
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
@@ -930,10 +912,44 @@ impl<'a> LiveSession<'a> {
         source: &MobjectFamily,
         references: &[crate::MobjectTarget<'_>],
     ) -> Result<crate::FamilyCopy, LiveSessionError> {
-        self.require_family(source)?;
+        self.copy_target_with_references(source.into(), references, MobjectFamily::from_node)
+    }
+
+    /// Copy an object and its descendants from one coherent publication.
+    pub fn copy_mobject(
+        &mut self,
+        source: &Mobject,
+    ) -> Result<crate::MobjectCopy, LiveSessionError> {
+        self.copy_mobject_with_references(source, &[])
+    }
+
+    /// Include detached metadata references in the same atomic object copy.
+    pub fn copy_mobject_with_references(
+        &mut self,
+        source: &Mobject,
+        references: &[crate::MobjectTarget<'_>],
+    ) -> Result<crate::MobjectCopy, LiveSessionError> {
+        self.copy_target_with_references(source.into(), references, Mobject::from_node)
+    }
+
+    fn copy_target_with_references<R>(
+        &mut self,
+        source: crate::MobjectTarget<'_>,
+        references: &[crate::MobjectTarget<'_>],
+        from_node: fn(
+            Rc<RefCell<SemanticStore>>,
+            noon_core::SemanticNodeId,
+        ) -> Result<R, crate::AuthoringError>,
+    ) -> Result<crate::SemanticCopy<R>, LiveSessionError> {
+        match source {
+            crate::MobjectTarget::Object(mobject) => self.require_mobject(mobject)?,
+            crate::MobjectTarget::Family(family) => self.require_family(family)?,
+        }
         self.require_target_capture()?;
-        let (transaction, pending) =
-            crate::family_copy::prepare_family_copy(source, references, |mobject, graph_row| {
+        let (transaction, pending) = crate::family_copy::prepare_semantic_copy(
+            source,
+            references,
+            |mobject, graph_row| {
                 crate::effective_capture::capture_mobject_state_with_graph_dependency(
                     self.store,
                     self.session,
@@ -941,9 +957,22 @@ impl<'a> LiveSession<'a> {
                     graph_row,
                 )
                 .map_err(LiveSessionError::from)
-            })?;
+            },
+            |store, source, target, transaction| {
+                crate::effective_capture::stage_effect_copy(
+                    store,
+                    self.session,
+                    source,
+                    target,
+                    transaction,
+                )
+                .map_err(LiveSessionError::from)
+            },
+        )?;
         let result = self.apply(transaction)?;
-        pending.resolve(&result).map_err(LiveSessionError::from)
+        pending
+            .resolve(&result, from_node)
+            .map_err(LiveSessionError::from)
     }
 
     /// Capture one flat family at the current publication and cyclically move

@@ -1,5 +1,6 @@
 //! Low-level semantic membership foundation on native and direct Rust/WASM.
-//! High-level Mobject copy/affine/target semantics and Python exposure follow separately.
+//! Authored and coherent live copies retain own content and ordered descendants.
+//! Broader affine/state semantics and Python membership exposure follow separately.
 use crate::{ExecutionSession, Scene};
 use noon_core::SemanticMutationTransaction;
 
@@ -25,6 +26,9 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
     let mut membership = SemanticMutationTransaction::new();
     membership.add_member(parent.node_id(), child.node_id());
     membership.apply(&mut store.borrow_mut())?;
+    let authored = parent.copy_with_references(&[])?;
+    let child = authored.mobject(&child)?;
+    let parent = authored.root().clone();
     scene.add(&tail)?;
     let mut session = scene.execution_session()?;
     let mut admit = SemanticMutationTransaction::new();
@@ -33,6 +37,17 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
     let mut reorder = SemanticMutationTransaction::new();
     reorder.reorder_member(scene.root(), parent.node_id(), Some(tail.node_id()));
     session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), reorder)?;
+    let copied = scene.live(&mut session).copy_mobject(&parent)?;
+    let copied_child = copied.mobject(&child)?;
+    let copied_parent = copied.root().clone();
+    assert_eq!(session.frame().objects.len(), 3);
+    let mut replace = SemanticMutationTransaction::new();
+    replace.remove_member(scene.root(), parent.node_id());
+    replace.add_member(scene.root(), copied_parent.node_id());
+    replace.reorder_member(scene.root(), copied_parent.node_id(), Some(tail.node_id()));
+    session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), replace)?;
+    let parent = copied_parent;
+    let child = copied_child;
     assert_eq!(
         session
             .painter_order()

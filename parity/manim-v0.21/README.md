@@ -376,10 +376,14 @@ transaction path. Family-specific metadata and declarations remain typed to
 family nodes.
 
 `object_membership.rs` exercises this engine foundation through the ordinary
-native and direct Rust/WASM execution session. This does not qualify Python
-`Mobject.add`, `insert`, `add_to_back`, `remove`,
+native and direct Rust/WASM execution session, including authored and coherent
+live copies of an object's own content and ordered descendants. Object and family
+copies use one Rust planner and one atomic transaction, preserve aliases and
+metadata, and discover graph dependencies across all explicitly addressed roots
+and detached references. Copy-result maps provide derived wrapper identity only.
+This does not qualify Python `Mobject.add`, `insert`, `add_to_back`, `remove`,
 `push_self_into_submobjects` or `add_n_more_submobjects`. Shared high-level
-copy, affine, path, style and target-state behavior over point-owning roots must
-be completed before exposing those methods, followed by pinned-source,
+affine, path, style, target-animation and saved-state behavior over point-owning
+roots must be completed before exposing those methods, followed by pinned-source,
 effective-state, replay and cross-language raster qualification. Owner #2011
 and case #2009 remain open; no API-ledger status is promoted by this foundation.
