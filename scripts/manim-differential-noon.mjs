@@ -1061,6 +1061,22 @@ json.dumps({
     "mobject_surround: matched height includes the buffer");
   assertPointNear(surround.center, [0.5, 0], "mobject_surround: centers on the target");
   for (const name of [
+    "mobject_add_background_rectangle",
+    "mobject_add_background_rectangle_live",
+  ]) {
+    const profile = observations[name];
+    assert.equal(profile.returns_self, true, `${name}: returns the family object`);
+    assert.equal(profile.background_is_first, true,
+      `${name}: prepends the generated background rectangle`);
+    assert.equal(profile.member_count, 3, `${name}: retains existing family members`);
+    assert.ok(Math.abs(profile.background.width - 2.9) <= 1e-5,
+      `${name}: background width includes horizontal buffer`);
+    assert.ok(Math.abs(profile.background.height - 1.1) <= 1e-5,
+      `${name}: background height includes vertical buffer`);
+    assert.ok(Math.abs(profile.fill_opacity - 0.4) <= 1e-5,
+      `${name}: applies the requested fill opacity`);
+  }
+  for (const name of [
     "plain_group_fade_family_false",
     "plain_group_fade_family_false_live",
   ]) {

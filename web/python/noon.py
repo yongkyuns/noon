@@ -1164,6 +1164,33 @@ class Mobject:
         self.scale((length + buff) / length)
         return self
 
+    def add_background_rectangle(
+        self,
+        color: object | None = None,
+        opacity: float = 0.75,
+        **kwargs: Any,
+    ) -> Mobject:
+        """Prepend a shared BackgroundRectangle to a family-backed object.
+
+        The public base API assumes every Mobject owns a mutable submobject
+        list. Noon currently represents that capability with shared Group and
+        VGroup family handles, so bare geometry objects are rejected before
+        constructing or publishing a rectangle.
+        """
+        add_to_back = getattr(self, "add_to_back", None)
+        if not callable(add_to_back):
+            raise NotImplementedError(
+                "add_background_rectangle requires a shared family object"
+            )
+        from _manim_shared_geometry import BackgroundRectangle
+
+        background_rectangle = BackgroundRectangle(
+            self, color=color, fill_opacity=opacity, **kwargs
+        )
+        self.background_rectangle = background_rectangle
+        add_to_back(background_rectangle)
+        return self
+
     def __deepcopy__(self, memo):
         from _manim_compat import deepcopy_semantic_wrapper
         return deepcopy_semantic_wrapper(self, memo)

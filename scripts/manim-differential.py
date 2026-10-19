@@ -1497,6 +1497,40 @@ def _manim_mobject_surround() -> Any:
     return _mobject_surround(manim)
 
 
+def _mobject_add_background_rectangle(provider: Any, scene: Any | None = None) -> Any:
+    family = provider.Group(
+        provider.Circle(radius=0.25).shift(provider.LEFT),
+        provider.Square(side_length=0.5).shift(provider.RIGHT),
+    )
+    if scene is not None:
+        scene.add(family)
+    returned = family.add_background_rectangle(
+        color=provider.WHITE, opacity=0.4, buff=(0.2, 0.3)
+    )
+    background = family.background_rectangle
+    return {
+        "returns_self": returned is family,
+        "background_is_first": family.submobjects[0] is background,
+        "member_count": len(family.submobjects),
+        "background": _object_observation(background),
+        "fill_opacity": float(background.get_fill_opacity()),
+    }
+
+
+def _noon_mobject_add_background_rectangle() -> Any:
+    return _mobject_add_background_rectangle(noon)
+
+
+def _manim_mobject_add_background_rectangle() -> Any:
+    return _mobject_add_background_rectangle(manim)
+
+
+def _noon_mobject_add_background_rectangle_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _mobject_add_background_rectangle(noon, scene)
+    )
+
+
 def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
     members = [
         provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
@@ -4556,6 +4590,14 @@ FIXTURES = [
     Fixture("mobject_surround",
             _noon_mobject_surround,
             _manim_mobject_surround,
+            1e-5),
+    Fixture("mobject_add_background_rectangle",
+            _noon_mobject_add_background_rectangle,
+            _manim_mobject_add_background_rectangle,
+            1e-5),
+    Fixture("mobject_add_background_rectangle_live",
+            _noon_mobject_add_background_rectangle_live,
+            _manim_mobject_add_background_rectangle,
             1e-5),
     Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
     Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
