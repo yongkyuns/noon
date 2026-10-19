@@ -337,3 +337,28 @@ paired render has 20,124 visible pixels and zero differences on both backends.
 Pinned two-sided semantic/raster qualification remains pending. These are bounded profiles. Circle remains partial; Dot/Ellipse retain their
 previously qualified constructor/canonical-geometry status, while the new
 inherited method and its limits are recorded separately.
+
+
+### Generic planar dimension fitting
+
+`Mobject.rescale_to_fit()` and `match_dim_size()` accept ordinary integer
+width/height/depth dimensions through shared Rust layout operations. Planar depth
+is zero. A zero source extent keeps semantic revisions and effective state
+unchanged, including during an active affine driver, and leaves unused length
+and pivot arguments uncoerced. The facade uses Rust extent observations for
+Python argument adaptation; it computes no layout ratios. Circle fitting reuses
+the typed depth dimension instead of a separate missing-dimension sentinel.
+
+The detached/live `generic_dimension_fitting` probes cover twelve bounds,
+receiver-return and selected index-error cases each, with nonzero width/height
+controls. Native tests cover aliases, empty/zero extents, non-finite unused
+lengths and publication identity. `dimension_fitting.rs` and
+`ordinary_dimension_fitting.py` execute matching native/direct-WASM/Python calls
+through the ordinary scene/runtime path. Full local and paired-render evidence
+is recorded in the owning PR, #2225. The pinned reference source is
+[Mobject dimension fitting](https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1757-L1768).
+Two further detached/live resource probes fit inline RGBA8 images and aliased
+image groups using the same Rust layout extents, without requiring vector-path
+point access. Hosted pinned qualification remains pending. Spatial geometry, staged callbacks,
+Boolean/custom index behavior and other untested input profiles remain unqualified;
+Mobject and the overall core-method case remain partial.
