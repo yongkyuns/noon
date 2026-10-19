@@ -8,6 +8,7 @@ import { PNG } from "pngjs";
 import playwright from "playwright";
 import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
@@ -41,6 +42,8 @@ await mkdir(artifacts, { recursive: true });
 let server;
 let browser;
 let runtimeCache;
+const failureTrace = createBrowserFailureTrace();
+let detachFailureTrace;
 const captures = {};
 const report = {
   browser: browserName, profile: profileName, input: profile.hasTouch ? "touch" : "mouse",
@@ -141,6 +144,8 @@ try {
   await runtimeCache.install(context);
   await disableAuthoringJspi(context);
   const page = await context.newPage();
+  detachFailureTrace = failureTrace.attach(browser, context, page);
+  failureTrace.setPhase("gallery-selection");
   page.setDefaultTimeout(30000);
   const errors = [];
   report.browserErrors = errors;
@@ -539,6 +544,8 @@ try {
   if (error.capture) captures.failure = error.capture;
   throw error;
 } finally {
+  report.failureTrace = failureTrace.snapshot();
+  report.resourceCache = runtimeCache?.stats() ?? null;
   // Persist the original captures after the verdict, including failed/partial
   // runs. Do not insert artifact I/O, extra captures or waits into the sample path.
   try {
@@ -558,6 +565,7 @@ try {
       console.error("Could not retain gallery selection diagnostics:", rejected.reason);
     }
   } finally {
+    detachFailureTrace?.();
     try {
       await browser?.close();
     } finally {

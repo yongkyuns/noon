@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { VIEW, SHAPES, selectionFixtureSource, shapeSurfaceCenter,
   assertExactPixels, assertSelectionPixels } from "./pointer-selection-raster-contract.mjs";
 
@@ -20,6 +22,7 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const report = { scope: "worker-rust-raster", status: "running", pythonSourceSha256: hash(source), cases: [] };
 await mkdir(output, { recursive: true });
 let server, browser;
+let runtimeCache;
 try {
   // A missing or stale package is an explicit failure, not a skipped test.
   for (const name of ["noon_web.js", "noon_web_bg.wasm", "noon_web.d.ts"]) {
@@ -34,6 +37,7 @@ try {
   }
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
   report.collectorSha256 = hash(await readFile(path.join(root, "web/browser-pointer-input.js")));
+  runtimeCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
   const { PNG } = await import("pngjs");
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
   for (const backend of ["webgpu", "webgl"]) {
@@ -46,7 +50,11 @@ try {
       const result = { backend, transportMode, status: "running", steps: [] };
       report.cases.push(result);
       const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
+      await runtimeCache.install(context);
       const page = await context.newPage();
+      const failureTrace = createBrowserFailureTrace();
+      const detachFailureTrace = failureTrace.attach(browser, context, page);
+      failureTrace.setPhase("bootstrap");
       page.setDefaultTimeout(90_000);
       const pageErrors = [];
       page.on("pageerror", error => pageErrors.push(String(error)));
@@ -145,6 +153,7 @@ try {
           await execution.advanceTo(0);
         }, { source, transportMode, view: VIEW });
         await settled();
+        failureTrace.setPhase("selection");
         assert.equal((await metrics()).backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal((await metrics()).transportMode, transportMode);
         const baseline = await image("baseline"), authored = await debug();
@@ -289,6 +298,8 @@ try {
         result.status = "failed"; result.error = String(error.stack ?? error);
         throw error;
       } finally {
+        result.failureTrace = failureTrace.snapshot();
+        detachFailureTrace();
         await page.evaluate(() => {
           window.pointerSelection?.execution.terminate(); window.pointerSelection?.authoring.terminate();
         }).catch(() => {});
@@ -302,6 +313,7 @@ try {
   report.status = "failed"; report.error = String(error.stack ?? error);
   console.error(report.error); process.exitCode = 1;
 } finally {
+  report.resourceCache = runtimeCache?.stats() ?? null;
   await browser?.close(); await server?.close();
   await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
 }
