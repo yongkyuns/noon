@@ -1418,6 +1418,38 @@ def _manim_mobject_base_layout_methods() -> Any:
     return _mobject_base_layout_methods(manim)
 
 
+def _mobject_depth_methods(provider: Any) -> Any:
+    mobject = provider.Square(side_length=2.0)
+
+    def geometry_profile():
+        center = mobject.get_center()
+        return {
+            "width": float(mobject.width),
+            "height": float(mobject.height),
+            "center": [float(center[0]), float(center[1])],
+        }
+
+    before = geometry_profile()
+    scaled = mobject.scale_to_fit_depth(3.0, about_point=object())
+    stretched = mobject.stretch_to_fit_depth(4.0, about_edge=object())
+    mobject.depth = 5.0
+    return {
+        "depth": float(mobject.depth),
+        "scale_returns_self": scaled is mobject,
+        "stretch_returns_self": stretched is mobject,
+        "before": before,
+        "after": geometry_profile(),
+    }
+
+
+def _noon_mobject_depth_methods() -> Any:
+    return _mobject_depth_methods(noon)
+
+
+def _manim_mobject_depth_methods() -> Any:
+    return _mobject_depth_methods(manim)
+
+
 def _mobject_surround(provider: Any) -> Any:
     target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
     surrounder = provider.Circle(radius=0.25)
@@ -4489,6 +4521,9 @@ FIXTURES = [
     Fixture("mobject_base_layout_methods",
             _noon_mobject_base_layout_methods,
             _manim_mobject_base_layout_methods),
+    Fixture("mobject_depth_methods",
+            _noon_mobject_depth_methods,
+            _manim_mobject_depth_methods),
     Fixture("mobject_surround",
             _noon_mobject_surround,
             _manim_mobject_surround,

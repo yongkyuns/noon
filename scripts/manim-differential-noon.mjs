@@ -1034,6 +1034,15 @@ json.dumps({
     "mobject_base_layout_methods: other expands when it has fewer points");
   assert.deepEqual(baseLayoutMethods.align_points_equal, [true, []],
     "mobject_base_layout_methods: equal point counts need no expansion");
+  const depthMethods = observations.mobject_depth_methods;
+  assert.equal(depthMethods.depth, 0,
+    "mobject_depth_methods: planar geometry has zero depth");
+  assert.equal(depthMethods.scale_returns_self, true,
+    "mobject_depth_methods: scale-to-fit-depth returns the receiver");
+  assert.equal(depthMethods.stretch_returns_self, true,
+    "mobject_depth_methods: stretch-to-fit-depth returns the receiver");
+  assert.deepEqual(depthMethods.after, depthMethods.before,
+    "mobject_depth_methods: zero-depth fitting leaves planar geometry unchanged");
   const surround = observations.mobject_surround;
   assert.equal(surround.returns_self, true,
     "mobject_surround: surround returns the receiver");
