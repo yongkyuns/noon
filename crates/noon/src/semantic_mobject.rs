@@ -878,6 +878,51 @@ impl Mobject {
         self.commit_state(result)
     }
 
+    /// Interpolate one Manim VMobject's world-space point array and supported
+    /// style fields, publishing the geometry and style through one transaction.
+    pub fn interpolate_manim(
+        &mut self,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_same_store(start)?;
+        self.require_same_store(end)?;
+
+        let receiver_state = self.state()?;
+        let start_state = start.state()?;
+        let end_state = end.state()?;
+        let (start_points, end_points) = {
+            let store = self.store.borrow();
+            let points = |state: &SemanticObjectState| {
+                let path = crate::path_editing::world_path(&store, state)?;
+                crate::path_editing::manim_points_for_path(&path).map(|points| {
+                    points
+                        .into_iter()
+                        .map(|point| (f64::from(point.x), f64::from(point.y)))
+                        .collect::<Vec<_>>()
+                })
+            };
+            (points(&start_state)?, points(&end_state)?)
+        };
+        let prepared = prepare_manim_interpolation(
+            &self.store.borrow(),
+            self.id,
+            receiver_state,
+            &start_state,
+            &end_state,
+            &start_points,
+            &end_points,
+            alpha,
+        )?;
+        prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+
     pub(crate) fn manim_line_endpoints_at(
         &self,
         transform: Transform2D,
@@ -1489,6 +1534,52 @@ pub(crate) fn interpolate_manim_vmobject_style(
         return Err(AuthoringError::NonFiniteObjectState);
     }
     Ok((style, direction))
+}
+
+pub(crate) fn prepare_manim_interpolation(
+    store: &SemanticStore,
+    receiver: SemanticNodeId,
+    mut receiver_state: SemanticObjectState,
+    start_state: &SemanticObjectState,
+    end_state: &SemanticObjectState,
+    start_points: &[(f64, f64)],
+    end_points: &[(f64, f64)],
+    alpha: f64,
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    let path = interpolate_manim_point_arrays(start_points, end_points, alpha)?;
+    let (style, sheen_direction) =
+        interpolate_manim_vmobject_style(&receiver_state.style, start_state, end_state, alpha)?;
+    receiver_state.style = style;
+    receiver_state.sheen_direction = sheen_direction;
+    crate::path_editing::PreparedPathEdits::prepare(store, [(receiver, receiver_state, path)])
+}
+
+pub(crate) fn interpolate_manim_point_arrays(
+    start: &[(f64, f64)],
+    end: &[(f64, f64)],
+    alpha: f64,
+) -> Result<VectorPath, AuthoringError> {
+    if !alpha.is_finite() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    if start.len() != end.len() {
+        return Err(AuthoringError::ManimPointArrayLengthMismatch {
+            start: start.len(),
+            end: end.len(),
+        });
+    }
+    let points = start
+        .iter()
+        .zip(end)
+        .map(|(&(start_x, start_y), &(end_x, end_y))| {
+            let x = interpolate_manim_scalar(start_x, end_x, alpha)? as f32;
+            let y = interpolate_manim_scalar(start_y, end_y, alpha)? as f32;
+            (x.is_finite() && y.is_finite())
+                .then_some(Vec2::new(x, y))
+                .ok_or(AuthoringError::NonFiniteGeometry)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VectorPath::from_manim_points(points))
 }
 
 fn interpolate_manim_paint(

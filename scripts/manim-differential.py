@@ -3928,6 +3928,28 @@ def _interpolate_color_probe(api, scene=None):
     }
 
 
+def _mobject_interpolate_probe(api, scene=None):
+    receiver = api.Line(start=(-2, 0, 0), end=(-1, 0, 0), color=api.GREEN)
+    start = api.Line(start=(0, 0, 0), end=(3, 0, 0), color=api.RED)
+    end = api.Line(start=(4, 2, 0), end=(7, 2, 0), color=api.BLUE)
+    receiver.shift((10, 0, 0))
+    start.shift((1, 0, 0))
+    end.shift((3, -2, 0))
+    if scene is not None:
+        scene.add(receiver, start, end)
+    returned = receiver.interpolate(start, end, 0.25)
+    points = receiver.get_all_points()
+    if hasattr(points, "tolist"):
+        points = points.tolist()
+    return {
+        "returned_self": returned is receiver,
+        "points": [[float(component) for component in point[:2]] for point in points],
+        "stroke": [[float(component) for component in row]
+                   for row in receiver.get_stroke_rgbas()],
+        "stroke_width": float(receiver.get_stroke_width()),
+    }
+
+
 def _boolean_geometry(api):
     a = api.Square(side_length=2)
     b = api.Square(side_length=2).shift(api.RIGHT)
@@ -4798,6 +4820,13 @@ FIXTURES = [
                 lambda scene: _interpolate_color_probe(noon, scene)
             ),
             lambda: _interpolate_color_probe(manim), 1e-5),
+    Fixture("mobject_interpolate", lambda: _mobject_interpolate_probe(noon),
+            lambda: _mobject_interpolate_probe(manim), 1e-5),
+    Fixture("mobject_interpolate_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _mobject_interpolate_probe(noon, scene)
+            ),
+            lambda: _mobject_interpolate_probe(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),

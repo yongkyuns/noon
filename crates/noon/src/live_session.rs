@@ -2862,6 +2862,47 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Interpolate one VMobject's effective world-space points and supported
+    /// paint through one coherent live path/style publication.
+    pub fn interpolate_manim(
+        &mut self,
+        receiver: &Mobject,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(receiver)?;
+        self.require_mobject(start)?;
+        self.require_mobject(end)?;
+        crate::path_editing::require_running_path_resource_admission(
+            self.store,
+            self.root,
+            self.session,
+        )?;
+
+        let receiver_state = self.capture_mobject_state(receiver)?;
+        let start_state = self.capture_mobject_state(start)?;
+        let end_state = self.capture_mobject_state(end)?;
+        let start_points =
+            crate::path_queries::effective_path_query(self.store, self.session, start)?.points()?;
+        let end_points =
+            crate::path_queries::effective_path_query(self.store, self.session, end)?.points()?;
+        let prepared = {
+            let store = self.store.borrow();
+            crate::semantic_mobject::prepare_manim_interpolation(
+                &store,
+                receiver.node_id(),
+                receiver_state,
+                &start_state,
+                &end_state,
+                &start_points,
+                &end_points,
+                alpha,
+            )?
+        };
+        self.publish_path_edits(prepared)
+    }
+
     /// Set fill color and fill opacity through one authoritative style publication.
     pub fn set_fill(
         &mut self,

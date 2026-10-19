@@ -156,6 +156,120 @@ fn manim_interpolate_color_rejects_mismatched_paint_without_publication() {
 }
 
 #[test]
+fn manim_interpolate_publishes_world_points_and_style_atomically() {
+    let mut scene = Scene::new();
+    let mut receiver = scene
+        .path(
+            VectorPath::from_manim_points(vec![
+                Vec2::new(20.0, 0.0),
+                Vec2::new(21.0, 0.0),
+                Vec2::new(22.0, 0.0),
+                Vec2::new(23.0, 0.0),
+            ]),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    let mut start = scene
+        .path(
+            VectorPath::from_manim_points(vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::new(3.0, 0.0),
+            ]),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    let mut end = scene
+        .path(
+            VectorPath::from_manim_points(vec![
+                Vec2::new(4.0, 2.0),
+                Vec2::new(5.0, 2.0),
+                Vec2::new(6.0, 2.0),
+                Vec2::new(7.0, 2.0),
+            ]),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    receiver.shift(10.0, 0.0).unwrap();
+    start.shift(1.0, 0.0).unwrap();
+    end.shift(3.0, -2.0).unwrap();
+
+    let mut start_state = start.state().unwrap();
+    start_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
+    start_state.style.fill_opacity = 0.2;
+    start.commit_state(start_state).unwrap();
+    let mut end_state = end.state().unwrap();
+    end_state.style.fill = Some(SemanticPaint::Solid(Color::BLUE));
+    end_state.style.fill_opacity = 0.8;
+    end.commit_state(end_state).unwrap();
+
+    let before_revision = scene.integration_store().borrow().scene_revision();
+    receiver.interpolate_manim(&start, &end, 0.25).unwrap();
+
+    assert_eq!(
+        receiver.local_path_query().unwrap().points().unwrap(),
+        vec![(2.5, 0.0), (3.5, 0.0), (4.5, 0.0), (5.5, 0.0),]
+    );
+    let state = receiver.state().unwrap();
+    assert_eq!(state.transform.translation.x, 0.0);
+    assert_eq!(state.transform.translation.y, 0.0);
+    let Some(SemanticPaint::Solid(color)) = state.style.fill else {
+        panic!("interpolated fill should remain solid paint");
+    };
+    for (actual, start, end) in [
+        (color.red, Color::RED.red, Color::BLUE.red),
+        (color.green, Color::RED.green, Color::BLUE.green),
+        (color.blue, Color::RED.blue, Color::BLUE.blue),
+    ] {
+        assert!(
+            (f64::from(actual) - (f64::from(start) * 0.75 + f64::from(end) * 0.25)).abs() < 1.0e-6
+        );
+    }
+    assert_eq!(color.alpha, 1.0);
+    assert!((state.style.fill_opacity - 0.35).abs() < 1.0e-12);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
+}
+
+#[test]
+fn manim_interpolate_rejects_point_count_mismatch_without_mutation() {
+    let mut scene = Scene::new();
+    let mut receiver = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    let start = scene
+        .path(
+            VectorPath::from_manim_points(vec![Vec2::ZERO; 4]),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    let end = scene
+        .path(
+            VectorPath::from_manim_points(vec![Vec2::ZERO; 8]),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    let before_state = receiver.state().unwrap();
+    let before_revision = scene.integration_store().borrow().scene_revision();
+
+    assert!(matches!(
+        receiver.interpolate_manim(&start, &end, 0.5),
+        Err(AuthoringError::ManimPointArrayLengthMismatch { start: 4, end: 8 })
+    ));
+    assert_eq!(receiver.state().unwrap(), before_state);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        before_revision
+    );
+}
+
+#[test]
 fn empty_path_layout_authored_and_live_queries_agree_after_seek() {
     let mut scene = Scene::new();
     let mut object = scene

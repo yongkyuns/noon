@@ -1471,7 +1471,7 @@ impl PathEdit<'_> {
     }
 }
 
-fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError> {
+pub(crate) fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError> {
     if let Some(points) = path.manim_points() {
         return Ok(points.to_vec());
     }

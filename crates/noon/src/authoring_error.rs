@@ -180,6 +180,11 @@ pub enum AuthoringError {
     NonFiniteGeometry,
     /// Flattened point input has an incomplete coordinate row.
     InvalidPointCoordinates(usize),
+    /// Manim's elementwise point interpolation received arrays of unequal length.
+    ManimPointArrayLengthMismatch {
+        start: usize,
+        end: usize,
+    },
     /// A repeated path point array exceeds addressable allocation capacity.
     PointArrayCapacityExceeded(usize),
     /// A polygon or star constructor has invalid topology options.
@@ -344,6 +349,10 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidPointCoordinates(count) => write!(
                 f,
                 "point coordinates do not form complete rows, received {count} values"
+            ),
+            Self::ManimPointArrayLengthMismatch { start, end } => write!(
+                f,
+                "operands could not be broadcast together with shapes ({start}, 3) ({end}, 3)"
             ),
             Self::PointArrayCapacityExceeded(count) => {
                 write!(f, "repeated path point array exceeds capacity ({count} points)")

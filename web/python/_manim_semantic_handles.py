@@ -1463,6 +1463,56 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
     return self
 
 
+def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
+    """Publish VMobject's default straight-path point and style interpolation in Rust."""
+    if not isinstance(self, _compat.VMobject) or isinstance(self, _compat.Group):
+        raise NotImplementedError("Please override in a child class.")
+    objects = (self, mobject1, mobject2)
+    if any(
+        not isinstance(value, _compat.VMobject) or isinstance(value, _compat.Group)
+        for value in objects
+    ):
+        raise NotImplementedError(
+            "Mobject.interpolate currently requires three individual VMobjects"
+        )
+    if type(self).interpolate_color is not _compat.VMobject.interpolate_color:
+        raise NotImplementedError(
+            "Mobject.interpolate subclass interpolate_color overrides require host dispatch"
+        )
+    from _manim_user_vectors import straight_path
+    if path_func is not straight_path():
+        raise NotImplementedError(
+            "Mobject.interpolate custom path_func callbacks require shared Rust path support"
+        )
+    from _manim_updaters import _canonical_phase_context
+    if any(_canonical_phase_context(value) is not None for value in objects):
+        raise NotImplementedError(
+            "Mobject.interpolate in host callbacks requires staged geometry publication"
+        )
+
+    amount = _ir._finite_number("alpha", alpha)
+    target = _handle_for(self)
+    start = _handle_for(mobject1)
+    end = _handle_for(mobject2)
+    if target is None or start is None or end is None:
+        raise RuntimeError(
+            "Mobject.interpolate requires current shared Rust semantic handles"
+        )
+
+    context = _live_mutation_context(self)
+    if context is None:
+        engine_call(target.interpolateManim, start, end, amount)
+    else:
+        engine_call(
+            context.liveInterpolateMobject,
+            target,
+            start,
+            end,
+            amount,
+        )
+    return self
+
+
 def _set_style(
     self,
     fill_color=None,

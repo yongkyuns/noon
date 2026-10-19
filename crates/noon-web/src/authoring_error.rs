@@ -217,6 +217,11 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::NonFiniteGeometry => {
                 Self::new("invalid_input", "authoring.non_finite_geometry", message)
             }
+            AuthoringError::ManimPointArrayLengthMismatch { .. } => Self::new(
+                "invalid_input",
+                "authoring.manim_point_array_length",
+                message,
+            ),
             AuthoringError::NonFiniteObjectState => Self::new(
                 "invalid_input",
                 "authoring.non_finite_object_state",

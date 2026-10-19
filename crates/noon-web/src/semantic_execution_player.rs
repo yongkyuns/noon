@@ -1473,6 +1473,17 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_interpolate_manim(
+        &mut self,
+        receiver: &noon::Mobject,
+        start: &noon::Mobject,
+        end: &noon::Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.interpolate_manim(receiver, start, end, alpha))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_style(
         &mut self,
         source: &noon::Mobject,

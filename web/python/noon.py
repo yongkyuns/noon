@@ -36,6 +36,11 @@ VectorPath = _ir.VectorPath
 Color = _ir.Color
 
 
+def _default_mobject_path_func():
+    from _manim_user_vectors import straight_path
+    return straight_path()
+
+
 class Vec2(tuple):
     """Tuple-compatible 2D vector used by every public frontend concept."""
 
@@ -304,6 +309,17 @@ class Mobject:
     ) -> Mobject:
         """Raise the pinned base-class override error for unsupported objects."""
         raise NotImplementedError("Please override in a child class.")
+
+    def interpolate(
+        self,
+        mobject1: Mobject,
+        mobject2: Mobject,
+        alpha: float,
+        path_func: Callable[..., Any] = _default_mobject_path_func(),
+    ) -> Self:
+        """Interpolate supported VMobject geometry and style through shared Rust."""
+        from _manim_semantic_handles import _interpolate_manim
+        return _interpolate_manim(self, mobject1, mobject2, alpha, path_func)
 
     def point_from_proportion(self, alpha: float) -> Any:
         raise NotImplementedError("Please override in a child class.")
