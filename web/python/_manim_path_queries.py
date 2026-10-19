@@ -137,18 +137,16 @@ def _curve_functions(value, with_lengths, sample_points=None):
     samples = _curve_sample_count(sample_points) if with_lengths else None
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
-    try:
-        count = int(query.curveCount)
-        for index in range(count):
-            function = _curve_callable(snapshot, index)
-            if with_lengths:
-                length = np.float64(engine_call(query.curveLength, index, samples))
-                yield function, length
-            else:
-                yield function
-    except Exception:
-        snapshot.__del__()
-        raise
+    # Yielded callables share this owner. Generator failure must not release
+    # the query while any previously returned callable still needs it.
+    count = int(query.curveCount)
+    for index in range(count):
+        function = _curve_callable(snapshot, index)
+        if with_lengths:
+            length = np.float64(engine_call(query.curveLength, index, samples))
+            yield function, length
+        else:
+            yield function
 
 
 def curve_function(value, n):
