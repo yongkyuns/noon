@@ -69,6 +69,18 @@ mean absolute channel error is 0.001725 with maximum channel error 9. Generic
 Mobject-owned child membership remains unqualified because Noon currently models
 child collections as family nodes.
 
+`Mobject.insert(index, mobject)` is supported for a new direct Group/VGroup member.
+Its Python list index conversion, negative-index adjustment, and clamping are
+preserved before a single Rust family-order transaction in detached and live
+contexts. Repeating an identity already present in the same family remains
+unsupported: Manim stores repeated list entries, while Noon semantic families
+currently store one direct edge per identity. The adapter raises
+`NotImplementedError` before mutation for that case. Pinned-source differential
+fixtures cover detached and live insertion order and receiver identity. The product
+Pyodide runner exercised both paths as part of 207 shared Rust/WASM/Python
+observations; exact comparison with pinned ManimCE remains in hosted checks because
+the reference package is unavailable locally.
+
 `Mobject.invert(recursive=False)` now reverses the direct member order through one
 shared Rust transaction. Recursive inversion propagates root-to-family path parity,
 so a nested family shared by two parents is inverted twice and returns to its

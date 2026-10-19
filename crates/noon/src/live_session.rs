@@ -1088,6 +1088,22 @@ impl<'a> LiveSession<'a> {
         Ok(())
     }
 
+    /// Insert or reposition one direct family member through one live commit.
+    pub fn insert_family_member(
+        &mut self,
+        family: &MobjectFamily,
+        index: usize,
+        member: MobjectTarget<'_>,
+    ) -> Result<(), LiveSessionError> {
+        self.require_family(family)?;
+        let transaction = crate::family_authoring::family_insert_transaction(family, index, member)
+            .map_err(LiveSessionError::from)?;
+        if !transaction.mutations().is_empty() {
+            self.apply(transaction)?;
+        }
+        Ok(())
+    }
+
     /// Reverse a live family's order through one authored transaction.
     pub fn invert_family_members(
         &mut self,

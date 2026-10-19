@@ -3100,6 +3100,26 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_insert_family_member(
+        &mut self,
+        family: &noon::MobjectFamily,
+        index: usize,
+        member: noon::MobjectTarget<'_>,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        )
+        .insert_family_member(family, index, member)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_invert_family_members(
         &mut self,
         family: &noon::MobjectFamily,

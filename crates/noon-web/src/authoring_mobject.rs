@@ -1972,6 +1972,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = insertMember)]
+        pub fn insert_member(
+            &self,
+            index: usize,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            let [member] = members.as_slice() else {
+                return Err(JsValue::from_str(
+                    "family insertion requires exactly one member",
+                ));
+            };
+            self.semantic_family()?
+                .insert_member(index, *member)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = invertMembers)]
         pub fn invert_members(&self, recursive: bool) -> Result<(), JsValue> {
             self.semantic_family()?.invert(recursive).map_err(js_error)

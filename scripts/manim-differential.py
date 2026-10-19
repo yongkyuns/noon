@@ -567,6 +567,31 @@ def _family_add_to_back(provider: Any, scene: Any | None = None) -> Any:
     }
 
 
+def _family_insert(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third = [provider.Square(side_length=0.5) for _ in range(3)]
+    group = provider.Group(first, second)
+    if scene is not None:
+        scene.add(group)
+    returned = group.insert(-1, third)
+    labels = {id(first): "first", id(second): "second", id(third): "third"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _noon_family_insert() -> Any:
+    return _family_insert(noon)
+
+
+def _manim_family_insert() -> Any:
+    return _family_insert(manim)
+
+
+def _noon_family_insert_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_insert(noon, scene))
+
+
 def _noon_family_add_to_back() -> Any:
     return _family_add_to_back(noon)
 
@@ -4558,6 +4583,8 @@ FIXTURES = [
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
+    Fixture("group_insert", _noon_family_insert, _manim_family_insert),
+    Fixture("group_insert_live", _noon_family_insert_live, _manim_family_insert),
     Fixture("group_add_to_back", _noon_family_add_to_back, _manim_family_add_to_back),
     Fixture("group_add_to_back_live", _noon_family_add_to_back_live, _manim_family_add_to_back),
     Fixture("group_invert_direct", _noon_family_invert_direct, _manim_family_invert_direct),

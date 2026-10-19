@@ -786,7 +786,7 @@
       "scene": "OrdinaryFamilyMembershipOrder",
       "source": "parity/manim-v0.21/core-examples/family_membership_order.py",
       "expected_duration": 0.2,
-      "notes": "Family add and add_to_back preserve duplicate suppression, requested ordering, and overlapping painter order.",
+      "notes": "Family add and add_to_back preserve duplicate suppression, requested ordering, and overlapping painter order. Group/VGroup insert has separate detached/live differential fixtures for Python list index behavior; repeated direct identities remain an explicit unsupported boundary because semantic families store one edge per identity.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,

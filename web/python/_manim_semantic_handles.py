@@ -2826,6 +2826,46 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.Group:
+    _validate_group_members(self, (mobject,))
+
+    # Let Python's own list implementation apply __index__, negative-index
+    # adjustment, clamping, and overflow behavior exactly as Manim does.
+    current = list(self.submobjects)
+    probe = list(current)
+    marker = object()
+    probe.insert(index, marker)
+    position = probe.index(marker)
+
+    key = _family_wrapper_key(mobject)
+    if any(_family_wrapper_key(member) == key for member in current):
+        raise NotImplementedError(
+            "Mobject.insert cannot repeat a direct member identity because Noon "
+            "semantic families store each child identity once"
+        )
+
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", (mobject,))
+    if context is not None:
+        engine_call(
+            context.liveInsertFamilyMember,
+            family_handle,
+            position,
+            batch,
+            operation="Mobject.insert",
+        )
+    else:
+        engine_call(
+            family_handle.insertMember,
+            position,
+            batch,
+            operation="Mobject.insert",
+        )
+    self._semantic_member_wrappers[key] = mobject
+    return self
+
+
 def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
     if not mobjects:

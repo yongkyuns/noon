@@ -907,6 +907,10 @@ class Group(Mobject):
             return group_class(*self.submobjects[index])
         return self.submobjects[index]
 
+    def insert(self, index: int, mobject: Mobject) -> Self:
+        from _manim_semantic_handles import _group_insert
+        return _group_insert(self, index, mobject)
+
     def add(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_add
         return _group_add(self, *mobjects)

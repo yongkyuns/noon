@@ -8,6 +8,78 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_group_insert_preserves_the_pinned_public_signature(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.insert)
+        self.assertEqual(tuple(signature.parameters), ("self", "index", "mobject"))
+        self.assertEqual(signature.parameters["index"].annotation, "int")
+        self.assertEqual(signature.parameters["mobject"].annotation, "Mobject")
+        self.assertEqual(signature.return_annotation, "Self")
+
+    def test_group_insert_uses_python_list_index_and_one_shared_family_operation(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        second = identity_only_wrapper(compat.Circle)
+        added = identity_only_wrapper(compat.Square)
+        root._semantic_family_handle = SimpleNamespace(insertMember=Mock())
+        root._semantic_member_wrappers = {}
+        for value, slot in ((first, 1), (second, 2), (added, 3)):
+            value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=4)
+        batch = object()
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first, second]),
+            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
+        ):
+            self.assertIs(handles._group_insert(root, -1, added), root)
+
+        make_batch.assert_called_once_with(None, "add", (added,))
+        root._semantic_family_handle.insertMember.assert_called_once_with(1, batch)
+        self.assertIs(root._semantic_member_wrappers["3:4"], added)
+
+    def test_group_insert_routes_live_index_and_rejects_repeated_identity(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        added = identity_only_wrapper(compat.Circle)
+        root._semantic_family_handle = SimpleNamespace()
+        root._semantic_member_wrappers = {}
+        for value, slot in ((first, 1), (added, 2)):
+            value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=4)
+        batch = object()
+        context = SimpleNamespace(liveInsertFamilyMember=Mock())
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first]),
+            patch.object(handles, "_live_constructor_context", return_value=context),
+            patch.object(handles, "_family_membership_batch", return_value=batch),
+        ):
+            self.assertIs(handles._group_insert(root, 100, added), root)
+        context.liveInsertFamilyMember.assert_called_once_with(
+            root._semantic_family_handle, 1, batch
+        )
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first]),
+            patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before live edit")),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "store each child identity once"):
+                handles._group_insert(root, 0, first)
+
     def test_group_add_to_back_uses_one_shared_family_order_operation(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch

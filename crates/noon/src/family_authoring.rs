@@ -590,6 +590,47 @@ pub(crate) fn family_prepend_transaction(
     Ok(transaction)
 }
 
+/// Prepare Manim `Mobject.insert` ordering for one new direct family member.
+///
+/// The Python boundary resolves list-style negative and oversized indices to a
+/// non-negative position. Semantic families store each direct identity once;
+/// inserting an identity already present therefore moves that identity instead
+/// of creating a repeated direct edge.
+pub(crate) fn family_insert_transaction(
+    family: &MobjectFamily,
+    index: usize,
+    member: MobjectTarget<'_>,
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    family.validate()?;
+    member.require_store(family.integration_store())?;
+
+    let (current, present) = {
+        let store = family.integration_store().borrow();
+        let node = store
+            .semantic_family_checked(family.node_id())
+            .map_err(AuthoringError::from)?;
+        (
+            node.members().to_vec(),
+            node.contains_member(member.node_id()),
+        )
+    };
+
+    let position = index.min(current.len());
+    let mut transaction = SemanticMutationTransaction::new();
+    if present {
+        let mut remaining = current;
+        remaining.retain(|current| *current != member.node_id());
+        let before = remaining.get(position.min(remaining.len())).copied();
+        transaction.reorder_member(family.node_id(), member.node_id(), before);
+    } else {
+        let before = current.get(position).copied();
+        transaction
+            .add_member(family.node_id(), member.node_id())
+            .reorder_member(family.node_id(), member.node_id(), before);
+    }
+    Ok(transaction)
+}
+
 /// Prepare Manim `Mobject.invert` member ordering for a family DAG.
 ///
 /// Recursive Manim inversion invokes a shared subfamily once for each path that
@@ -755,6 +796,23 @@ impl MobjectFamily {
     /// matching Manim's `Mobject.add_to_back` behavior.
     pub fn prepend_many(&self, members: &[MobjectTarget<'_>]) -> Result<(), AuthoringError> {
         let transaction = family_prepend_transaction(self, members)?;
+        if !transaction.mutations().is_empty() {
+            transaction
+                .apply(&mut self.store.borrow_mut())
+                .map_err(AuthoringError::from)?;
+        }
+        Ok(())
+    }
+
+    /// Insert one unique direct member at the requested family index.
+    /// Existing identities are repositioned because semantic families retain
+    /// one direct edge per identity.
+    pub fn insert_member(
+        &self,
+        index: usize,
+        member: MobjectTarget<'_>,
+    ) -> Result<(), AuthoringError> {
+        let transaction = family_insert_transaction(self, index, member)?;
         if !transaction.mutations().is_empty() {
             transaction
                 .apply(&mut self.store.borrow_mut())
@@ -1031,6 +1089,85 @@ mod tests {
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),
             unchanged
+        );
+    }
+
+    #[test]
+    fn family_insert_matches_indexed_direct_member_order_atomically() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let second = scene.square(0.4).unwrap();
+        let third = scene.circle(0.3).unwrap();
+        let added = scene.rectangle(0.3, 0.2).unwrap();
+        let family = scene
+            .family(&[(&first).into(), (&second).into(), (&third).into()])
+            .unwrap();
+
+        let before = scene.integration_store().borrow().scene_revision();
+        family.insert_member(1, (&added).into()).unwrap();
+        let members = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(family.node_id())
+            .unwrap()
+            .members()
+            .to_vec();
+        assert_eq!(
+            members,
+            vec![
+                first.node_id(),
+                added.node_id(),
+                second.node_id(),
+                third.node_id()
+            ]
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+
+        // An existing semantic identity is moved to the resolved position,
+        // while repeated direct edges remain outside the family's data model.
+        family.insert_member(0, (&third).into()).unwrap();
+        let members = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(family.node_id())
+            .unwrap()
+            .members()
+            .to_vec();
+        assert_eq!(
+            members,
+            vec![
+                third.node_id(),
+                first.node_id(),
+                added.node_id(),
+                second.node_id()
+            ]
+        );
+
+        let unchanged = scene.integration_store().borrow().scene_revision();
+        family.insert_member(0, (&third).into()).unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            unchanged
+        );
+        family.insert_member(usize::MAX, (&added).into()).unwrap();
+        let members = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(family.node_id())
+            .unwrap()
+            .members()
+            .to_vec();
+        assert_eq!(
+            members,
+            vec![
+                third.node_id(),
+                first.node_id(),
+                second.node_id(),
+                added.node_id()
+            ]
         );
     }
 
