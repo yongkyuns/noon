@@ -40,12 +40,12 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --all
-          cargo fmt --all -- --check
+          cargo fmt --all -- --check 2>&1 | tee prefix-incremental-artifacts/format.log
           bash scripts/check.sh architecture a1808765ef106392c1c20b84fe84f09639f5dfc3 2>&1 | tee prefix-incremental-artifacts/architecture.log
-      - name: Sparse transfer and existing runtime regressions
+      - name: Sparse transfer and semantic reactive admission
         run: |
           set -euo pipefail
-          cargo test -p noon-runtime --features prepared-prefix --test prefix_transfer --test finite_replay_locality --test reconciled_replay -- --nocapture 2>&1 | tee prefix-incremental-artifacts/runtime.log
+          cargo test -p noon-runtime --features prepared-prefix --test prefix_transfer --test prefix_reactive_admission --test finite_replay_locality --test reconciled_replay -- --nocapture 2>&1 | tee prefix-incremental-artifacts/runtime.log
       - name: Source-owner boundary and existing isolation tests
         run: |
           set -euo pipefail
@@ -76,14 +76,16 @@ jobs:
           test "$(git rev-parse origin/experimental/prepared-prefix-incremental)" = "$GITHUB_SHA"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-core/src/reactive/native_reactive/compute_ir.rs
           git add crates/noon-compile/Cargo.toml crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision/prefix.rs
-          git add crates/noon-runtime/Cargo.toml crates/noon-runtime/src/lib.rs crates/noon-runtime/src/replay.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/tests/prefix_transfer.rs
+          git add crates/noon-runtime/Cargo.toml crates/noon-runtime/src/lib.rs crates/noon-runtime/src/replay.rs crates/noon-runtime/src/replay/prefix.rs crates/noon-runtime/src/reactive/runtime.rs crates/noon-runtime/tests/prefix_transfer.rs crates/noon-runtime/tests/prefix_reactive_admission.rs
           git add crates/noon/Cargo.toml crates/noon/src/lib.rs crates/noon/src/execution_session/replay.rs crates/noon/src/execution_session/replay/prefix.rs crates/noon/tests/prepared_prefix_incremental.rs docs/architecture.md
           if test -f scripts/apply-prepared-prefix-experiment.py; then git rm scripts/apply-prepared-prefix-experiment.py; fi
           if ! git diff --cached --quiet; then
             git commit -m 'Wire and format validated incremental prefix experiment (#2211)'
             git push origin HEAD:experimental/prepared-prefix-incremental
           fi
+          git diff --exit-code -- crates docs
           git rev-parse HEAD > prefix-incremental-artifacts/validated-commit.txt
       - name: Preserve actual results including failures
         if: always()
@@ -92,6 +94,16 @@ jobs:
           mkdir -p prefix-incremental-artifacts
           git diff -- crates docs > prefix-incremental-artifacts/remaining-source.patch
           git rev-parse HEAD > prefix-incremental-artifacts/checkout-commit.txt
+          if test -f Cargo.lock; then cp Cargo.lock prefix-incremental-artifacts/selected-Cargo.lock; fi
+          tar -czf prefix-incremental-artifacts/candidate-source.tar.gz \
+            crates/noon-core/src/reactive/native_reactive/compute_ir.rs \
+            crates/noon-runtime/src/reactive/runtime.rs \
+            crates/noon-runtime/src/replay/prefix.rs \
+            crates/noon-runtime/tests/prefix_transfer.rs \
+            crates/noon-runtime/tests/prefix_reactive_admission.rs \
+            crates/noon-compile/src/replay_revision/prefix.rs \
+            crates/noon/src/execution_session/replay/prefix.rs \
+            crates/noon/tests/prepared_prefix_incremental.rs
       - uses: actions/upload-artifact@v6
         if: always()
         with:
