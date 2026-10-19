@@ -9798,6 +9798,31 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]
+        pub fn live_interpolate_mobject_style(
+            &mut self,
+            receiver: &crate::WasmAuthoringMobjectHandle,
+            start: &crate::WasmAuthoringMobjectHandle,
+            end: &crate::WasmAuthoringMobjectHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            let store = self.inner.scene.integration_store();
+            receiver.id_in_store(store, "style interpolation receiver")?;
+            start.id_in_store(store, "style interpolation start")?;
+            end.id_in_store(store, "style interpolation end")?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_interpolate_manim_style(
+                    receiver.semantic_mobject(),
+                    start.semantic_mobject(),
+                    end.semantic_mobject(),
+                    alpha,
+                )
+                .map(|_| ())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetMobjectSheenDirection)]
         pub fn live_set_mobject_sheen_direction(
             &mut self,

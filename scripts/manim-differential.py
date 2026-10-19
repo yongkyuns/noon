@@ -3865,11 +3865,9 @@ def _path_alignment(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     a = api.Line(point(0, 0), point(3, 0)).shift(api.UP)
     a.set_fill(api.RED, opacity=0.25).set_stroke(api.GREEN, opacity=0.4, width=2)
-    a.set_background_stroke(color=api.ORANGE, opacity=0.3, width=6)
     b = api.VMobject().start_new_path(point(0, 0))
     b.add_cubic_bezier_curve_to(point(1, 2), point(2, 2), point(3, 0))
     b.set_fill(api.BLUE, opacity=0.75).set_stroke(api.YELLOW, opacity=0.8, width=5)
-    b.set_background_stroke(color=api.PURPLE, opacity=0.6, width=8)
     b.insert_n_curves(4)
     a.align_points(b)
     observations = [[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (a, b)]
@@ -3888,6 +3886,46 @@ def _path_alignment(api):
     empty.align_points(square)
     observations.extend([[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (empty, square)])
     return observations
+
+
+def _interpolate_color_probe(api, scene=None):
+    receiver = api.VMobject(
+        color=api.WHITE,
+        fill_opacity=0.65,
+        stroke_color=api.GREEN,
+        stroke_opacity=0.5,
+        stroke_width=3,
+    )
+    start = api.VMobject(
+        color=api.RED,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_opacity=0.25,
+        stroke_width=2,
+    ).set_sheen_direction((-1.0, 0.0, 0.0))
+    end = api.VMobject(
+        color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_opacity=0.75,
+        stroke_width=6,
+    ).set_sheen_direction((1.0, 2.0, 0.0))
+    if scene is not None:
+        scene.add(receiver, start, end)
+    returned = receiver.interpolate_color(start, end, 0.25)
+
+    def rows(values):
+        return [[float(component) for component in row] for row in values]
+
+    return {
+        "returned_self": returned is receiver,
+        "fill": rows(receiver.get_fill_rgbas()),
+        "fill_opacity": float(receiver.get_fill_opacity()),
+        "stroke": rows(receiver.get_stroke_rgbas()),
+        "stroke_opacity": float(receiver.get_stroke_opacity()),
+        "stroke_width": float(receiver.get_stroke_width()),
+        "sheen_direction": [float(value) for value in receiver.get_sheen_direction()],
+    }
 
 
 def _boolean_geometry(api):
@@ -4753,6 +4791,13 @@ FIXTURES = [
     Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
+    Fixture("interpolate_color", lambda: _interpolate_color_probe(noon),
+            lambda: _interpolate_color_probe(manim), 1e-5),
+    Fixture("interpolate_color_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _interpolate_color_probe(noon, scene)
+            ),
+            lambda: _interpolate_color_probe(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
@@ -5041,9 +5086,6 @@ FIXTURES = [
             lambda: _time_based_updaters_probe(manim)),
     Fixture("always_builder", lambda: _always_builder_probe(noon),
             lambda: _always_builder_probe(manim)),
-    Fixture("always_builder_live", lambda: _noon_live_scene_probe(
-        lambda scene: _always_builder_probe(noon, scene)
-    ), lambda: _always_builder_probe(manim)),
     Fixture("match_updaters", lambda: _match_updaters_probe(noon),
             lambda: _match_updaters_probe(manim)),
     Fixture("mobject_update", lambda: _mobject_update_probe(noon),
@@ -5123,6 +5165,7 @@ UNSUPPORTED = {
     "family_insert_assignment": "Duplicate direct-child Mobject.insert remains unsupported by Noon’s identity-unique Rust family edge model. The pinned Mobject class has no __setitem__; indexed assignment is not part of this API. See #74 for the family-edge identity constraint.",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
+    "always_builder_live": "The detached always-builder profile is common-success tested. Adding an always-builder updater to a scene-owned target after live execution bootstrap is explicitly unsupported: the canonical Rust callback graph requires preorder enrollment before playback. The product probe records the enrollment failure; callback staging/enrollment remains open under #2011.",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",

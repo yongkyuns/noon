@@ -30,7 +30,7 @@ fn shared_shapes_lower_manim_defaults_into_effective_styles() {
         assert_eq!(object.style.stroke_width, 0.04);
         assert_eq!(object.style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
         assert_eq!(object.style.stroke_join, StrokeJoin::Miter);
-        assert_eq!(object.style.stroke_cap, StrokeCap::Butt);
+        assert_eq!(object.style.stroke_cap, StrokeCap::Auto);
     }
 }
 

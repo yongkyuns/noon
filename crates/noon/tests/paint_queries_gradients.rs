@@ -1,4 +1,5 @@
-use noon::{color_gradient, Color, Scene, SemanticPaint, StyleUpdate};
+use noon::{color_gradient, Color, Scene, SemanticPaint, SemanticSheenDirection, StyleUpdate};
+use noon_core::SemanticVec3;
 
 #[test]
 fn matching_color_preserves_opacity_geometry_and_aliased_family_locality() {
@@ -61,6 +62,62 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
     let before = recipient.state().unwrap();
     assert!(live.match_color(&recipient, &foreign).is_err());
     assert_eq!(recipient.state().unwrap(), before);
+}
+
+#[test]
+fn live_manim_interpolate_color_publishes_effective_style_once() {
+    let mut scene = Scene::new();
+    let receiver = scene.square(0.5).unwrap();
+    let start = scene.square(0.25).unwrap();
+    let end = scene.square(0.75).unwrap();
+    for object in [&receiver, &start, &end] {
+        scene.add(object).unwrap();
+    }
+
+    let mut start_state = start.state().unwrap();
+    start_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
+    start_state.style.fill_opacity = 0.2;
+    start_state.style.stroke = Some(SemanticPaint::Solid(Color::BLUE));
+    start_state.style.stroke_opacity = 0.25;
+    start_state.style.stroke_width = 0.02;
+    start_state.sheen_direction = SemanticSheenDirection::new(SemanticVec3::new(-1.0, 0.0, 0.0), 3);
+    let mut start = start;
+    start.commit_state(start_state).unwrap();
+
+    let mut end_state = end.state().unwrap();
+    end_state.style.fill = Some(SemanticPaint::Solid(Color::BLUE));
+    end_state.style.fill_opacity = 0.8;
+    end_state.style.stroke = Some(SemanticPaint::Solid(Color::RED));
+    end_state.style.stroke_opacity = 0.75;
+    end_state.style.stroke_width = 0.06;
+    end_state.sheen_direction = SemanticSheenDirection::new(SemanticVec3::new(1.0, 2.0, 0.0), 3);
+    let mut end = end;
+    end.commit_state(end_state).unwrap();
+
+    let mut session = scene.execution_session().unwrap();
+    let before = scene.revision();
+    let result = scene
+        .live(&mut session)
+        .interpolate_manim_style(&receiver, &start, &end, 0.5)
+        .unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(result.impacts().len(), 1);
+    let state = receiver.state().unwrap();
+    let midpoint = Color {
+        red: (Color::RED.red + Color::BLUE.red) * 0.5,
+        green: (Color::RED.green + Color::BLUE.green) * 0.5,
+        blue: (Color::RED.blue + Color::BLUE.blue) * 0.5,
+        alpha: (Color::RED.alpha + Color::BLUE.alpha) * 0.5,
+    };
+    assert_eq!(state.style.fill, Some(SemanticPaint::Solid(midpoint)));
+    assert!((state.style.fill_opacity - 0.5).abs() < 1.0e-12);
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(midpoint)));
+    assert!((state.style.stroke_opacity - 0.5).abs() < 1.0e-12);
+    assert_eq!(state.style.stroke_width, 0.04);
+    assert_eq!(
+        state.sheen_direction.value,
+        SemanticVec3::new(0.0, 1.0, 0.0)
+    );
 }
 
 #[test]

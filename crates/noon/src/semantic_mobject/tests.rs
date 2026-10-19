@@ -1,5 +1,5 @@
 use super::*;
-use crate::Scene;
+use crate::{Scene, UnsupportedAuthoringOperation};
 
 #[test]
 fn empty_path_layout_ignores_pose_until_world_points_exist() {
@@ -24,6 +24,135 @@ fn empty_path_layout_ignores_pose_until_world_points_exist() {
         .unwrap();
     assert_eq!(object.center().unwrap(), (2.0, 2.0));
     assert_eq!(object.width().unwrap(), 2.0);
+}
+
+#[test]
+fn manim_interpolate_color_publishes_solid_channels_and_sheen_atomically() {
+    let mut scene = Scene::new();
+    let mut receiver = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let mut start = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let mut end = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+
+    let mut receiver_state = receiver.state().unwrap();
+    receiver_state.style.object_opacity = 0.3;
+    receiver_state.style.stroke_cap = StrokeCap::Butt;
+    receiver.commit_state(receiver_state).unwrap();
+
+    let mut start_state = start.state().unwrap();
+    start_state.style.fill = Some(SemanticPaint::Solid(Color {
+        red: 1.0,
+        green: 0.0,
+        blue: 0.0,
+        alpha: 1.0,
+    }));
+    start_state.style.fill_opacity = 0.2;
+    start_state.style.stroke = Some(SemanticPaint::Solid(Color {
+        red: 0.0,
+        green: 1.0,
+        blue: 0.0,
+        alpha: 0.25,
+    }));
+    start_state.style.stroke_opacity = 0.4;
+    start_state.style.stroke_width = 1.0;
+    start_state.sheen_direction = SemanticSheenDirection::new(SemanticVec3::new(0.0, 2.0, 0.0), 2);
+    start.commit_state(start_state).unwrap();
+
+    let mut end_state = end.state().unwrap();
+    end_state.style.fill = Some(SemanticPaint::Solid(Color {
+        red: 0.0,
+        green: 0.0,
+        blue: 1.0,
+        alpha: 0.5,
+    }));
+    end_state.style.fill_opacity = 0.8;
+    end_state.style.stroke = Some(SemanticPaint::Solid(Color {
+        red: 1.0,
+        green: 0.0,
+        blue: 1.0,
+        alpha: 0.75,
+    }));
+    end_state.style.stroke_opacity = 0.8;
+    end_state.style.stroke_width = 5.0;
+    end_state.sheen_direction = SemanticSheenDirection::new(SemanticVec3::new(4.0, 6.0, 0.0), 2);
+    end.commit_state(end_state).unwrap();
+
+    let before_revision = scene.integration_store().borrow().scene_revision();
+    receiver
+        .interpolate_manim_style(&start, &end, 0.25)
+        .unwrap();
+    let result = receiver.state().unwrap();
+    assert_eq!(
+        result.style.fill,
+        Some(SemanticPaint::Solid(Color {
+            red: 0.75,
+            green: 0.0,
+            blue: 0.25,
+            alpha: 0.875,
+        }))
+    );
+    assert!((result.style.fill_opacity - 0.35).abs() < 1.0e-12);
+    assert_eq!(
+        result.style.stroke,
+        Some(SemanticPaint::Solid(Color {
+            red: 0.25,
+            green: 0.75,
+            blue: 0.25,
+            alpha: 0.375,
+        }))
+    );
+    assert_eq!(result.style.stroke_opacity, 0.5);
+    assert_eq!(result.style.stroke_width, 2.0);
+    assert_eq!(result.style.object_opacity, 0.3);
+    assert_eq!(result.style.stroke_cap, StrokeCap::Butt);
+    assert_eq!(
+        result.sheen_direction.value,
+        SemanticVec3::new(1.0, 3.0, 0.0)
+    );
+    assert_eq!(result.sheen_direction.dimensions, 2);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
+}
+
+#[test]
+fn manim_interpolate_color_rejects_mismatched_paint_without_publication() {
+    let mut scene = Scene::new();
+    let mut receiver = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let mut start = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let mut end = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let mut start_state = start.state().unwrap();
+    start_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+    start.commit_state(start_state).unwrap();
+    let mut end_state = end.state().unwrap();
+    end_state.style.stroke = None;
+    end.commit_state(end_state).unwrap();
+
+    let before_state = receiver.state().unwrap();
+    let before_revision = scene.integration_store().borrow().scene_revision();
+    assert!(matches!(
+        receiver.interpolate_manim_style(&start, &end, 0.5),
+        Err(AuthoringError::Unsupported(
+            UnsupportedAuthoringOperation::ManimStyleInterpolation
+        ))
+    ));
+    assert_eq!(receiver.state().unwrap(), before_state);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        before_revision
+    );
 }
 
 #[test]

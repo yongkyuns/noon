@@ -1424,6 +1424,45 @@ def _style_color(value, name):
     return _compat._as_color(name, value)
 
 
+def _interpolate_manim_style(self, mobject1, mobject2, alpha):
+    """Publish VMobject's supported color fields through one Rust operation."""
+    objects = (self, mobject1, mobject2)
+    if any(
+        not isinstance(value, _compat.VMobject) or isinstance(value, _compat.Group)
+        for value in objects
+    ):
+        raise NotImplementedError(
+            "VMobject.interpolate_color requires three individual VMobjects"
+        )
+    from _manim_updaters import _canonical_phase_context
+    if any(_canonical_phase_context(value) is not None for value in objects):
+        raise NotImplementedError(
+            "VMobject.interpolate_color in host callbacks requires staged style publication"
+        )
+
+    amount = _ir._finite_number("alpha", alpha)
+    target = _handle_for(self)
+    start = _handle_for(mobject1)
+    end = _handle_for(mobject2)
+    if target is None or start is None or end is None:
+        raise RuntimeError(
+            "VMobject.interpolate_color requires current shared Rust semantic handles"
+        )
+
+    context = _live_mutation_context(self)
+    if context is None:
+        engine_call(target.interpolateManimStyle, start, end, amount)
+    else:
+        engine_call(
+            context.liveInterpolateMobjectStyle,
+            target,
+            start,
+            end,
+            amount,
+        )
+    return self
+
+
 def _set_style(
     self,
     fill_color=None,

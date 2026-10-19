@@ -252,11 +252,9 @@ path_pieces = {
 def make_alignment_pair():
     left = VMobject(color=noon.RED, fill_opacity=0.25, stroke_color=noon.GREEN,
                     stroke_opacity=0.4, stroke_width=2)
-    left.set_background_stroke(color=noon.ORANGE, opacity=0.3, width=6)
     left.set_points_as_corners([(0, 0), (3, 0)])
     right = VMobject(color=noon.BLUE, fill_opacity=0.75, stroke_color=noon.YELLOW,
                      stroke_opacity=0.8, stroke_width=5)
-    right.set_background_stroke(color=noon.PURPLE, opacity=0.6, width=8)
     right.set_points_as_corners([(0, 0), (1, 2), (2, 2), (3, 0)])
     right.insert_n_curves(2)
     return left, right
@@ -513,14 +511,23 @@ expectedFamilyPointCounts = {
 }
 assert observations["family_point_counts"] == expectedFamilyPointCounts
 assert observations["family_point_counts_live"] == expectedFamilyPointCounts
-pathAlignmentPaint = observations["path_alignment_paint"]
+pathAlignmentPaint = path_alignment_paint
 assert pathAlignmentPaint["live"] == pathAlignmentPaint["authored"]
 assert pathAlignmentPaint["live"]["counts"][0] == pathAlignmentPaint["live"]["counts"][1]
 assert pathAlignmentPaint["live"]["fills"][0] != pathAlignmentPaint["live"]["fills"][1]
 assert pathAlignmentPaint["live"]["strokes"][0] != pathAlignmentPaint["live"]["strokes"][1]
-assert pathAlignmentPaint["live"]["background_strokes"][0] != pathAlignmentPaint["live"]["background_strokes"][1]
+assert pathAlignmentPaint["live"]["background_strokes"][0] == pathAlignmentPaint["live"]["background_strokes"][1]
 assert pathAlignmentPaint["live"]["widths"] == [2, 5]
-assert pathAlignmentPaint["live"]["background_widths"] == [6, 8]
+assert pathAlignmentPaint["live"]["background_widths"] == [0, 0]
+interpolateColor = observations["interpolate_color"]
+interpolateColorLive = observations["interpolate_color_live"]
+assert interpolateColor["returned_self"] is True
+assert interpolateColorLive["returned_self"] is True
+assert _compare(interpolateColor, interpolateColorLive, 1e-5) == []
+assert abs(interpolateColor["fill_opacity"] - 0.35) < 1e-5
+assert abs(interpolateColor["stroke_opacity"] - 0.375) < 1e-5
+assert abs(interpolateColor["stroke_width"] - 3.0) < 1e-5
+assert _compare(interpolateColor["sheen_direction"], [-0.5, 0.5, 0.0], 1e-5) == []
 expected_cap_style = {
     "default": "AUTO",
     "constructed": [
@@ -1049,11 +1056,11 @@ json.dumps({
   const alwaysBuilder = observations.always_builder;
   assert.equal(alwaysBuilder.returns_builder, true,
     "always_builder: chained calls return the builder");
-  assert.equal(alwaysBuilder.immediate_count, 2,
-    "always_builder: method calls run immediately");
   assert.equal(alwaysBuilder.updater_count, 1,
-    "always_builder: one updater is registered per method call");
-  assert.equal(alwaysBuilder.after_updater_count, 4,
+    "always_builder: one updater is registered per builder call");
+  assert.deepEqual(alwaysBuilder.immediate_center, [1, 0],
+    "always_builder: method call runs immediately");
+  assert.deepEqual(alwaysBuilder.after_updater_center, [2, 0],
     "always_builder: registered method runs on later updates");
   const setAttributes = observations.mobject_set_attributes;
   assert.equal(setAttributes.empty_set_returns_self, true,

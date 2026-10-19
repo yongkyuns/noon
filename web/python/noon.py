@@ -299,6 +299,12 @@ class Mobject:
             setattr(self, attr, value)
         return self
 
+    def interpolate_color(
+        self, mobject1: Mobject, mobject2: Mobject, alpha: float
+    ) -> Mobject:
+        """Raise the pinned base-class override error for unsupported objects."""
+        raise NotImplementedError("Please override in a child class.")
+
     def point_from_proportion(self, alpha: float) -> Any:
         raise NotImplementedError("Please override in a child class.")
 

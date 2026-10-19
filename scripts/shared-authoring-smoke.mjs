@@ -93,7 +93,7 @@ class SharedAuthoringSmoke(Scene):
         assert abs(center.x - 2.0) < 1e-9
         assert abs(center.y + 1.0) < 1e-9
         assert circle.style["stroke_join"] == "miter"
-        assert circle.style["stroke_cap"] == "butt"
+        assert circle.style["stroke_cap"] == "auto"
 
         # Replay is bounded by completed authored history. Record the interval
         # exercised by the transport pause/seek/resume checks below; a host loop

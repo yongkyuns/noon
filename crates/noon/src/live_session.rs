@@ -2831,6 +2831,37 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Interpolate Manim VMobject paint and sheen fields from two coherent
+    /// effective source snapshots and publish them atomically to the receiver.
+    pub fn interpolate_manim_style(
+        &mut self,
+        receiver: &Mobject,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(receiver)?;
+        self.require_mobject(start)?;
+        self.require_mobject(end)?;
+
+        let receiver_state = self.capture_mobject_state(receiver)?;
+        let start_state = self.capture_mobject_state(start)?;
+        let end_state = self.capture_mobject_state(end)?;
+        let (style, sheen_direction) = crate::semantic_mobject::interpolate_manim_vmobject_style(
+            &receiver_state.style,
+            &start_state,
+            &end_state,
+            alpha,
+        )
+        .map_err(LiveSessionError::from)?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .replace_style(receiver.node_id(), style)
+            .set_sheen_direction(receiver.node_id(), sheen_direction);
+        self.apply(transaction)
+    }
+
     /// Set fill color and fill opacity through one authoritative style publication.
     pub fn set_fill(
         &mut self,

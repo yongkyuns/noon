@@ -2347,6 +2347,18 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = interpolateManimStyle)]
+        pub fn interpolate_manim_style(
+            &mut self,
+            start: &WasmAuthoringMobjectHandle,
+            end: &WasmAuthoringMobjectHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .interpolate_manim_style(start.semantic_mobject(), end.semantic_mobject(), alpha)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = updatingSuspended)]
         pub fn updating_suspended(&self) -> Result<bool, JsValue> {
             noon::MobjectTarget::from(&self.handle)

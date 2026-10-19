@@ -49,6 +49,9 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintColorQuery,
     /// Manim opacity queries do not support resource paints.
     ResourcePaintOpacityQuery,
+    /// Manim style interpolation requires matching solid-paint channels and
+    /// compatible sheen-direction dimensions.
+    ManimStyleInterpolation,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
     /// 2D layout and boundary queries do not project spatial mesh geometry.
@@ -89,6 +92,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
+            Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::PathQueryContent => "path queries require retained geometry",

@@ -566,6 +566,10 @@ class VMobject(Mobject):
                           background_stroke_width, background_stroke_opacity,
                           sheen_factor, sheen_direction, background_image, family)
 
+    def interpolate_color(self, mobject1, mobject2, alpha):
+        from _manim_semantic_handles import _interpolate_manim_style
+        return _interpolate_manim_style(self, mobject1, mobject2, alpha)
+
     def set_background_stroke(self, **kwargs):
         kwargs["background"] = True
         return self.set_stroke(**kwargs)

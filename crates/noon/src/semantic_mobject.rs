@@ -856,6 +856,28 @@ impl Mobject {
         style::manim_color_from_semantic(&self.state()?.style)
     }
 
+    /// Interpolate the Manim VMobject color channels and sheen direction from
+    /// two source states, publishing the complete result through this object's
+    /// shared semantic store.
+    pub fn interpolate_manim_style(
+        &mut self,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_same_store(start)?;
+        self.require_same_store(end)?;
+
+        let mut result = self.state()?;
+        let start_state = start.state()?;
+        let end_state = end.state()?;
+        let (style, sheen_direction) =
+            interpolate_manim_vmobject_style(&result.style, &start_state, &end_state, alpha)?;
+        result.style = style;
+        result.sheen_direction = sheen_direction;
+        self.commit_state(result)
+    }
+
     pub(crate) fn manim_line_endpoints_at(
         &self,
         transform: Transform2D,
@@ -1418,6 +1440,100 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
     }
+}
+
+/// Derive Manim VMobject's interpolated paint profile without mutating either
+/// endpoint. Discrete style metadata remains owned by the receiver; Manim only
+/// interpolates its RGBA rows, stroke width, and sheen direction here.
+pub(crate) fn interpolate_manim_vmobject_style(
+    receiver: &SemanticStyle,
+    start: &SemanticObjectState,
+    end: &SemanticObjectState,
+    alpha: f64,
+) -> Result<(SemanticStyle, SemanticSheenDirection), AuthoringError> {
+    if !alpha.is_finite() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+
+    let mut style = receiver.clone();
+    style.fill =
+        interpolate_manim_paint(start.style.fill.as_ref(), end.style.fill.as_ref(), alpha)?;
+    style.fill_opacity =
+        interpolate_manim_scalar(start.style.fill_opacity, end.style.fill_opacity, alpha)?;
+    style.stroke = interpolate_manim_paint(
+        start.style.stroke.as_ref(),
+        end.style.stroke.as_ref(),
+        alpha,
+    )?;
+    style.stroke_opacity =
+        interpolate_manim_scalar(start.style.stroke_opacity, end.style.stroke_opacity, alpha)?;
+    style.stroke_width =
+        interpolate_manim_scalar(start.style.stroke_width, end.style.stroke_width, alpha)?;
+
+    let start_direction = start.sheen_direction;
+    let end_direction = end.sheen_direction;
+    if start_direction.dimensions != end_direction.dimensions {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ManimStyleInterpolation,
+        ));
+    }
+    let direction = SemanticSheenDirection::new(
+        SemanticVec3::new(
+            interpolate_manim_scalar(start_direction.value.x, end_direction.value.x, alpha)?,
+            interpolate_manim_scalar(start_direction.value.y, end_direction.value.y, alpha)?,
+            interpolate_manim_scalar(start_direction.value.z, end_direction.value.z, alpha)?,
+        ),
+        start_direction.dimensions,
+    );
+    if !style.is_finite() || !direction.is_valid() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    Ok((style, direction))
+}
+
+fn interpolate_manim_paint(
+    start: Option<&SemanticPaint>,
+    end: Option<&SemanticPaint>,
+    alpha: f64,
+) -> Result<Option<SemanticPaint>, AuthoringError> {
+    if alpha == 0.0 {
+        return Ok(start.cloned());
+    }
+    if alpha == 1.0 {
+        return Ok(end.cloned());
+    }
+    match (start, end) {
+        (None, None) => Ok(None),
+        (Some(SemanticPaint::Solid(start)), Some(SemanticPaint::Solid(end))) => {
+            let component = |start: f32, end: f32| {
+                interpolate_manim_scalar(f64::from(start), f64::from(end), alpha)
+                    .map(|value| value as f32)
+            };
+            let color = Color {
+                red: component(start.red, end.red)?,
+                green: component(start.green, end.green)?,
+                blue: component(start.blue, end.blue)?,
+                alpha: component(start.alpha, end.alpha)?,
+            };
+            Ok(Some(SemanticPaint::Solid(color)))
+        }
+        (Some(SemanticPaint::Resource(start)), Some(SemanticPaint::Resource(end)))
+            if start == end =>
+        {
+            Ok(Some(SemanticPaint::Resource(*start)))
+        }
+        _ => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ManimStyleInterpolation,
+        )),
+    }
+}
+
+fn interpolate_manim_scalar(start: f64, end: f64, alpha: f64) -> Result<f64, AuthoringError> {
+    let value = start * (1.0 - alpha) + end * alpha;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or(AuthoringError::NonFiniteObjectState)
 }
 
 fn color_tuple(color: Color) -> (f64, f64, f64, f64) {
