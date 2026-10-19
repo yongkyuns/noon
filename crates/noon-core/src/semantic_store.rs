@@ -473,6 +473,18 @@ impl SemanticNode {
             _ => None,
         }
     }
+    pub fn family_background_stroke_color(&self) -> Option<crate::Color> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_color),
+            _ => None,
+        }
+    }
+    pub fn family_background_stroke_width(&self) -> Option<f64> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_width),
+            _ => None,
+        }
+    }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
             unreachable!("preflighted family color");
@@ -490,11 +502,24 @@ impl SemanticNode {
             state.own_color = color;
         }
     }
-    pub(crate) fn set_family_background_stroke_opacity(&mut self, opacity: f64) {
+    pub(crate) fn set_family_background_stroke_style(
+        &mut self,
+        color: Option<crate::Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
-            unreachable!("preflighted family background stroke opacity");
+            unreachable!("preflighted family background stroke style");
         };
-        state.own_background_stroke_opacity = opacity;
+        if let Some(color) = color {
+            state.own_background_stroke_color = color;
+        }
+        if let Some(width) = width {
+            state.own_background_stroke_width = width;
+        }
+        if let Some(opacity) = opacity {
+            state.own_background_stroke_opacity = opacity;
+        }
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {

@@ -1864,6 +1864,21 @@ def _family_own_paint_probe(api):
         [_paint_rgb(member.get_stroke_color()) for member in vector_root_only.submobjects],
     ]
 
+    background_root = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    background_root_children_before = [
+        rgb(member) for member in background_root.submobjects
+    ]
+    background_root.set_background_stroke(
+        color=api.BLUE, width=7, opacity=0.4, family=False
+    )
+    root_background_stroke_observation = [
+        _paint_rgb(background_root.get_stroke_color(background=True)),
+        background_root.get_stroke_width(background=True),
+        background_root.get_stroke_opacity(background=True),
+        background_root_children_before,
+        [rgb(member) for member in background_root.submobjects],
+    ]
+
     vector_style_root = api.VGroup(
         api.Circle(color=api.RED), api.Square(color=api.BLUE)
     )
@@ -1876,6 +1891,8 @@ def _family_own_paint_probe(api):
         stroke_color=api.BLUE,
         stroke_width=4,
         stroke_opacity=0.45,
+        background_stroke_color=api.BLUE,
+        background_stroke_width=6,
         background_stroke_opacity=0.55,
         family=False,
     )
@@ -1886,6 +1903,8 @@ def _family_own_paint_probe(api):
         _paint_rgb(root_style["stroke_color"]),
         root_style["stroke_width"],
         root_style["stroke_opacity"],
+        _paint_rgb(vector_style_root.get_stroke_color(background=True)),
+        vector_style_root.get_stroke_width(background=True),
         vector_style_root.get_stroke_opacity(background=True),
         vector_style_root_children_before,
         [rgb(member) for member in vector_style_root.submobjects],
@@ -2129,6 +2148,7 @@ def _family_own_paint_probe(api):
             root_fill_style, root_opacity_style, root_stroke_style
         ],
         "vgroup_root_only_set_style": root_style_observation,
+        "vgroup_root_only_background_stroke_setter": root_background_stroke_observation,
         "vgroup_root_full_style": full_style_observation,
         "vgroup_root_only_match_style": root_only_match,
         "vgroup_recursive_match_style": recursive_match,
@@ -3492,11 +3512,11 @@ UNSUPPORTED = {
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
-    "background_stroke_and_sheen": "default background-stroke and zero-sheen mutators are supported; non-default background paint and sheen gradients still require shared style/renderer channels",
+    "background_stroke_and_sheen": "Default background-stroke behavior is supported for leaves. VGroup root-only family=False background color, width, and opacity are retained in shared Rust metadata, but non-default leaf/recursive background paint, staged callback reads/writes, and sheen gradients still require shared style/renderer channels.",
     "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
     "rotate_sheen_direction": "zero-angle rotation is a supported no-op; nonzero sheen rotation still requires shared gradient paint",
     "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
-    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style(family=False) in detached/live fixtures; each operation publishes foreground style and default zero-width background-stroke opacity atomically without changing children. Staged callback use, recursive leaf background-stroke opacity, non-default background stroke width/color, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
+    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style/set_background_stroke(family=False) in detached/live fixtures. Root background color, width, and opacity publish atomically with foreground style and leave children unchanged; copy and become retain the metadata. The family root has no points, so this retained background-stroke profile has no raster effect. Staged callback reads/writes, recursive leaf background-stroke paint, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported pending shared style/rendering semantics.",
 }
 
 

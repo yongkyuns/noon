@@ -177,13 +177,20 @@ fn stage_paired_family_styles(
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<(), AuthoringError> {
-    for (source, style, background_stroke_opacity) in
-        paired_family_style_states(store, source, target)?
+    for (
+        source,
+        style,
+        background_stroke_color,
+        background_stroke_width,
+        background_stroke_opacity,
+    ) in paired_family_style_states(store, source, target)?
     {
-        transaction.set_family_style_with_background_stroke_opacity(
+        transaction.set_family_style_with_background_stroke_update(
             source,
             style,
-            background_stroke_opacity,
+            Some(background_stroke_color),
+            Some(background_stroke_width),
+            Some(background_stroke_opacity),
         );
     }
     Ok(())
@@ -196,7 +203,7 @@ pub(crate) fn paired_family_styles(
 ) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle)>, AuthoringError> {
     Ok(paired_family_style_states(store, source, target)?
         .into_iter()
-        .map(|(source, style, _)| (source, style))
+        .map(|(source, style, _, _, _)| (source, style))
         .collect())
 }
 
@@ -204,7 +211,16 @@ fn paired_family_style_states(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
-) -> Result<Vec<(SemanticNodeId, noon_core::SemanticStyle, f64)>, AuthoringError> {
+) -> Result<
+    Vec<(
+        SemanticNodeId,
+        noon_core::SemanticStyle,
+        crate::Color,
+        f64,
+        f64,
+    )>,
+    AuthoringError,
+> {
     store
         .ordered_family_root_pairs(source, target)
         .map_err(AuthoringError::from)?
@@ -216,11 +232,25 @@ fn paired_family_style_states(
             let style = node.family_style().cloned().ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
             })?;
+            let background_stroke_color =
+                node.family_background_stroke_color().ok_or_else(|| {
+                    AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
+                })?;
+            let background_stroke_width =
+                node.family_background_stroke_width().ok_or_else(|| {
+                    AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
+                })?;
             let background_stroke_opacity =
                 node.family_background_stroke_opacity().ok_or_else(|| {
                     AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(target))
                 })?;
-            Ok((source, style, background_stroke_opacity))
+            Ok((
+                source,
+                style,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            ))
         })
         .collect()
 }
@@ -232,6 +262,9 @@ enum PersistentTargetNode {
         members: Vec<SemanticNodeId>,
         own_color: crate::Color,
         own_style: noon_core::SemanticStyle,
+        own_background_stroke_color: crate::Color,
+        own_background_stroke_width: f64,
+        own_background_stroke_opacity: f64,
     },
 }
 
@@ -292,6 +325,9 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 members: node.members_iter().collect(),
                 own_color: state.own_color,
                 own_style: state.own_style.clone(),
+                own_background_stroke_color: state.own_background_stroke_color,
+                own_background_stroke_width: state.own_background_stroke_width,
+                own_background_stroke_opacity: state.own_background_stroke_opacity,
             }),
             _ => Err(AuthoringError::from(
                 noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
@@ -376,6 +412,9 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 members,
                 own_color,
                 own_style,
+                own_background_stroke_color,
+                own_background_stroke_width,
+                own_background_stroke_opacity,
             } => {
                 let (receiver, reused, prototype_members) = if let Some(source) = reusable {
                     self.source_to_target.insert(source, target);
@@ -406,7 +445,14 @@ impl<'a> PersistentFamilyReconcile<'a> {
                     )
                 };
                 self.transaction.set_family_color(receiver, own_color);
-                self.transaction.set_family_style(receiver, own_style);
+                self.transaction
+                    .set_family_style_with_background_stroke_update(
+                        receiver,
+                        own_style,
+                        Some(own_background_stroke_color),
+                        Some(own_background_stroke_width),
+                        Some(own_background_stroke_opacity),
+                    );
                 // Publish the mapping before descending so aliases in the target
                 // DAG converge on exactly one receiver-owned identity.
                 self.target_to_receiver.insert(target, receiver);

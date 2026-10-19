@@ -159,6 +159,8 @@ pub enum SemanticMutation {
     SetFamilyStyle {
         node: SemanticTransactionNodeRef,
         style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
         background_stroke_opacity: Option<f64>,
     },
     ReplaceStyle {
@@ -1058,6 +1060,8 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            background_stroke_color: None,
+            background_stroke_width: None,
             background_stroke_opacity: None,
         });
         self
@@ -1071,10 +1075,31 @@ impl SemanticMutationTransaction {
         style: SemanticStyle,
         background_stroke_opacity: f64,
     ) -> &mut Self {
+        self.set_family_style_with_background_stroke_update(
+            node,
+            style,
+            None,
+            None,
+            Some(background_stroke_opacity),
+        )
+    }
+
+    /// Replace a non-rendered family's foreground and selected background
+    /// stroke fields in one atomic publication.
+    pub fn set_family_style_with_background_stroke_update(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
-            background_stroke_opacity: Some(background_stroke_opacity),
+            background_stroke_color,
+            background_stroke_width,
+            background_stroke_opacity,
         });
         self
     }
@@ -2835,6 +2860,8 @@ impl SemanticMutationTransaction {
                 SemanticMutation::SetFamilyStyle {
                     node,
                     style,
+                    background_stroke_color,
+                    background_stroke_width,
                     background_stroke_opacity,
                 } => {
                     catalog.ensure_family(*node, index)?;
@@ -2846,12 +2873,27 @@ impl SemanticMutationTransaction {
                     }) {
                         return Err(invalid_style_error(index, *node));
                     }
+                    if background_stroke_color.is_some_and(|color| {
+                        ![color.red, color.green, color.blue, color.alpha]
+                            .into_iter()
+                            .all(f32::is_finite)
+                    }) || background_stroke_width
+                        .is_some_and(|width| !width.is_finite() || width < 0.0)
+                    {
+                        return Err(invalid_style_error(index, *node));
+                    }
                     let previous_style = staged_family_styles
                         .get(node)
                         .cloned()
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
                     let previous_background_stroke_opacity = catalog
                         .family_background_stroke_opacity(*node)
+                        .expect("validated family");
+                    let previous_background_stroke_color = catalog
+                        .family_background_stroke_color(*node)
+                        .expect("validated family");
+                    let previous_background_stroke_width = catalog
+                        .family_background_stroke_width(*node)
                         .expect("validated family");
                     let previous_color = staged_family_colors
                         .get(node)
@@ -2860,10 +2902,16 @@ impl SemanticMutationTransaction {
                     let next_color = style.family_color().unwrap_or(previous_color);
                     let next_background_stroke_opacity =
                         background_stroke_opacity.unwrap_or(previous_background_stroke_opacity);
+                    let next_background_stroke_color =
+                        background_stroke_color.unwrap_or(previous_background_stroke_color);
+                    let next_background_stroke_width =
+                        background_stroke_width.unwrap_or(previous_background_stroke_width);
                     changed.push(
                         previous_style != *style
                             || previous_color != next_color
-                            || previous_background_stroke_opacity != next_background_stroke_opacity,
+                            || previous_background_stroke_opacity != next_background_stroke_opacity
+                            || previous_background_stroke_color != next_background_stroke_color
+                            || previous_background_stroke_width != next_background_stroke_width,
                     );
                     staged_family_styles.insert(*node, style.clone());
                     staged_family_colors.insert(*node, next_color);

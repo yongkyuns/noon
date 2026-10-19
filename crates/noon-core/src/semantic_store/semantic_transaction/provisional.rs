@@ -362,6 +362,40 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn family_background_stroke_color(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::Color> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_color),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::Color::BLACK)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn family_background_stroke_width(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<f64> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_width),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,

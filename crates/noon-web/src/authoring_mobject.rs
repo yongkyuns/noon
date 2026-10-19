@@ -1355,9 +1355,9 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = setOwnStyleWithBackgroundStrokeOpacity)]
+        #[wasm_bindgen(js_name = setOwnStyleWithBackgroundStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn set_own_style_with_background_stroke_opacity(
+        pub fn set_own_style_with_background_stroke(
             &self,
             fill_enabled: bool,
             fill_red: f64,
@@ -1372,7 +1372,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
-            background_stroke_opacity: f64,
+            background_stroke_color_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = super::style_update(
                 fill_enabled,
@@ -1390,8 +1396,21 @@ mod wasm {
                 stroke_opacity,
             )
             .map_err(js_error)?;
+            let background_stroke_color = super::family_color(
+                background_stroke_color_enabled,
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            )
+            .map_err(js_error)?;
             self.semantic_family()?
-                .set_own_style_with_background_stroke_opacity(update, background_stroke_opacity)
+                .set_own_style_with_background_stroke(
+                    update,
+                    background_stroke_color,
+                    background_stroke_width,
+                    background_stroke_opacity,
+                )
                 .map_err(js_error)
         }
 
@@ -1522,6 +1541,21 @@ mod wasm {
         pub fn own_background_stroke_opacity(&self) -> Result<f64, JsValue> {
             self.semantic_family()?
                 .own_background_stroke_opacity()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownBackgroundStrokeColor)]
+        pub fn own_background_stroke_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownBackgroundStrokeWidth)]
+        pub fn own_background_stroke_width(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_width()
                 .map_err(js_error)
         }
 

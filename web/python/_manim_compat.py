@@ -468,9 +468,13 @@ class VMobject(Mobject):
 
     def get_stroke_rgbas(self, background=False):
         if background:
-            from _manim_semantic_handles import _get_background_stroke_opacity
+            from _manim_semantic_handles import (
+                _get_background_stroke_color,
+                _get_background_stroke_opacity,
+            )
             return _manim_rgba_rows(
-                _base.BLACK, _get_background_stroke_opacity(self)
+                _get_background_stroke_color(self),
+                _get_background_stroke_opacity(self),
             )
         from _manim_semantic_handles import _paint_color
         return _manim_rgba_rows(_paint_color(self, "stroke"), self.get_stroke_opacity())
@@ -483,7 +487,8 @@ class VMobject(Mobject):
 
     def get_stroke_width(self, background=False):
         if background:
-            return 0.0
+            from _manim_semantic_handles import _get_background_stroke_width
+            return _get_background_stroke_width(self)
         from _manim_semantic_handles import _get_stroke_width
         return _get_stroke_width(self, background)
 

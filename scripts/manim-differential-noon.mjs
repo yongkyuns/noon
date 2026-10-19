@@ -551,9 +551,22 @@ assert not _compare(root_only_opacity[5], root_only_opacity[6], 1e-6), (
     root_only_opacity[5], root_only_opacity[6]
 )
 root_only_style = family_paint["vgroup_root_only_set_style"]
-assert abs(float(root_only_style[5]) - 0.55) <= 1e-6, root_only_style
-assert not _compare(root_only_style[6], root_only_style[7], 1e-6), (
-    root_only_style[6], root_only_style[7]
+assert not _compare(root_only_style[5], root_only_style[2], 1e-6), root_only_style
+assert abs(float(root_only_style[6]) - 6.0) <= 1e-6, root_only_style
+assert abs(float(root_only_style[7]) - 0.55) <= 1e-6, root_only_style
+assert not _compare(root_only_style[8], root_only_style[9], 1e-6), (
+    root_only_style[8], root_only_style[9]
+)
+root_background_stroke = family_paint["vgroup_root_only_background_stroke_setter"]
+assert not _compare(
+    root_background_stroke[0],
+    [float(noon.BLUE.red), float(noon.BLUE.green), float(noon.BLUE.blue)],
+    1e-6,
+), root_background_stroke
+assert abs(float(root_background_stroke[1]) - 7.0) <= 1e-6, root_background_stroke
+assert abs(float(root_background_stroke[2]) - 0.4) <= 1e-6, root_background_stroke
+assert not _compare(root_background_stroke[3], root_background_stroke[4], 1e-6), (
+    root_background_stroke[3], root_background_stroke[4]
 )
 family_paint_play = observations["family_own_paint_play_live"]
 def color_components(color):

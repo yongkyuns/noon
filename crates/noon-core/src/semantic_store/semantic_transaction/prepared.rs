@@ -1564,14 +1564,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::SetFamilyStyle {
                     node,
                     style,
+                    background_stroke_color,
+                    background_stroke_width,
                     background_stroke_opacity,
                 } => {
                     let node = resolve_node_ref(node, &committed_nodes);
                     let family = store.node_mut(node).expect("preflighted family");
                     family.set_family_style(style);
-                    if let Some(opacity) = background_stroke_opacity {
-                        family.set_family_background_stroke_opacity(opacity);
-                    }
+                    family.set_family_background_stroke_style(
+                        background_stroke_color,
+                        background_stroke_width,
+                        background_stroke_opacity,
+                    );
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });
                 }

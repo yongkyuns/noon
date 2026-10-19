@@ -174,7 +174,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                     0.45,
                 )
 
-    def test_root_only_set_style_with_background_opacity_is_atomic_authored_or_live(self):
+    def test_root_only_set_style_with_background_stroke_is_atomic_authored_or_live(self):
         fill_color = compat._base.GREEN
         stroke_color = compat._base.BLUE
         for live in (False, True):
@@ -195,6 +195,8 @@ class SharedFamilyPaintTests(unittest.TestCase):
                                 stroke_color=stroke_color,
                                 stroke_width=4,
                                 stroke_opacity=0.45,
+                                background_stroke_color=stroke_color,
+                                background_stroke_width=6,
                                 background_stroke_opacity=background_opacity,
                                 family=False,
                             ),
@@ -202,9 +204,9 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         )
                     owner = context if live else family._semantic_family_handle
                     method = (
-                        owner.liveSetFamilyOwnStyleWithBackgroundStrokeOpacity
+                        owner.liveSetFamilyOwnStyleWithBackgroundStroke
                         if live
-                        else owner.setOwnStyleWithBackgroundStrokeOpacity
+                        else owner.setOwnStyleWithBackgroundStroke
                     )
                     prefix = (family._semantic_family_handle,) if live else ()
                     method.assert_called_once_with(
@@ -222,6 +224,12 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         stroke_color.alpha,
                         0.04,
                         0.45,
+                        True,
+                        stroke_color.red,
+                        stroke_color.green,
+                        stroke_color.blue,
+                        stroke_color.alpha,
+                        0.06,
                         background_opacity,
                     )
                     if live:
@@ -303,24 +311,43 @@ class SharedFamilyPaintTests(unittest.TestCase):
         phase.paint_family.assert_not_called()
         family._semantic_family_handle.fadeOwn.assert_not_called()
 
-    def test_vgroup_background_opacity_query_reads_the_root_family_state(self):
+    def test_vgroup_background_stroke_query_reads_the_root_family_state(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        background_color = compat._base.BLUE
         family._semantic_family_handle = Mock(
-            ownBackgroundStrokeOpacity=Mock(return_value=0.75)
+            ownBackgroundStrokeColor=Mock(
+                return_value=Mock(
+                    red=background_color.red,
+                    green=background_color.green,
+                    blue=background_color.blue,
+                    alpha=background_color.alpha,
+                )
+            ),
+            ownBackgroundStrokeWidth=Mock(return_value=0.06),
+            ownBackgroundStrokeOpacity=Mock(return_value=0.75),
         )
         self.assertEqual(family.get_stroke_opacity(background=True), 0.75)
+        self.assertEqual(family.get_stroke_width(background=True), 6.0)
+        self.assertEqual(family.get_stroke_color(background=True), compat._base.BLUE)
         rows = family.get_stroke_rgbas(background=True)
         rows = rows.tolist() if hasattr(rows, "tolist") else rows
-        self.assertEqual(rows[0], [0.0, 0.0, 0.0, 0.75])
+        self.assertEqual(
+            rows[0],
+            [background_color.red, background_color.green, background_color.blue, 0.75],
+        )
 
-    def test_vgroup_background_opacity_setter_routes_to_root_only_owner(self):
+    def test_vgroup_background_stroke_setter_routes_to_root_only_owner(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
         family._semantic_family_handle = Mock()
         context = Mock()
         with patch.object(handles, "_group_target_context", return_value=context):
             self.assertIs(family.set_background_stroke(opacity=0.5, family=False), family)
-        context.liveSetFamilyOwnBackgroundStrokeOpacity.assert_called_once_with(
-            family._semantic_family_handle, 0.5
+        context.liveSetFamilyOwnStyleWithBackgroundStroke.assert_called_once_with(
+            family._semantic_family_handle,
+            False, 0.0, 0.0, 0.0, 1.0, None,
+            False, 0.0, 0.0, 0.0, 1.0, None, None,
+            False, 0.0, 0.0, 0.0, 1.0,
+            None, 0.5,
         )
 
     def test_root_only_callback_color_fails_before_leaf_mutation(self):

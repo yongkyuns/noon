@@ -9695,9 +9695,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOwnStyleWithBackgroundStrokeOpacity)]
+        #[wasm_bindgen(js_name = liveSetFamilyOwnStyleWithBackgroundStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_own_style_with_background_stroke_opacity(
+        pub fn live_set_family_own_style_with_background_stroke(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             fill_enabled: bool,
@@ -9713,7 +9713,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
-            background_stroke_opacity: f64,
+            background_stroke_color_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = crate::authoring_mobject::style_update(
                 fill_enabled,
@@ -9731,12 +9737,22 @@ mod wasm {
                 stroke_opacity,
             )
             .map_err(typed_js_error)?;
+            let background_stroke_color = crate::authoring_mobject::family_color(
+                background_stroke_color_enabled,
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            )
+            .map_err(typed_js_error)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_family_own_style_with_background_stroke_opacity(
+                .live_set_family_own_style_with_background_stroke(
                     &source.semantic_family()?,
                     update,
+                    background_stroke_color,
+                    background_stroke_width,
                     background_stroke_opacity,
                 )
                 .map_err(typed_js_error)

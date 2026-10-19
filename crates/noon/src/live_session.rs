@@ -2985,16 +2985,20 @@ impl<'a> LiveSession<'a> {
         self.apply(family.own_style_transaction(update)?)
     }
 
-    pub fn set_family_own_style_with_background_stroke_opacity(
+    pub fn set_family_own_style_with_background_stroke(
         &mut self,
         family: &MobjectFamily,
         update: crate::StyleUpdate,
-        background_stroke_opacity: f64,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         self.apply(family.own_style_with_background_stroke_opacity_transaction(
             update,
+            background_stroke_color,
+            background_stroke_width,
             background_stroke_opacity,
         )?)
     }

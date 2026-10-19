@@ -131,6 +131,26 @@ impl MobjectFamily {
             .expect("family background stroke opacity"))
     }
 
+    pub fn own_background_stroke_color(&self) -> Result<Color, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        Ok(store
+            .node(self.node_id())
+            .expect("validated family")
+            .family_background_stroke_color()
+            .expect("family background stroke color"))
+    }
+
+    pub fn own_background_stroke_width(&self) -> Result<f64, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        Ok(store
+            .node(self.node_id())
+            .expect("validated family")
+            .family_background_stroke_width()
+            .expect("family background stroke width"))
+    }
+
     pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
         self.own_background_stroke_opacity_transaction(opacity)?
             .apply(&mut self.integration_store().borrow_mut())
@@ -142,15 +162,12 @@ impl MobjectFamily {
         &self,
         opacity: f64,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
-        let mut validation = noon_core::SemanticStyle::default();
-        edit_fill_opacity(&mut validation, opacity)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_family_style_with_background_stroke_opacity(
-            self.node_id(),
-            self.own_style()?,
-            opacity,
-        );
-        Ok(transaction)
+        self.own_style_with_background_stroke_opacity_transaction(
+            StyleUpdate::default(),
+            None,
+            None,
+            Some(opacity),
+        )
     }
 
     /// Fade only a VMobject family's non-rendered root paint. Its default
@@ -216,8 +233,27 @@ impl MobjectFamily {
         update: StyleUpdate,
         background_stroke_opacity: f64,
     ) -> Result<(), AuthoringError> {
+        self.set_own_style_with_background_stroke(
+            update,
+            None,
+            None,
+            Some(background_stroke_opacity),
+        )
+    }
+
+    /// Atomically update foreground and selected background-stroke fields on a
+    /// non-rendered family root.
+    pub fn set_own_style_with_background_stroke(
+        &self,
+        update: StyleUpdate,
+        background_stroke_color: Option<Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
         self.own_style_with_background_stroke_opacity_transaction(
             update,
+            background_stroke_color,
+            background_stroke_width,
             background_stroke_opacity,
         )?
         .apply(&mut self.integration_store().borrow_mut())
@@ -228,16 +264,34 @@ impl MobjectFamily {
     pub(crate) fn own_style_with_background_stroke_opacity_transaction(
         &self,
         update: StyleUpdate,
-        background_stroke_opacity: f64,
+        background_stroke_color: Option<Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let mut style = self.own_style()?;
         update.apply(&mut style)?;
         let mut validation = noon_core::SemanticStyle::default();
-        edit_fill_opacity(&mut validation, background_stroke_opacity)?;
+        if let Some(color) = background_stroke_color {
+            edit_stroke_color(
+                &mut validation,
+                color.red.into(),
+                color.green.into(),
+                color.blue.into(),
+                color.alpha.into(),
+            )?;
+        }
+        if let Some(width) = background_stroke_width {
+            edit_stroke_width(&mut validation, width)?;
+        }
+        if let Some(opacity) = background_stroke_opacity {
+            edit_stroke_opacity(&mut validation, opacity)?;
+        }
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_family_style_with_background_stroke_opacity(
+        transaction.set_family_style_with_background_stroke_update(
             self.node_id(),
             style,
+            background_stroke_color,
+            background_stroke_width,
             background_stroke_opacity,
         );
         Ok(transaction)
@@ -838,7 +892,7 @@ mod tests {
         let revision = scene.integration_store().borrow().scene_revision();
 
         family
-            .set_own_style_with_background_stroke_opacity(
+            .set_own_style_with_background_stroke(
                 StyleUpdate {
                     fill_color: Some(Color::GREEN),
                     fill_opacity: Some(0.35),
@@ -847,7 +901,9 @@ mod tests {
                     stroke_opacity: Some(0.45),
                     ..StyleUpdate::default()
                 },
-                0.55,
+                Some(Color::BLUE),
+                Some(0.06),
+                Some(0.55),
             )
             .unwrap();
 
@@ -857,6 +913,8 @@ mod tests {
         assert_eq!(root_style.stroke, Some(SemanticPaint::Solid(Color::BLUE)));
         assert_eq!(root_style.stroke_width, 4.0);
         assert_eq!(root_style.stroke_opacity, 0.45);
+        assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
+        assert_eq!(family.own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
         assert_eq!(leaf.state().unwrap().style, child_before);
         assert_eq!(
@@ -866,6 +924,8 @@ mod tests {
 
         let root_before = (
             family.own_style().unwrap(),
+            family.own_background_stroke_color().unwrap(),
+            family.own_background_stroke_width().unwrap(),
             family.own_background_stroke_opacity().unwrap(),
         );
         let revision = scene.integration_store().borrow().scene_revision();
@@ -881,6 +941,8 @@ mod tests {
         assert_eq!(
             (
                 family.own_style().unwrap(),
+                family.own_background_stroke_color().unwrap(),
+                family.own_background_stroke_width().unwrap(),
                 family.own_background_stroke_opacity().unwrap(),
             ),
             root_before
@@ -908,13 +970,25 @@ mod tests {
                 ..StyleUpdate::default()
             })
             .unwrap();
-        source.set_own_background_stroke_opacity(0.7).unwrap();
+        source
+            .set_own_style_with_background_stroke(
+                StyleUpdate::default(),
+                Some(Color::BLUE),
+                Some(0.06),
+                Some(0.7),
+            )
+            .unwrap();
         let expected = source.own_style().unwrap();
         assert_eq!(source.own_color().unwrap(), Color::BLUE);
 
         let copy = source.copy_family().unwrap();
         assert_eq!(copy.root().own_style().unwrap(), expected);
         assert_eq!(copy.root().own_background_stroke_opacity().unwrap(), 0.7);
+        assert_eq!(
+            copy.root().own_background_stroke_color().unwrap(),
+            Color::BLUE
+        );
+        assert_eq!(copy.root().own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(copy.root().own_color().unwrap(), Color::BLUE);
         target
             .set_own_style(StyleUpdate {
@@ -927,6 +1001,8 @@ mod tests {
             .unwrap();
         assert_eq!(target.own_style().unwrap(), expected);
         assert_eq!(target.own_background_stroke_opacity().unwrap(), 0.7);
+        assert_eq!(target.own_background_stroke_color().unwrap(), Color::BLUE);
+        assert_eq!(target.own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(target.own_color().unwrap(), Color::BLUE);
     }
 
@@ -970,7 +1046,7 @@ mod tests {
         let leaf_before = live.effective(&leaf).unwrap();
 
         let result = live
-            .set_family_own_style(
+            .set_family_own_style_with_background_stroke(
                 &family,
                 StyleUpdate {
                     fill_color: Some(Color::GREEN),
@@ -978,6 +1054,9 @@ mod tests {
                     stroke_opacity: Some(0.25),
                     ..StyleUpdate::default()
                 },
+                Some(Color::BLUE),
+                Some(0.06),
+                Some(0.55),
             )
             .unwrap();
 
@@ -989,6 +1068,9 @@ mod tests {
         );
         assert_eq!(family.own_style().unwrap().fill_opacity, 0.4);
         assert_eq!(family.own_style().unwrap().stroke_opacity, 0.25);
+        assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
+        assert_eq!(family.own_background_stroke_width().unwrap(), 0.06);
+        assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
         assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
 
         live.set_family_own_stroke_cap(&family, "square").unwrap();
