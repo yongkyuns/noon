@@ -19,10 +19,12 @@ jobs:
       CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v7
-      - name: Prepare exact source
+      - name: Prepare exact source and comparison base
         run: |
           set -euo pipefail
           mkdir -p family-prefix-artifacts
+          git fetch --no-tags --depth=1 origin 55daebead113cf65e163e32e676fbdfe0334e608
+          git cat-file -e '55daebead113cf65e163e32e676fbdfe0334e608^{commit}'
           git rev-parse HEAD > family-prefix-artifacts/trigger-commit.txt
           rustc --version --verbose | tee family-prefix-artifacts/rustc.log
       - uses: actions/cache@v6
@@ -84,6 +86,8 @@ jobs:
           mkdir -p family-prefix-artifacts
           git diff --binary -- crates > family-prefix-artifacts/remaining-source.patch
           git rev-parse HEAD > family-prefix-artifacts/checked-out-commit.txt
+          if test -f Cargo.lock; then cp Cargo.lock family-prefix-artifacts/selected-Cargo.lock; fi
+          tar -czf family-prefix-artifacts/tested-prefix-source.tar.gz crates/noon-compile/src/replay_revision.rs crates/noon-compile/src/replay_revision crates/noon-runtime/src/replay.rs crates/noon-runtime/src/replay crates/noon-runtime/tests/prefix_family_plans.rs crates/noon/tests/prepared_prefix_family_raster.rs
       - uses: actions/upload-artifact@v6
         if: always()
         with:
