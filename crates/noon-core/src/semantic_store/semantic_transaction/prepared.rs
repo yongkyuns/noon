@@ -511,6 +511,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self,
         tracks: impl IntoIterator<Item = SemanticScalarSignalTrack>,
     ) -> Result<Self, SemanticMutationTransactionError> {
+        let mut tracks = tracks.into_iter().peekable();
+        if tracks.peek().is_none() {
+            // The exclusive store borrow still protects the original preflight.
+            return Ok(self);
+        }
         let Self {
             store,
             mut transaction,
