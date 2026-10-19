@@ -844,6 +844,13 @@
       "notes": "Repeat the raw point array of each nested-family VMobject twice after scene admission, preserving family membership while drawing coincident paths."
     },
     {
+      "id": "family-space-out-submobjects",
+      "scene": "OrdinaryFamilySpaceOutSubmobjects",
+      "source": "parity/manim-v0.21/core-examples/family_space_out_submobjects.py",
+      "expected_duration": 0.2,
+      "notes": "Expand a nested Group, then inversely scale its direct children through the existing shared transforms."
+    },
+    {
       "id": "family-grid-options",
       "scene": "OrdinaryFamilyGrid",
       "source": "parity/manim-v0.21/core-examples/family_grid_options.py",

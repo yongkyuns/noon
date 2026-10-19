@@ -463,6 +463,13 @@ class Mobject:
         from _manim_path_editing import repeat_points
         return repeat_points(self, count)
 
+    def space_out_submobjects(self, factor: float = 1.5, **kwargs: Any) -> Self:
+        """Expand the family, then shrink direct children through shared transforms."""
+        self.scale(factor, **kwargs)
+        for submobject in getattr(self, "submobjects", ()):
+            submobject.scale(1.0 / factor, **kwargs)
+        return self
+
     def apply_to_family(self, func: Callable[[Mobject], None]) -> Mobject:
         """Apply ``func`` to every point-owning member in shared family order."""
         for mobject in self.family_members_with_points():

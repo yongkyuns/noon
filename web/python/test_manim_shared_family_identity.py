@@ -167,6 +167,36 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         plain = object.__new__(compat.Mobject)
         self.assertIs(plain.arrange_submobjects(), plain)
 
+    def test_space_out_submobjects_scales_root_then_direct_children(self):
+        from unittest.mock import Mock
+        import _manim_compat as compat
+        from types import SimpleNamespace
+
+        root = SimpleNamespace()
+        first = SimpleNamespace()
+        second = SimpleNamespace()
+        root.submobjects = [first, second]
+        root_scale = Mock(return_value=root)
+        first_scale = Mock(return_value=first)
+        second_scale = Mock(return_value=second)
+        root.scale = root_scale
+        first.scale = first_scale
+        second.scale = second_scale
+
+        self.assertIs(compat.Mobject.space_out_submobjects(root, 2.0, about_edge=(1.0, 0.0)), root)
+        root_scale.assert_called_once_with(2.0, about_edge=(1.0, 0.0))
+        first_scale.assert_called_once_with(0.5, about_edge=(1.0, 0.0))
+        second_scale.assert_called_once_with(0.5, about_edge=(1.0, 0.0))
+
+        import inspect
+        signature = inspect.signature(compat.Mobject.space_out_submobjects)
+        self.assertEqual(tuple(signature.parameters), ("self", "factor", "kwargs"))
+        self.assertEqual(signature.parameters["factor"].default, 1.5)
+        plain = SimpleNamespace()
+        plain.scale = Mock(return_value=plain)
+        self.assertIs(compat.Mobject.space_out_submobjects(plain), plain)
+        plain.scale.assert_called_once_with(1.5)
+
     def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
         from unittest.mock import Mock, call
         import _manim_compat as compat

@@ -121,3 +121,11 @@ https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1
 dynamic `arrange()` implementation, reusing the shared Rust family layout path.
 Product comparisons cover detached and live Group calls and preserve receiver
 identity.
+
+`Mobject.space_out_submobjects(factor=1.5, **kwargs)` expands the family then
+scales each direct child by the reciprocal factor through existing shared Rust
+transforms. Detached and live nested-Group fixtures match pinned ManimCE in the
+177/177 semantic suite. The Cairo raster fixture passes on WebGPU and WebGL2
+with zero duration delta, 0.0739% differing pixels, MAE 0.009215, and maximum
+channel error 42. Pinned source:
+https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L1898.
