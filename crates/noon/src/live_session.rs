@@ -2751,7 +2751,14 @@ impl<'a> LiveSession<'a> {
             x,
             y,
         )
-        .map_err(LiveSessionError::from)
+        .map_err(|error| match error {
+            // The shared authoring helper retains the publication cause; the
+            // live facade must retain its existing public error category too.
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            other => LiveSessionError::from(other),
+        })
     }
 
     /// Shift every ordinary leaf of one semantic family in a single publication.

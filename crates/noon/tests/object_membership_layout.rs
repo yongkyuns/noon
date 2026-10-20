@@ -339,3 +339,120 @@ fn an_entirely_empty_root_scope_has_no_geometry_bounds_or_nonzero_center() {
     assert_eq!(effective.width, 0.0);
     assert_eq!(execution.publication_context(), before);
 }
+
+#[test]
+fn stale_scene_shift_keeps_publication_error_and_root_scope_atomicity() {
+    let mut scene = Scene::new();
+    let (root, child, grandchild, _) = root_tree(&mut scene);
+    scene.add(&root).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    execution.take_frame_changes();
+    let published = execution.publication_context();
+    let frame_transforms: Vec<_> = execution
+        .frame()
+        .objects
+        .iter()
+        .map(|row| row.transform)
+        .collect();
+    let child_translation = translation(&child);
+    let grandchild_translation = translation(&grandchild);
+    let mut raw = SemanticMutationTransaction::new();
+    raw.set_property(
+        root.node_id(),
+        noon::SemanticObjectProperty::Translation,
+        noon::SemanticVec3::new(9.0, 0.0, 0.0),
+    );
+    raw.apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let raw_revision = scene.revision();
+    assert_ne!(raw_revision, published.scene_revision());
+    for x in [1.0, f64::NAN] {
+        let error = scene.live(&mut execution).shift(&root, x, 0.0).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                noon::LiveSessionError::Publication(
+                    noon::ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
+                ) if *expected == published.scene_revision() && *actual == raw_revision
+            ),
+            "stale live shifts must preserve the publication error: {error:?}"
+        );
+    }
+    assert_eq!(translation(&root), (9.0, 0.0));
+    assert_eq!(translation(&child), child_translation);
+    assert_eq!(translation(&grandchild), grandchild_translation);
+    assert_eq!(scene.revision(), raw_revision);
+    assert_eq!(execution.publication_context(), published);
+    assert_eq!(
+        execution
+            .frame()
+            .objects
+            .iter()
+            .map(|row| row.transform)
+            .collect::<Vec<_>>(),
+        frame_transforms
+    );
+    assert!(execution.take_frame_changes().is_empty());
+}
+
+#[test]
+fn pending_live_shift_keeps_publication_error_then_recovers_after_completion() {
+    let mut scene = Scene::new();
+    let (root, child, grandchild, _) = root_tree(&mut scene);
+    let unrelated = scene.square(0.5).unwrap();
+    scene
+        .add_many(&[(&root).into(), (&unrelated).into()])
+        .unwrap();
+    let mut target = unrelated.target_editor().unwrap();
+    target.shift(2.0, 0.0).unwrap();
+    let animation = scene
+        .declare_transform_to(&unrelated, &target, AnimationOptions::new().run_time(0.1))
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let segment = scene
+        .live(&mut execution)
+        .play_animation(&animation)
+        .unwrap();
+    execution.take_frame_changes();
+    let revision = scene.revision();
+    let published = execution.publication_context();
+    let error = scene
+        .live(&mut execution)
+        .shift(&root, 1.0, 0.0)
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            noon::LiveSessionError::Publication(
+                noon::ExecutionSessionPublicationError::SegmentCompletionPending
+            )
+        ),
+        "pending live shifts must preserve the publication error: {error:?}"
+    );
+    assert_eq!(
+        [
+            translation(&root),
+            translation(&child),
+            translation(&grandchild)
+        ],
+        [(0.0, 0.0), (4.0, 0.0), (8.0, 0.0)]
+    );
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.publication_context(), published);
+    assert!(execution.take_frame_changes().is_empty());
+    let mut live = scene.live(&mut execution);
+    live.advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    live.complete_segment(segment).unwrap();
+    let unrelated_translation = translation(&unrelated);
+    live.shift(&root, 1.0, 0.0).unwrap();
+    assert_eq!(
+        [
+            translation(&root),
+            translation(&child),
+            translation(&grandchild)
+        ],
+        [(1.0, 0.0), (5.0, 0.0), (9.0, 0.0)]
+    );
+    assert_eq!(translation(&unrelated), unrelated_translation);
+}
