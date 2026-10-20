@@ -65,16 +65,35 @@ async function buildArguments(env) {
     await mkdir(path.join(temp, "bin"));
     await writeFile(path.join(temp, "scripts/build-web-demo.sh"), await source("scripts/build-web-demo.sh"));
     await writeFile(path.join(temp, "bin/node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(path.join(temp, "bin/cargo"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_CARGO_ARGS"\nexit "$NOON_TEST_CARGO_STATUS"\n', { mode: 0o755 });
     await writeFile(path.join(temp, "bin/wasm-pack"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_ARGS"\n', { mode: 0o755 });
     const argsFile = path.join(temp, "args.txt");
+    const cargoArgsFile = path.join(temp, "cargo-args.txt");
     const result = spawnSync("bash", ["scripts/build-web-demo.sh"], { cwd: temp, encoding: "utf8",
       env: { ...process.env, PATH: `${temp}/bin:${process.env.PATH}`, NOON_TEST_ARGS: argsFile,
+        NOON_TEST_CARGO_ARGS: cargoArgsFile, NOON_TEST_CARGO_STATUS: "0",
         NOON_SKIP_WEB_PREFLIGHT: "1", NOON_WEB_PREFLIGHT_ONLY: "0", NOON_WASM_PROFILE: "release",
         NOON_WASM_SKIP_OPT: "0", NOON_RENDERER_SMOKE: "0", NOON_REPLAY_SMOKE: "0", ...env } });
-    assert.equal(result.status, 0, result.stderr);
-    return (await readFile(argsFile, "utf8")).trim().split("\n");
+    const expectedStatus = Number(env.NOON_TEST_CARGO_STATUS ?? "0");
+    assert.equal(result.status, expectedStatus, result.stderr);
+    assert.deepEqual((await readFile(cargoArgsFile, "utf8")).trim().split("\n"),
+      ["metadata", "--locked", "--format-version", "1"]);
+    if (expectedStatus !== 0) {
+      await assert.rejects(readFile(argsFile), { code: "ENOENT" },
+        "a stale dependency lock must fail before wasm-pack can rewrite it");
+      return null;
+    }
+    const args = (await readFile(argsFile, "utf8")).trim().split("\n");
+    assert.equal(args.at(-1), "--locked");
+    assert.ok(!args.includes("--"),
+      "wasm-pack must not forward a separator after Cargo feature options");
+    return args;
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
+
+test("browser build rejects a stale lock before invoking wasm-pack", async () => {
+  assert.equal(await buildArguments({ NOON_TEST_CARGO_STATUS: "42" }), null);
+});
 
 test("normal release build keeps fixture features absent", async () => {
   const args = await buildArguments({});
@@ -94,6 +113,14 @@ test("renderer diagnostic feature does not silently opt into replay", async () =
   const args = await buildArguments({ NOON_RENDERER_SMOKE: "1" });
   assert.equal(args[args.indexOf("--features") + 1], "renderer-smoke");
   assert.ok(!args.includes("replay-smoke"));
+});
+
+test("development renderer build forwards locked Cargo feature options", async () => {
+  const args = await buildArguments({ NOON_WASM_PROFILE: "dev",
+    NOON_WASM_SKIP_OPT: "1", NOON_RENDERER_SMOKE: "1" });
+  assert.ok(args.includes("--dev"));
+  assert.ok(args.includes("--no-opt"));
+  assert.equal(args[args.indexOf("--features") + 1], "renderer-smoke");
 });
 
 test("all six replay fixtures and original sampling remain mandatory", async () => {

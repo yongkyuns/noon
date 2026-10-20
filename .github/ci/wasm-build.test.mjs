@@ -390,13 +390,16 @@ test("changed dependency resolution cannot be stamped as the prepared build", as
   await assert.rejects(stamp(root, identity, env), /resolution changed/);
 });
 
-test("future tracked lockfiles must match the downloaded artifact", async (t) => {
+test("tracked workspace lock is part of build configuration and cannot be substituted", async (t) => {
   const { root, put, git } = await fixture(t);
   git("add", "Cargo.lock");
   git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid", "commit", "-qm", "track lock");
-  await stamp(root, await prepare(root, env, compiler), env);
+  const identity = await prepare(root, env, compiler);
+  assert.equal(identity.build.inputs["Cargo.lock"], identity.dependencyLock,
+    "CI and deployment must identify the reviewed dependency resolution as a build input");
+  await stamp(root, identity, env);
   await put("Cargo.lock", "changed checkout lock");
-  await assert.rejects(verify(root, env), /checkout lockfile mismatch/);
+  await assert.rejects(verify(root, env), /configuration mismatch/);
 });
 
 test("only explicitly requested master push/dispatch may publish compiler caches", () => {

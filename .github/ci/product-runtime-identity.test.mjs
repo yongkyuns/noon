@@ -29,6 +29,7 @@ async function fixture(t) {
   // Use the repository's real ignore policy. Do not hide newly added bookkeeping.
   await put(root, ".gitignore", await readFile(path.join(repository, ".gitignore")));
   await put(root, "Cargo.toml", '[workspace]\nmembers = ["crates/noon-web"]\n');
+  await put(root, "Cargo.lock", "version = 4\n");
   await put(root, "rust-toolchain.toml", '[toolchain]\nchannel = "1.98.0"\n');
   await put(root, "crates/noon-web/Cargo.toml", '[package]\nname = "noon-web"\nversion = "0.1.0"\n');
   await put(root, "scripts/build-web-demo.sh", "# unit fixture; no Rust build\n");
@@ -79,7 +80,6 @@ async function selectSources(f, root = f.root) {
 }
 
 async function generatedPackage(root, role) {
-  await put(root, "Cargo.lock", "version = 4\n");
   await put(root, "web/pkg/noon_web.js", "export default function init() {}\n");
   await put(root, "web/pkg/noon_web_bg.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
   await put(root, "web/pkg/package.json", '{"type":"module"}\n');
@@ -140,7 +140,7 @@ test("untracked pre-build evidence makes provenance unavailable instead of inven
   assert.notEqual(clean.buildId, dirty.buildId);
 });
 
-for (const name of ["pr.txt", "web/python/untracked_module.py"]) {
+for (const name of ["pr.txt", "Cargo.lock", "web/python/untracked_module.py"]) {
   test(`actual dirty source still has no claimed revision: ${name}`, async t => {
     const f = await fixture(t);
     await selectSources(f);

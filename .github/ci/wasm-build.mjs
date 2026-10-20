@@ -57,7 +57,7 @@ export async function fileDigest(root, name) {
 export async function configuration(root, buildConfig = config) {
   const inputs = {};
   // Hash tracked build inputs without requiring Cargo in artifact consumers.
-  const names = git(root, "ls-files", "-z", "Cargo.toml", "rust-toolchain.toml",
+  const names = git(root, "ls-files", "-z", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
     ":(glob)crates/**/Cargo.toml", ".cargo", "scripts/build-web-demo.sh",
     ".github/actions/dev-wasm-build/action.yml").split("\0").filter(Boolean).sort();
   for (const name of names) inputs[name] = await fileDigest(root, name);
