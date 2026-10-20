@@ -2228,7 +2228,8 @@ impl SemanticMutationTransaction {
         let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
             HashMap::new();
         let mut staged_family_colors = HashMap::new();
-        let mut staged_family_styles = HashMap::new();
+        let mut staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle> =
+            HashMap::new();
         let mut staged_sheen_directions = HashMap::new();
         let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
@@ -2626,6 +2627,29 @@ impl SemanticMutationTransaction {
                     changed.push(did_change);
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
+                    // A family can acquire its own content without replacing its
+                    // identity or membership. Preparation uses real content and
+                    // the current staged root metadata, never a fake resource.
+                    if !staged_objects.contains_key(object) {
+                        if let Some(mut state) =
+                            catalog.initial_family_content_state(*object, *content)
+                        {
+                            if let Some(style) = staged_family_styles.get(object) {
+                                state.style = style.clone();
+                            }
+                            if let Some(value) = staged_family_z.get(object) {
+                                state.set_z_index(*value);
+                            }
+                            if let Some(direction) = staged_sheen_directions.get(object) {
+                                state.sheen_direction = *direction;
+                            }
+                            staged_objects.insert(*object, state);
+                            staged_object_order.push(*object);
+                        }
+                    }
+                    let materializing = catalog
+                        .initial_family_content_state(*object, *content)
+                        .is_some();
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
@@ -2639,7 +2663,7 @@ impl SemanticMutationTransaction {
                         *content,
                         index,
                     )?;
-                    let did_change = state.content != *content;
+                    let did_change = materializing || state.content != *content;
                     if did_change {
                         state.content = *content;
                     }
@@ -2891,24 +2915,34 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetFamilyColor { node, color } => {
                     catalog.ensure_family(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if ![color.red, color.green, color.blue, color.alpha]
                         .into_iter()
                         .all(f32::is_finite)
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous_color = staged_family_colors
+                    let previous_color = staged_objects
                         .get(node)
-                        .copied()
+                        .and_then(|state| state.style.family_color())
+                        .or_else(|| staged_family_colors.get(node).copied())
                         .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
-                    let previous_style = staged_family_styles
+                    let previous_style = staged_objects
                         .get(node)
-                        .cloned()
+                        .map(|state| state.style.clone())
+                        .or_else(|| staged_family_styles.get(node).cloned())
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
                     let mut next_style = previous_style.clone();
                     next_style.set_family_color(*color);
                     changed.push(previous_color != *color || previous_style != next_style);
                     staged_family_colors.insert(*node, *color);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.style = next_style.clone();
+                    }
                     staged_family_styles.insert(*node, next_style);
                 }
                 SemanticMutation::SetFamilyStyle {
@@ -2919,6 +2953,11 @@ impl SemanticMutationTransaction {
                     background_stroke_opacity,
                 } => {
                     catalog.ensure_family(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !style.is_finite() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -2936,42 +2975,41 @@ impl SemanticMutationTransaction {
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous_style = staged_family_styles
+                    let previous_style = staged_objects
                         .get(node)
-                        .cloned()
+                        .map(|state| state.style.clone())
+                        .or_else(|| staged_family_styles.get(node).cloned())
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
-                    let previous_background_stroke_opacity = catalog
-                        .family_background_stroke_opacity(*node)
-                        .expect("validated family");
-                    let previous_background_stroke_color = catalog
-                        .family_background_stroke_color(*node)
-                        .expect("validated family");
-                    let previous_background_stroke_width = catalog
-                        .family_background_stroke_width(*node)
-                        .expect("validated family");
-                    let previous_color = staged_family_colors
+                    let previous_color = staged_objects
                         .get(node)
-                        .copied()
+                        .and_then(|state| state.style.family_color())
+                        .or_else(|| staged_family_colors.get(node).copied())
                         .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
                     let next_color = style.family_color().unwrap_or(previous_color);
-                    let next_background_stroke_opacity =
-                        background_stroke_opacity.unwrap_or(previous_background_stroke_opacity);
-                    let next_background_stroke_color =
-                        background_stroke_color.unwrap_or(previous_background_stroke_color);
-                    let next_background_stroke_width =
-                        background_stroke_width.unwrap_or(previous_background_stroke_width);
-                    changed.push(
-                        previous_style != *style
-                            || previous_color != next_color
-                            || previous_background_stroke_opacity != next_background_stroke_opacity
-                            || previous_background_stroke_color != next_background_stroke_color
-                            || previous_background_stroke_width != next_background_stroke_width,
-                    );
-                    staged_family_styles.insert(*node, style.clone());
+                    let mut next_style = style.clone();
+                    if let Some(color) = background_stroke_color {
+                        next_style.background_stroke = Some(crate::SemanticPaint::Solid(*color));
+                    }
+                    if let Some(width) = background_stroke_width {
+                        next_style.background_stroke_width = *width;
+                    }
+                    if let Some(opacity) = background_stroke_opacity {
+                        next_style.background_stroke_opacity = *opacity;
+                    }
+                    changed.push(previous_style != next_style || previous_color != next_color);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.style = next_style.clone();
+                    }
+                    staged_family_styles.insert(*node, next_style);
                     staged_family_colors.insert(*node, next_color);
                 }
                 SemanticMutation::SetSheenDirection { node, direction } => {
                     catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !direction.is_valid() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -2982,6 +3020,9 @@ impl SemanticMutationTransaction {
                         .expect("validated authoring node sheen direction");
                     changed.push(previous != *direction);
                     staged_sheen_directions.insert(*node, *direction);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.sheen_direction = *direction;
+                    }
                 }
                 SemanticMutation::SetUpdatingSuspended { node, suspended } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -2995,6 +3036,11 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !value.is_finite() {
                         return Err(SemanticMutationTransactionError::NonFiniteZIndex {
                             index,
@@ -3013,6 +3059,9 @@ impl SemanticMutationTransaction {
                         let previous = staged_family_z.entry(*node).or_insert(previous);
                         changed.push(*previous != *value);
                         *previous = *value;
+                        if let Some(state) = staged_objects.get_mut(node) {
+                            state.set_z_index(*value);
+                        }
                     } else {
                         let state = catalog.staged_object_state(
                             &mut staged_objects,
@@ -3045,6 +3094,7 @@ impl SemanticMutationTransaction {
                     let did_change = state.style != *style;
                     if did_change {
                         state.style = style.clone();
+                        staged_family_styles.remove(object);
                     }
                     changed.push(did_change);
                 }
@@ -5242,6 +5292,9 @@ mod family_color_tests;
 
 #[cfg(test)]
 mod family_style_tests;
+
+#[cfg(test)]
+mod family_content_tests;
 
 #[cfg(test)]
 mod foreground_tests;

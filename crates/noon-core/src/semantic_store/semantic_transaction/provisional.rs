@@ -299,9 +299,11 @@ impl<'a> TransactionNodeCatalog<'a> {
         match node {
             SemanticTransactionNodeRef::Existing(node) => {
                 match self.store.node(node).expect("validated node").kind() {
-                    SemanticNodeKind::Family(presentation) => {
-                        Some(presentation.presentation.z_index)
-                    }
+                    SemanticNodeKind::Family(_) => self
+                        .store
+                        .node(node)
+                        .and_then(|node| node.presentation())
+                        .map(|presentation| presentation.z_index),
                     _ => None,
                 }
             }
@@ -341,56 +343,6 @@ impl<'a> TransactionNodeCatalog<'a> {
                 PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
                     Some(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
                 }
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_opacity(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<f64> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_opacity),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(1.0),
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_color(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<crate::Color> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_color),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::Color::BLACK)
-                }
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_width(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<f64> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_width),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
                 _ => None,
             },
         }
@@ -714,6 +666,40 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .map(|node| node.host_updaters().to_vec())
                 .unwrap_or_default(),
             SemanticTransactionNodeRef::Pending(_) => Vec::new(),
+        }
+    }
+
+    pub(super) fn stage_owned_object_state(
+        &self,
+        staged: &mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+        order: &mut Vec<SemanticTransactionNodeRef>,
+        node: SemanticTransactionNodeRef,
+    ) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = staged.entry(node) {
+            if let SemanticTransactionNodeRef::Existing(id) = node {
+                if let Ok(state) = self.store.semantic_object_state_checked(id) {
+                    entry.insert(state.clone());
+                    order.push(node);
+                }
+            }
+        }
+    }
+
+    pub(super) fn initial_family_content_state(
+        &self,
+        node: SemanticTransactionNodeRef,
+        content: crate::SemanticObjectContent,
+    ) -> Option<SemanticObjectState> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                self.store.node(node)?.initial_family_object_state(content)
+            }
+            SemanticTransactionNodeRef::Pending(token) => match self.pending.get(&token)? {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::SemanticFamilyPresentation::default().with_content(content))
+                }
+                _ => None,
+            },
         }
     }
 

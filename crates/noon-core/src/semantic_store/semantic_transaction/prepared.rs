@@ -812,6 +812,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => {}
         }
+        if let Some(color) = self.family_style(node)?.family_color() {
+            return Ok(color);
+        }
         if let Some(color) = self.preflight.staged_family_colors.get(&node) {
             return Ok(*color);
         }
@@ -853,6 +856,21 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
             }
             _ => {}
+        }
+        let is_family = match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .is_some_and(|node| matches!(node.kind(), crate::SemanticNodeKind::Family(_))),
+            SemanticTransactionNodeRef::Pending(token) => matches!(
+                self.pending_creation(token),
+                Some(SemanticNodeCreation::Family { .. })
+            ),
+        };
+        if is_family {
+            if let Some(state) = self.preflight.staged_objects.get(&node) {
+                return Ok(state.style.clone());
+            }
         }
         if let Some(style) = self.preflight.staged_family_styles.get(&node) {
             return Ok(style.clone());
@@ -902,10 +920,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
         match node {
             SemanticTransactionNodeRef::Existing(id) => {
-                if let Some(crate::SemanticNodeKind::Family(presentation)) =
+                if let Some(crate::SemanticNodeKind::Family(_)) =
                     self.store.node(id).map(|node| node.kind())
                 {
-                    return Ok(presentation.presentation.z_index);
+                    return Ok(self
+                        .store
+                        .node(id)
+                        .and_then(|node| node.presentation())
+                        .expect("family presentation")
+                        .z_index);
                 }
             }
             SemanticTransactionNodeRef::Pending(token)
@@ -939,6 +962,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let SemanticTransactionNodeRef::Pending(token) = object else {
             return Ok(state);
         };
+        if matches!(
+            self.pending_creation(token),
+            Some(SemanticNodeCreation::Family { .. })
+        ) {
+            return Ok(state);
+        }
         let mut insertion_order = self.store.next_insertion_order();
         for mutation in self.transaction.mutations() {
             let SemanticMutation::AddNode {

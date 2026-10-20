@@ -1031,7 +1031,11 @@ fn family_point_occurrences(
             .ok_or_else(|| AuthoringError::from(noon_core::SemanticStoreError::UnknownNode(id)))?;
         match node.kind() {
             SemanticNodeKind::AuthoringObject => result.push(id),
-            SemanticNodeKind::Family(_) => {}
+            SemanticNodeKind::Family(_) => {
+                if node.semantic_object_state().is_some() {
+                    result.push(id);
+                }
+            }
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
             | SemanticNodeKind::Effect(_) => continue,
@@ -1053,7 +1057,7 @@ fn point_reduction_topology(
         .ok_or_else(|| AuthoringError::from(noon_core::SemanticStoreError::UnknownNode(root)))?;
     let object = match node.kind() {
         SemanticNodeKind::AuthoringObject => Some(root),
-        SemanticNodeKind::Family(_) => None,
+        SemanticNodeKind::Family(_) => node.semantic_object_state().is_some().then_some(root),
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
         | SemanticNodeKind::Effect(_) => {

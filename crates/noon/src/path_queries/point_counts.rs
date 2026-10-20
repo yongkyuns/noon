@@ -11,7 +11,18 @@ impl MobjectTarget<'_> {
             Self::Object(object) => object.get_num_points(),
             Self::Family(family) => {
                 family.validate()?;
-                Ok(0)
+                let has_content = family
+                    .integration_store()
+                    .borrow()
+                    .semantic_family_checked(family.node_id())?
+                    .semantic_object_state()
+                    .is_some();
+                if has_content {
+                    Mobject::from_node(Rc::clone(family.integration_store()), family.node_id())?
+                        .get_num_points()
+                } else {
+                    Ok(0)
+                }
             }
         }
     }

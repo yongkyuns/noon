@@ -192,16 +192,16 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family(presentation) => (
+                SemanticNodeKind::Family(_) => (
                     true,
                     node.members_iter().collect::<Vec<_>>(),
-                    Some(presentation.presentation.z_index),
-                    Some(presentation.own_color),
-                    Some(presentation.own_style.clone()),
-                    Some(presentation.own_background_stroke_color),
-                    Some(presentation.own_background_stroke_width),
-                    Some(presentation.own_background_stroke_opacity),
-                    Some(presentation.own_sheen_direction),
+                    Some(node.presentation().expect("family presentation").z_index),
+                    node.family_color(),
+                    node.family_style().cloned(),
+                    node.family_background_stroke_color(),
+                    node.family_background_stroke_width(),
+                    node.family_background_stroke_opacity(),
+                    node.sheen_direction(),
                     node.graph_declaration().cloned(),
                     node.updating_suspended(),
                 ),
