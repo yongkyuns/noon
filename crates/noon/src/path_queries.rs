@@ -442,22 +442,39 @@ impl PathQuery {
         &self,
         point: (f64, f64, f64),
     ) -> Result<Option<f64>, AuthoringError> {
-        let total_length = self.arc_length(None)?;
-        let mut target_length = 0.0;
-        for index in 0..self.curve_count() {
+        let lengths = (0..self.curve_count())
+            .map(|index| self.curve_length(index, None))
+            .collect::<Result<Vec<_>, _>>()?;
+        proportion_for_curve_lengths(&lengths, |index| {
             let controls = self.curve_points(index)?;
-            let length = self.curve_length(index, None)?;
-            let parameters = if point.2 == 0.0 {
+            Ok(if point.2 == 0.0 {
                 cubic_parameters_for_point(controls, (point.0, point.1))
             } else {
                 Vec::new()
-            };
-            if let Some(parameter) = parameters.into_iter().reduce(f64::max) {
-                return Ok(Some((target_length + length * parameter) / total_length));
-            }
-            target_length += length;
-        }
-        Ok(None)
+            })
+        })
+    }
+
+    /// Inverse query over caller-selected Manim point slices, in supplied order.
+    ///
+    /// Arbitrary Bezier degrees use the same sampled-length normalization and
+    /// first-matching-curve/latest-parameter rules as the default cubic query.
+    pub fn proportion_from_point_in_ranges(
+        &self,
+        ranges: &[(usize, usize)],
+        point: (f64, f64, f64),
+    ) -> Result<Option<f64>, AuthoringError> {
+        let lengths = ranges
+            .iter()
+            .map(|&(start, stop)| {
+                self.bezier_length_pieces_range(start, stop, None)
+                    .map(|pieces| pieces.into_iter().sum())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        proportion_for_curve_lengths(&lengths, |index| {
+            let (start, stop) = ranges[index];
+            self.bezier_parameters_for_point_range(start, stop, point)
+        })
     }
 
     fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
@@ -495,6 +512,24 @@ impl PathQuery {
                 .map_err(AuthoringError::PathQuery)
         })
     }
+}
+
+fn proportion_for_curve_lengths(
+    lengths: &[f64],
+    mut parameters: impl FnMut(usize) -> Result<Vec<f64>, AuthoringError>,
+) -> Result<Option<f64>, AuthoringError> {
+    // Use the same captured-coordinate measure for both terms. A cached local
+    // metric can round differently after affine edits, producing values above
+    // one that the corresponding forward query correctly rejects.
+    let total_length: f64 = lengths.iter().sum();
+    let mut preceding_length = 0.0;
+    for (index, &length) in lengths.iter().enumerate() {
+        if let Some(parameter) = parameters(index)?.into_iter().reduce(f64::max) {
+            return Ok(Some((preceding_length + length * parameter) / total_length));
+        }
+        preceding_length += length;
+    }
+    Ok(None)
 }
 
 fn shoelace_direction(anchors: &[(f64, f64)]) -> &'static str {

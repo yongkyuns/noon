@@ -143,29 +143,20 @@ def proportion_from_point(value, point):
 def _custom_stride_proportion_from_point(value, query, stride, coordinates, point):
     point_count = int(query.pointCount)
     count = point_count // stride
-    selections = []
-    lengths = []
+    ranges = []
     for index in range(count):
         selection = _nth_curve_selection(value, index, query)
         if selection is None:
             raise IndexError("index 0 is out of bounds for axis 1 with size 0")
-        selections.append(selection)
-        lengths.append(_curve_length_from_selection(query, selection, None))
-
-    total_length = sum(lengths)
-    target_length = 0.0
-    for selection, length in zip(selections, lengths):
-        parameters = engine_call(
-            query.bezierParametersForPointRange,
-            selection[1],
-            selection[2],
-            *coordinates,
-        )
-        if parameters:
-            parameter = max(float(value) for value in parameters)
-            return (target_length + length * parameter) / total_length
-        target_length += length
-    raise ValueError(f"Point {point} does not lie on this curve.")
+        if selection[0] == "cubic":
+            start = 4 * selection[1]
+            ranges.extend((start, start + 4))
+        else:
+            ranges.extend((selection[1], selection[2]))
+    proportion = engine_call(query.proportionFromPointForRanges, ranges, *coordinates)
+    if proportion is None:
+        raise ValueError(f"Point {point} does not lie on this curve.")
+    return float(proportion)
 
 
 def arc_length(value, sample_points_per_curve):

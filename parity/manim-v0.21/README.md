@@ -406,3 +406,17 @@ affine, path, style, target-animation and saved-state behavior over point-owning
 roots must be completed before exposing those methods, followed by pinned-source,
 effective-state, replay and cross-language raster qualification. Owner #2011
 and case #2009 remain open; no API-ledger status is promoted by this foundation.
+
+
+Inverse point queries use one shared Rust length normalization for default cubic
+curves and caller-selected Bezier point slices. Both the numerator and denominator
+use the captured coordinate-space samples, so affine-edited endpoints return a
+usable normalized parameter; cached local-length rounding is not mixed into that
+ratio. Custom-stride Python code selects point slices and delegates matching and
+normalization through the typed Rust query. Native tests protect 72 affine cases,
+closed seams, range order, repeated ranges, arbitrary degree and invalid slices.
+The detached/live `inverse_endpoint_parameters` profiles retain the original
+forward-query checks and add exact endpoint/stride observations. The checked-in
+Rust/native/direct-WASM and Python path examples contain inverse assertions with
+unchanged visible geometry and duration. Current-head release-WASM/product, raster
+and hosted gates remain required; broader class/array/callback contracts stay open.

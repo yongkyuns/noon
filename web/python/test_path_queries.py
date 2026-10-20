@@ -68,20 +68,16 @@ class PathQueryTests(unittest.TestCase):
         value.throw_error_if_no_points = Mock()
         query = Mock()
         query.pointCount = 4
-        query.bezierLengthPiecesRange.side_effect = ([2.0], [6.0])
-        query.bezierParametersForPointRange.side_effect = ([], [0.5])
+        query.proportionFromPointForRanges.return_value = 0.625
+        query.bezierLengthPiecesRange.side_effect = AssertionError("Rust owns length normalization")
+        query.bezierParametersForPointRange.side_effect = AssertionError("Rust owns curve matching")
 
         with patch.object(queries, "_typed_manim_observation", return_value=query):
             self.assertEqual(value.proportion_from_point((1.0, 2.0, 0.0)), 0.625)
 
-        self.assertEqual(
-            [call.args for call in query.bezierLengthPiecesRange.call_args_list],
-            [(0, 2, None), (2, 4, None)],
-        )
-        self.assertEqual(
-            [call.args for call in query.bezierParametersForPointRange.call_args_list],
-            [(0, 2, 1.0, 2.0, 0.0), (2, 4, 1.0, 2.0, 0.0)],
-        )
+        query.proportionFromPointForRanges.assert_called_once_with([0, 2, 2, 4], 1.0, 2.0, 0.0)
+        query.bezierLengthPiecesRange.assert_not_called()
+        query.bezierParametersForPointRange.assert_not_called()
         query.proportionFromPoint.assert_not_called()
         query.free.assert_called_once_with()
 
@@ -101,6 +97,19 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, "no points"):
                 value.proportion_from_point((0, 0, 0))
             observe.assert_not_called()
+
+    def test_custom_stride_inverse_preserves_unmatched_point_error_and_releases_query(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 3
+        value.throw_error_if_no_points = Mock()
+        query = Mock(pointCount=8)
+        query.proportionFromPointForRanges.return_value = None
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            with self.assertRaisesRegex(ValueError, "Point .* does not lie on this curve"):
+                value.proportion_from_point((99.0, 0.0, 0.0))
+        query.proportionFromPointForRanges.assert_called_once_with([0, 3, 3, 6], 99.0, 0.0, 0.0)
+        value.throw_error_if_no_points.assert_called_once_with()
+        query.free.assert_called_once_with()
 
     def test_vmobject_constructor_accepts_query_stride_and_tolerance(self):
         with patch.object(semantic_handles, "_empty_path_init") as initialize:
@@ -1069,11 +1078,9 @@ class PathQueryTests(unittest.TestCase):
 
         path_query = Mock()
         path_query.pointCount = 4
-        path_query.bezierLengthPiecesRange.side_effect = (
-            [30.0], [1.0], [30.0], [1.0]
-        )
+        path_query.bezierLengthPiecesRange.side_effect = ([30.0], [1.0])
         path_query.bezierPointsAtRange.return_value = [15.5, 0.0, 0.0]
-        path_query.bezierParametersForPointRange.side_effect = ([15.5 / 30.0], [])
+        path_query.proportionFromPointForRanges.return_value = 0.5
 
         context = Mock()
         context.queryMobjectPath.return_value = path_query
@@ -1086,10 +1093,11 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(path_query.free.call_count, 2)
         self.assertEqual(
             [call.args for call in path_query.bezierLengthPiecesRange.call_args_list],
-            [(0, 2, None), (2, 4, None), (0, 2, None), (2, 4, None)],
+            [(0, 2, None), (2, 4, None)],
         )
-        path_query.bezierParametersForPointRange.assert_called_once_with(
-            0, 2, 15.5, 0.0, 0.0
+        path_query.bezierParametersForPointRange.assert_not_called()
+        path_query.proportionFromPointForRanges.assert_called_once_with(
+            [0, 2, 2, 4], 15.5, 0.0, 0.0
         )
 
     def test_custom_stride_proportions_reject_staged_callbacks_before_host_reads(self):

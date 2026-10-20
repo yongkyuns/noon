@@ -18,6 +18,9 @@ pub fn session() -> Result<ExecutionSession, String> {
         for shape in [&rectangle, &ellipse] {
             scene.add(shape)?;
             let query = shape.path_query()?;
+            let ranges = (0..query.curve_count())
+                .map(|index| (4 * index, 4 * index + 4))
+                .collect::<Vec<_>>();
             assert!(query.arc_length(None)? > 0.);
             let default_pieces = query.curve_length_pieces(0, None)?;
             assert_eq!(default_pieces.len(), 9);
@@ -29,6 +32,17 @@ pub fn session() -> Result<ExecutionSession, String> {
             assert_eq!(query.curve_length(0, Some(1))?, 0.0);
             for alpha in [0.125, 0.375, 0.625, 0.875] {
                 let (x, y) = query.point_from_proportion(alpha)?;
+                assert!(
+                    (query.proportion_from_point((x, y, 0.0))?.unwrap() - alpha).abs() < 1.0e-5
+                );
+                assert!(
+                    (query
+                        .proportion_from_point_in_ranges(&ranges, (x, y, 0.0))?
+                        .unwrap()
+                        - alpha)
+                        .abs()
+                        < 1.0e-5
+                );
                 let mut marker = scene.circle(0.08)?;
                 marker.set_fill(1., 204. / 255., 68. / 255., 1.)?;
                 marker.set_stroke_width(0.)?;
@@ -36,6 +50,45 @@ pub fn session() -> Result<ExecutionSession, String> {
                 scene.add(&marker)?;
             }
         }
+        assert_eq!(
+            rectangle
+                .path_query()?
+                .proportion_from_point((0.0, 0.0, 0.0))?,
+            None
+        );
+        let loop_path = scene.path(
+            crate::VectorPath::new()
+                .move_to(crate::Vec2::ZERO)
+                .cubic_to(
+                    crate::Vec2::new(1.0, 1.0),
+                    crate::Vec2::new(-1.0, 1.0),
+                    crate::Vec2::ZERO,
+                ),
+            Default::default(),
+        )?;
+        assert_eq!(
+            loop_path
+                .path_query()?
+                .proportion_from_point((0.0, 0.0, 0.0))?,
+            Some(1.0)
+        );
+        let mut endpoint_path = scene.path(
+            crate::VectorPath::new()
+                .move_to(crate::Vec2::new(-3.0, -1.0))
+                .cubic_to(
+                    crate::Vec2::new(-1.0, 2.0),
+                    crate::Vec2::new(1.0, -2.0),
+                    crate::Vec2::new(3.0, 1.0),
+                ),
+            Default::default(),
+        )?;
+        endpoint_path.rotate(0.1)?;
+        let endpoint_query = endpoint_path.path_query()?;
+        let endpoint = endpoint_query.end()?;
+        assert_eq!(
+            endpoint_query.proportion_from_point((endpoint.0, endpoint.1, 0.0))?,
+            Some(1.0)
+        );
         let target = rectangle.target_editor()?;
         crate::LayoutAnchor::from(&target).stretch(
             1.2,

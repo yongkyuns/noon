@@ -2714,6 +2714,40 @@ def _proportion_from_point(api):
     }
 
 
+def _inverse_endpoint_parameters(api, scene=None):
+    observations = []
+    for angle in [0.0, 0.1, 0.25, 0.3, 1.0, 2.0]:
+        for sx, sy in [(1.0, 1.0), (1.3, 0.7), (0.25, 2.5)]:
+            for x, y in [(0.0, 0.0), (7.0, -3.0), (10000.0, 20000.0), (1000000.0, -2000000.0)]:
+                path = api.CubicBezier((-3, -1, 0), (-1, 2, 0), (1, -2, 0), (3, 1, 0))
+                if scene is not None:
+                    scene.add(path)
+                path.stretch(sx, 0, about_point=api.ORIGIN)
+                path.stretch(sy, 1, about_point=api.ORIGIN)
+                path.rotate(angle, about_point=api.ORIGIN).shift((x, y, 0))
+                end = path.get_end()
+                alpha = float(path.proportion_from_point(end))
+                observations.append({
+                    "angle": angle, "scale": [sx, sy], "shift": [x, y],
+                    "alpha": alpha, "in_unit_interval": 0 <= alpha <= 1,
+                    "forward_endpoint_identical": tuple(path.point_from_proportion(alpha)) == tuple(end),
+                })
+    strides = []
+    for stride in [2, 3, 5]:
+        path = api.VMobject()
+        if scene is not None:
+            scene.add(path)
+        path.set_points([
+            (0, 0, 0), (1, 1, 0), (-1, 1, 0), (0, 0, 0),
+            (0, 0, 0), (2 / 3, 0, 0), (4 / 3, 0, 0), (2, 0, 0),
+        ])
+        path.n_points_per_cubic_curve = stride
+        path.rotate(0.3, about_point=api.ORIGIN).shift((7, -3, 0))
+        end = path.get_nth_curve_points(path.get_num_curves() - 1)[-1]
+        strides.append({"stride": stride, "alpha": float(path.proportion_from_point(end))})
+    return {"endpoints": observations, "custom_strides": strides}
+
+
 def _curve_function_queries(api):
     import numpy as np
 
@@ -6005,6 +6039,11 @@ FIXTURES = [
             lambda: _family_point_count_probe(manim)),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
+    Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),
+            lambda: _inverse_endpoint_parameters(manim), 0.0),
+    Fixture("inverse_endpoint_parameters_live",
+            lambda: _noon_live_scene_probe(lambda scene: _inverse_endpoint_parameters(noon, scene)),
+            lambda: _inverse_endpoint_parameters(manim), 0.0),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
     Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
     Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),

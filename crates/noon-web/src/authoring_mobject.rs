@@ -2330,6 +2330,29 @@ mod wasm {
                 .proportion_from_point((x, y, z))
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = proportionFromPointForRanges)]
+        pub fn proportion_from_point_for_ranges(
+            &self,
+            ranges: Vec<u32>,
+            x: f64,
+            y: f64,
+            z: f64,
+        ) -> Result<Option<f64>, JsValue> {
+            if !ranges.len().is_multiple_of(2) {
+                return Err(typed_js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "path_query.invalid_curve_ranges",
+                    "curve ranges require start/stop index pairs",
+                )));
+            }
+            let ranges = ranges
+                .chunks_exact(2)
+                .map(|pair| (pair[0] as usize, pair[1] as usize))
+                .collect::<Vec<_>>();
+            self.value
+                .proportion_from_point_in_ranges(&ranges, (x, y, z))
+                .map_err(js_error)
+        }
         pub fn start(&self) -> Result<Vec<f64>, JsValue> {
             self.value
                 .start()

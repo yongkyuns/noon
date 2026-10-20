@@ -146,6 +146,77 @@ fn proportion_from_point_matches_manim_cubic_root_and_arc_length_rules() {
 }
 
 #[test]
+fn inverse_endpoint_parameters_are_usable_by_forward_queries_after_affine_edits() {
+    for angle in [0.0, 0.1, 0.25, 0.3, 1.0, 2.0] {
+        for (sx, sy) in [(1.0, 1.0), (1.3, 0.7), (0.25, 2.5)] {
+            for (x, y) in [
+                (0.0, 0.0),
+                (7.0, -3.0),
+                (10_000.0, 20_000.0),
+                (1_000_000.0, -2_000_000.0),
+            ] {
+                let mut scene = Scene::new();
+                let mut path = scene
+                    .path(
+                        VectorPath::new().move_to(Vec2::new(-3.0, -1.0)).cubic_to(
+                            Vec2::new(-1.0, 2.0),
+                            Vec2::new(1.0, -2.0),
+                            Vec2::new(3.0, 1.0),
+                        ),
+                        Default::default(),
+                    )
+                    .unwrap();
+                path.set_scale(sx, sy).unwrap();
+                path.rotate(angle).unwrap();
+                path.shift(x, y).unwrap();
+                let revision = scene.revision();
+                let query = path.path_query().unwrap();
+                let end = query.end().unwrap();
+                let proportion = query
+                    .proportion_from_point((end.0, end.1, 0.0))
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    (0.0..=1.0).contains(&proportion),
+                    "{angle}, {sx}, {sy}, {x}, {y}: {proportion}"
+                );
+                assert_eq!(query.point_from_proportion(proportion).unwrap(), end);
+                assert_eq!(proportion, 1.0);
+                assert_eq!(scene.revision(), revision);
+            }
+        }
+    }
+}
+
+#[test]
+fn inverse_closed_cubic_seam_uses_one_curve_measure() {
+    let mut scene = Scene::new();
+    let path = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+                Vec2::new(1.0, 1.0),
+                Vec2::new(-1.0, 1.0),
+                Vec2::ZERO,
+            ),
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        path.path_query()
+            .unwrap()
+            .proportion_from_point((0.0, 0.0, 0.0))
+            .unwrap(),
+        Some(1.0)
+    );
+}
+
+#[test]
+fn paired_path_query_example_executes_native_inverse_assertions() {
+    let session = noon::example_scenes::path_queries::session().unwrap();
+    assert!((session.frame().time - 2.2).abs() < 1.0e-6);
+}
+
+#[test]
 fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     let mut scene = Scene::new();
     let first = scene
@@ -217,6 +288,87 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     assert!(empty_center.1.is_nan());
     assert_eq!(MobjectTarget::from(&empty).length_over_dim(3).unwrap(), 0.);
     assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
+}
+
+#[test]
+fn range_inverse_queries_use_supplied_order_and_validate_every_slice() {
+    let mut scene = Scene::new();
+    let path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0))
+                .move_to(Vec2::new(10.0, 0.0))
+                .line_to(Vec2::new(11.0, 0.0)),
+            Default::default(),
+        )
+        .unwrap();
+    let query = path.path_query().unwrap();
+    let point = (1.5, 0.0, 0.0);
+    assert_eq!(
+        query
+            .proportion_from_point_in_ranges(&[(0, 4), (4, 8)], point)
+            .unwrap(),
+        Some(0.5)
+    );
+    let reversed = query
+        .proportion_from_point_in_ranges(&[(4, 8), (0, 4)], point)
+        .unwrap()
+        .unwrap();
+    assert!((reversed - 5.0 / 6.0).abs() < 1.0e-12);
+    assert_eq!(
+        query
+            .proportion_from_point_in_ranges(&[(0, 4), (0, 4)], point)
+            .unwrap(),
+        Some(0.375)
+    );
+    assert_eq!(
+        query.proportion_from_point_in_ranges(&[], point).unwrap(),
+        None
+    );
+    assert_eq!(
+        query
+            .proportion_from_point_in_ranges(&[(0, 4)], (1.5, 0.0, 1.0))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        query
+            .proportion_from_point_in_ranges(&[(0, 4)], (99.0, 0.0, 0.0))
+            .unwrap(),
+        None
+    );
+    assert!(query
+        .proportion_from_point_in_ranges(&[(0, 4), (4, 9)], point)
+        .is_err());
+}
+
+#[test]
+fn range_inverse_queries_share_normalization_for_cubic_and_higher_degree_seams() {
+    let mut scene = Scene::new();
+    let mut path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .cubic_to(Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0), Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+            Default::default(),
+        )
+        .unwrap();
+    path.rotate(0.3).unwrap();
+    path.shift(7.0, -3.0).unwrap();
+    let revision = scene.revision();
+    let query = path.path_query().unwrap();
+    for stop in [4, 5] {
+        let end = query.bezier_points_at_range(0, stop, &[1.0]).unwrap()[0];
+        assert_eq!(
+            query
+                .proportion_from_point_in_ranges(&[(0, stop)], end)
+                .unwrap(),
+            Some(1.0)
+        );
+    }
+    assert_eq!(scene.revision(), revision);
 }
 
 #[test]

@@ -1077,6 +1077,29 @@ json.dumps({
     [2, 1], [3, 1], [3, 2], [4, 2],
   ]);
   assert.equal(product.plain_group_restore_extension.status, "restored");
+  const inverseRangeBoundary = await page.evaluate(async () => {
+    const wasm = await import('/web/pkg/noon_web.js');
+    const store = new wasm.WasmAuthoringStore();
+    const line = store.createManimGeometry(wasm.WasmManimGeometryOptions.line(0, 0, 1, 0));
+    const query = line.pathQuery();
+    try {
+      let rejected = null;
+      try {
+        query.proportionFromPointForRanges(new Uint32Array([0]), 1, 0, 0);
+      } catch (error) {
+        rejected = { category: error.category, code: error.code };
+      }
+      return { rejected, recovered: query.proportionFromPointForRanges(new Uint32Array([0, 4]), 1, 0, 0) };
+    } finally {
+      query.free();
+      line.free();
+      store.free();
+    }
+  });
+  assert.deepEqual(inverseRangeBoundary, {
+    rejected: { category: 'invalid_input', code: 'path_query.invalid_curve_ranges' }, recovered: 1,
+  });
+  console.log('[PASS] typed inverse range input rejection and snapshot reuse');
   const observations = product.observations;
   const curveQueries = observations.curve_function_queries;
   for (const name of ["functions", "functions_with_lengths"]) {
