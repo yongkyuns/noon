@@ -217,6 +217,17 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(args[1], [])
         self.assertIsNone(args[2])
 
+    def test_query_view_reconciliation_preserves_existing_wrapper_identity(self):
+        value = table.Table([["a"]])
+        original = types.SimpleNamespace(_semantic_handle=self.handle.a)
+        generic = types.SimpleNamespace(_semantic_handle=self.handle.a)
+        nested = types.SimpleNamespace(_semantic_member_wrappers={"0:1": generic})
+        root = types.SimpleNamespace(_semantic_member_wrappers={"9:1": nested})
+        value._table_query_wrappers["0:1"] = original
+        value._reuse_query_wrappers(root)
+        self.assertIs(nested._semantic_member_wrappers["0:1"], original)
+        self.assertIs(value._table_query_wrappers["9:1"], nested)
+
     def test_absent_label_queries_return_empty_groups(self):
         value = table.Table([["a"]])
         self.assertEqual(value.get_row_labels().submobjects, [])
@@ -330,10 +341,10 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(value.row_labels[0], row_label)
         self.assertIs(value.col_labels[0], column_label)
         self.assertIs(value.top_left_entry, top_left_entry)
-        self.assertIs(children[1].submobjects[0]._semantic_member_wrappers["1:1"], entry)
-        self.assertIs(children[3]._semantic_member_wrappers["2:1"], row_label)
-        self.assertIs(children[4]._semantic_member_wrappers["3:1"], column_label)
-        self.assertIs(children[5]._semantic_member_wrappers["4:1"], top_left_entry)
+        self.assertIs(value._table_query_wrappers["1:1"], entry)
+        self.assertIs(value._table_query_wrappers["2:1"], row_label)
+        self.assertIs(value._table_query_wrappers["3:1"], column_label)
+        self.assertIs(value._table_query_wrappers["4:1"], top_left_entry)
 
     def test_mobject_table_element_converter_receives_config_and_retains_results(self):
         inputs = [_FakeMobject(1), _FakeMobject(2)]
@@ -374,8 +385,8 @@ class TableFacadeTests(unittest.TestCase):
 
         self.assertEqual(calls, [(inputs[0], 0.5), (inputs[1], 0.5)])
         row = value._test_submobjects[1].submobjects[0]
-        self.assertIs(row._semantic_member_wrappers["3:1"], converted[0])
-        self.assertIs(row._semantic_member_wrappers["4:1"], converted[1])
+        self.assertIs(value._table_query_wrappers["3:1"], converted[0])
+        self.assertIs(value._table_query_wrappers["4:1"], converted[1])
 
     def test_mobject_table_element_converter_validates_callable_and_config(self):
         with patch.object(table._base, "Mobject", _FakeMobject), \
@@ -500,9 +511,9 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(value.row_labels[0], row_label)
         self.assertIs(value.col_labels[0], column_label)
         self.assertIs(value.top_left_entry, top_left_entry)
-        self.assertIs(value._test_submobjects[3]._semantic_member_wrappers["1:1"], row_label)
-        self.assertIs(value._test_submobjects[4]._semantic_member_wrappers["2:1"], column_label)
-        self.assertIs(value._test_submobjects[5]._semantic_member_wrappers["3:1"], top_left_entry)
+        self.assertIs(value._table_query_wrappers["1:1"], row_label)
+        self.assertIs(value._table_query_wrappers["2:1"], column_label)
+        self.assertIs(value._table_query_wrappers["3:1"], top_left_entry)
 
     def test_table_forwards_ignored_corner_identity_to_rust(self):
         corner = _FakeMobject(1)

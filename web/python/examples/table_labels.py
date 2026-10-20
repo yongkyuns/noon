@@ -19,9 +19,9 @@ class TableLabelsExample(Scene):
         assert table.row_labels[1] is row_labels[1]
         assert table.col_labels[0] is column_labels[0]
         assert table.top_left_entry is top_left_entry
-        assert table.submobjects[3].submobjects[0] is row_labels[0]
-        assert table.submobjects[4].submobjects[0] is column_labels[0]
-        assert table.submobjects[5].submobjects[0] is top_left_entry
+        assert table.get_row_labels()[0] is row_labels[0]
+        assert table.get_col_labels()[0] is column_labels[0]
+        assert table.get_labels()[0] is top_left_entry
         copied = table.copy()
         assert copied.row_labels[0] is not row_labels[0]
         assert copied.col_labels[0] is not column_labels[0]

@@ -249,20 +249,8 @@ class Table(_compat.VGroup):
         self.row_labels = row_label_mobjects or None
         self.col_labels = column_label_mobjects or None
         self.top_left_entry = top_left_entry
-        family_index = 3
-        for labels in (row_label_mobjects, column_label_mobjects):
-            if labels:
-                label_group = self.submobjects[family_index]
-                label_group._semantic_member_wrappers = {
-                    _family_wrapper_key(value): value for value in labels
-                }
-                family_index += 1
-        if top_left_entry is not None and row_label_mobjects and column_label_mobjects:
-            top_left_family = self.submobjects[family_index]
-            top_left_family._semantic_member_wrappers = {
-                _family_wrapper_key(top_left_entry): top_left_entry
-            }
         self._remember_query_wrappers([*(row_label_mobjects or []), *(column_label_mobjects or []), top_left_entry])
+        self._reuse_query_wrappers(self)
 
     @staticmethod
     def _label_handle(value):
@@ -304,6 +292,25 @@ class Table(_compat.VGroup):
             self._table_query_wrappers[_family_wrapper_key(value)] = value
             stack.extend(getattr(value, "_semantic_member_wrappers", {}).values())
 
+    def _reuse_query_wrappers(self, root):
+        # Reconcile only host identities. Every member and its order still comes
+        # from the Rust family handle, including the unpainted query views.
+        stack = [root]
+        seen = set()
+        while stack:
+            wrapper = stack.pop()
+            if id(wrapper) in seen:
+                continue
+            seen.add(id(wrapper))
+            members = getattr(wrapper, "_semantic_member_wrappers", {})
+            for key, member in list(members.items()):
+                known = self._table_query_wrappers.get(key)
+                if known is not None:
+                    members[key] = known
+                else:
+                    self._table_query_wrappers[key] = member
+                stack.append(members[key])
+
     def _query_entry_wrapper(self, handle):
         key = _handle_key(handle)
         wrapper = self._table_query_wrappers.get(key)
@@ -318,7 +325,8 @@ class Table(_compat.VGroup):
             _attach_shared_handle(wrapper, handle)
             if context is not None:
                 wrapper._canonical_live_target_context = context
-        self._remember_query_wrappers([wrapper])
+        self._table_query_wrappers[key] = wrapper
+        self._reuse_query_wrappers(wrapper)
         return wrapper
 
     def _query_entries(self, method):
@@ -350,7 +358,7 @@ class Table(_compat.VGroup):
         ))
 
     def _entry_family(self):
-        return self.submobjects[1]
+        return self._query_entry_wrapper(engine_call(self._table_handle.entryFamily))
 
     def _line_family(self):
         return self.submobjects[2]
@@ -543,25 +551,9 @@ class MobjectTable(Table):
         self.row_labels = row_label_mobjects or None
         self.col_labels = column_label_mobjects or None
         self.top_left_entry = top_left_entry
-        for row_group, row in zip(self._entry_family().submobjects, source_rows):
-            row_group._semantic_member_wrappers = {
-                _family_wrapper_key(value): value for value in row
-            }
         self._remember_query_wrappers(value for row in source_rows for value in row)
-        family_index = 3
-        for labels in (row_label_mobjects, column_label_mobjects):
-            if labels:
-                label_group = self.submobjects[family_index]
-                label_group._semantic_member_wrappers = {
-                    _family_wrapper_key(value): value for value in labels
-                }
-                family_index += 1
-        if top_left_entry is not None and row_label_mobjects and column_label_mobjects:
-            top_left_family = self.submobjects[family_index]
-            top_left_family._semantic_member_wrappers = {
-                _family_wrapper_key(top_left_entry): top_left_entry
-            }
         self._remember_query_wrappers([*(row_label_mobjects or []), *(column_label_mobjects or []), top_left_entry])
+        self._reuse_query_wrappers(self)
 
     @staticmethod
     def _label_handle(value):

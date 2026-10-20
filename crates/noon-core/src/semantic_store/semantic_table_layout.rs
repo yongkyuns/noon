@@ -160,6 +160,36 @@ impl SemanticTableLayout {
     }
 }
 
+/// Named query views and the canonical painted entry projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SemanticTableFamilies<N = SemanticNodeId> {
+    pub body_rows: N,
+    pub body_entries: N,
+    pub painted_entries: N,
+    pub row_labels: Option<N>,
+    pub column_labels: Option<N>,
+    pub corner: Option<N>,
+}
+impl<N: Copy> SemanticTableFamilies<N> {
+    pub fn referenced_nodes(&self) -> impl Iterator<Item = N> + '_ {
+        [self.body_rows, self.body_entries, self.painted_entries]
+            .into_iter()
+            .chain(self.row_labels)
+            .chain(self.column_labels)
+            .chain(self.corner)
+    }
+    fn map_nodes<M: Copy>(&self, map: &mut impl FnMut(N) -> M) -> SemanticTableFamilies<M> {
+        SemanticTableFamilies {
+            body_rows: map(self.body_rows),
+            body_entries: map(self.body_entries),
+            painted_entries: map(self.painted_entries),
+            row_labels: self.row_labels.map(&mut *map),
+            column_labels: self.column_labels.map(&mut *map),
+            corner: self.corner.map(map),
+        }
+    }
+}
+
 /// Logical table entries retain aliases and non-painted identities independently
 /// of the ordinary family projection used for drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +199,7 @@ pub struct SemanticTableStructure<N = SemanticNodeId> {
     column_labels: Option<Vec<N>>,
     top_left_entry: Option<N>,
     corner_placeholder: Option<N>,
+    families: Option<SemanticTableFamilies<N>>,
 }
 impl<N: Copy> SemanticTableStructure<N> {
     pub fn new(
@@ -184,7 +215,20 @@ impl<N: Copy> SemanticTableStructure<N> {
             column_labels,
             top_left_entry,
             corner_placeholder,
+            families: None,
         }
+    }
+    pub fn with_families(mut self, families: SemanticTableFamilies<N>) -> Self {
+        self.families = Some(families);
+        self
+    }
+    pub fn families(&self) -> Option<&SemanticTableFamilies<N>> {
+        self.families.as_ref()
+    }
+    pub fn family_references(&self) -> impl Iterator<Item = N> + '_ {
+        self.families
+            .iter()
+            .flat_map(|families| families.referenced_nodes())
     }
     pub fn body_rows(&self) -> &[Vec<N>] {
         &self.body
@@ -210,12 +254,20 @@ impl<N: Copy> SemanticTableStructure<N> {
             .chain(self.column_labels.iter().flatten().copied())
             .chain(self.top_left_entry)
             .chain(self.corner_placeholder)
+            .chain(self.family_references())
     }
     fn is_valid(&self) -> bool {
         let Some(first) = self.body.first().filter(|row| !row.is_empty()) else {
             return false;
         };
-        self.body.iter().all(|row| row.len() == first.len())
+        self.families.as_ref().is_none_or(|views| {
+            views.row_labels.is_some() == self.row_labels.is_some()
+                && views.column_labels.is_some() == self.column_labels.is_some()
+                && views.corner.is_some()
+                    == (self.row_labels.is_some()
+                        && self.column_labels.is_some()
+                        && self.top_left_entry.is_some())
+        }) && self.body.iter().all(|row| row.len() == first.len())
             && self
                 .row_labels
                 .as_ref()
@@ -245,7 +297,11 @@ impl<N: Copy> SemanticTableStructure<N> {
                 .as_ref()
                 .map(|columns| columns.iter().copied().map(&mut map).collect()),
             top_left_entry: self.top_left_entry.map(&mut map),
-            corner_placeholder: self.corner_placeholder.map(map),
+            corner_placeholder: self.corner_placeholder.map(&mut map),
+            families: self
+                .families
+                .as_ref()
+                .map(|families| families.map_nodes(&mut map)),
         }
     }
 }
@@ -282,6 +338,13 @@ impl SemanticTransactionTableLayout {
         self.structure
             .iter()
             .flat_map(|grid| grid.referenced_nodes())
+    }
+    pub(crate) fn family_references(
+        &self,
+    ) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
+        self.structure
+            .iter()
+            .flat_map(|grid| grid.family_references())
     }
     pub(crate) fn placeholder(&self) -> Option<SemanticTransactionNodeRef> {
         self.structure
@@ -436,5 +499,83 @@ mod tests {
         tx.remove_node(new);
         tx.apply(&mut store).unwrap();
         assert!(store.node(root).is_none());
+    }
+    #[test]
+    fn table_view_families_are_typed_dependencies_with_retirement_cleanup() {
+        let mut store = SemanticStore::new();
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        let rows = tx.create_node(SemanticNodeCreation::family());
+        let body = tx.create_node(SemanticNodeCreation::family());
+        let painted = tx.create_node(SemanticNodeCreation::family());
+        let entry = tx.create_node(SemanticNodeCreation::object(
+            crate::SemanticObjectState::new(crate::StoredGeometry::Circle { radius: 1.0 }),
+        ));
+        let families = SemanticTableFamilies {
+            body_rows: rows.into(),
+            body_entries: body.into(),
+            painted_entries: painted.into(),
+            row_labels: None,
+            column_labels: None,
+            corner: None,
+        };
+        let structure =
+            SemanticTableStructure::new(vec![vec![entry.into()]], None, None, None, None)
+                .with_families(families);
+        tx.set_table_layout(
+            root,
+            SemanticTransactionTableLayout::new(
+                SemanticTableLayout::new(1.0, 1.0, 0.5, false),
+                Some(structure),
+            ),
+        );
+        let result = tx.apply(&mut store).unwrap();
+        let root = result.resolve(root).unwrap();
+        let body = result.resolve(body).unwrap();
+        assert_eq!(
+            store
+                .semantic_table_layout(root)
+                .unwrap()
+                .unwrap()
+                .structure()
+                .unwrap()
+                .families()
+                .unwrap()
+                .body_entries,
+            body
+        );
+        let mut tx = SemanticMutationTransaction::new();
+        tx.remove_node(body);
+        tx.apply(&mut store).unwrap();
+        assert!(store.node(root).is_none());
+    }
+
+    #[test]
+    fn object_cannot_be_used_as_a_table_query_family() {
+        let mut store = SemanticStore::new();
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        let object = tx.create_node(SemanticNodeCreation::object(
+            crate::SemanticObjectState::new(crate::StoredGeometry::Circle { radius: 1.0 }),
+        ));
+        let families = SemanticTableFamilies {
+            body_rows: object.into(),
+            body_entries: root.into(),
+            painted_entries: root.into(),
+            row_labels: None,
+            column_labels: None,
+            corner: None,
+        };
+        tx.set_table_layout(
+            root,
+            SemanticTransactionTableLayout::new(
+                SemanticTableLayout::new(1.0, 1.0, 0.5, false),
+                Some(
+                    SemanticTableStructure::new(vec![vec![object.into()]], None, None, None, None)
+                        .with_families(families),
+                ),
+            ),
+        );
+        assert!(tx.apply(&mut store).is_err());
     }
 }

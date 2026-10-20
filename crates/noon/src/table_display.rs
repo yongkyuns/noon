@@ -5,6 +5,8 @@
 //! admission, layout and topology convention.
 
 mod admission;
+#[cfg(all(test, feature = "diagnostics"))]
+mod alias_tests;
 mod queries;
 
 use crate::{
@@ -219,6 +221,8 @@ impl From<NumericAuthoringError> for TableAuthoringError {
 pub struct Table {
     family: MobjectFamily,
     entry_family: MobjectFamily,
+    body_entries: MobjectFamily,
+    painted_entries: MobjectFamily,
     line_family: MobjectFamily,
     highlight_family: MobjectFamily,
     row_label_family: Option<MobjectFamily>,
@@ -249,7 +253,7 @@ impl Table {
             .borrow()
             .semantic_family_members_checked(family.node_id())
             .map_err(AuthoringError::from)?;
-        let [highlights, entries, lines, labels @ ..] = members.as_slice() else {
+        let [highlights, painted_entries, lines] = members.as_slice() else {
             return Err(TableAuthoringError::InvalidStructure);
         };
         let layout = store
@@ -257,29 +261,21 @@ impl Table {
             .semantic_table_layout(family.node_id())
             .map_err(AuthoringError::from)?
             .ok_or(TableAuthoringError::InvalidStructure)?;
-        let roles = [
-            layout.has_row_labels(),
-            layout.has_column_labels(),
-            layout.has_top_left_entry(),
-        ];
-        if labels.len() != roles.iter().filter(|present| **present).count() {
+        let views = layout
+            .structure()
+            .and_then(|grid| grid.families())
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        if views.painted_entries != *painted_entries {
             return Err(TableAuthoringError::InvalidStructure);
         }
-        let mut labels = labels.iter();
-        let mut next_role = |present: bool| -> Result<Option<MobjectFamily>, TableAuthoringError> {
-            if !present {
-                return Ok(None);
-            }
-            let node = labels
-                .next()
-                .copied()
-                .ok_or(TableAuthoringError::InvalidStructure)?;
-            Ok(Some(MobjectFamily::from_node(Rc::clone(&store), node)?))
-        };
-        let row_label_family = next_role(roles[0])?;
-        let column_label_family = next_role(roles[1])?;
-        let top_left_entry_family = next_role(roles[2])?;
-        let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
+        let view =
+            |id| MobjectFamily::from_node(Rc::clone(&store), id).map_err(TableAuthoringError::from);
+        let row_label_family = views.row_labels.map(view).transpose()?;
+        let column_label_family = views.column_labels.map(view).transpose()?;
+        let top_left_entry_family = views.corner.map(view).transpose()?;
+        let entry_family = view(views.body_rows)?;
+        let body_entries = view(views.body_entries)?;
+        let painted_entries = view(views.painted_entries)?;
         let table = Self {
             family,
             line_family: MobjectFamily::from_node(Rc::clone(&store), *lines)?,
@@ -288,6 +284,8 @@ impl Table {
             column_label_family,
             top_left_entry_family,
             entry_family,
+            body_entries,
+            painted_entries,
         };
         table.options()?;
         table.shape()?;
@@ -1301,7 +1299,7 @@ mod tests {
     fn arrange_in_grid_cell_alignment_places_unequal_entries_on_requested_edges() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
-        let entries = vec![
+        let entries = [
             circle(&store, 1.0),
             circle(&store, 0.5),
             circle(&store, 0.5),
@@ -1420,7 +1418,7 @@ mod tests {
                 .unwrap(),
             vec![
                 table.highlight_family().node_id(),
-                table.entry_family().node_id(),
+                table.painted_entries.node_id(),
                 table.line_family().node_id(),
             ]
         );
@@ -1723,10 +1721,7 @@ mod tests {
                 .iter()
                 .map(|row| row.iter().map(key).collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
-            vec![
-                vec![roots[0].clone(), roots[1].clone()],
-                vec![roots[2].clone(), roots[3].clone()],
-            ]
+            vec![vec![roots[0], roots[1]], vec![roots[2], roots[3]],]
         );
         assert_eq!(
             table
@@ -1735,10 +1730,7 @@ mod tests {
                 .iter()
                 .map(|column| column.iter().map(key).collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
-            vec![
-                vec![roots[0].clone(), roots[2].clone()],
-                vec![roots[1].clone(), roots[3].clone()],
-            ]
+            vec![vec![roots[0], roots[2]], vec![roots[1], roots[3]],]
         );
         assert_eq!(
             table
@@ -1887,12 +1879,7 @@ mod tests {
     fn labeled_constructor_counts_follow_pinned_reference_errors() {
         // Actual ManimCE 0.21.0: rows/columns of length 0..3 on a 2x2 body,
         // with and without a supplied corner. O=success, I=IndexError, V=ValueError.
-        let expected = [
-            [b'O', b'V', b'O', b'I'],
-            [b'I', b'V', b'I', b'I'],
-            [b'O', b'V', b'O', b'I'],
-            [b'I', b'I', b'I', b'I'],
-        ];
+        let expected = [*b"OVOI", *b"IVII", *b"OVOI", *b"IIII"];
         for corner in [false, true] {
             for (row_count, outcomes) in expected.into_iter().enumerate() {
                 for (column_count, outcome) in outcomes.into_iter().enumerate() {
@@ -1927,8 +1914,7 @@ mod tests {
                         }
                         b'I' => {
                             let error = result
-                                .err()
-                                .expect("the pinned constructor rejects this label count");
+                                .expect_err("the pinned constructor rejects this label count");
                             assert!(matches!(
                                 error,
                                 TableAuthoringError::InvalidLabelIndex { .. }
@@ -1938,8 +1924,7 @@ mod tests {
                         }
                         b'V' => {
                             let error = result
-                                .err()
-                                .expect("the pinned constructor rejects this label count");
+                                .expect_err("the pinned constructor rejects this label count");
                             assert!(matches!(
                                 error,
                                 TableAuthoringError::InsufficientColumnLabels { .. }
@@ -2102,28 +2087,39 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_family_entries_fail_without_moving_a_leaf() {
+    fn overlapping_family_entries_retain_shared_leaf_identity() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
         let first = circle(&store, 1.0);
         let family = MobjectFamily::create(Rc::clone(&store), &[(&first).into()]).unwrap();
-        let before = first.state().unwrap();
-
-        let result = MobjectTable::from_target_rows(
+        let table = MobjectTable::from_target_rows(
             &mut scene,
             vec![vec![
                 MobjectTarget::from(&first),
                 MobjectTarget::from(&family),
             ]],
+        )
+        .unwrap()
+        .into_table();
+        assert_eq!(
+            table
+                .get_entries()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.as_target().node_id())
+                .collect::<Vec<_>>(),
+            vec![first.node_id(), family.node_id()]
         );
-
-        assert!(matches!(
-            result,
-            Err(TableAuthoringError::Semantic(AuthoringError::Semantic(
-                noon_core::SemanticSceneOperationError::DuplicateMembershipTarget(_)
-            )))
-        ));
-        assert_eq!(first.state().unwrap(), before);
+        assert_eq!(
+            store
+                .borrow()
+                .ordered_leaf_nodes(table.family().node_id())
+                .unwrap()
+                .iter()
+                .filter(|id| **id == first.node_id())
+                .count(),
+            1
+        );
     }
 
     #[test]

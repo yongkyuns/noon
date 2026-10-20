@@ -1,0 +1,3033 @@
+{
+  "schemaVersion": 1,
+  "manimVersion": "0.21.0",
+  "manimTableSourceSha256": "81fc0819dc80433222f9c12958f86dcaab4bc893aa55cbb9cf15cc22a0d4d6b5",
+  "generatorSha256": "fb2de52a3ca4d7fec8cb6a6aa599516eef65f3168a65a56f828ea47740330a21",
+  "scope": "Geometric table constructor/query and alias observations; bounds use a declared 1e-6 comparison budget in native tests.",
+  "cases": [
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {},
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.0,
+            0.75
+          ],
+          "width": 1.9000000000000004,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true
+      },
+      "rows": [
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "row0",
+          "row1"
+        ],
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        1,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "row0",
+        "(1, 2)": "cell00",
+        "(2, 1)": "row1",
+        "(2, 2)": "cell10",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.95,
+            0.75
+          ],
+          "width": 1.9000000000000006,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            -0.04999999999999993,
+            -0.6499999999999999
+          ],
+          "width": 1.9,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "cols": true
+      },
+      "rows": [
+        [
+          "col0",
+          "col1"
+        ],
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "col0",
+        "col1"
+      ],
+      "line_counts": [
+        2,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "col0",
+        "(1, 2)": "col1",
+        "(2, 1)": "cell00",
+        "(2, 2)": "cell01",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": "col0",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.3428203230275508,
+            1.4
+          ],
+          "width": 2.512435565298214,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            1.2562177826491072,
+            -0.25
+          ],
+          "width": 2.685640646055101,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true
+      },
+      "rows": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "col0",
+          "col1"
+        ],
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "row0",
+          "row1"
+        ],
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "col0",
+        "col1",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell11",
+        "(1, 2)": "col0",
+        "(2, 1)": "row0",
+        "(2, 2)": "cell00",
+        "(3, 3)": "cell11",
+        "(0, 0)": "cell00",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -2.599038105676658,
+            1.4
+          ],
+          "width": 1.9000000000000004,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            -0.3928203230275504,
+            -0.25
+          ],
+          "width": 2.5124355652982135,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "center": [
+            2.206217782649107,
+            -1.65
+          ],
+          "width": 2.6856406460551017,
+          "height": 1.5
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "corner": true
+      },
+      "rows": [
+        [
+          "corner",
+          "col0",
+          "col1"
+        ],
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "corner",
+          "row0",
+          "row1"
+        ],
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "corner",
+        "col0",
+        "col1",
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "corner",
+        "col0",
+        "col1",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "corner",
+        "(1, 2)": "col0",
+        "(2, 1)": "row0",
+        "(2, 2)": "cell00",
+        "(3, 3)": "cell11",
+        "(0, 0)": "cell01",
+        "(-1, -1)": "col0",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -2.599038105676658,
+            1.4
+          ],
+          "width": 1.9000000000000004,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            -0.3928203230275504,
+            -0.25
+          ],
+          "width": 2.5124355652982135,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "center": [
+            2.206217782649107,
+            -1.65
+          ],
+          "width": 2.6856406460551017,
+          "height": 1.5
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "corner": true
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "corner"
+      ],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.0,
+            0.75
+          ],
+          "width": 1.9000000000000004,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "cols": true,
+        "corner": true
+      },
+      "rows": [
+        [
+          "col0",
+          "col1"
+        ],
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "corner",
+        "col0",
+        "col1"
+      ],
+      "line_counts": [
+        2,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "col0",
+        "(1, 2)": "col1",
+        "(2, 1)": "cell00",
+        "(2, 2)": "cell01",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": "col0",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.3428203230275508,
+            1.4
+          ],
+          "width": 2.512435565298214,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            1.2562177826491072,
+            -0.25
+          ],
+          "width": 2.685640646055101,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "corner": true
+      },
+      "rows": [
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "row0",
+          "row1"
+        ],
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "corner",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        1,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "row0",
+        "(1, 2)": "cell00",
+        "(2, 1)": "row1",
+        "(2, 2)": "cell10",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.95,
+            0.75
+          ],
+          "width": 1.9000000000000006,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            -0.04999999999999993,
+            -0.6499999999999999
+          ],
+          "width": 1.9,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "omit_inner": true
+      },
+      "rows": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "col0",
+          "col1"
+        ],
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "row0",
+          "row1"
+        ],
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "col0",
+        "col1",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        0,
+        0
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell11",
+        "(1, 2)": "col0",
+        "(2, 1)": "row0",
+        "(2, 2)": "cell00",
+        "(3, 3)": "cell11",
+        "(0, 0)": "cell00",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -2.599038105676658,
+            1.4
+          ],
+          "width": 1.9000000000000004,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            -0.3928203230275504,
+            -0.25
+          ],
+          "width": 2.5124355652982135,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "center": [
+            2.206217782649107,
+            -1.65
+          ],
+          "width": 2.6856406460551017,
+          "height": 1.5
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "alias": true
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell00"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell00"
+        ]
+      ],
+      "entries": [
+        "cell01",
+        "cell10",
+        "cell00"
+      ],
+      "body_entries": [
+        "cell01",
+        "cell10",
+        "cell00"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell01",
+        "(1, 2)": "cell10",
+        "(2, 1)": "cell00",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell01",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            0.02499999999999991,
+            -0.025000000000000133
+          ],
+          "width": 3.650000000000001,
+          "height": 2.5500000000000003
+        },
+        "(2, 2)": {
+          "center": [
+            -0.9500000000000002,
+            0.0
+          ],
+          "width": 1.8000000000000003,
+          "height": 2.6000000000000005
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "row_count": 1
+      },
+      "constructor_exception": "IndexError",
+      "message": "list index out of range"
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "cols": true,
+        "col_count": 1
+      },
+      "constructor_exception": "ValueError",
+      "message": "Too few rows and columns to fit all submobjetcs."
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.5588457268119893,
+          "height": 1.3500000000000008
+        }
+      ],
+      "case": {
+        "cols": true,
+        "body_cols": 3
+      },
+      "rows": [
+        [
+          "col0",
+          "col1",
+          "col2"
+        ],
+        [
+          "cell00",
+          "cell01",
+          "cell02"
+        ],
+        [
+          "cell10",
+          "cell11",
+          "cell12"
+        ]
+      ],
+      "columns": [
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ],
+        [
+          "col2",
+          "cell02",
+          "cell12"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "col2",
+        "cell00",
+        "cell01",
+        "cell02",
+        "cell10",
+        "cell11",
+        "cell12"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell02",
+        "cell10",
+        "cell11",
+        "cell12"
+      ],
+      "labels": [
+        "col0",
+        "col1",
+        "col2"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "col0",
+        "(1, 2)": "col1",
+        "(2, 1)": "cell00",
+        "(2, 2)": "cell01",
+        "(3, 3)": "cell12",
+        "(0, 0)": "cell02",
+        "(-1, -1)": "col1",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell02"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -2.772243186433545,
+            1.5500000000000003
+          ],
+          "width": 2.5124355652982144,
+          "height": 2.1500000000000004
+        },
+        "(2, 2)": {
+          "center": [
+            -0.1732050807568868,
+            -0.22500000000000053
+          ],
+          "width": 2.685640646055101,
+          "height": 1.4
+        },
+        "(3, 3)": {
+          "center": [
+            2.599038105676658,
+            -1.7750000000000004
+          ],
+          "width": 2.8588457268119893,
+          "height": 1.7000000000000004
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "body_rows": 3
+      },
+      "rows": [
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ],
+        [
+          "row2",
+          "cell20",
+          "cell21"
+        ]
+      ],
+      "columns": [
+        [
+          "row0",
+          "row1",
+          "row2"
+        ],
+        [
+          "cell00",
+          "cell10",
+          "cell20"
+        ],
+        [
+          "cell01",
+          "cell11",
+          "cell21"
+        ]
+      ],
+      "entries": [
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11",
+        "row2",
+        "cell20",
+        "cell21"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11",
+        "cell20",
+        "cell21"
+      ],
+      "labels": [
+        "row0",
+        "row1",
+        "row2"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "row0",
+        "(1, 2)": "cell00",
+        "(2, 1)": "row1",
+        "(2, 2)": "cell10",
+        "(3, 3)": "cell21",
+        "(0, 0)": "cell11",
+        "(-1, -1)": "cell00",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell11"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -2.1500000000000004,
+            1.6
+          ],
+          "width": 2.1,
+          "height": 1.3
+        },
+        "(2, 2)": {
+          "center": [
+            -0.05000000000000021,
+            0.20000000000000018
+          ],
+          "width": 2.0999999999999996,
+          "height": 1.5000000000000004
+        },
+        "(3, 3)": {
+          "center": [
+            2.1,
+            -1.4
+          ],
+          "width": 2.2,
+          "height": 1.7
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "row_count": 0
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.0,
+            0.75
+          ],
+          "width": 1.9000000000000004,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "cols": true,
+        "col_count": 0
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.0,
+            0.75
+          ],
+          "width": 1.9000000000000004,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "row_count": 0
+      },
+      "rows": [
+        [
+          "col0",
+          "col1"
+        ],
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "col0",
+        "col1"
+      ],
+      "line_counts": [
+        2,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "col0",
+        "(1, 2)": "col1",
+        "(2, 1)": "cell00",
+        "(2, 2)": "cell01",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": "col0",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.3428203230275508,
+            1.4
+          ],
+          "width": 2.512435565298214,
+          "height": 2.0
+        },
+        "(2, 2)": {
+          "center": [
+            1.2562177826491072,
+            -0.25
+          ],
+          "width": 2.685640646055101,
+          "height": 1.3000000000000003
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "col_count": 0
+      },
+      "rows": [
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "row0",
+          "row1"
+        ],
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "row0",
+        "cell00",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        1,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "row0",
+        "(1, 2)": "cell00",
+        "(2, 1)": "row1",
+        "(2, 2)": "cell10",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.95,
+            0.75
+          ],
+          "width": 1.9000000000000006,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            -0.04999999999999993,
+            -0.6499999999999999
+          ],
+          "width": 1.9,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "row_count": 0,
+        "col_count": 0
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -1.0,
+            0.75
+          ],
+          "width": 1.9000000000000004,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "row_count": 3
+      },
+      "constructor_exception": "IndexError",
+      "message": "list index out of range"
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.5588457268119893,
+          "height": 1.3500000000000008
+        }
+      ],
+      "case": {
+        "cols": true,
+        "col_count": 3
+      },
+      "constructor_exception": "IndexError",
+      "message": "list index out of range"
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "row_count": 3
+      },
+      "constructor_exception": "IndexError",
+      "message": "list index out of range"
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.5588457268119893,
+          "height": 1.3500000000000008
+        }
+      ],
+      "case": {
+        "rows": true,
+        "cols": true,
+        "col_count": 3
+      },
+      "constructor_exception": "IndexError",
+      "message": "list index out of range"
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "same_row_alias": true
+      },
+      "rows": [
+        [
+          "cell00"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00",
+          "cell10"
+        ],
+        [
+          "cell00",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell00",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": "cell10",
+        "(2, 1)": "cell11",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell00",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell00"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            0.07499999999999996,
+            0.75
+          ],
+          "width": 3.75,
+          "height": 1.2000000000000002
+        },
+        "(2, 2)": {
+          "center": [
+            -0.9499999999999997,
+            0.0
+          ],
+          "width": 2.0,
+          "height": 2.9000000000000004
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "same_column_alias": true
+      },
+      "rows": [
+        [
+          "cell00",
+          "cell01"
+        ],
+        [
+          "cell00",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "cell01",
+        "cell00",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell01",
+        "cell00",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell01",
+        "(1, 2)": "cell00",
+        "(2, 1)": "cell11",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell01",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            1.0,
+            0.75
+          ],
+          "width": 1.7000000000000006,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            -0.8500000000000001,
+            -0.02499999999999991
+          ],
+          "width": 2.0,
+          "height": 2.75
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "all_alias": true
+      },
+      "rows": [
+        [
+          "cell00"
+        ],
+        [
+          "cell00"
+        ]
+      ],
+      "columns": [
+        [
+          "cell00"
+        ],
+        [
+          "cell00"
+        ]
+      ],
+      "entries": [
+        "cell00"
+      ],
+      "body_entries": [
+        "cell00"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell00",
+        "(1, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(2, 1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            0.0,
+            0.0
+          ],
+          "width": 1.7000000000000002,
+          "height": 1.2
+        },
+        "(2, 2)": {
+          "center": [
+            0.0,
+            0.0
+          ],
+          "width": 1.7000000000000002,
+          "height": 1.2
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "family_overlap": true
+      },
+      "rows": [
+        [
+          "family00",
+          "cell01"
+        ],
+        [
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          "family00",
+          "cell10"
+        ],
+        [
+          "cell01",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "family00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "family00",
+        "cell01",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [],
+      "line_counts": [
+        1,
+        1
+      ],
+      "entry_positions": {
+        "(1, 1)": "family00",
+        "(1, 2)": "cell01",
+        "(2, 1)": "cell10",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "family00",
+        "(2, 2)": "cell11",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -0.050000000000000044,
+            0.75
+          ],
+          "width": 3.8000000000000007,
+          "height": 1.2999999999999998
+        },
+        "(2, 2)": {
+          "center": [
+            0.95,
+            -0.6499999999999999
+          ],
+          "width": 2.0000000000000004,
+          "height": 1.5
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "same_row_alias": true,
+        "rows": true,
+        "cols": true
+      },
+      "rows": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "col0",
+          "col1"
+        ],
+        [
+          "row0",
+          "cell00"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell11"
+        ]
+      ],
+      "columns": [
+        [
+          {
+            "type": "VMobject",
+            "points": 0
+          },
+          "row0",
+          "row1"
+        ],
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell00",
+          "cell11"
+        ]
+      ],
+      "entries": [
+        "col0",
+        "col1",
+        "row0",
+        "cell00",
+        "row1",
+        "cell10",
+        "cell11"
+      ],
+      "body_entries": [
+        "cell00",
+        "cell10",
+        "cell11"
+      ],
+      "labels": [
+        "col0",
+        "col1",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "cell11",
+        "(1, 2)": "col0",
+        "(2, 1)": "row0",
+        "(2, 2)": "cell00",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "row0",
+        "(-1, -1)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell00",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell00"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -0.1464101615137754,
+            1.4500000000000004
+          ],
+          "width": 6.605255888325765,
+          "height": 2.000000000000001
+        },
+        "(2, 2)": {
+          "center": [
+            -1.3428203230275506,
+            -0.25000000000000067
+          ],
+          "width": 4.412435565298215,
+          "height": 1.2000000000000002
+        },
+        "(3, 3)": {
+          "center": [
+            1.0781088913245536,
+            -1.0000000000000007
+          ],
+          "width": 4.941858428704208,
+          "height": 2.9000000000000004
+        }
+      },
+      "first_grid_member_identity_stable": true
+    },
+    {
+      "initial_columns": [
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999964
+          ],
+          "width": 1.212435565298214,
+          "height": 1.0500000000000005
+        },
+        {
+          "center": [
+            -3.3306690738754696e-16,
+            0.24999999999999958
+          ],
+          "width": 1.3856406460551016,
+          "height": 1.2000000000000006
+        }
+      ],
+      "case": {
+        "alias": true,
+        "rows": true,
+        "cols": true,
+        "corner": true
+      },
+      "rows": [
+        [
+          "corner",
+          "col0",
+          "col1"
+        ],
+        [
+          "row0",
+          "cell00",
+          "cell01"
+        ],
+        [
+          "row1",
+          "cell10",
+          "cell00"
+        ]
+      ],
+      "columns": [
+        [
+          "corner",
+          "row0",
+          "row1"
+        ],
+        [
+          "col0",
+          "cell00",
+          "cell10"
+        ],
+        [
+          "col1",
+          "cell01",
+          "cell00"
+        ]
+      ],
+      "entries": [
+        "corner",
+        "col0",
+        "col1",
+        "row0",
+        "cell01",
+        "row1",
+        "cell10",
+        "cell00"
+      ],
+      "body_entries": [
+        "cell01",
+        "cell10",
+        "cell00"
+      ],
+      "labels": [
+        "corner",
+        "col0",
+        "col1",
+        "row0",
+        "row1"
+      ],
+      "line_counts": [
+        2,
+        2
+      ],
+      "entry_positions": {
+        "(1, 1)": "corner",
+        "(1, 2)": "col0",
+        "(2, 1)": "row0",
+        "(2, 2)": "cell01",
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01",
+        "(-1, -1)": "corner",
+        "(99, 99)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        }
+      },
+      "body_positions": {
+        "(1, 1)": "cell01",
+        "(2, 2)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(3, 3)": {
+          "exception": "IndexError",
+          "message": "range object index out of range"
+        },
+        "(0, 0)": "cell01"
+      },
+      "cells": {
+        "(1, 1)": {
+          "center": [
+            -0.1464101615137754,
+            1.4000000000000001
+          ],
+          "width": 6.605255888325765,
+          "height": 2.0000000000000004
+        },
+        "(2, 2)": {
+          "center": [
+            -1.3428203230275506,
+            -0.9750000000000003
+          ],
+          "width": 4.412435565298215,
+          "height": 2.65
+        },
+        "(3, 3)": {
+          "center": [
+            1.1281088913245536,
+            -1.0000000000000004
+          ],
+          "width": 4.841858428704208,
+          "height": 2.8
+        }
+      },
+      "first_grid_member_identity_stable": true
+    }
+  ]
+}

@@ -3292,6 +3292,9 @@ impl SemanticMutationTransaction {
                     for node in layout.node_references() {
                         catalog.ensure_authoring_node(node, index)?;
                     }
+                    for family in layout.family_references() {
+                        catalog.ensure_family(family, index)?;
+                    }
                     if let Some(node) = layout.placeholder() {
                         catalog.ensure_object(node, index)?;
                     }

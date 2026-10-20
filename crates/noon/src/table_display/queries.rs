@@ -60,24 +60,25 @@ impl Table {
     }
     /// Flat entries omit the unsupplied corner and preserve last-occurrence order.
     pub fn get_entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        let grid = self.query_grid()?;
-        let placeholder = grid.corner_placeholder();
-        self.entry_handles(unique_last(
-            self.displayed_nodes()?
-                .into_iter()
-                .flatten()
-                .filter(|node| Some(*node) != placeholder)
-                .collect(),
-        ))
+        self.family_entries(&self.painted_entries)
     }
     pub fn entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
         self.get_entries()
     }
     pub fn get_entries_without_labels(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        let grid = self.query_grid()?;
-        self.entry_handles(unique_last(
-            grid.body_rows().iter().flatten().copied().collect(),
-        ))
+        self.family_entries(&self.body_entries)
+    }
+    fn family_entries(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<Vec<TableEntry>, TableAuthoringError> {
+        family.validate()?;
+        let nodes = family
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(AuthoringError::from)?;
+        self.entry_handles(nodes)
     }
     pub fn get_row_labels(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
         self.entry_handles(unique_last(
@@ -111,7 +112,7 @@ impl Table {
         let grid = self.query_grid()?;
         let width = grid.body_rows()[0].len() + usize::from(grid.row_labels().is_some());
         let missing = i128::from(grid.corner_placeholder().is_some());
-        select_position(self.get_entries()?, row, column, width, missing)
+        self.entry_in_family(&self.painted_entries, row, column, width, missing)
     }
     pub fn body_entry_at_position(
         &self,
@@ -119,7 +120,34 @@ impl Table {
         column: i128,
     ) -> Result<TableEntry, TableAuthoringError> {
         let width = self.query_grid()?.body_rows()[0].len();
-        select_position(self.get_entries_without_labels()?, row, column, width, 0)
+        self.entry_in_family(&self.body_entries, row, column, width, 0)
+    }
+    fn entry_in_family(
+        &self,
+        family: &MobjectFamily,
+        row: i128,
+        column: i128,
+        width: usize,
+        missing: i128,
+    ) -> Result<TableEntry, TableAuthoringError> {
+        family.validate()?;
+        let node = {
+            let store = family.integration_store().borrow();
+            let length = store
+                .node(family.node_id())
+                .ok_or(TableAuthoringError::InvalidStructure)?
+                .members()
+                .len();
+            let index = position_index(row, column, width, missing, length)?;
+            store
+                .semantic_family_member_at_checked(family.node_id(), index)
+                .map_err(AuthoringError::from)?
+                .ok_or(TableAuthoringError::InvalidStructure)?
+        };
+        Ok(CompositeEntryHandle::from_node(
+            Rc::clone(family.integration_store()),
+            node,
+        )?)
     }
     pub fn get_entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
         self.entry_at_position(row as i128, column as i128)
@@ -141,7 +169,7 @@ impl Table {
     }
 }
 
-fn unique_last(nodes: Vec<SemanticNodeId>) -> Vec<SemanticNodeId> {
+pub(super) fn unique_last<N: Copy + std::hash::Hash + Eq>(nodes: Vec<N>) -> Vec<N> {
     let mut seen = HashSet::new();
     let mut result: Vec<_> = nodes
         .into_iter()
@@ -151,19 +179,19 @@ fn unique_last(nodes: Vec<SemanticNodeId>) -> Vec<SemanticNodeId> {
     result.reverse();
     result
 }
-fn select_position(
-    entries: Vec<TableEntry>,
+fn position_index(
     row: i128,
     column: i128,
     width: usize,
     missing: i128,
-) -> Result<TableEntry, TableAuthoringError> {
+    length: usize,
+) -> Result<usize, TableAuthoringError> {
     let index = row
         .checked_mul(width as i128)
         .and_then(|index| index.checked_add(column))
         .and_then(|index| index.checked_sub(missing))
         .ok_or(TableAuthoringError::InvalidEntryIndex)?;
-    let length = entries.len() as i128;
+    let length = length as i128;
     let index = if index < 0 {
         index
             .checked_add(length)
@@ -174,21 +202,21 @@ fn select_position(
     if !(0..length).contains(&index) {
         return Err(TableAuthoringError::InvalidEntryIndex);
     }
-    Ok(entries[index as usize].clone())
+    Ok(index as usize)
 }
 
 /// Read one logical row or column without traversing the full table family.
-pub(super) fn displayed_shape(grid: &SemanticTableStructure) -> (usize, usize) {
+pub(super) fn displayed_shape<N: Copy>(grid: &SemanticTableStructure<N>) -> (usize, usize) {
     (
         grid.body_rows().len() + usize::from(grid.column_labels().is_some()),
         grid.body_rows()[0].len() + usize::from(grid.row_labels().is_some()),
     )
 }
 
-pub(super) fn displayed_row(
-    grid: &SemanticTableStructure,
+pub(super) fn displayed_row<N: Copy>(
+    grid: &SemanticTableStructure<N>,
     row: usize,
-) -> Result<Vec<SemanticNodeId>, TableAuthoringError> {
+) -> Result<Vec<N>, TableAuthoringError> {
     if row >= displayed_shape(grid).0 {
         return Err(TableAuthoringError::InvalidEntryIndex);
     }
@@ -214,10 +242,10 @@ pub(super) fn displayed_row(
     Ok(nodes)
 }
 
-pub(super) fn displayed_column(
-    grid: &SemanticTableStructure,
+pub(super) fn displayed_column<N: Copy>(
+    grid: &SemanticTableStructure<N>,
     column: usize,
-) -> Result<Vec<SemanticNodeId>, TableAuthoringError> {
+) -> Result<Vec<N>, TableAuthoringError> {
     if column >= displayed_shape(grid).1 {
         return Err(TableAuthoringError::InvalidEntryIndex);
     }

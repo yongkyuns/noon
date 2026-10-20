@@ -91,10 +91,10 @@ class TableLifecycle(Scene):
         labeled = MobjectTable([[entry, Circle(radius=0.12)]], row_labels=[row_label],
                                col_labels=column_labels, top_left_entry=top_left_entry,
                                h_buff=0.7, v_buff=0.45, include_outer_lines=True)
-        assert labeled.submobjects[3].submobjects[0] is row_label
-        assert labeled.submobjects[4].submobjects[0] is column_labels[0]
-        assert labeled.submobjects[4].submobjects[1] is column_labels[1]
-        assert labeled.submobjects[5].submobjects[0] is top_left_entry
+        assert labeled.get_row_labels()[0] is row_label
+        assert labeled.get_col_labels()[0] is column_labels[0]
+        assert labeled.get_col_labels()[1] is column_labels[1]
+        assert labeled.get_labels()[0] is top_left_entry
         assert labeled.row_labels[0] is row_label
         assert labeled.col_labels[0] is column_labels[0]
         assert labeled.top_left_entry is top_left_entry
