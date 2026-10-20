@@ -109,5 +109,5 @@ jobs:
         with:
           name: prepared-prefix-incremental
           path: prefix-incremental-artifacts
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: error

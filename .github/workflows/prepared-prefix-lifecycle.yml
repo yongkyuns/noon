@@ -99,5 +99,5 @@ jobs:
         with:
           name: prepared-prefix-lifecycle
           path: prefix-lifecycle-artifacts
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: error
