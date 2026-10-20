@@ -23,6 +23,70 @@ impl WasmTableOptions {
             },
         }
     }
+
+    /// Match ManimCE's default-on inner grid lines while preserving the
+    /// existing three-argument constructor for JavaScript callers.
+    #[wasm_bindgen(js_name = setIncludeInnerLines)]
+    pub fn set_include_inner_lines(&mut self, include_inner_lines: bool) {
+        self.options.include_inner_lines = include_inner_lines;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeColor)]
+    pub fn set_line_stroke_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) {
+        self.options.line_stroke_color = noon::Color {
+            red: red as f32,
+            green: green as f32,
+            blue: blue as f32,
+            alpha: alpha as f32,
+        };
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeWidth)]
+    pub fn set_line_stroke_width(&mut self, width: f64) {
+        self.options.line_stroke_width = width;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeOpacity)]
+    pub fn set_line_stroke_opacity(&mut self, opacity: f64) {
+        self.options.line_stroke_opacity = opacity;
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeJoin)]
+    pub fn set_line_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
+        self.options.line_stroke_join = match join {
+            "round" => noon::StrokeJoin::Round,
+            "miter" | "auto" => noon::StrokeJoin::Miter,
+            "bevel" => noon::StrokeJoin::Bevel,
+            _ => {
+                return Err(js_error(
+                    "line_config.joint_type must be auto, round, miter, or bevel",
+                ))
+            }
+        };
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setLineStrokeCap)]
+    pub fn set_line_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
+        self.options.line_stroke_cap = match cap {
+            "round" => noon::StrokeCap::Round,
+            "butt" | "auto" => noon::StrokeCap::Butt,
+            "square" => noon::StrokeCap::Square,
+            _ => {
+                return Err(js_error(
+                    "line_config.cap_style must be auto, round, butt, or square",
+                ))
+            }
+        };
+        Ok(())
+    }
+
+    /// Apply the qualified arrange-in-grid cell-alignment directions.
+    #[wasm_bindgen(js_name = setCellAlignment)]
+    pub fn set_cell_alignment(&mut self, x: f64, y: f64) {
+        self.options.cell_alignment_x = x;
+        self.options.cell_alignment_y = y;
+    }
 }
 
 #[wasm_bindgen]
@@ -48,6 +112,48 @@ pub async fn create_table_renderer(
     compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::table::session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the configurable DecimalTable fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createDecimalTableFormatRenderer)]
+pub async fn create_decimal_table_format_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::table::decimal_format_session(compiler).map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the grouped-label table fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createMobjectTableFamilyLabelsRenderer)]
+pub async fn create_mobject_table_family_labels_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::family_labels_session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the plain-text Table labels fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createTableLabelsRenderer)]
+pub async fn create_table_labels_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::labels_session().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct WASM renderer counterpart of the Table line-configuration fixture.
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createTableLineConfigRenderer)]
+pub async fn create_table_line_config_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::table::line_config_session().map_err(js_error)?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -95,6 +201,22 @@ impl WasmTableHandle {
                 values.push(&entry_handle(entry));
             }
             result.push(&values);
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = getHorizontalLines)]
+    pub fn get_horizontal_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_horizontal_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = getVerticalLines)]
+    pub fn get_vertical_lines(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for line in self.table.get_vertical_lines().map_err(js_error)? {
+            result.push(&WasmAuthoringMobjectHandle::from_semantic_mobject(line).into());
         }
         Ok(result)
     }

@@ -48,6 +48,28 @@ impl SemanticExecutionPlayer {
         })?
         .map_err(AuthoringFailure::from)
     }
+    pub(crate) fn live_create_table_with_labels<'a>(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        row_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        column_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        top_left_entry: Option<noon::MobjectTarget<'a>>,
+        options: noon::TableOptions,
+    ) -> Result<noon::Table, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(
+                noon::Table::from_rows_with_composite_labels_in_live_session(
+                    live,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    top_left_entry,
+                    options,
+                ),
+            )
+        })?
+        .map_err(AuthoringFailure::from)
+    }
     pub(crate) fn live_create_math_table(
         &mut self,
         backend: &mut impl noon::LatexBackend,
@@ -79,18 +101,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         backend: &mut impl noon::LatexBackend,
         rows: Vec<Vec<f64>>,
+        format: noon::DecimalFormat,
         options: noon::TableOptions,
     ) -> Result<noon::DecimalTable, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(noon::DecimalTable::from_rows_in_live_session(
-                live,
-                backend,
-                rows,
-                noon::DecimalFormat {
-                    decimal_places: 1,
-                    ..Default::default()
-                },
-                options,
+                live, backend, rows, format, options,
             ))
         })?
         .map_err(AuthoringFailure::from)
@@ -103,6 +119,46 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| {
             Ok(noon::MobjectTable::from_target_rows_in_live_session(
                 live, rows, options,
+            ))
+        })?
+        .map_err(AuthoringFailure::from)
+    }
+    pub(crate) fn live_create_mobject_table_with_labels<'a>(
+        &mut self,
+        rows: Vec<Vec<noon::MobjectTarget<'a>>>,
+        row_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        column_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        options: noon::TableOptions,
+    ) -> Result<noon::MobjectTable, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(
+                noon::MobjectTable::from_target_rows_with_composite_labels_in_live_session(
+                    live,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    options,
+                ),
+            )
+        })?
+        .map_err(AuthoringFailure::from)
+    }
+    pub(crate) fn live_create_mobject_table_with_labels_and_top_left_entry<'a>(
+        &mut self,
+        rows: Vec<Vec<noon::MobjectTarget<'a>>>,
+        row_labels: Vec<noon::MobjectTarget<'a>>,
+        column_labels: Vec<noon::MobjectTarget<'a>>,
+        top_left_entry: noon::MobjectTarget<'a>,
+        options: noon::TableOptions,
+    ) -> Result<noon::MobjectTable, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(noon::MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry_in_live_session(
+                live,
+                rows,
+                row_labels,
+                column_labels,
+                top_left_entry,
+                options,
             ))
         })?
         .map_err(AuthoringFailure::from)
