@@ -297,11 +297,9 @@ fn measure_content(
             GeometryResource::VectorPath(path) => {
                 transformed_path_layout_bounds(path, transform, include_handles)
             }
-            GeometryResource::Mesh(_) => {
-                return Err(AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::SpatialMeshBounds2D,
-                ));
-            }
+            GeometryResource::Mesh(_) => Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::SpatialMeshBounds2D,
+            )),
         },
     }
 }
