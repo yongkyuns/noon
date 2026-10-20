@@ -25,6 +25,8 @@ mod signal_timeline;
 mod spatial_index;
 mod translation_drag;
 pub use replay::{ReplayError, ReplayLimits, ReplayStats};
+#[cfg(feature = "prepared-prefix")]
+pub use replay::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};
 pub use signal_timeline::{
     PreparedSignalTimelineAppend, SignalTimelineAppendError, SignalTimelinePreview,
     SignalTimelineSchedule,
@@ -5187,5 +5189,3 @@ mod tests {
     }
 }
 
-#[cfg(feature = "prepared-prefix")]
-pub use replay::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};
