@@ -214,7 +214,7 @@ fn cloned_source_and_replaced_replay_scope_cannot_continue_the_old_stream() {
 }
 
 #[test]
-fn unsupported_structural_suffix_publishes_nothing_and_old_reader_survives() {
+fn structural_removal_preserves_delivered_history_and_later_membership() {
     let mut source = source(2, limits());
     let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
     source.apply_execution_patch(&position(3.0)).unwrap();
@@ -222,15 +222,17 @@ fn unsupported_structural_suffix_publishes_nothing_and_old_reader_survives() {
         .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(1)))
         .unwrap();
     source.advance_to(2.0).unwrap();
-    for _ in 0..2 {
-        assert!(matches!(
-            source.prepare_prefix_update(&mut publisher),
-            Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
-        ));
-    }
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
     drop(source);
-    assert_eq!(reader.seek(0.5).unwrap().objects.len(), 2);
-    assert_eq!(reader.frontier(), 1.0);
+    assert_eq!(
+        reader.seek(1.5).unwrap().objects[0].transform.translation.x,
+        3.0
+    );
+    assert_eq!(reader.take_renderer_publication().painter_order(), &[0]);
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.take_renderer_publication().painter_order(), &[0, 1]);
 }
 
 #[test]

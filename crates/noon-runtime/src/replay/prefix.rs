@@ -3,7 +3,10 @@
 //! The reader accepts future revisions without seeking to the producer frontier.
 use super::{ReplayError, ReplayLimits, ReplayStats, Revision};
 use crate::{EvaluationError, FrameState, RendererPublication, RuntimeIdentity, SceneInstance};
+use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
 use std::sync::Arc;
+
+mod storage;
 
 #[derive(Debug, PartialEq)]
 pub enum PrefixError {
@@ -18,6 +21,10 @@ pub enum PrefixError {
         end_exclusive: f64,
     },
     Allocation,
+    CapacityRequired {
+        object_slots: usize,
+    },
+    Resources(CompiledResourceError),
 }
 impl std::fmt::Display for PrefixError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,11 +43,20 @@ impl From<EvaluationError> for PrefixError {
     }
 }
 
+impl From<CompiledResourceError> for PrefixError {
+    fn from(error: CompiledResourceError) -> Self {
+        Self::Resources(error)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrefixBatchStats {
     pub revisions: usize,
     pub payloads: usize,
     pub row_payloads: usize,
+    pub new_object_slots: usize,
+    /// Unique immutable resource entries delivered, not resource bytes.
+    pub resource_payloads: usize,
 }
 
 /// Source-bound cursor only. Does not own a Semantic Scene or another evaluator.
@@ -53,6 +69,8 @@ pub struct PrefixPublisher {
     stream: Arc<()>,
     next_revision: usize,
     frontier: f64,
+    object_slots: usize,
+    resources: CompiledResources,
 }
 
 /// An owned, ordered extension of one read-only historical projection.
@@ -66,8 +84,15 @@ pub struct PrefixBatch {
     frontier: f64,
     revisions: Vec<Revision>,
     stats: PrefixBatchStats,
+    from_object_slots: usize,
+    new_objects: Vec<CompiledObject>,
+    resources: CompiledResources,
 }
 impl PrefixBatch {
+    /// Reserve explicitly before append when additional object storage is needed.
+    pub fn required_object_capacity(&self) -> usize {
+        self.from_object_slots + self.new_objects.len()
+    }
     pub fn stats(&self) -> PrefixBatchStats {
         self.stats
     }
@@ -87,6 +112,8 @@ pub struct PrefixReader {
     frontier: f64,
     received_revisions: usize,
     limits: ReplayLimits,
+    object_capacity: usize,
+    initial_object_slots: usize,
 }
 impl PrefixReader {
     pub fn frontier(&self) -> f64 {
@@ -107,6 +134,7 @@ impl PrefixReader {
                 end_exclusive: self.frontier,
             });
         }
+        self.runtime.extend_prefix_frame_storage();
         self.runtime.seek(time)?;
         Ok(self.runtime.frame())
     }
@@ -126,6 +154,19 @@ impl PrefixReader {
         {
             return Err(PrefixError::UnexpectedBatch);
         }
+        if batch.from_object_slots != self.runtime.compiled.objects().len() {
+            return Err(PrefixError::UnexpectedBatch);
+        }
+        let required = batch.required_object_capacity();
+        if required > self.object_capacity {
+            return Err(PrefixError::CapacityRequired {
+                object_slots: required,
+            });
+        }
+        self.runtime
+            .compiled
+            .resources()
+            .preflight_merge(&batch.resources)?;
         let history = self
             .runtime
             .replay_history
@@ -146,6 +187,12 @@ impl PrefixReader {
         }
         // Only this sealed reader owns its history; capacity was reserved once.
         debug_assert!(count <= history.revisions.capacity());
+        self.runtime
+            .compiled
+            .merge_prepared_resources(batch.resources);
+        self.runtime
+            .compiled
+            .install_prefix_tombstones(batch.new_objects);
         history.revisions.extend(batch.revisions);
         history.stats.revisions_retained = count;
         history.stats.payloads_retained = payloads;
@@ -190,6 +237,8 @@ impl SceneInstance {
             stream: stream.clone(),
             next_revision: history.revisions.len(),
             frontier: self.frame.time,
+            object_slots: self.compiled.objects().len(),
+            resources: self.compiled.resources().clone(),
         };
         let mut runtime = self.clone();
         let copied = runtime
@@ -215,6 +264,8 @@ impl SceneInstance {
             frontier: self.frame.time,
             received_revisions: history.revisions.len(),
             limits: history.limits,
+            object_capacity: self.compiled.objects().len(),
+            initial_object_slots: self.compiled.objects().len(),
         };
         Ok((publisher, reader))
     }
@@ -284,6 +335,25 @@ impl SceneInstance {
             .compiled
             .forward_prefix_revisions(&inverse)
             .ok_or(ReplayError::UnsupportedDomain)?;
+        let new_objects = self
+            .compiled
+            .objects()
+            .get(publisher.object_slots..)
+            .ok_or(PrefixError::SourceChanged)?
+            .to_vec();
+        let resources = self
+            .compiled
+            .prefix_resource_delta(&forward, &publisher.resources)?;
+        stats.new_object_slots = new_objects.len();
+        stats.resource_payloads = resources.prefix_payload_count();
+        stats.payloads = stats
+            .payloads
+            .checked_add(stats.new_object_slots)
+            .and_then(|cost| cost.checked_add(stats.resource_payloads))
+            .ok_or(ReplayError::RetentionLimit)?;
+        if stats.payloads > history.limits.payloads {
+            return Err(ReplayError::RetentionLimit.into());
+        }
         let revisions = suffix
             .iter()
             .zip(forward)
@@ -299,7 +369,14 @@ impl SceneInstance {
             frontier: self.frame.time,
             revisions,
             stats,
+            from_object_slots: publisher.object_slots,
+            new_objects,
+            resources,
         };
+        publisher
+            .resources
+            .extend_prefix_knowledge(&batch.resources);
+        publisher.object_slots = self.compiled.objects().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;
         Ok(batch)
