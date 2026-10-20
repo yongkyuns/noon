@@ -1185,7 +1185,7 @@ fn area_clips_graph_ranges_and_closes_against_the_axis_baseline() {
     let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
     let area = axes.get_area(&graph, Some([-2.0, 2.0]), None).unwrap();
     let frame = axes.authored_frame().unwrap();
-    let points = area.path_query().unwrap().anchors();
+    let points = area.path_query().unwrap().anchors().unwrap();
     near(
         [points[0].0, points[0].1],
         frame.coords_to_point(-1.0, 0.0).unwrap(),
@@ -1210,10 +1210,16 @@ fn area_baseline_is_the_physical_axis_when_zero_is_outside_the_y_range() {
     let graph = axes.plot(|_| 3.0, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
     let area = axes.get_area(&graph, None, None).unwrap();
     let frame = axes.authored_frame().unwrap();
-    assert!(area.path_query().unwrap().anchors().iter().any(|point| {
-        let expected = frame.coords_to_point(1.0, 2.0).unwrap();
-        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
-    }));
+    assert!(area
+        .path_query()
+        .unwrap()
+        .anchors()
+        .unwrap()
+        .iter()
+        .any(|point| {
+            let expected = frame.coords_to_point(1.0, 2.0).unwrap();
+            (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+        }));
 }
 
 #[test]
@@ -1230,7 +1236,7 @@ fn bounded_area_reverses_the_lower_graph_and_riemann_partition_is_half_open() {
         .get_area(&top, Some([-1.0, 1.0]), Some(&bottom))
         .unwrap();
     let frame = axes.authored_frame().unwrap();
-    let points = area.path_query().unwrap().anchors();
+    let points = area.path_query().unwrap().anchors().unwrap();
     near(
         [points[0].0, points[0].1],
         frame.coords_to_point(-0.5, 0.5).unwrap(),

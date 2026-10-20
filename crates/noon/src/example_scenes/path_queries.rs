@@ -4,6 +4,29 @@ use crate::{ExecutionSession, Scene};
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
+        let precise = 1.0 + 2.0_f64.powi(-40);
+        for count in 0..10 {
+            let points = vec![(precise, 0.0); count];
+            let value = scene.path(
+                crate::VectorPath::from_manim_points_f64(points),
+                Default::default(),
+            )?;
+            assert_eq!(value.width()?, 0.0);
+            if count != 1 && !count.is_multiple_of(4) {
+                assert!(value.path_query()?.anchors().is_err());
+                assert!(value.center().is_err());
+            } else {
+                assert_eq!(
+                    value.center()?,
+                    (if count == 0 { 0.0 } else { precise }, 0.0)
+                );
+                assert_eq!(
+                    value.path_query()?.anchors()?.len(),
+                    if count == 1 { 1 } else { count / 2 }
+                );
+            }
+        }
+
         let mut rectangle = scene.rectangle(2., 1.)?;
         rectangle.set_scale(2., 1.)?;
         rectangle.rotate(0.25)?;
@@ -29,9 +52,9 @@ pub fn session() -> Result<ExecutionSession, String> {
         let vector_family = scene.family(&[(&nested).into(), (&rectangle).into()])?;
         let expected_boundary = ellipse
             .path_query()?
-            .anchors()
+            .anchors()?
             .into_iter()
-            .chain(rectangle.path_query()?.anchors())
+            .chain(rectangle.path_query()?.anchors()?)
             .collect::<Vec<_>>();
         assert_eq!(
             crate::MobjectTarget::from(&vector_family).vector_boundary_points()?,
@@ -152,9 +175,9 @@ pub fn session() -> Result<ExecutionSession, String> {
         )?;
         let expected_boundary = ellipse
             .path_query()?
-            .anchors()
+            .anchors()?
             .into_iter()
-            .chain(captured.anchors())
+            .chain(captured.anchors()?)
             .collect::<Vec<_>>();
         assert_eq!(
             crate::integration::effective_vector_boundary_points(

@@ -88,7 +88,7 @@ fn vector_boundary_uses_unique_last_family_order_and_base_family_queries_keep_co
     let family = scene.family(&[(&root).into()]).unwrap();
     let expected = [&root, &child, &grandchild]
         .iter()
-        .flat_map(|object| object.path_query().unwrap().anchors())
+        .flat_map(|object| object.path_query().unwrap().anchors().unwrap())
         .collect::<Vec<_>>();
     let object = MobjectTarget::from(&root);
     let group = MobjectTarget::from(&family);
@@ -116,7 +116,7 @@ fn empty_own_array_does_not_hide_children_or_add_an_origin_boundary_point() {
     );
     assert_eq!(
         target.path_boundary_points().unwrap(),
-        child.path_query().unwrap().anchors()
+        child.path_query().unwrap().anchors().unwrap()
     );
     let tree = target.point_reduction_tree().unwrap();
     assert!(tree.points.is_empty());
@@ -174,6 +174,7 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
                 )
                 .unwrap()
                 .anchors()
+                .unwrap()
             })
             .collect::<Vec<_>>();
         let points = noon::integration::effective_all_points(
@@ -318,7 +319,7 @@ fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
             (&aliases).into(),
         )
         .unwrap(),
-        current.anchors()
+        current.anchors().unwrap()
     );
     let store = scene.integration_store().borrow();
     assert!(store

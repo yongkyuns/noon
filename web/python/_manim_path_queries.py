@@ -1041,14 +1041,17 @@ def curve_length(value, n, sample_points):
 
 
 def path_points(value, method):
-    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    query = _query(value)
     try:
-        integer_stride = operator.index(stride)
-    except TypeError:
-        integer_stride = None
-    if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
-        query = _query(value)
+        # Manim returns its single point as an array before inspecting stride.
+        if method == "anchors" and query.pointCount == 1:
+            return _points_array(_points(engine_call(query.anchors)))
+        stride = getattr(value, "n_points_per_cubic_curve", 4)
         try:
+            integer_stride = operator.index(stride)
+        except TypeError:
+            integer_stride = None
+        if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
             points = _points(engine_call(query.points))
             starts = points[::stride]
             if method == "startAnchors":
@@ -1056,13 +1059,7 @@ def path_points(value, method):
             ends = points[stride - 1 :: stride]
             if method == "endAnchors":
                 return _points_array(ends)
-            return _point_rows(
-                [point for pair in zip(starts, ends, strict=True) for point in pair]
-            )
-        finally:
-            query.free()
-    query = _query(value)
-    try:
+            return _point_rows([point for pair in zip(starts, ends, strict=True) for point in pair])
         points = _points(engine_call(getattr(query, method)))
         return _point_rows(points) if method == "anchors" else _points_array(points)
     finally:

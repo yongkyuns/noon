@@ -280,15 +280,12 @@ impl PathQuery {
     }
 
     fn curve_column(&self, column: usize) -> Vec<(f64, f64)> {
-        let mut points = (0..self.curve_count())
-            .map(|index| self.curve_points(index).expect("known curve index")[column])
-            .collect::<Vec<_>>();
-        if column == 0 {
-            if let Some(point) = self.unfinished_anchor {
-                points.push(self.transform_point(point.0, point.1));
-            }
-        }
-        points
+        self.manim_points
+            .iter()
+            .skip(column)
+            .step_by(4)
+            .map(|&(x, y)| self.transform_point(x, y))
+            .collect()
     }
 
     pub fn start_anchors(&self) -> Vec<(f64, f64)> {
@@ -351,25 +348,25 @@ impl PathQuery {
         self.curve_column(3)
     }
 
-    /// Start anchors, first handles, second handles and end anchors. An
-    /// unfinished subpath contributes only to the start-anchor column.
+    /// Start anchors, first handles, second handles and end anchors. Each
+    /// column retains its raw stride slice, including incomplete controls.
     pub fn anchors_and_handles(&self) -> [Vec<(f64, f64)>; 4] {
         std::array::from_fn(|column| self.curve_column(column))
     }
 
-    /// Ordered start/end anchors, followed by any unfinished starting anchor.
-    pub fn anchors(&self) -> Vec<(f64, f64)> {
-        let mut anchors = Vec::with_capacity(
-            self.curve_count() * 2 + usize::from(self.unfinished_anchor.is_some()),
-        );
-        for index in 0..self.curve_count() {
-            let points = self.curve_points(index).expect("known curve index");
-            anchors.extend([points[0], points[3]]);
-        }
-        if let Some(point) = self.unfinished_anchor {
-            anchors.push(self.transform_point(point.0, point.1));
-        }
-        anchors
+    /// Manim's ordered start/end anchors. A singleton remains one anchor;
+    /// unmatched rows fail rather than inventing a boundary for a pending curve.
+    pub fn anchors(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        noon_geometry::manim_anchor_indices(self.manim_points.len())
+            .map_err(AuthoringError::PathQuery)
+            .map(|indices| {
+                indices
+                    .map(|index| {
+                        let (x, y) = self.manim_points[index];
+                        self.transform_point(x, y)
+                    })
+                    .collect()
+            })
     }
 
     /// ManimCE's flattened cubic point array, including any padded subpaths.
@@ -1017,7 +1014,7 @@ impl FamilyPointObservation {
     fn points(self, query: &PathQuery) -> Result<Vec<(f64, f64)>, AuthoringError> {
         match self {
             Self::RecursivePoints => query.points(),
-            Self::VectorBoundary => Ok(query.anchors()),
+            Self::VectorBoundary => query.anchors(),
         }
     }
 }

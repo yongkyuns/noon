@@ -1,8 +1,27 @@
 from noon import *
+import numpy as np
 
 
 class OrdinaryPathQueries(Scene):
     def construct(self):
+        precise = 1.0 + 2.0 ** -40
+        for count in range(10):
+            value = VMobject().set_points([(precise, 0.0, 0.0)] * count)
+            assert value.width == 0.0
+            if count != 1 and count % 4 != 0:
+                for query in (value.get_anchors, value.get_center):
+                    try:
+                        query()
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError(("unmatched anchors", count))
+            else:
+                assert float(value.get_center()[0]) == (0.0 if count == 0 else precise)
+                anchors = value.get_anchors()
+                assert isinstance(anchors, np.ndarray) == (count == 1)
+                assert len(anchors) == (1 if count == 1 else count // 2)
+
         rectangle = Rectangle(width=2, height=1, color=WHITE)
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
         precise_points = [[float(p[0]), float(p[1]), 0.0]

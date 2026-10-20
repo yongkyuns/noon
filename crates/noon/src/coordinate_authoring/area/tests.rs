@@ -74,7 +74,7 @@ fn assert_rectangle_starts(scene: &Scene, family: &MobjectFamily, expected_x: &[
     assert_eq!(members.len(), expected_x.len());
     for (&id, &x) in members.iter().zip(expected_x) {
         let leaf = Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap();
-        let point = leaf.path_query().unwrap().anchors()[0];
+        let point = leaf.path_query().unwrap().anchors().unwrap()[0];
         assert!((point.0 - x).abs() < 1.0e-6, "{point:?} != ({x}, 0)");
         assert!(point.1.abs() < 1.0e-6, "{point:?} != ({x}, 0)");
     }

@@ -2768,6 +2768,43 @@ def _raw_point_precision(api, scene=None):
     return result
 
 
+def _raw_point_layout(api, scene=None):
+    delta = 2.0 ** -40
+    result = []
+
+    def rows(points):
+        return [[float(p[0]).hex(), float(p[1]).hex()] for p in points]
+
+    def observed(function, convert):
+        try:
+            return convert(function())
+        except ValueError as error:
+            return {"exception": "ValueError", "message": str(error)}
+
+    for count in range(10):
+        value = api.VMobject().set_points([(1.0 + i * delta, i * delta, 0.0) for i in range(count)])
+        if scene is not None:
+            scene.add(value)
+        result.append({
+            "count": count,
+            "width": float(value.width).hex(),
+            "height": float(value.height).hex(),
+            "center": observed(value.get_center, lambda point: [float(p).hex() for p in point[:2]]),
+            "critical": observed(lambda: value.get_critical_point((1, 0, 0)), lambda point: [float(p).hex() for p in point[:2]]),
+            "anchors": observed(value.get_anchors, lambda points: {"type": type(points).__name__, "points": rows(points)}),
+            "columns": [rows(column) for column in value.get_anchors_and_handles()],
+        })
+    single = api.VMobject().set_points([(1.0 + delta, -delta, 0.0)])
+    if scene is not None:
+        scene.add(single)
+    singleton = []
+    for stride in (4, 0, -2, 3.5, None):
+        single.n_points_per_cubic_curve = stride
+        anchors = single.get_anchors()
+        singleton.append({"type": type(anchors).__name__, "points": rows(anchors)})
+    return {"prefixes": result, "singleton_strides": singleton}
+
+
 def _cubic_tuple_groups(api):
     path = api.VMobject().add_subpath([
         (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0),
@@ -6140,6 +6177,11 @@ FIXTURES = [
     Fixture("raw_point_precision_live",
             lambda: _noon_live_scene_probe(lambda scene: _raw_point_precision(noon, scene)),
             lambda: _raw_point_precision(manim), 1e-6),
+    Fixture("raw_point_layout", lambda: _raw_point_layout(noon),
+            lambda: _raw_point_layout(manim), 0.0),
+    Fixture("raw_point_layout_live",
+            lambda: _noon_live_scene_probe(lambda scene: _raw_point_layout(noon, scene)),
+            lambda: _raw_point_layout(manim), 0.0),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),

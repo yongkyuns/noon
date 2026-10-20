@@ -973,7 +973,7 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
             MobjectTarget::from(&object),
         )
         .unwrap(),
-        effective_path.anchors()
+        effective_path.anchors().unwrap()
     );
     assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
     let expected_center = (

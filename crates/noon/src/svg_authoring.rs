@@ -526,8 +526,8 @@ fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, S
     resolve_leaf_identity_locators(&mut leaves);
     // Dimensions include canonical cubic handles; the centering boundary
     // contains anchors only. This is the same authority used by ordinary Mobjects.
-    let dimensions = aggregate_path_bounds(&leaves, true);
-    let boundary = aggregate_path_bounds(&leaves, false);
+    let dimensions = aggregate_path_bounds(&leaves, true)?;
+    let boundary = aggregate_path_bounds(&leaves, false)?;
     let transform = placement_transform(dimensions, boundary, options);
     Ok(PreparedSvg { leaves, transform })
 }
@@ -884,14 +884,15 @@ fn svg_point(mut point: usvg::tiny_skia_path::Point, transform: usvg::Transform)
 fn aggregate_path_bounds(
     leaves: &[PreparedSvgLeaf],
     include_handles: bool,
-) -> Option<noon_core::Bounds2D64> {
+) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
     let mut aggregate: Option<noon_core::Bounds2D64> = None;
     for leaf in leaves {
         let Some(bounds) = crate::semantic_mobject::transformed_path_layout_bounds(
             &leaf.path,
             SemanticTransform2_5D::default(),
             include_handles,
-        ) else {
+        )?
+        else {
             continue;
         };
         if let Some(aggregate) = &mut aggregate {
@@ -901,7 +902,7 @@ fn aggregate_path_bounds(
             aggregate = Some(bounds);
         }
     }
-    aggregate
+    Ok(aggregate)
 }
 
 fn placement_transform(

@@ -88,8 +88,23 @@ pub(crate) fn transformed_path_layout_bounds(
     path: &VectorPath,
     transform: SemanticTransform2_5D,
     include_handles: bool,
-) -> Option<Bounds2D64> {
+) -> Result<Option<Bounds2D64>, AuthoringError> {
     let mut bounds = None;
+    if let Some(points) = path.manim_points() {
+        if include_handles {
+            for &(x, y) in points {
+                include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
+            }
+        } else {
+            for index in noon_geometry::manim_anchor_indices(points.len())
+                .map_err(AuthoringError::PathQuery)?
+            {
+                let (x, y) = points[index];
+                include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
+            }
+        }
+        return Ok(bounds);
+    }
     let mut current = None;
     let mut subpath_start = None;
 
@@ -163,14 +178,14 @@ pub(crate) fn transformed_path_layout_bounds(
             }
         }
     }
-    bounds
+    Ok(bounds)
 }
 fn geometry_layout_bounds(
     geometry: &GeometryRef,
     transform: SemanticTransform2_5D,
     include_handles: bool,
-) -> Option<Bounds2D64> {
-    match geometry {
+) -> Result<Option<Bounds2D64>, AuthoringError> {
+    Ok(match geometry {
         GeometryRef::Circle { radius } => {
             canonical_circle_layout_bounds(*radius, transform, include_handles)
         }
@@ -205,11 +220,12 @@ fn geometry_layout_bounds(
             bounds
         }
         GeometryRef::VectorPath(path) => {
-            transformed_path_layout_bounds(path, transform, include_handles)
+            transformed_path_layout_bounds(path, transform, include_handles)?
         }
         GeometryRef::External(_) => None,
-    }
+    })
 }
+
 pub(crate) fn layout_for_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
@@ -261,7 +277,7 @@ fn measure_content(
             return Ok(Some(transformed_rect_layout_bounds(local, transform)));
         }
     };
-    Ok(match geometry {
+    match geometry {
         StoredGeometry::Circle { radius } => {
             geometry_layout_bounds(&GeometryRef::circle(radius), transform, include_handles)
         }
@@ -287,7 +303,7 @@ fn measure_content(
                 ));
             }
         },
-    })
+    }
 }
 
 #[cfg(test)]

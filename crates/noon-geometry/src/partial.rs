@@ -33,6 +33,7 @@ pub enum PathProportionError {
     InvalidInterval,
     InvalidCurveCount,
     InvalidCurveIndex { index: usize, count: usize },
+    UnpairedAnchors { starts: usize, ends: usize },
 }
 
 impl std::fmt::Display for PathProportionError {
@@ -55,6 +56,9 @@ impl std::fmt::Display for PathProportionError {
                 formatter,
                 "curve index {index} is out of bounds for {count} curves"
             ),
+            Self::UnpairedAnchors { .. } => {
+                formatter.write_str("zip() argument 2 is shorter than argument 1")
+            }
             Self::InvalidInterval => {
                 formatter.write_str("partial path requires an ordered interval: a <= b")
             }
@@ -66,6 +70,21 @@ impl std::fmt::Display for PathProportionError {
 }
 
 impl std::error::Error for PathProportionError {}
+
+/// Select Manim's default cubic anchors without allocating a query or measure.
+/// A singleton is its own anchor; other arrays require matched start/end rows.
+pub fn manim_anchor_indices(
+    point_count: usize,
+) -> Result<impl Iterator<Item = usize>, PathProportionError> {
+    let ends = point_count / 4;
+    let starts = ends + usize::from(!point_count.is_multiple_of(4));
+    if point_count != 1 && starts != ends {
+        return Err(PathProportionError::UnpairedAnchors { starts, ends });
+    }
+    Ok((0..ends)
+        .flat_map(|curve| [curve * 4, curve * 4 + 3])
+        .chain((point_count == 1).then_some(0)))
+}
 
 /// Extract a curve-count interval, optionally wrapping a closed path's seam.
 /// The caller validates closure in the intended coordinate space.

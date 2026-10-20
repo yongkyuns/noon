@@ -21,6 +21,39 @@ def _path_observation(query):
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_single_anchor_array_precedes_mutable_stride_validation(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        value = identity_only_wrapper(compat.VMobject)
+        for stride in (4, 0, -2, 3.5, None):
+            value.n_points_per_cubic_curve = stride
+            query = Mock(pointCount=1)
+            query.anchors.return_value = [1.0 + 2.0 ** -40, -2.0]
+            with patch.object(queries, "_query", return_value=query):
+                result = value.get_anchors()
+            self.assertEqual(float(result[0][0]), 1.0 + 2.0 ** -40)
+            if np is not None:
+                self.assertIsInstance(result, np.ndarray)
+            else:
+                self.assertIsInstance(result, list)
+            query.points.assert_not_called()
+            query.anchors.assert_called_once_with()
+            query.free.assert_called_once_with()
+
+    def test_default_anchor_pairing_error_is_engine_owned_and_frees_snapshot(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock(pointCount=2)
+        error = ValueError("zip() argument 2 is shorter than argument 1")
+        query.anchors.side_effect = error
+        with patch.object(queries, "_query", return_value=query):
+            with self.assertRaises(ValueError) as raised:
+                value.get_anchors()
+        self.assertIs(raised.exception, error)
+        query.points.assert_not_called()
+        query.free.assert_called_once_with()
+
     def test_vmobject_point_equality_uses_rust_with_broadcast_arrays_and_tolerance(self):
         value = identity_only_wrapper(compat.VMobject)
         value.tolerance_for_point_equality = 2e-6

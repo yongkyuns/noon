@@ -2316,12 +2316,8 @@ mod wasm {
                 .flat_map(|(x, y)| [x, y])
                 .collect()
         }
-        pub fn anchors(&self) -> Vec<f64> {
-            self.value
-                .anchors()
-                .into_iter()
-                .flat_map(|(x, y)| [x, y])
-                .collect()
+        pub fn anchors(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.anchors().map(flat_points).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = pointFromProportion)]
