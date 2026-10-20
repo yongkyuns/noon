@@ -1292,6 +1292,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = vectorBoundaryPoints)]
+        pub fn vector_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .vector_boundary_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = mergedPoints)]
         pub fn merged_points(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;

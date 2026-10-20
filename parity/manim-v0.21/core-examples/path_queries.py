@@ -7,6 +7,16 @@ class OrdinaryPathQueries(Scene):
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
         ellipse = Circle(radius=0.8, color=WHITE)
         ellipse.stretch_to_fit_width(2.4).shift(RIGHT * 2.5)
+        family = VGroup(VGroup(rectangle, ellipse), rectangle)
+
+        def check_boundary():
+            actual = [[float(p[0]), float(p[1])]
+                      for p in family.get_points_defining_boundary()]
+            expected = [[float(p[0]), float(p[1])]
+                        for shape in (ellipse, rectangle) for p in shape.get_anchors()]
+            assert actual == expected
+
+        check_boundary()
         assert Mobject().get_num_points() == 0
         assert Mobject().has_no_points()
         assert VGroup(Circle()).get_num_points() == 0
@@ -46,6 +56,7 @@ class OrdinaryPathQueries(Scene):
         assert endpoint_path.proportion_from_point(endpoint_path.get_end()) == 1.0
         target = rectangle.copy().stretch(1.2, 0)
         self.play(Transform(rectangle, target), run_time=1, rate_func=linear)
+        check_boundary()
         self.wait(0.2)
         self.remove(ellipse)
         self.play(Create(ellipse), run_time=1, rate_func=linear)

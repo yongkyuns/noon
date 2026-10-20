@@ -15,6 +15,18 @@ pub fn session() -> Result<ExecutionSession, String> {
         ellipse.shift(2.5, 0.)?;
         ellipse.disable_fill()?;
         ellipse.set_stroke_color(1., 1., 1., 1.)?;
+        let nested = scene.family(&[(&rectangle).into(), (&ellipse).into()])?;
+        let vector_family = scene.family(&[(&nested).into(), (&rectangle).into()])?;
+        let expected_boundary = ellipse
+            .path_query()?
+            .anchors()
+            .into_iter()
+            .chain(rectangle.path_query()?.anchors())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::MobjectTarget::from(&vector_family).vector_boundary_points()?,
+            expected_boundary
+        );
         assert_eq!(rectangle.get_num_points()?, 16);
         assert_eq!(ellipse.get_num_points()?, 32);
         let empty = scene.path(crate::VectorPath::new(), Default::default())?;
@@ -128,6 +140,20 @@ pub fn session() -> Result<ExecutionSession, String> {
             &session,
             &rectangle,
         )?;
+        let expected_boundary = ellipse
+            .path_query()?
+            .anchors()
+            .into_iter()
+            .chain(captured.anchors())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::integration::effective_vector_boundary_points(
+                scene.integration_store(),
+                &session,
+                (&vector_family).into(),
+            )?,
+            expected_boundary
+        );
         let midpoint = captured.start()?;
         assert!((midpoint.0 - (start.0 + end.0) * 0.5).abs() < 2e-6);
         assert!((midpoint.1 - (start.1 + end.1) * 0.5).abs() < 2e-6);

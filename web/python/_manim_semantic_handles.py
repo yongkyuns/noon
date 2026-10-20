@@ -2820,6 +2820,10 @@ def _boundary_point_observation(
     )
 
 
+def _vector_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "VectorBoundaryPoints")
+
+
 def _path_boundary_points_observation(value: _base.Mobject):
     return _point_query_observation(value, "PathBoundaryPoints")
 
@@ -2991,16 +2995,21 @@ def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
     if handle is None:
         raise RuntimeError("get_family requires a shared Rust semantic handle")
     keys = [str(key) for key in engine_call(handle.familyKeys)]
+    selected = set(keys)
     wrappers = {}
     pending = [self]
     while pending:
         wrapper = pending.pop()
         key = _family_wrapper_key(wrapper)
-        if key in wrappers:
+        if key not in selected or key in wrappers:
             continue
         wrappers[key] = wrapper
         if _is_shared_family(wrapper):
             pending.extend(wrapper.submobjects)
+        else:
+            pending.extend(member for member_key, member in
+                           getattr(wrapper, "_semantic_member_wrappers", {}).items()
+                           if str(member_key) in selected)
     try:
         return [wrappers[key] for key in keys]
     except KeyError as error:

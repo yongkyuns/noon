@@ -451,3 +451,41 @@ unchanged 1-pixel / 0.0036 differing-ratio / 0.1 channel-error limits locally.
 Current-head full and hosted qualification remain required before merge. This
 qualifies scalar counts and predicates; mutable image/text point arrays, buffer
 shape/dtype and broader class/family contracts remain partial in #2011 and #2009.
+
+
+Default vector-family boundaries now use the existing shared Rust unique-family
+anchor observation through thin authored/canonical WASM bindings. Python resolves
+Rust-selected wrapper identities to recognize caller-owned hooks; it preserves
+custom family selectors, anchor callables and mutable strides on their existing
+language path. Static hook inspection does not invoke descriptors. Empty family
+arrays retain their existing `(0,)` shape, while wider array/row/zero-Z contracts
+remain separate work. Identity lookup also reaches registered wrappers below an
+ordinary root, excludes unselected stale entries, preserves aliases and current
+Group refresh, and keeps staged membership queries rejected.
+
+Empty recursive point arrays, vector boundaries and reduction trees now validate
+the current publication even when there is no leaf to query. Fresh empty and
+aliased scopes are read-only; stale revisions and foreign execution stores reject
+through the canonical publication error. Native regressions fail before this fix.
+The canonical vector-family test additionally checks live leaf transforms without
+requiring admission of the family root, and rejects reads while ownership is lent.
+
+The detached/live `vector_family_boundaries` profiles are enrolled against actual
+pinned ManimCE for planar alias order, live shift, custom anchors, custom stride and
+empty shape. Matching native/direct-WASM/Python path examples exercise authored
+and live boundaries without changing visible geometry or the timeline. Full
+current-head product/render/hosted qualification remains required before merge.
+VGroup/VMobject class identity, family-owned points, resource/mixed-content and
+custom start/end-anchor breadth stay unqualified under #2011; ordinary-root
+high-level membership methods remain unexposed and case #2009 remains open.
+
+The family-query example also retains a removed circle's query-only aliases during
+its later Create. Single-leaf admission now checks parent reachability in the
+current execution domain, consistent with existing composition admission. An
+unadmitted family no longer blocks Create; active targets remain rejected and
+alias edges survive readmission. The focused regression fails before correction.
+Actual pinned ManimCE executes the unchanged 2.2-second timeline with these new
+assertions and retains twelve own points at quarter Create. Its scene includes
+ten point-bearing roots plus one zero-point Mobject root; that host placeholder
+is recorded separately from Noon's drawable count. Full qualification of this
+interaction remains required with the vector-family delivery.

@@ -215,3 +215,116 @@ fn shared_native_and_direct_wasm_example_observes_the_complete_copied_object() {
     let session = noon::example_scenes::object_membership::session().unwrap();
     assert_eq!(session.painter_order().len(), 3);
 }
+
+#[test]
+fn empty_family_point_observations_validate_the_execution_publication() {
+    fn snapshots(
+        scene: &Scene,
+        execution: &noon::ExecutionSession,
+        family: &MobjectFamily,
+    ) -> [Result<(), noon::AuthoringError>; 3] {
+        let store = scene.integration_store();
+        [
+            noon::integration::effective_all_points(store, execution, family.into()).map(|_| ()),
+            noon::integration::effective_vector_boundary_points(store, execution, family.into())
+                .map(|_| ()),
+            noon::integration::effective_point_reduction_tree(store, execution, family.into())
+                .map(|_| ()),
+        ]
+    }
+
+    let mut scene = Scene::new();
+    let empty = scene.family(&[]).unwrap();
+    let left = scene.family(&[(&empty).into()]).unwrap();
+    let right = scene.family(&[(&empty).into()]).unwrap();
+    let aliased = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+    let mut circle = scene.circle(1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let execution = scene.execution_session().unwrap();
+    let publication = execution.publication_context();
+    let revision = scene.revision();
+    for family in [&empty, &aliased] {
+        assert!(snapshots(&scene, &execution, family)
+            .into_iter()
+            .all(|r| r.is_ok()));
+    }
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.publication_context(), publication);
+
+    circle.set_object_opacity(0.5).unwrap();
+    for family in [&empty, &aliased] {
+        for result in snapshots(&scene, &execution, family) {
+            assert!(matches!(
+                result,
+                Err(noon::AuthoringError::ExecutionPublication(
+                    noon::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                ))
+            ));
+        }
+    }
+    assert_eq!(execution.publication_context(), publication);
+
+    let mut other = Scene::new();
+    let foreign_execution = other.execution_session().unwrap();
+    for result in snapshots(&scene, &foreign_execution, &empty) {
+        assert!(matches!(
+            result,
+            Err(noon::AuthoringError::ExecutionPublication(
+                noon::ExecutionSessionPublicationError::ForeignSemanticStore
+            ))
+        ));
+    }
+}
+
+#[test]
+fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
+    let mut scene = Scene::new();
+    let circle = scene.circle(1.0).unwrap();
+    let left = scene.family(&[(&circle).into()]).unwrap();
+    let right = scene.family(&[(&circle).into()]).unwrap();
+    let aliases = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+    scene.add(&circle).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let before = execution.publication_context();
+    assert!(scene
+        .live(&mut execution)
+        .declare_and_activate_create(&circle, AnimationOptions::new())
+        .is_err());
+    assert_eq!(execution.publication_context(), before);
+    scene.live(&mut execution).remove(&circle).unwrap();
+    assert!(execution.painter_order().is_empty());
+    let reveal = scene
+        .live(&mut execution)
+        .declare_and_activate_create(
+            &circle,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    scene
+        .live(&mut execution)
+        .advance_segment_to(reveal, 0.25)
+        .unwrap();
+    let current =
+        noon::integration::effective_path_query(scene.integration_store(), &execution, &circle)
+            .unwrap();
+    assert_eq!(current.point_count(), 12);
+    assert_eq!(execution.painter_order().len(), 1);
+    assert_eq!(
+        noon::integration::effective_vector_boundary_points(
+            scene.integration_store(),
+            &execution,
+            (&aliases).into(),
+        )
+        .unwrap(),
+        current.anchors()
+    );
+    let store = scene.integration_store().borrow();
+    assert!(store
+        .is_direct_member(left.node_id(), circle.node_id())
+        .unwrap());
+    assert!(store
+        .is_direct_member(right.node_id(), circle.node_id())
+        .unwrap());
+}

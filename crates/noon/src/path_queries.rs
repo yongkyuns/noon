@@ -1205,6 +1205,9 @@ pub fn effective_point_reduction_tree(
         return Err(AuthoringError::ForeignStore);
     }
     target.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
     let topology = {
         let semantics = store.borrow();
         point_reduction_topology(&semantics, target.node_id())?
@@ -1256,6 +1259,9 @@ fn effective_point_observation(
         return Err(AuthoringError::ForeignStore);
     }
     target.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
     let occurrences = observation.nodes(&store.borrow(), target.node_id())?;
     let mut result = Vec::new();
     for id in occurrences {

@@ -2680,6 +2680,29 @@ def _family_point_count_probe(api, scene=None):
     }
 
 
+def _vector_family_boundaries(api, scene=None):
+    rectangle = api.Rectangle(width=2, height=1).shift(api.LEFT * 2 + api.UP)
+    circle = api.Circle(radius=0.8).stretch(1.5, 0).shift(api.RIGHT * 3 - api.UP)
+    family = api.VGroup(api.VGroup(rectangle, circle), rectangle)
+    if scene is not None:
+        scene.add(rectangle, circle)
+
+    def observe():
+        return [_point_observation(point)
+                for point in family.get_points_defining_boundary()]
+
+    before = observe()
+    rectangle.shift(api.RIGHT * 2)
+    after = observe()
+    circle.get_anchors = lambda: [api.RIGHT * 9 + api.UP * 8]
+    custom_anchors = observe()
+    rectangle.n_points_per_cubic_curve = 2
+    custom_stride = observe()
+    empty = api.VGroup().get_points_defining_boundary()
+    return {"before": before, "after": after, "custom_anchors": custom_anchors,
+            "custom_stride": custom_stride, "empty_shape": list(empty.shape)}
+
+
 def _mobject_own_point_counts(api, scene=None):
     objects = [
         ("empty", api.Mobject()),
@@ -6059,6 +6082,11 @@ FIXTURES = [
     Fixture("family_point_counts_live",
             lambda: _noon_live_scene_probe(lambda scene: _family_point_count_probe(noon, scene)),
             lambda: _family_point_count_probe(manim)),
+    Fixture("vector_family_boundaries", lambda: _vector_family_boundaries(noon),
+            lambda: _vector_family_boundaries(manim), 2e-6),
+    Fixture("vector_family_boundaries_live",
+            lambda: _noon_live_scene_probe(lambda scene: _vector_family_boundaries(noon, scene)),
+            lambda: _vector_family_boundaries(manim), 2e-6),
     Fixture("mobject_own_point_counts", lambda: _mobject_own_point_counts(noon),
             lambda: _mobject_own_point_counts(manim), 0.0),
     Fixture("mobject_own_point_counts_live",
