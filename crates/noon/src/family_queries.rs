@@ -2,7 +2,51 @@
 use crate::{AuthoringError, CompositeEntryHandle, MobjectFamily};
 use std::rc::Rc;
 
+/// A retained direct-member list view, independent of any language frontend.
+/// In-place edits stay visible; adding/prepending replaces the member container.
+#[derive(Clone, Debug)]
+pub struct FamilyMemberView {
+    store: Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    view: noon_core::SemanticMemberView,
+}
+impl FamilyMemberView {
+    pub fn len(&self) -> Result<usize, AuthoringError> {
+        self.view
+            .len(&self.store.borrow())
+            .map_err(member_view_error)
+    }
+    pub fn is_empty(&self) -> Result<bool, AuthoringError> {
+        self.len().map(|len| len == 0)
+    }
+    pub fn member_at(&self, index: usize) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+        self.view
+            .member_at(&self.store.borrow(), index)
+            .map_err(member_view_error)?
+            .map(|node| CompositeEntryHandle::from_node(Rc::clone(&self.store), node))
+            .transpose()
+    }
+}
+fn member_view_error(error: noon_core::SemanticMemberViewError) -> AuthoringError {
+    match error {
+        noon_core::SemanticMemberViewError::ForeignStore => AuthoringError::ForeignStore,
+        noon_core::SemanticMemberViewError::Store(error) => error.into(),
+    }
+}
+
 impl MobjectFamily {
+    /// Capture direct-member container identity without copying its order.
+    pub fn member_view(&self) -> Result<FamilyMemberView, AuthoringError> {
+        self.validate()?;
+        let view = self
+            .integration_store()
+            .borrow_mut()
+            .member_view(self.node_id())?;
+        Ok(FamilyMemberView {
+            store: Rc::clone(self.integration_store()),
+            view,
+        })
+    }
+
     /// Count direct members without materializing their ordered sequence.
     pub fn member_count(&self) -> Result<usize, AuthoringError> {
         self.integration_store()
@@ -72,6 +116,86 @@ impl MobjectFamily {
 mod tests {
     use super::*;
     use crate::Scene;
+
+    #[test]
+    fn retained_member_lists_follow_native_authoring_and_live_publication() {
+        for running in [false, true] {
+            let mut scene = Scene::new();
+            let a = scene.square(0.2).unwrap();
+            let b = scene.circle(0.3).unwrap();
+            let c = scene.circle(0.4).unwrap();
+            let family = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+            scene.add_many(&[(&family).into()]).unwrap();
+            if running {
+                let execution = scene.execution_session().unwrap();
+                scene.install_execution(execution);
+            }
+            let old = family.member_view().unwrap();
+            let revision = scene.revision();
+            if running {
+                scene
+                    .owned_live()
+                    .add_family_members(&family, &[(&c).into()])
+                    .unwrap();
+            } else {
+                family.add_many(&[(&c).into()]).unwrap();
+            }
+            assert_eq!(scene.revision(), revision.checked_next().unwrap());
+            assert_eq!(old.len().unwrap(), 2);
+            let current = family.member_view().unwrap();
+            assert_eq!(current.len().unwrap(), 3);
+            if running {
+                scene
+                    .owned_live()
+                    .remove_family_members(&family, &[(&a).into()])
+                    .unwrap();
+            } else {
+                family.remove_many(&[(&a).into()]).unwrap();
+            }
+            assert_eq!(current.len().unwrap(), 2);
+            assert_eq!(
+                old.member_at(0).unwrap().unwrap().as_target().node_id(),
+                a.node_id()
+            );
+            assert_eq!(
+                current.member_at(0).unwrap().unwrap().as_target().node_id(),
+                b.node_id()
+            );
+            let revision = scene.revision();
+            if running {
+                assert!(scene
+                    .owned_live()
+                    .add_family_members(&family, &[(&family).into()])
+                    .is_err());
+            } else {
+                assert!(family.add_many(&[(&family).into()]).is_err());
+            }
+            assert_eq!(scene.revision(), revision);
+            assert_eq!(current.len().unwrap(), 2);
+            // Even an empty add replaces the list; a later in-place removal
+            // must leave this captured list unchanged.
+            if running {
+                scene.owned_live().add_family_members(&family, &[]).unwrap();
+            } else {
+                family.add_many(&[]).unwrap();
+            }
+            if running {
+                scene
+                    .owned_live()
+                    .remove_family_members(&family, &[(&b).into()])
+                    .unwrap();
+            } else {
+                family.remove_many(&[(&b).into()]).unwrap();
+            }
+            assert_eq!(current.len().unwrap(), 2);
+            assert_eq!(family.member_count().unwrap(), 1);
+            if running {
+                family
+                    .effective_own_path_query(scene.owned_execution())
+                    .unwrap();
+            }
+        }
+    }
 
     #[test]
     fn indexed_members_track_edits_without_replacing_roots_or_allocating_nodes() {

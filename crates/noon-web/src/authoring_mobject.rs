@@ -1235,7 +1235,38 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub struct WasmFamilyMemberView {
+        view: noon::FamilyMemberView,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilyMemberView {
+        #[wasm_bindgen(getter, js_name = memberCount)]
+        pub fn member_count(&self) -> Result<usize, JsValue> {
+            self.view.len().map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = memberAt)]
+        pub fn member_at(&self, index: usize) -> Result<JsValue, JsValue> {
+            self.view
+                .member_at(index)
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
+    #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = memberView)]
+        pub fn member_view(&self) -> Result<WasmFamilyMemberView, JsValue> {
+            self.semantic_family()?
+                .member_view()
+                .map(|view| WasmFamilyMemberView { view })
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = setPoints)]
         pub fn set_points(&self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;

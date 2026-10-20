@@ -113,6 +113,7 @@ mod family_layout;
 mod family_layout_migration_tests;
 mod family_points;
 mod family_queries;
+pub use family_queries::FamilyMemberView;
 mod family_style;
 #[cfg(test)]
 mod family_transform_renderer_publication_tests;
