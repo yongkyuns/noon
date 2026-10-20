@@ -72,6 +72,10 @@ class NoonOwnershipError(NoonError, RuntimeError):
         return self.js_error.takePlayer()
 
 
+class MultiAnimationOverrideException(Exception):
+    """Raised when a class registers more than one override for an animation."""
+
+
 _EXCEPTION_TYPES = {
     "invalid_input": NoonValueError,
     "foreign_handle": NoonForeignHandleError,

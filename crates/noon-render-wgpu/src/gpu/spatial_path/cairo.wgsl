@@ -47,7 +47,10 @@ struct CairoPathOutput {
     }
     let a = camera.view_projection * vec4<f32>(start, 1.0);
     let b = camera.view_projection * vec4<f32>(end, 1.0);
-    let base = select(input.fill, input.stroke, (input.surface & 1u) != 0u);
+    var base = select(input.fill, input.stroke, (input.surface & 1u) != 0u);
+    if (input.surface & PATH_BACKGROUND_STROKE_FLAG) != 0u {
+        base = input.background_stroke;
+    }
     let sheen = vec4<f32>(clamp(base.rgb + vec3<f32>(cairo_path.metadata.x),
         vec3<f32>(0.0), vec3<f32>(1.0)), base.a);
     var result: CairoPathOutput;

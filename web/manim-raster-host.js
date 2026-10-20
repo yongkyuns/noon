@@ -46,6 +46,7 @@ async function load(source, loopDurationSeconds, context = {}) {
   return {
     kind: "semantic_execution",
     duration: result.authoredDuration,
+    time: result.frame.publishedTime,
     objectCount: result.frame.objectCount,
     rendererBackend: result.frame.rendererBackend,
   };

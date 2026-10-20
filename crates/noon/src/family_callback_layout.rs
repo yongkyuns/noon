@@ -143,6 +143,7 @@ pub fn prepare_callback_layout_replace(
         let (from, to) = match dimension {
             crate::LayoutDimension::Width => (source_bounds.width(), target_bounds.width()),
             crate::LayoutDimension::Height => (source_bounds.height(), target_bounds.height()),
+            crate::LayoutDimension::Depth => (0.0, 0.0),
         };
         let factor = if from == 0.0 {
             1.0

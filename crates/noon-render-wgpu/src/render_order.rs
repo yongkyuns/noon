@@ -1652,8 +1652,8 @@ fn pack_derived_display_object(
             transform.padding = state.reveal.clamp(0.0, 1.0);
             let mut style = style;
             style.stroke_enabled |= match state.style.stroke_cap {
+                noon_core::StrokeCap::Auto | noon_core::StrokeCap::Butt => 1 << 2,
                 noon_core::StrokeCap::Round => 0,
-                noon_core::StrokeCap::Butt => 1 << 2,
                 noon_core::StrokeCap::Square => 2 << 2,
             };
             prepared.lines.push(crate::LineInstance {
@@ -1776,6 +1776,12 @@ fn pack_derived_path_instance(
         transform: crate::packed_path_transform(state.style, render_transform),
         style,
         path_params: [state.reveal.clamp(0.0, 1.0), state.morph.clamp(0.0, 1.0)],
+        background_stroke: state
+            .style
+            .background_stroke
+            .filter(|_| state.style.background_stroke_width > 0.0)
+            .map(|color| [color.red, color.green, color.blue, color.alpha])
+            .unwrap_or_default(),
     });
     let instance_start =
         u32::try_from(index).expect("transient path instance count exceeds renderer limits");

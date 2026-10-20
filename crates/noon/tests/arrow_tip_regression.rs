@@ -193,7 +193,7 @@ fn double_arrow_reuses_the_same_outward_triangle_construction_in_both_directions
         );
         assert_eq!(
             arrow.shaft().state().unwrap().style.stroke_cap,
-            StrokeCap::Butt
+            StrokeCap::Auto
         );
         let endpoints = arrow.manim_endpoints().unwrap();
         point_close(endpoints.start, world_start);

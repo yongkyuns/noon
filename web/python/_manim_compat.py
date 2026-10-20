@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Callable, Iterator
+from collections.abc import Hashable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Self
 
 import noon as _base
+from _manim_iterables import resize_array as _resize_array
+
+if TYPE_CHECKING:
+    from manim.typing import Point3DLike
 
 from noon import Mobject, Scene
 _ir = _base._ir
@@ -91,8 +96,80 @@ def _as_color(name: str, value: object) -> _base.Color:
     raise TypeError(f"{name} must be a Color or #RRGGBB value")
 
 
+def _manim_rgba_rows(color: _base.Color | None, opacity: float):
+    # SemanticStyle is the source of truth and currently represents solid paint.
+    # Manim's array facade uses black when a color is omitted and keeps opacity.
+    rgb = (0.0, 0.0, 0.0) if color is None else (
+        float(color.red), float(color.green), float(color.blue)
+    )
+    rows = [[*rgb, float(opacity)]]
+    try:
+        import numpy as np
+    except ImportError:
+        return rows
+    return np.asarray(rows, dtype=np.float64)
+
+
+def _manim_colors_from_rgbas(rgbas):
+    rows = rgbas.tolist() if hasattr(rgbas, "tolist") else rgbas
+    colors = []
+    for row in rows:
+        rgba = [float(component) for component in row]
+        colors.append(
+            None if not any(rgba) else _base.Color(*rgba[:3])
+        )
+    return colors
+
+
+def _manim_opacities_from_rgbas(rgbas):
+    rows = rgbas.tolist() if hasattr(rgbas, "tolist") else rgbas
+    opacities = [float(row[3]) for row in rows]
+    try:
+        import numpy as np
+    except ImportError:
+        return opacities
+    return np.asarray(opacities, dtype=np.float64)
+
+
+def _manim_point3(point):
+    values = (float(point.x), float(point.y), 0.0)
+    try:
+        import numpy as np
+    except ImportError:
+        return list(values)
+    return np.asarray(values, dtype=np.float64)
+
+
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
+
+    n_points_per_cubic_curve = 4
+    tolerance_for_point_equality = 1e-6
+
+    @property
+    def cap_style(self):
+        from _manim_semantic_handles import _get_cap_style
+        return _get_cap_style(self)
+
+    @cap_style.setter
+    def cap_style(self, value):
+        from _manim_semantic_handles import _set_cap_style
+        _set_cap_style(self, value)
+
+    @property
+    def shade_in_3d(self):
+        """Whether 3D vector shading is enabled (the supported profile is planar)."""
+        return False
+
+    @shade_in_3d.setter
+    def shade_in_3d(self, value):
+        if value is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
+
+    @property
+    def n_points_per_curve(self) -> int:
+        """The current cubic stride, matching Manim's mutable instance value."""
+        return self.n_points_per_cubic_curve
 
     def get_group_class(self):
         return VGroup
@@ -101,17 +178,157 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
-    def __init__(self, *, color=_base.WHITE, **kwargs):
+    def get_points_defining_boundary(self):
+        from _manim_path_queries import boundary_points
+        return boundary_points(self)
+
+    def get_point_mobject(self, center=None):
+        point = VectorizedPoint(self.get_center() if center is None else center)
+        point.match_style(self)
+        return point
+
+    def __init__(self, *, color=_base.WHITE, shade_in_3d=False, **kwargs):
+        if shade_in_3d is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
+        # These Python-facing VMobject query settings are part of Manim's
+        # constructor contract. Keep them on the wrapper because the shared
+        # Rust path remains the authority for geometry and query results.
+        tolerance = kwargs.pop(
+            "tolerance_for_point_equality", self.tolerance_for_point_equality
+        )
+        stride = kwargs.pop(
+            "n_points_per_cubic_curve", self.n_points_per_cubic_curve
+        )
+        self.tolerance_for_point_equality = tolerance
+        self.n_points_per_cubic_curve = stride
+        try:
+            import numpy as np
+        except ImportError:
+            import operator
+
+            sample_count = operator.index(stride)
+            if sample_count < 0:
+                raise ValueError(
+                    f"Number of samples, {sample_count}, must be non-negative."
+                )
+            if sample_count == 0:
+                self._bezier_t_values = []
+            elif sample_count == 1:
+                self._bezier_t_values = [0.0]
+            else:
+                self._bezier_t_values = [
+                    index / (sample_count - 1) for index in range(sample_count)
+                ]
+        else:
+            self._bezier_t_values = np.linspace(0, 1, stride)
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)
+
+    def init_colors(self, propagate_colors=True):
+        """Reapply the root's supported paint profile through shared Rust.
+
+        Noon stores paint on the semantic object, so this re-applies the
+        current root profile through the normal typed setters. The non-propagating
+        form remains root-local. Nonzero sheen and background images are rejected
+        before any writes.
+        """
+        def current(name, getter):
+            try:
+                return getattr(self, name)
+            except AttributeError:
+                return getter()
+
+        background_stroke_color = current(
+            "background_stroke_color",
+            lambda: self.get_stroke_color(background=True),
+        )
+        background_stroke_width = current(
+            "background_stroke_width",
+            lambda: self.get_stroke_width(background=True),
+        )
+        background_stroke_opacity = current(
+            "background_stroke_opacity",
+            lambda: self.get_stroke_opacity(background=True),
+        )
+        sheen_factor = current("sheen_factor", self.get_sheen_factor)
+        background_image = current("background_image", self.get_background_image)
+        if background_stroke_color is None:
+            background_stroke_color = self.get_stroke_color(background=True)
+        if background_stroke_width is None:
+            background_stroke_width = self.get_stroke_width(background=True)
+        if background_stroke_opacity is None:
+            background_stroke_opacity = self.get_stroke_opacity(background=True)
+        if sheen_factor != 0:
+            raise NotImplementedError(
+                "VMobject.init_colors requires shared gradient paint"
+            )
+        if background_image is not None:
+            raise NotImplementedError(
+                "VMobject.init_colors requires shared image paint"
+            )
+
+        fill_color = current("fill_color", self.get_fill_color)
+        fill_opacity = current("fill_opacity", self.get_fill_opacity)
+        stroke_color = current("stroke_color", self.get_stroke_color)
+        stroke_width = current("stroke_width", self.get_stroke_width)
+        stroke_opacity = current("stroke_opacity", self.get_stroke_opacity)
+        sheen_direction = current("sheen_direction", self.get_sheen_direction)
+
+        self.set_fill(
+            color=fill_color,
+            opacity=fill_opacity,
+            family=propagate_colors,
+        )
+        self.set_stroke(
+            color=stroke_color,
+            width=stroke_width,
+            opacity=stroke_opacity,
+            family=propagate_colors,
+        )
+        self.set_background_stroke(
+            color=background_stroke_color,
+            width=background_stroke_width,
+            opacity=background_stroke_opacity,
+            family=propagate_colors,
+        )
+        self.set_sheen(
+            factor=sheen_factor,
+            direction=sheen_direction,
+            family=propagate_colors,
+        )
+        return self
+
+    def consider_points_equals(self, p0, p1):
+        from _manim_path_queries import consider_points_equals
+        return consider_points_equals(self, p0, p1)
+
+    def consider_points_equals_2d(self, p0, p1):
+        from _manim_path_queries import consider_points_equals_2d
+        return consider_points_equals_2d(self, p0, p1)
 
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
 
+    def set_points(self, points):
+        from _manim_path_editing import set_points
+        return set_points(self, points)
+
+    def append_points(self, points):
+        from _manim_path_editing import append_points
+        return append_points(self, points)
+
+    def resize_points(self, new_length, resize_func=_resize_array):
+        from _manim_path_editing import resize_points
+        return resize_points(self, new_length, resize_func=resize_func)
+
+    def clear_points(self):
+        from _manim_path_editing import clear_points
+        return clear_points(self)
+
     def set_points_smoothly(self, points):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "setPointsSmoothly", "liveSetPointsSmoothly", points, array=True)
+        from _manim_path_editing import set_points_smoothly
+        return set_points_smoothly(self, points)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")
@@ -124,20 +341,57 @@ class VMobject(Mobject):
         return change_anchor_mode(self, mode)
 
     def start_new_path(self, point):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "startNewPath", "liveStartNewPath", (point,))
+        from _manim_path_editing import start_new_path
+        return start_new_path(self, point)
 
     def add_line_to(self, point):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "addLineTo", "liveAddLineTo", (point,))
+        from _manim_path_editing import add_line_to
+        return add_line_to(self, point)
 
     def add_quadratic_bezier_curve_to(self, control, anchor):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "addQuadraticBezierCurveTo", "liveAddQuadraticBezierCurveTo", (control, anchor))
+        from _manim_path_editing import add_quadratic_bezier_curve_to
+        return add_quadratic_bezier_curve_to(self, control, anchor)
 
     def add_cubic_bezier_curve_to(self, control1, control2, anchor):
+        from _manim_path_editing import add_cubic_bezier_curve_to
+        return add_cubic_bezier_curve_to(self, control1, control2, anchor)
+
+    def add_smooth_curve_to(self, *points):
+        from _manim_path_editing import add_smooth_curve_to
+        return add_smooth_curve_to(self, *points)
+
+    def scale_handle_to_anchor_distances(self, factor):
+        from _manim_path_editing import scale_handle_to_anchor_distances
+        return scale_handle_to_anchor_distances(self, factor)
+
+    def add_cubic_bezier_curve(self, anchor1, handle1, handle2, anchor2):
         from _manim_path_editing import edit_points
-        return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
+        return edit_points(
+            self,
+            "addCubicBezierCurve",
+            "liveAddCubicBezierCurve",
+            (anchor1, handle1, handle2, anchor2),
+        )
+
+    def add_cubic_bezier_curves(self, curves):
+        from _manim_path_editing import add_cubic_bezier_curves
+        return add_cubic_bezier_curves(self, curves)
+
+    def add_subpath(self, points):
+        from _manim_path_editing import add_subpath
+        return add_subpath(self, points)
+
+    def set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2):
+        from _manim_path_editing import set_anchors_and_handles
+        return set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2)
+
+    def append_vectorized_mobject(self, source):
+        from _manim_path_editing import append_vectorized_mobject
+        return append_vectorized_mobject(self, source)
+
+    def add_points_as_corners(self, points):
+        from _manim_path_editing import add_points_as_corners
+        return add_points_as_corners(self, points)
 
     def insert_n_curves(self, n):
         from _manim_path_editing import insert_n_curves
@@ -151,6 +405,30 @@ class VMobject(Mobject):
         from _manim_path_queries import subpaths
         return subpaths(self)
 
+    def get_subpath_split_indices_from_points(self, points, n_dims=3):
+        from _manim_path_queries import subpath_split_indices
+        return subpath_split_indices(self, points, n_dims)
+
+    def get_subpaths_from_points(self, points):
+        from _manim_path_queries import subpaths_from_points
+        return subpaths_from_points(self, points)
+
+    def gen_subpaths_from_points_2d(self, points):
+        from _manim_path_queries import gen_subpaths_from_points_2d
+        return gen_subpaths_from_points_2d(self, points)
+
+    def gen_cubic_bezier_tuples_from_points(self, points):
+        from _manim_path_queries import gen_cubic_bezier_tuples_from_points
+        return gen_cubic_bezier_tuples_from_points(self, points)
+
+    def get_cubic_bezier_tuples_from_points(self, points):
+        from _manim_path_queries import cubic_bezier_tuples_from_points
+        return cubic_bezier_tuples_from_points(self, points)
+
+    def get_cubic_bezier_tuples(self):
+        from _manim_path_queries import cubic_bezier_tuples
+        return cubic_bezier_tuples(self)
+
     def is_closed(self):
         from _manim_path_queries import is_closed
         return is_closed(self)
@@ -158,10 +436,6 @@ class VMobject(Mobject):
     def get_num_curves(self):
         from _manim_path_queries import curve_count
         return curve_count(self)
-
-    def get_num_points(self):
-        from _manim_path_queries import point_count
-        return point_count(self)
 
     def get_nth_curve_points(self, n):
         from _manim_path_queries import curve_points
@@ -226,13 +500,17 @@ class VMobject(Mobject):
         from _manim_path_editing import align_points
         return align_points(self, vmobject)
 
+    def align_rgbas(self, vmobject):
+        from _manim_path_editing import align_rgbas
+        return align_rgbas(self, vmobject)
+
     def pointwise_become_partial(self, vmobject, a, b):
         from _manim_path_editing import pointwise_become_partial
         return pointwise_become_partial(self, vmobject, a, b)
 
     def close_path(self):
-        from _manim_path_editing import edit_points
-        return edit_points(self, "closePath", "liveClosePath", ())
+        from _manim_path_editing import close_path
+        return close_path(self)
 
     def set_color_by_gradient(self, *colors):
         from _manim_semantic_handles import _set_color_by_gradient
@@ -241,24 +519,277 @@ class VMobject(Mobject):
     set_submobject_colors_by_gradient = set_color_by_gradient
 
     def get_fill_color(self):
+        return self.get_fill_colors()[0]
+
+    def get_fill_rgbas(self):
         from _manim_semantic_handles import _paint_color
-        return _paint_color(self, "fill")
+        return _manim_rgba_rows(_paint_color(self, "fill"), self.get_fill_opacity())
+
+    def get_fill_colors(self):
+        return _manim_colors_from_rgbas(self.get_fill_rgbas())
+
+    def get_fill_opacities(self):
+        return _manim_opacities_from_rgbas(self.get_fill_rgbas())
 
     def get_stroke_color(self, background=False):
+        return self.get_stroke_colors(background)[0]
+
+    def get_stroke_rgbas(self, background=False):
         if background:
-            raise NotImplementedError("background strokes require shared background paint")
+            from _manim_semantic_handles import (
+                _get_background_stroke_color,
+                _get_background_stroke_opacity,
+            )
+            return _manim_rgba_rows(
+                _get_background_stroke_color(self),
+                _get_background_stroke_opacity(self),
+            )
         from _manim_semantic_handles import _paint_color
-        return _paint_color(self, "stroke")
+        return _manim_rgba_rows(_paint_color(self, "stroke"), self.get_stroke_opacity())
+
+    def get_stroke_colors(self, background=False):
+        return _manim_colors_from_rgbas(self.get_stroke_rgbas(background))
+
+    def get_stroke_opacities(self, background=False):
+        return _manim_opacities_from_rgbas(self.get_stroke_rgbas(background))
 
     def get_stroke_width(self, background=False):
+        if background:
+            from _manim_semantic_handles import _get_background_stroke_width
+            return _get_background_stroke_width(self)
         from _manim_semantic_handles import _get_stroke_width
         return _get_stroke_width(self, background)
 
-    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+    def get_sheen_factor(self):
+        return 0.0
+
+    def generate_rgbas_array(self, color, opacity):
+        from _manim_iterables import make_even, tuplify
+
+        def parse_color(value):
+            if value is None:
+                return _base.Color(0.0, 0.0, 0.0)
+            if isinstance(value, _base.Color):
+                return value
+            if isinstance(value, str):
+                text = value.strip()
+                digits = None
+                if text.startswith("#"):
+                    digits = text[1:]
+                elif text.lower().startswith("0x"):
+                    digits = text[2:]
+                if (
+                    digits is not None
+                    and len(digits) in (3, 4, 6, 8)
+                    and all(character in "0123456789abcdefABCDEF" for character in digits)
+                ):
+                    if len(digits) in (3, 4):
+                        digits = "".join(character * 2 for character in digits)
+                    return _base.color_from_hex(int(digits[:6], 16))
+                try:
+                    return _as_color("color", value)
+                except ValueError:
+                    named_color = getattr(_base, value.upper(), None)
+                    if isinstance(named_color, _base.Color):
+                        return named_color
+                    raise
+            get_hex = getattr(value, "get_hex", None)
+            if not callable(get_hex):
+                get_hex = getattr(value, "to_hex", None)
+            if callable(get_hex):
+                return parse_color(get_hex())
+            if hasattr(value, "tolist"):
+                value = value.tolist()
+            if isinstance(value, (list, tuple)):
+                if len(value) not in (3, 4):
+                    raise ValueError(
+                        "ManimColor only accepts lists/tuples/arrays of length 3 or 4"
+                    )
+                scale = (
+                    1.0
+                    if all(isinstance(component, float) for component in value)
+                    else 1.0 / 255.0
+                )
+                return _base.Color(
+                    *(float(component) * scale for component in value[:3])
+                )
+            return _as_color("color", value)
+
+        colors = [parse_color(value) for value in tuplify(color)]
+        opacities = [0.0 if value is None else value for value in tuplify(opacity)]
+        paired_colors, paired_opacities = make_even(colors, opacities)
+        rows = [
+            [float(value.red), float(value.green), float(value.blue), float(alpha)]
+            for value, alpha in zip(paired_colors, paired_opacities, strict=True)
+        ]
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+            rgbas = rows
+        else:
+            rgbas = np.asarray(rows, dtype=np.float64)
+
+        sheen_factor = self.get_sheen_factor()
+        if sheen_factor != 0 and len(rgbas) == 1:
+            light_rgbas = rgbas.copy()
+            if np is not None:
+                light_rgbas[:, :3] += sheen_factor
+                np.clip(light_rgbas, 0.0, 1.0, out=light_rgbas)
+                rgbas = np.append(rgbas, light_rgbas, axis=0)
+            else:
+                for row in light_rgbas:
+                    for index in range(3):
+                        row[index] = min(1.0, max(0.0, row[index] + sheen_factor))
+                    row[3] = min(1.0, max(0.0, row[3]))
+                rgbas = rgbas + light_rgbas
+        return rgbas
+
+    def update_rgbas_array(self, array_name, color=None, opacity=None):
+        """Update supported solid fill/stroke paint through the Rust owner.
+
+        Per-point gradients and arbitrary Python-owned RGBA arrays have no
+        shared semantic representation, so they fail explicitly.
+        """
+        if not isinstance(array_name, str):
+            raise TypeError("array_name must be a string")
+        if array_name not in (
+            "fill_rgbas",
+            "stroke_rgbas",
+            "background_stroke_rgbas",
+        ):
+            raise NotImplementedError(
+                f"unsupported RGBA array {array_name!r}; use shared fill or stroke paint"
+            )
+        if array_name in getattr(self, "__dict__", {}):
+            raise NotImplementedError(
+                "Python-owned RGBA arrays are not shared semantic paint"
+            )
+        if getattr(self, "sheen_factor", self.get_sheen_factor()) != 0:
+            raise NotImplementedError(
+                "RGBA array updates with sheen require shared gradient paint"
+            )
+
+        from _manim_semantic_handles import _style_value
+
+        parsed_color = None
+        if color is not None:
+            rgba_rows = self.generate_rgbas_array(color, 1.0)
+            if hasattr(rgba_rows, "tolist"):
+                rgba_rows = rgba_rows.tolist()
+            if len(rgba_rows) != 1:
+                raise NotImplementedError(
+                    "multi-color RGBA updates require shared gradient paint"
+                )
+            parsed_color = _base.Color(*rgba_rows[0][:3])
+        parsed_opacity = _style_value(opacity, "opacity")
+
+        if array_name == "fill_rgbas":
+            return self.set_fill(
+                color=parsed_color,
+                opacity=parsed_opacity,
+                family=False,
+            )
+        return self.set_stroke(
+            color=parsed_color,
+            opacity=parsed_opacity,
+            background=array_name == "background_stroke_rgbas",
+            family=False,
+        )
+
+    def get_sheen_direction(self):
+        from _manim_semantic_handles import _get_sheen_direction
+        return _get_sheen_direction(self)
+
+    def get_gradient_start_and_end_points(self):
+        from _manim_semantic_handles import _get_gradient_start_and_end_points
+        return _get_gradient_start_and_end_points(self)
+
+    def get_background_image(self):
+        return None
+
+    def color_using_background_image(self, background_image):
+        from _manim_semantic_handles import _color_using_background_image
+        return _color_using_background_image(self, background_image)
+
+    def match_background_image(self, vmobject):
+        from _manim_semantic_handles import _match_background_image
+        return _match_background_image(self, vmobject)
+
+    def get_style(self, simple=False):
+        style = {
+            "stroke_opacity": self.get_stroke_opacity(),
+            "stroke_width": self.get_stroke_width(),
+        }
+        if simple:
+            style["fill_color"] = self.get_fill_color()
+            style["fill_opacity"] = self.get_fill_opacity()
+            style["stroke_color"] = self.get_stroke_color()
+            return style
+        style.update({
+            "fill_color": self.get_fill_colors(),
+            "fill_opacity": self.get_fill_opacities(),
+            "stroke_color": self.get_stroke_colors(),
+            "background_stroke_color": self.get_stroke_colors(background=True),
+            "background_stroke_width": self.get_stroke_width(background=True),
+            "background_stroke_opacity": self.get_stroke_opacity(background=True),
+            "sheen_factor": self.get_sheen_factor(),
+            "sheen_direction": self.get_sheen_direction(),
+            "background_image": self.get_background_image(),
+        })
+        return style
+
+    def set_style(
+        self,
+        fill_color=None,
+        fill_opacity=None,
+        stroke_color=None,
+        stroke_width=None,
+        stroke_opacity=None,
+        background_stroke_color=None,
+        background_stroke_width=None,
+        background_stroke_opacity=None,
+        sheen_factor=None,
+        sheen_direction=None,
+        background_image=None,
+        family=True,
+    ):
         from _manim_semantic_handles import _set_style
         return _set_style(self, fill_color, fill_opacity, stroke_color,
-                          stroke_width, stroke_opacity, family, **kwargs)
+                          stroke_width, stroke_opacity, background_stroke_color,
+                          background_stroke_width, background_stroke_opacity,
+                          sheen_factor, sheen_direction, background_image, family)
+
+    def interpolate_color(self, mobject1, mobject2, alpha):
+        from _manim_semantic_handles import _interpolate_manim_style
+        return _interpolate_manim_style(self, mobject1, mobject2, alpha)
+
+    def set_background_stroke(self, **kwargs):
+        kwargs["background"] = True
+        return self.set_stroke(**kwargs)
+
+    def set_cap_style(self, cap_style):
+        from _manim_semantic_handles import _set_cap_style
+        return _set_cap_style(self, cap_style)
+
+    def set_shade_in_3d(self, value=True, z_index_as_group=False):
+        if value is not False or z_index_as_group:
+            raise NotImplementedError(
+                "3D shading and z-index grouping require spatial renderer support"
+            )
+        return self
+
+    def set_sheen_direction(self, direction, family=True):
+        from _manim_semantic_handles import _set_sheen_direction
+        return _set_sheen_direction(self, direction, family)
+
+    def rotate_sheen_direction(self, angle, axis=_base.OUT, family=True):
+        from _manim_semantic_handles import _rotate_sheen_direction
+        return _rotate_sheen_direction(self, angle, axis, family)
+
+    def set_sheen(self, factor, direction=None, family=True):
+        from _manim_semantic_handles import _set_sheen
+        return _set_sheen(self, factor, direction, family)
 
     def match_style(self, vmobject, family=True):
         from _manim_semantic_handles import _match_style
@@ -281,8 +812,12 @@ class VMobject(Mobject):
         color: object = None,
         width: float | None = None,
         opacity: float | None = None,
+        background: bool = False,
         family: bool = True,
     ) -> VMobject:
+        if background:
+            from _manim_semantic_handles import _set_background_stroke
+            return _set_background_stroke(self, color, width, opacity, family)
         from _manim_updaters import _canonical_vmobject_set_stroke
         return _canonical_vmobject_set_stroke(self, color=color, width=width, opacity=opacity, family=family)
 
@@ -294,7 +829,9 @@ class VMobject(Mobject):
         from _manim_semantic_handles import _get_fill_opacity
         return _get_fill_opacity(self)
 
-    def get_stroke_opacity(self) -> float:
+    def get_stroke_opacity(self, background=False) -> float:
+        if background:
+            return float(self.get_stroke_opacities(background=True)[0])
         from _manim_semantic_handles import _get_stroke_opacity
         return _get_stroke_opacity(self)
 
@@ -303,17 +840,63 @@ class VMobject(Mobject):
         from _manim_path_queries import point_from_proportion
         return point_from_proportion(self, alpha)
 
-    def get_start(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, False)
+    def proportion_from_point(self, point: object) -> float:
+        from _manim_path_queries import _reject_staged_custom_stride_query
+        _reject_staged_custom_stride_query(self)
+        self.throw_error_if_no_points()
+        from _manim_path_queries import proportion_from_point
+        return proportion_from_point(self, point)
 
-    def get_end(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-        return endpoint(self, True)
+    def get_last_point(self) -> _base.Vec2:
+        from _manim_path_queries import last_point
+        return last_point(self)
+
+    def has_new_path_started(self) -> bool:
+        from _manim_path_queries import has_new_path_started
+        return has_new_path_started(self)
 
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
         return arc_length(self, sample_points_per_curve)
+
+
+class VectorizedPoint(VMobject):
+    """Invisible one-point VMobject with Manim's artificial layout extent."""
+
+    def __init__(
+        self,
+        location=_base.ORIGIN,
+        color=_base.BLACK,
+        fill_opacity=0,
+        stroke_width=0,
+        artificial_width=0.01,
+        artificial_height=0.01,
+        **kwargs,
+    ) -> None:
+        self.artificial_width = artificial_width
+        self.artificial_height = artificial_height
+        super().__init__(
+            color=color,
+            fill_opacity=fill_opacity,
+            stroke_width=stroke_width,
+            **kwargs,
+        )
+        self.set_points([location])
+
+    @VMobject.width.getter
+    def width(self) -> float:
+        return self.artificial_width
+
+    @VMobject.height.getter
+    def height(self) -> float:
+        return self.artificial_height
+
+    def get_location(self):
+        return self.get_start()
+
+    def set_location(self, new_loc):
+        self.set_points([new_loc])
+        return self
 
 
 class Circle(VMobject):
@@ -326,6 +909,16 @@ class Circle(VMobject):
     ) -> None:
         from _manim_semantic_handles import _circle_init
         _circle_init(self, radius, color=color, **kwargs)
+
+    def surround(
+        self,
+        mobject: _base.Mobject,
+        dim_to_match: int = 0,
+        stretch: bool = False,
+        buffer_factor: float = 1.2,
+    ) -> Circle:
+        from _manim_semantic_handles import _circle_surround
+        return _circle_surround(self, mobject, dim_to_match, stretch, buffer_factor)
 
 
 class Rectangle(VMobject):
@@ -463,11 +1056,26 @@ class Group(Mobject):
 
     set_submobject_colors_by_gradient = set_color_by_gradient
 
-    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+    def set_style(
+        self,
+        fill_color=None,
+        fill_opacity=None,
+        stroke_color=None,
+        stroke_width=None,
+        stroke_opacity=None,
+        background_stroke_color=None,
+        background_stroke_width=None,
+        background_stroke_opacity=None,
+        sheen_factor=None,
+        sheen_direction=None,
+        background_image=None,
+        family=True,
+    ):
         from _manim_semantic_handles import _set_style
         return _set_style(self, fill_color, fill_opacity, stroke_color,
-                          stroke_width, stroke_opacity, family, **kwargs)
+                          stroke_width, stroke_opacity, background_stroke_color,
+                          background_stroke_width, background_stroke_opacity,
+                          sheen_factor, sheen_direction, background_image, family)
 
     def match_style(self, vmobject, family=True):
         from _manim_semantic_handles import _match_style
@@ -519,9 +1127,37 @@ class Group(Mobject):
             return group_class(*self.submobjects[index])
         return self.submobjects[index]
 
+    def insert(self, index: int, mobject: Mobject) -> Self:
+        from _manim_semantic_handles import _group_insert
+        return _group_insert(self, index, mobject)
+
     def add(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_add
         return _group_add(self, *mobjects)
+
+    def add_to_back(self, *mobjects: object) -> Group:
+        from _manim_semantic_handles import _group_add_to_back
+        return _group_add_to_back(self, *mobjects)
+
+    def add_n_more_submobjects(self, n: int) -> Self | None:
+        from _manim_semantic_handles import _group_add_n_more_submobjects
+        return _group_add_n_more_submobjects(self, n)
+
+    def invert(self, recursive: bool = False) -> Self:
+        from _manim_semantic_handles import _group_invert
+        return _group_invert(self, recursive)
+
+    def sort(
+        self,
+        point_to_num_func: Callable[[Point3DLike], float] = lambda point: point[0],
+        submob_func: Callable[[Mobject], Any] | None = None,
+    ) -> Self:
+        from _manim_semantic_handles import _group_sort
+        return _group_sort(self, point_to_num_func, submob_func)
+
+    def shuffle(self, recursive: bool = False) -> Self:
+        from _manim_semantic_handles import _group_shuffle
+        return _group_shuffle(self, recursive)
 
     def remove(self, *mobjects: object) -> Group:
         from _manim_semantic_handles import _group_remove
@@ -638,6 +1274,9 @@ class Group(Mobject):
     ) -> Group:
         return _base._semantic_operations()._group_arrange(self, direction, buff, center, **kwargs)
 
+    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.arrange(*args, **kwargs)
+
     def arrange_in_grid(
         self, rows: int | None = None, cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
@@ -670,28 +1309,92 @@ class Group(Mobject):
 
 
 class VGroup(Group):
-    # The family wrapper reuses vector-class queries without duplicating them.
+    match_style = VMobject.match_style
+    interpolate = VMobject.interpolate
+    interpolate_color = VMobject.interpolate_color
+    # The family wrapper reuses vector-class geometry queries without duplicating them.
+    # Paint getters stay on VMobject until the family root has authoritative own-style state.
+    cap_style = VMobject.cap_style
+    shade_in_3d = VMobject.shade_in_3d
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+    get_points_defining_boundary = VMobject.get_points_defining_boundary
+    get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
+    get_background_image = VMobject.get_background_image
+    get_sheen_factor = VMobject.get_sheen_factor
+    generate_rgbas_array = VMobject.generate_rgbas_array
+    update_rgbas_array = VMobject.update_rgbas_array
+    get_sheen_direction = VMobject.get_sheen_direction
+    set_background_stroke = VMobject.set_background_stroke
+    set_cap_style = VMobject.set_cap_style
+    set_shade_in_3d = VMobject.set_shade_in_3d
+    color_using_background_image = VMobject.color_using_background_image
+    match_background_image = VMobject.match_background_image
+    set_sheen_direction = VMobject.set_sheen_direction
+    rotate_sheen_direction = VMobject.rotate_sheen_direction
+    set_sheen = VMobject.set_sheen
+    get_style = VMobject.get_style
+    set_style = VMobject.set_style
+    init_colors = VMobject.init_colors
+    get_fill_color = VMobject.get_fill_color
+    get_fill_rgbas = VMobject.get_fill_rgbas
+    get_fill_colors = VMobject.get_fill_colors
+    get_fill_opacities = VMobject.get_fill_opacities
+    get_stroke_color = VMobject.get_stroke_color
+    get_stroke_rgbas = VMobject.get_stroke_rgbas
+    get_stroke_colors = VMobject.get_stroke_colors
+    get_stroke_opacities = VMobject.get_stroke_opacities
+    get_stroke_width = VMobject.get_stroke_width
 
-    def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:
+    def __init__(self, *mobjects, z_index=0, color=_base.WHITE, shade_in_3d=False):
+        if shade_in_3d is not False:
+            raise NotImplementedError("3D-shaded vector rendering is not supported")
+        super().__init__(*mobjects, z_index=z_index, color=color)
+
+    def get_point_mobject(self, center=None):
+        if center is None:
+            center = self.get_center()
+        point = VectorizedPoint(center)
+        point.match_style(self, family=False)
+        return point
+
+    def get_fill_opacity(self):
+        from _manim_semantic_handles import _get_fill_opacity
+        return _get_fill_opacity(self)
+
+    def get_stroke_opacity(self, background=False):
+        if background:
+            return float(self.get_stroke_opacities(background=True)[0])
+        from _manim_semantic_handles import _get_stroke_opacity
+        return _get_stroke_opacity(self)
+
+    def set_fill(
+        self,
+        color: object = None,
+        opacity: float | None = None,
+        family: bool = True,
+    ) -> VGroup:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_fill(self, color, opacity)
         from _manim_semantic_handles import _group_set_fill
-        return _group_set_fill(self, color, opacity)
+        return _group_set_fill(self, color, opacity, family)
 
     def set_stroke(self, color: object = None, width: float | None = None,
-                   opacity: float | None = None) -> VGroup:
+                   opacity: float | None = None, background: bool = False,
+                   family: bool = True) -> VGroup:
+        if background:
+            from _manim_semantic_handles import _set_background_stroke
+            return _set_background_stroke(self, color, width, opacity, family)
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_stroke(self, color, width, opacity)
         from _manim_semantic_handles import _group_set_stroke
-        return _group_set_stroke(self, color, width, opacity)
+        return _group_set_stroke(self, color, width, opacity, family)
 
-    def set_opacity(self, opacity: float) -> VGroup:
+    def set_opacity(self, opacity: float, family: bool = True) -> VGroup:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_opacity(self, opacity)
         from _manim_semantic_handles import _group_set_opacity
-        return _group_set_opacity(self, opacity)
+        return _group_set_opacity(self, opacity, family)
 
     def make_smooth(self):
         return self.change_anchor_mode("smooth")
@@ -702,6 +1405,116 @@ class VGroup(Group):
     def change_anchor_mode(self, mode):
         from _manim_path_editing import change_anchor_mode
         return change_anchor_mode(self, mode)
+
+
+class CurvesAsSubmobjects(VGroup):
+    """Expose each shared-Rust cubic path segment as a styled VMobject child."""
+
+    def __init__(self, vmobject: VMobject, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        for curve in vmobject.get_cubic_bezier_tuples():
+            part = VMobject()
+            part.set_points(curve)
+            part.match_style(vmobject)
+            self.add(part)
+
+    def point_from_proportion(self, alpha: float) -> _base.Vec2:
+        """Query this piecewise family by cumulative shared-Rust arc length."""
+        if alpha < 0 or alpha > 1:
+            raise ValueError(f"Alpha {alpha} not between 0 and 1.")
+
+        if len(self.submobjects) == 0:
+            raise Exception(
+                "Cannot call CurvesAsSubmobjects. point_from_proportion for a "
+                "CurvesAsSubmobject with no submobjects"
+            )
+        parts = [part for part in self.submobjects if part.get_num_points() > 0]
+        if not parts:
+            raise Exception(
+                "Cannot call CurvesAsSubmobjects. point_from_proportion for a "
+                "CurvesAsSubmobject whose submobjects have no points"
+            )
+        if alpha == 1:
+            return parts[-1].point_from_proportion(1)
+
+        lengths = [part.get_arc_length() for part in parts]
+        target_length = alpha * sum(lengths)
+        current_length = 0.0
+        for part, length in zip(parts, lengths):
+            if current_length + length >= target_length:
+                residue = (target_length - current_length) / length
+                return part.point_from_proportion(residue)
+            current_length += length
+
+
+class VDict(VGroup, VMobject):
+    """A shared-family vector group with Manim's key-to-mobject access."""
+
+    def __init__(
+        self,
+        mapping_or_iterable: Mapping[Hashable, VMobject]
+        | Iterable[tuple[Hashable, VMobject]] = {},
+        show_keys: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        if show_keys:
+            raise NotImplementedError(
+                "VDict show_keys requires adding text submobjects to geometry objects"
+            )
+        super().__init__(**kwargs)
+        self.show_keys = show_keys
+        self.submob_dict: dict[Hashable, VMobject] = {}
+        self.add(mapping_or_iterable)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.submob_dict!r})"
+
+    def add(
+        self,
+        mapping_or_iterable: Mapping[Hashable, VMobject]
+        | Iterable[tuple[Hashable, VMobject]],
+    ) -> Self:
+        for key, value in dict(mapping_or_iterable).items():
+            self.add_key_value_pair(key, value)
+        return self
+
+    def remove(self, key: Hashable) -> Self:
+        if key not in self.submob_dict:
+            raise KeyError(f"The given key '{key!s}' is not present in the VDict")
+        super().remove(self.submob_dict[key])
+        del self.submob_dict[key]
+        return self
+
+    def __getitem__(self, key: Hashable) -> VMobject:
+        return self.submob_dict[key]
+
+    def __setitem__(self, key: Hashable, value: VMobject) -> None:
+        if key in self.submob_dict:
+            self.remove(key)
+        self.add([(key, value)])
+
+    def __delitem__(self, key: Hashable) -> None:
+        # Manim deliberately removes only the key here; its family member remains.
+        del self.submob_dict[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.submob_dict
+
+    def get_all_submobjects(self):
+        return self.submob_dict.values()
+
+    def add_key_value_pair(self, key: Hashable, value: VMobject) -> Self:
+        if not isinstance(value, (VMobject, VGroup)):
+            raise TypeError(
+                f"VDict values must be VMobjects, got {type(value).__name__}"
+            )
+        if self.show_keys:
+            raise NotImplementedError(
+                "VDict show_keys requires adding text submobjects to geometry objects"
+            )
+        self.submob_dict[key] = value
+        super().add(value)
+        return self
 
 
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:

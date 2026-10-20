@@ -281,9 +281,9 @@ fn require_flat_family_endpoint(
             error: FamilyTransformCorrespondenceError::InvalidFamily(endpoint),
         })?;
     if members.iter().any(|member| {
-        store
-            .node(*member)
-            .is_some_and(|node| matches!(node.kind(), SemanticNodeKind::Family(_)))
+        store.node(*member).is_some_and(|node| {
+            matches!(node.kind(), SemanticNodeKind::Family(_)) || node.member_count() > 0
+        })
     }) {
         return Err(
             PreparedFamilyTransformActivationError::UnsupportedNestedTopology {

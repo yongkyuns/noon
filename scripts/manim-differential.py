@@ -7,10 +7,11 @@ comparison reads their observations and executes the equivalent pinned ManimCE
 probes. It reports a structural diff on mismatch. Serialized observations are a
 test boundary, never engine input.
 
-Add new probes only for behavior Noon claims to support.  Unsupported behavior
-belongs in ``UNSUPPORTED`` below until an implementation PR promotes it to a
-gated fixture.  That distinction prevents the compatibility suite from turning
-missing API surface into an accidental semantic specification.
+Add common-success probes only when Noon and pinned ManimCE both have defined
+outputs. Unsupported, deferred, or intentionally divergent behavior belongs in
+``UNSUPPORTED`` below with its reason until it has an appropriate qualification
+lane. That distinction prevents the compatibility suite from turning missing
+API surface into an accidental semantic specification.
 """
 
 from __future__ import annotations
@@ -19,9 +20,12 @@ import argparse
 import json
 import math
 import os
+import random
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -183,36 +187,233 @@ def _manim_next_to() -> Any:
     return {"left": _object_observation(left), "right": _object_observation(right)}
 
 
+def _next_to_live_probe(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Rectangle(width=1.4, height=0.8).shift(
+        provider.LEFT * 1.1 + provider.UP * 0.35
+    )
+    receiver = provider.Square(side_length=0.6).shift(provider.DOWN * 0.8)
+    if scene is not None:
+        scene.add(target, receiver)
+    returned = receiver.next_to(
+        target, provider.RIGHT, buff=0.25, aligned_edge=provider.UP,
+        coor_mask=(1.0, 1.0, 0.0),
+    )
+    return {
+        "returns_self": returned is receiver,
+        "target": _object_observation(target),
+        "receiver": _object_observation(receiver),
+    }
+
+
+def _noon_next_to_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _next_to_live_probe(noon, scene))
+
+
+def _manim_next_to_live() -> Any:
+    return _next_to_live_probe(manim)
+
+
+def _next_to_point_live_probe(provider: Any, scene: Any | None = None) -> Any:
+    receiver = provider.Circle(radius=0.35).shift(provider.LEFT + provider.DOWN)
+    if scene is not None:
+        scene.add(receiver)
+    returned = receiver.next_to(
+        (1.25, 0.75, 0.0), provider.UP, buff=0.2,
+        coor_mask=(1.0, 1.0, 0.0),
+    )
+    return {"returns_self": returned is receiver, "receiver": _object_observation(receiver)}
+
+
+def _noon_next_to_point_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _next_to_point_live_probe(noon, scene)
+    )
+
+
+def _manim_next_to_point_live() -> Any:
+    return _next_to_point_live_probe(manim)
+
+
+def _align_to_top(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Rectangle(width=2.0, height=1.5).shift(
+        provider.RIGHT * 0.8 + provider.UP * 0.5
+    )
+    obj = provider.Circle(radius=0.4).shift(provider.LEFT * 2.0)
+    if scene is not None:
+        scene.add(target, obj)
+    target_top = _point_observation(target.get_top())
+    before = _object_observation(obj)
+    returned = obj.align_to(target, provider.UP)
+    return {
+        "returns_self": returned is obj,
+        "target": _object_observation(target),
+        "target_top": target_top,
+        "before": before,
+        "object": _object_observation(obj),
+        "object_top": _point_observation(obj.get_top()),
+    }
+
+
 def _noon_align_to_top() -> Any:
-    target = noon.Rectangle(width=2.0, height=1.5).shift(noon.RIGHT * 0.8 + noon.UP * 0.5)
-    obj = noon.Circle(radius=0.4).shift(noon.LEFT * 2.0).align_to(target, noon.UP)
-    return {"target": _object_observation(target), "object": _object_observation(obj)}
+    return _align_to_top(noon)
 
 
 def _manim_align_to_top() -> Any:
-    target = manim.Rectangle(width=2.0, height=1.5).shift(manim.RIGHT * 0.8 + manim.UP * 0.5)
-    obj = manim.Circle(radius=0.4).shift(manim.LEFT * 2.0).align_to(target, manim.UP)
-    return {"target": _object_observation(target), "object": _object_observation(obj)}
+    return _align_to_top(manim)
+
+
+def _noon_align_to_top_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _align_to_top(noon, scene))
+
+
+def _align_to_point_right(provider: Any, scene: Any | None = None) -> Any:
+    point = (1.25, 2.75, 0.0)
+    obj = provider.Rectangle(width=0.8, height=0.4).shift(
+        provider.LEFT * 2.0 + provider.DOWN
+    )
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.align_to(point, provider.RIGHT)
+    return {
+        "returns_self": returned is obj,
+        "point": list(point[:2]),
+        "before": before,
+        "after": _object_observation(obj),
+        "right": _point_observation(obj.get_right()),
+    }
+
+
+def _noon_align_to_point_right() -> Any:
+    return _align_to_point_right(noon)
+
+
+def _manim_align_to_point_right() -> Any:
+    return _align_to_point_right(manim)
+
+
+def _noon_align_to_point_right_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_to_point_right(noon, scene)
+    )
+
+
+def _align_to_group_top(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Group(
+        provider.Rectangle(width=1.2, height=0.7).shift(
+            provider.RIGHT + provider.UP
+        ),
+        provider.Circle(radius=0.25).shift(
+            provider.RIGHT * 1.5 + provider.UP * 2.0
+        ),
+    )
+    obj = provider.Circle(radius=0.35).shift(provider.LEFT * 1.5 + provider.DOWN)
+    if scene is not None:
+        scene.add(target, obj)
+    target_top = _point_observation(target.get_top())
+    before = _object_observation(obj)
+    returned = obj.align_to(target, provider.UP)
+    return {
+        "returns_self": returned is obj,
+        "target": _members_observation(target),
+        "target_top": target_top,
+        "before": before,
+        "object": _object_observation(obj),
+        "object_top": _point_observation(obj.get_top()),
+    }
+
+
+def _noon_align_to_group_top() -> Any:
+    return _align_to_group_top(noon)
+
+
+def _manim_align_to_group_top() -> Any:
+    return _align_to_group_top(manim)
+
+
+def _noon_align_to_group_top_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_to_group_top(noon, scene)
+    )
+
+
+def _to_edge(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Square(side_length=1.0)
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.to_edge(provider.LEFT, buff=0.4)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
 
 
 def _noon_to_edge() -> Any:
-    obj = noon.Square(side_length=1.0).to_edge(noon.LEFT, buff=0.4)
-    return _object_observation(obj)
+    return _to_edge(noon)
 
 
 def _manim_to_edge() -> Any:
-    obj = manim.Square(side_length=1.0).to_edge(manim.LEFT, buff=0.4)
-    return _object_observation(obj)
+    return _to_edge(manim)
+
+
+def _noon_to_edge_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _to_edge(noon, scene))
+
+
+def _to_corner(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Circle(radius=0.5)
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.to_corner(provider.UR, buff=0.25)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
 
 
 def _noon_to_corner() -> Any:
-    obj = noon.Circle(radius=0.5).to_corner(noon.UR, buff=0.25)
-    return _object_observation(obj)
+    return _to_corner(noon)
 
 
 def _manim_to_corner() -> Any:
-    obj = manim.Circle(radius=0.5).to_corner(manim.UR, buff=0.25)
-    return _object_observation(obj)
+    return _to_corner(manim)
+
+
+def _noon_to_corner_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _to_corner(noon, scene))
+
+
+def _align_on_border(provider: Any, scene: Any | None = None) -> Any:
+    obj = provider.Rectangle(width=0.8, height=0.4).shift(
+        provider.LEFT + provider.DOWN
+    )
+    if scene is not None:
+        scene.add(obj)
+    before = _object_observation(obj)
+    returned = obj.align_on_border(provider.LEFT + provider.UP, buff=0.3)
+    return {
+        "returns_self": returned is obj,
+        "before": before,
+        "object": _object_observation(obj),
+    }
+
+
+def _noon_align_on_border() -> Any:
+    return _align_on_border(noon)
+
+
+def _manim_align_on_border() -> Any:
+    return _align_on_border(manim)
+
+
+def _noon_align_on_border_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _align_on_border(noon, scene)
+    )
 
 
 def _noon_arrange() -> Any:
@@ -243,6 +444,301 @@ def _manim_set_xy() -> Any:
     return _object_observation(obj)
 
 
+def _noon_set_z_zero() -> Any:
+    obj = noon.Circle(radius=0.4).shift(noon.RIGHT * 1.25 + noon.DOWN * 0.75)
+    result = obj.set_z(0.0)
+    return {
+        "object": _object_observation(obj),
+        "z": _round_float(obj.get_z()),
+        "returned_self": result is obj,
+    }
+
+
+def _manim_set_z_zero() -> Any:
+    obj = manim.Circle(radius=0.4).shift(manim.RIGHT * 1.25 + manim.DOWN * 0.75)
+    result = obj.set_z(0.0)
+    return {
+        "object": _object_observation(obj),
+        "z": _round_float(obj.get_z()),
+        "returned_self": result is obj,
+    }
+
+
+def _apply_to_family_probe(api) -> Any:
+    circle = api.Circle(radius=0.2)
+    circle.parity_marker = "circle"
+    square = api.Square(side_length=0.4)
+    square.parity_marker = "square"
+    empty = api.Mobject()
+    empty.parity_marker = "empty"
+    nested = api.Group(square, empty)
+    nested.parity_marker = "nested"
+    family = api.Group(circle, nested)
+    family.parity_marker = "root"
+    visited = []
+    result = family.apply_to_family(lambda mobject: visited.append(mobject.parity_marker))
+    return {"visited": visited, "returned_self": result is family}
+
+
+def _family_updaters_probe(api) -> Any:
+    def root_first(mobject):
+        return mobject
+
+    def root_second(mobject, dt):
+        return dt
+
+    def circle_updater(mobject):
+        return mobject
+
+    def square_updater(mobject, dt):
+        return dt
+
+    circle = api.Circle(radius=0.2).add_updater(circle_updater)
+    square = api.Square(side_length=0.4).add_updater(square_updater)
+    nested = api.Group(square)
+    family = api.Group(circle, nested).add_updater(root_first).add_updater(root_second)
+    names = [updater.__name__ for updater in family.get_family_updaters()]
+    return {"updaters": names}
+
+
+def _time_based_updaters_probe(api) -> Any:
+    def ordinary(mobject):
+        return mobject
+
+    def positional_dt(mobject, dt):
+        return dt
+
+    def keyword_only_dt(mobject, *, dt):
+        return dt
+
+    def variadic(mobject, *args):
+        return args
+
+    mobject = api.Mobject()
+    for updater in (ordinary, positional_dt, keyword_only_dt, variadic):
+        mobject.add_updater(updater)
+    selected = mobject.get_time_based_updaters()
+    return {
+        "selected": [updater.__name__ for updater in selected],
+        "has_time_based": mobject.has_time_based_updater(),
+        "empty_has_time_based": api.Mobject().has_time_based_updater(),
+    }
+
+
+def _always_builder_probe(api, scene=None) -> Any:
+    mobject = api.Square()
+    if scene is not None:
+        scene.add(mobject)
+    builder = mobject.always
+    returned = builder.shift(api.RIGHT)
+    immediate_center = _point_observation(mobject.get_center())
+    callbacks = mobject.get_updaters()
+    callbacks[0](mobject)
+    return {
+        "returns_builder": returned is builder,
+        "immediate_center": immediate_center,
+        "updater_count": len(callbacks),
+        "after_updater_center": _point_observation(mobject.get_center()),
+    }
+
+
+def _match_updaters_probe(api) -> Any:
+    target = api.Group(api.Dot(), api.Dot())
+    source = api.Group(api.Dot())
+
+    def old_root(mobject):
+        return mobject
+
+    def old_child(mobject):
+        return mobject
+
+    def donor_root(mobject):
+        return mobject
+
+    def donor_child(mobject):
+        return mobject
+
+    target.add_updater(old_root)
+    target[0].add_updater(old_child)
+    source.add_updater(donor_root)
+    source[0].add_updater(donor_child)
+    result = target.match_updaters(source)
+    return {
+        "returns_self": result is target,
+        "target_root": [updater.__name__ for updater in target.get_updaters()],
+        "target_family": [
+            updater.__name__ for updater in target.get_family_updaters()
+        ],
+        "source_root": [updater.__name__ for updater in source.get_updaters()],
+    }
+
+
+def _mobject_update_probe(api) -> Any:
+    target = api.Group(api.Dot(), api.Dot())
+    events = []
+
+    def root_updater(mobject, dt):
+        events.append(("root", dt))
+
+    def child_updater(mobject):
+        events.append(("child", None))
+
+    def suspended_updater(mobject):
+        events.append(("suspended", None))
+
+    target.add_updater(root_updater)
+    target[0].add_updater(child_updater)
+    target[1].add_updater(suspended_updater)
+    target[1].updating_suspended = True
+    result = target.update(dt=0.5)
+    recursive = list(events)
+    events.clear()
+    target.update(dt=0.25, recursive=False)
+    return {
+        "returns_self": result is target,
+        "recursive": recursive,
+        "non_recursive": events,
+    }
+
+
+def _updater_suspension_probe(api) -> Any:
+    root = api.Group(api.Dot(), api.Group(api.Dot()))
+    labels = [(root, "root"), (root[0], "first"), (root[1], "nested"), (root[1][0], "last")]
+    events = []
+    for member, label in labels:
+        member.add_updater(
+            lambda target, dt, label=label: events.append((label, float(dt)))
+        )
+
+    root.updating_suspended = True
+    root_only_flags = [member.updating_suspended for member in root.get_family()]
+    root.updating_suspended = False
+
+    suspended_result = root.suspend_updating()
+    suspended_flags = [member.updating_suspended for member in root.get_family()]
+    root.update(dt=0.5)
+    events_while_suspended = list(events)
+
+    resumed_result = root.resume_updating()
+    return {
+        "property_set_root_only": root_only_flags,
+        "suspend_returns_self": suspended_result is root,
+        "suspended_flags": suspended_flags,
+        "events_while_suspended": events_while_suspended,
+        "resume_returns_self": resumed_result is root,
+        "resumed_flags": [member.updating_suspended for member in root.get_family()],
+        "resume_events": events,
+    }
+
+
+def _to_original_color_probe(api) -> Any:
+    family = api.Group(
+        api.Dot(color=api.BLUE),
+        api.Dot(color=api.GREEN),
+    )
+    family.set_color(api.RED, family=False)
+    result = family.to_original_color()
+    return {
+        "returns_self": result is family,
+        "colors": [_paint_rgb(member.get_color()) for member in family.get_family()],
+    }
+
+
+def _base_mobject_color_gradient_probe(api) -> Any:
+    mobject = api.Mobject()
+    before = _paint_rgb(mobject.get_color())
+    multi = mobject.set_color_by_gradient(api.RED, api.BLUE)
+    after_multi = _paint_rgb(mobject.get_color())
+    single = mobject.set_submobject_colors_by_gradient(api.GREEN)
+    after_single = _paint_rgb(mobject.get_color())
+    try:
+        mobject.set_color_by_gradient()
+    except ValueError as error:
+        empty_error = str(error)
+    else:
+        empty_error = None
+    return {
+        "returns_self": multi is mobject and single is mobject,
+        "before": before,
+        "after_multi": after_multi,
+        "after_single": after_single,
+        "empty_error": empty_error,
+    }
+
+
+def _base_mobject_set_color_probe(api) -> Any:
+    mobject = api.Mobject()
+    default_result = mobject.set_color()
+    default_color = _paint_rgb(mobject.get_color())
+    parsed_result = mobject.set_color("#00FF00", alpha=0.25, family=False)
+    return {
+        "returns_self": default_result is mobject and parsed_result is mobject,
+        "default_color": default_color,
+        "parsed_color": _paint_rgb(mobject.get_color()),
+    }
+
+
+def _radial_family_gradient_probe(api) -> Any:
+    near = api.Square(color=api.YELLOW, fill_opacity=0.3, stroke_opacity=0.6)
+    near.shift(api.LEFT)
+    center = api.Circle(color=api.GREEN)
+    far = api.Square(color=api.YELLOW).shift(api.RIGHT * 2)
+    point_free = api.VMobject(color=api.GREEN)
+    family = api.VGroup(near, api.VGroup(point_free, center, far))
+    result = family.set_submobject_colors_by_radial_gradient(
+        center=api.ORIGIN,
+        radius=2,
+        inner_color=api.RED,
+        outer_color=api.BLUE,
+    )
+    default_center = api.Square(color=api.GREEN)
+    default_result = default_center.set_colors_by_radial_gradient()
+    z_offset_center = api.Square(color=api.GREEN)
+    z_offset_result = z_offset_center.set_colors_by_radial_gradient(
+        center=(0, 0, 1), radius=2, inner_color=api.RED, outer_color=api.BLUE
+    )
+    return {
+        "returns_self": (
+            result is family
+            and default_result is default_center
+            and z_offset_result is z_offset_center
+        ),
+        "colors": [_paint_rgb(member.get_color()) for member in (near, point_free, center, far)],
+        "opacity": [float(near.get_fill_opacity()), float(near.get_stroke_opacity())],
+        "default_center_color": _paint_rgb(default_center.get_color()),
+        "z_offset_color": _paint_rgb(z_offset_center.get_color()),
+    }
+
+
+def _family_fade_to_probe(api) -> Any:
+    first = api.Square(
+        color=api.RED,
+        fill_opacity=0.35,
+        stroke_color=api.GREEN,
+        stroke_opacity=0.65,
+    )
+    second = api.Circle(
+        color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_opacity=0.25,
+    )
+    nested = api.VGroup(first, second)
+    family = api.VGroup(first, nested)
+    result = family.fade_to(api.YELLOW, 0.25)
+    after_recursive = [_paint_rgb(member.get_color()) for member in (first, second)]
+    opacity_after_recursive = [
+        [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+        for member in (first, second)
+    ]
+    nonrecursive_result = family.fade_to(api.GREEN, 0.5, family=False)
+    return {
+        "returns_self": result is family and nonrecursive_result is family,
+        "colors": after_recursive,
+        "opacity": opacity_after_recursive,
+        "nonrecursive_colors": [_paint_rgb(member.get_color()) for member in (first, second)],
+    }
+
+
 def _noon_next_to_point() -> Any:
     point = noon.RIGHT * 1.5 + noon.UP * 0.2
     obj = noon.Square(side_length=0.6).next_to(point, noon.UP, buff=0.15)
@@ -269,6 +765,1689 @@ def _manim_vgroup_add_remove() -> Any:
     last = manim.Rectangle(width=0.8, height=0.4).shift(manim.RIGHT)
     group = manim.VGroup(first, removed).add(last).remove(removed)
     return _members_observation(group)
+
+
+def _repeat_submobject_probe(provider: Any) -> Any:
+    parent = provider.Group()
+    member = provider.Circle(radius=0.25).shift(provider.RIGHT)
+    repeated = parent.repeat_submobject(member)
+    return {
+        "returns_distinct_copy": repeated is not member,
+        "member": _object_observation(member),
+        "copy": _object_observation(repeated),
+    }
+
+
+def _noon_repeat_submobject() -> Any:
+    return _repeat_submobject_probe(noon)
+
+
+def _manim_repeat_submobject() -> Any:
+    return _repeat_submobject_probe(manim)
+
+
+def _group_add_n_more_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    second = provider.Square(side_length=0.5, color=provider.BLUE).shift(provider.RIGHT)
+    group = provider.VGroup(first, second)
+    if scene is not None:
+        scene.add(group)
+    returned = group.add_n_more_submobjects(3)
+    members = group.submobjects
+    return {
+        "returns_self": returned is group,
+        "member_count": len(members),
+        "retains_original_order": members[0] is first and members[3] is second,
+        "geometry": [_object_observation(member) for member in members],
+        "colors": [_paint_rgb(member.get_color()) for member in members],
+        "paint_opacities": [
+            [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+            for member in members
+        ],
+    }
+
+
+def _noon_group_add_n_more_submobjects() -> Any:
+    return _group_add_n_more_submobjects(noon)
+
+
+def _manim_group_add_n_more_submobjects() -> Any:
+    return _group_add_n_more_submobjects(manim)
+
+
+def _noon_group_add_n_more_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_add_n_more_submobjects(noon, scene)
+    )
+
+
+def _group_align_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    left_first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    left_second = provider.Square(side_length=0.5, color=provider.GREEN).shift(provider.RIGHT)
+    left = provider.VGroup(left_first, left_second)
+    right_members = [
+        provider.Triangle(color=provider.BLUE).shift(provider.UP),
+        provider.Rectangle(width=0.8, height=0.4, color=provider.YELLOW).shift(provider.DOWN),
+        provider.Dot(color=provider.PURPLE).shift(provider.LEFT + provider.UP),
+        provider.Circle(radius=0.15, color=provider.ORANGE).shift(provider.RIGHT + provider.DOWN),
+    ]
+    right = provider.VGroup(*right_members)
+    if scene is not None:
+        scene.add(left, right)
+    returned = left.align_submobjects(right)
+    left_children = list(left.submobjects)
+    right_children = list(right.submobjects)
+    return {
+        "returns_self": returned is left,
+        "member_counts": [len(left_children), len(right_children)],
+        "retains_original_positions": [
+            left_children[0] is left_first,
+            left_children[2] is left_second,
+            all(actual is expected for actual, expected in zip(right_children, right_members, strict=True)),
+        ],
+        "left_geometry": [_object_observation(member) for member in left_children],
+        "left_colors": [_paint_rgb(member.get_color()) for member in left_children],
+        "left_opacities": [
+            [float(member.get_fill_opacity()), float(member.get_stroke_opacity())]
+            for member in left_children
+        ],
+    }
+
+
+def _noon_group_align_submobjects() -> Any:
+    return _group_align_submobjects(noon)
+
+
+def _manim_group_align_submobjects() -> Any:
+    return _group_align_submobjects(manim)
+
+
+def _noon_group_align_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_align_submobjects(noon, scene)
+    )
+
+
+def _leaf_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    leaf = provider.Circle(radius=0.25).shift(provider.RIGHT + provider.UP)
+    if scene is not None:
+        scene.add(leaf)
+    centered_result = leaf.arrange_submobjects()
+    centered = _object_observation(leaf)
+    leaf.shift(provider.UP)
+    uncentered_result = leaf.arrange_submobjects(center=False)
+    return {
+        "returns_self": centered_result is leaf and uncentered_result is leaf,
+        "centered": centered,
+        "center_false": _object_observation(leaf),
+    }
+
+
+def _noon_leaf_arrange_submobjects() -> Any:
+    return _leaf_arrange_submobjects(noon)
+
+
+def _manim_leaf_arrange_submobjects() -> Any:
+    return _leaf_arrange_submobjects(manim)
+
+
+def _noon_leaf_arrange_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _leaf_arrange_submobjects(noon, scene)
+    )
+
+
+def _leaf_align_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25).shift(provider.LEFT + provider.UP)
+    second = provider.Square(side_length=0.5).shift(provider.RIGHT + provider.DOWN)
+    if scene is not None:
+        scene.add(first, second)
+    returned = first.align_submobjects(second)
+    return {
+        "returns_self": returned is first,
+        "first": _object_observation(first),
+        "second": _object_observation(second),
+    }
+
+
+def _noon_leaf_align_submobjects() -> Any:
+    return _leaf_align_submobjects(noon)
+
+
+def _manim_leaf_align_submobjects() -> Any:
+    return _leaf_align_submobjects(manim)
+
+
+def _noon_leaf_align_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _leaf_align_submobjects(noon, scene)
+    )
+
+
+def _group_align_data(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25, color=provider.RED).shift(provider.LEFT)
+    second = provider.Square(side_length=0.5, color=provider.GREEN).shift(provider.RIGHT)
+    left = provider.VGroup(first, second)
+    right_members = [
+        provider.Triangle(color=provider.BLUE).shift(provider.UP),
+        provider.Rectangle(width=0.8, height=0.4, color=provider.YELLOW).shift(provider.DOWN),
+        provider.Dot(color=provider.PURPLE).shift(provider.LEFT + provider.UP),
+    ]
+    right = provider.VGroup(*right_members)
+    if scene is not None:
+        scene.add(left, right)
+    returned = left.align_data(right)
+    left_children = list(left.submobjects)
+    right_children = list(right.submobjects)
+    return {
+        "returns_self": returned is left,
+        "member_counts": [len(left_children), len(right_children)],
+        "retains_original_positions": [
+            left_children[0] is first,
+            left_children[2] is second,
+            all(actual is expected for actual, expected in zip(right_children, right_members, strict=True)),
+        ],
+        "point_counts": [
+            [member.get_num_points() for member in left_children],
+            [member.get_num_points() for member in right_children],
+        ],
+        "geometry": [
+            [_object_observation(member) for member in left_children],
+            [_object_observation(member) for member in right_children],
+        ],
+    }
+
+
+def _noon_group_align_data() -> Any:
+    return _group_align_data(noon)
+
+
+def _manim_group_align_data() -> Any:
+    return _group_align_data(manim)
+
+
+def _noon_group_align_data_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _group_align_data(noon, scene)
+    )
+
+
+def _vdict_mapping(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Circle(radius=0.25)
+    second = provider.Square(side_length=0.5)
+    third = provider.Rectangle(width=0.8, height=0.4)
+    replacement = provider.Circle(radius=0.4)
+    labels = {
+        id(first): "first",
+        id(second): "second",
+        id(third): "third",
+        id(replacement): "replacement",
+    }
+    value = provider.VDict([("first", first), ("second", second)])
+    if scene is not None:
+        scene.add(value)
+    add_result = value.add([("third", third)])
+    value["second"] = replacement
+    direct_after_assignment = [labels[id(member)] for member in value.submobjects]
+    remove_result = value.remove("third")
+    del value["first"]
+    copied = value.copy()
+    return {
+        "returns_self": add_result is value and remove_result is value,
+        "direct_after_assignment": direct_after_assignment,
+        "direct_after_key_delete": [labels[id(member)] for member in value.submobjects],
+        "keys": list(value.submob_dict),
+        "values": [labels[id(member)] for member in value.get_all_submobjects()],
+        "lookup_is_replacement": value["second"] is replacement,
+        "contains_deleted_key": "first" in value,
+        "copy_keys": list(copied.submob_dict),
+        "copy_lookup_is_family_member": copied["second"] is copied.submobjects[-1],
+        "copy_show_keys": copied.show_keys,
+    }
+
+
+def _noon_vdict_mapping() -> Any:
+    return _vdict_mapping(noon)
+
+
+def _manim_vdict_mapping() -> Any:
+    return _vdict_mapping(manim)
+
+
+def _noon_vdict_mapping_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _vdict_mapping(noon, scene))
+
+
+def _family_add_to_back(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third, added = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    group = provider.Group(first, second, third)
+    if scene is not None:
+        scene.add(group)
+    returned = group.add_to_back(third, first, added, third)
+    labels = {id(first): "first", id(second): "second", id(third): "third", id(added): "added"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _family_insert(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third = [provider.Square(side_length=0.5) for _ in range(3)]
+    group = provider.Group(first, second)
+    if scene is not None:
+        scene.add(group)
+    returned = group.insert(-1, third)
+    labels = {id(first): "first", id(second): "second", id(third): "third"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _noon_family_insert() -> Any:
+    return _family_insert(noon)
+
+
+def _manim_family_insert() -> Any:
+    return _family_insert(manim)
+
+
+def _noon_family_insert_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_insert(noon, scene))
+
+
+def _noon_family_add_to_back() -> Any:
+    return _family_add_to_back(noon)
+
+
+def _manim_family_add_to_back() -> Any:
+    return _family_add_to_back(manim)
+
+
+def _noon_family_add_to_back_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_add_to_back(noon, scene)
+    )
+
+
+def _family_invert_direct(provider: Any, scene: Any | None = None) -> Any:
+    first, second, third = [provider.Square(side_length=0.5) for _ in range(3)]
+    group = provider.Group(first, second, third)
+    if scene is not None:
+        scene.add(group)
+    returned = group.invert()
+    labels = {id(first): "first", id(second): "second", id(third): "third"}
+    return {
+        "returns_self": returned is group,
+        "direct_order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _family_invert_recursive(provider: Any, scene: Any | None = None) -> Any:
+    even_first, even_second, even_left_only, even_right_only = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    odd_first, odd_second, odd_left_only, odd_right_only = [
+        provider.Square(side_length=0.5) for _ in range(4)
+    ]
+    even_shared = provider.Group(even_first, even_second)
+    even_left = provider.Group(even_shared, even_left_only)
+    even_right = provider.Group(even_shared, even_right_only)
+    even_root = provider.Group(even_left, even_right)
+    odd_shared = provider.Group(odd_first, odd_second)
+    odd_left = provider.Group(odd_shared, odd_left_only)
+    odd_right = provider.Group(odd_shared, odd_right_only)
+    odd_root = provider.Group(odd_left, odd_right, odd_shared)
+    if scene is not None:
+        scene.add(even_root, odd_root)
+    even_returned = even_root.invert(recursive=True)
+    odd_returned = odd_root.invert(recursive=True)
+    labels = {
+        id(even_first): "even_first",
+        id(even_second): "even_second",
+        id(even_left_only): "even_left_only",
+        id(even_right_only): "even_right_only",
+        id(even_shared): "even_shared",
+        id(even_left): "even_left",
+        id(even_right): "even_right",
+        id(odd_first): "odd_first",
+        id(odd_second): "odd_second",
+        id(odd_left_only): "odd_left_only",
+        id(odd_right_only): "odd_right_only",
+        id(odd_shared): "odd_shared",
+        id(odd_left): "odd_left",
+        id(odd_right): "odd_right",
+    }
+    def order(group: Any) -> list[str]:
+        return [labels[id(member)] for member in group.submobjects]
+
+    return {
+        "even_returns_self": even_returned is even_root,
+        "even_root_order": order(even_root),
+        "even_left_order": order(even_left),
+        "even_right_order": order(even_right),
+        "even_shared_order": order(even_shared),
+        "odd_returns_self": odd_returned is odd_root,
+        "odd_root_order": order(odd_root),
+        "odd_left_order": order(odd_left),
+        "odd_right_order": order(odd_right),
+        "odd_shared_order": order(odd_shared),
+    }
+
+
+def _noon_family_invert_direct() -> Any:
+    return _family_invert_direct(noon)
+
+
+def _manim_family_invert_direct() -> Any:
+    return _family_invert_direct(manim)
+
+
+def _noon_family_invert_direct_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_invert_direct(noon, scene)
+    )
+
+
+def _noon_family_invert_recursive() -> Any:
+    return _family_invert_recursive(noon)
+
+
+def _manim_family_invert_recursive() -> Any:
+    return _family_invert_recursive(manim)
+
+
+def _noon_family_invert_recursive_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_invert_recursive(noon, scene)
+    )
+
+
+def _family_sort(
+    provider: Any,
+    scene: Any | None = None,
+    alias: bool = False,
+    by_y: bool = False,
+) -> Any:
+    right = provider.Square(side_length=0.5).shift(provider.RIGHT)
+    top = provider.Square(side_length=0.5).shift(provider.UP)
+    bottom = provider.Square(side_length=0.5).shift(provider.DOWN)
+    center = provider.Square(side_length=0.5)
+    group = provider.Group(right, top, bottom, center)
+    if scene is not None:
+        scene.add(group)
+    if alias:
+        returned = group.sort_submobjects(
+            submob_func=lambda member: (member.get_center()[1], member.get_center()[0])
+        )
+    elif by_y:
+        returned = group.sort(point_to_num_func=lambda point: point[1])
+    else:
+        returned = group.sort()
+    labels = {id(right): "right", id(top): "top", id(bottom): "bottom", id(center): "center"}
+    return {
+        "returns_self": returned is group,
+        "order": [labels[id(member)] for member in group.submobjects],
+    }
+
+
+def _noon_family_sort() -> Any:
+    return _family_sort(noon)
+
+
+def _noon_family_sort_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene))
+
+
+def _noon_family_sort_point_key() -> Any:
+    return _family_sort(noon, by_y=True)
+
+
+def _manim_family_sort_point_key() -> Any:
+    return _family_sort(manim, by_y=True)
+
+
+def _noon_family_sort_point_key_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene, by_y=True))
+
+
+def _noon_family_sort_alias() -> Any:
+    return _family_sort(noon, alias=True)
+
+
+def _manim_family_sort_alias() -> Any:
+    return _family_sort(manim, alias=True)
+
+
+def _noon_family_sort_alias_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_sort(noon, scene, alias=True))
+
+
+def _family_shuffle(
+    provider: Any,
+    scene: Any | None = None,
+    alias: bool = False,
+) -> Any:
+    random.seed(179)
+    members = [provider.Square(side_length=0.5) for _ in range(4)]
+    root = provider.Group(*members)
+    if scene is not None:
+        scene.add(root)
+    returned = (
+        root.shuffle_submobjects()
+        if alias
+        else root.shuffle()
+    )
+    labels = {id(member): str(index) for index, member in enumerate(members)}
+    return {"returns_self": returned is root,
+            "root_order": [labels[id(member)] for member in root.submobjects]}
+
+
+def _noon_family_shuffle() -> Any:
+    return _family_shuffle(noon)
+
+
+def _manim_family_shuffle() -> Any:
+    return _family_shuffle(manim)
+
+
+def _noon_family_shuffle_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene))
+
+
+def _noon_family_shuffle_alias() -> Any:
+    return _family_shuffle(noon, alias=True)
+
+
+def _manim_family_shuffle_alias() -> Any:
+    return _family_shuffle(manim, alias=True)
+
+
+def _noon_family_shuffle_alias_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_shuffle(noon, scene, alias=True))
+
+
+def _family_reverse_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.VMobject(color=provider.RED, stroke_width=8)
+    first.set_points_as_corners([
+        provider.LEFT * 3 + provider.DOWN,
+        provider.LEFT * 2 + provider.UP,
+        provider.LEFT + provider.DOWN,
+    ])
+    first.start_new_path(provider.DOWN).add_line_to(provider.RIGHT + provider.UP)
+    second = provider.VMobject(color=provider.BLUE, stroke_width=8)
+    second.set_points_as_corners([
+        provider.RIGHT * 2 + provider.DOWN,
+        provider.RIGHT * 3 + provider.UP,
+        provider.RIGHT * 4 + provider.DOWN,
+    ])
+    nested = provider.Group(second)
+    family = provider.Group(first, nested)
+    if scene is not None:
+        scene.add(family)
+    returned = family.reverse_points()
+    endpoints = lambda value: {
+        "start": _point_observation(value.get_start()),
+        "end": _point_observation(value.get_end()),
+    }
+    return {
+        "returns_self": returned is family,
+        "first": endpoints(first),
+        "second": endpoints(second),
+    }
+
+
+def _noon_family_reverse_points() -> Any:
+    return _family_reverse_points(noon)
+
+
+def _manim_family_reverse_points() -> Any:
+    return _family_reverse_points(manim)
+
+
+def _noon_family_reverse_points_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_reverse_points(noon, scene)
+    )
+
+
+def _family_repeat_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.VMobject(color=provider.RED, stroke_width=8)
+    first.set_points_as_corners([
+        provider.LEFT * 3 + provider.DOWN,
+        provider.LEFT * 2 + provider.UP,
+        provider.LEFT + provider.DOWN,
+    ])
+    second = provider.VMobject(color=provider.BLUE, stroke_width=8)
+    second.set_points_as_corners([
+        provider.RIGHT * 2 + provider.DOWN,
+        provider.RIGHT * 3 + provider.UP,
+        provider.RIGHT * 4 + provider.DOWN,
+    ])
+    family = provider.Group(first, provider.Group(second))
+    if scene is not None:
+        scene.add(family)
+    returned = family.repeat(2)
+    return {
+        "returns_self": returned is family,
+        "first_points": [_point_observation(point) for point in first.get_all_points()],
+        "second_points": [_point_observation(point) for point in second.get_all_points()],
+        "first_count": first.get_num_points(),
+        "second_count": second.get_num_points(),
+    }
+
+
+def _noon_family_repeat_points() -> Any:
+    return _family_repeat_points(noon)
+
+
+def _manim_family_repeat_points() -> Any:
+    return _family_repeat_points(manim)
+
+
+def _noon_family_repeat_points_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_repeat_points(noon, scene)
+    )
+
+
+def _family_space_out_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    left = provider.Circle(radius=0.4, color=provider.RED).shift(provider.LEFT)
+    right = provider.Square(side_length=0.8, color=provider.BLUE).shift(provider.RIGHT)
+    family = provider.Group(left, provider.Group(right))
+    if scene is not None:
+        scene.add(family)
+    returned = family.space_out_submobjects(1.5)
+    return {
+        "returns_self": returned is family,
+        "left": _object_observation(left),
+        "right": _object_observation(right),
+        "family": _object_observation(family),
+    }
+
+
+def _noon_family_space_out_submobjects() -> Any:
+    return _family_space_out_submobjects(noon)
+
+
+def _manim_family_space_out_submobjects() -> Any:
+    return _family_space_out_submobjects(manim)
+
+
+def _noon_family_space_out_submobjects_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_space_out_submobjects(noon, scene)
+    )
+
+
+def _family_frame_methods(provider: Any, scene: Any | None = None) -> Any:
+    offscreen = provider.Group(
+        provider.Circle(radius=0.5, color=provider.RED).shift(provider.RIGHT * 9)
+    )
+    bordered = provider.Group(provider.Square(side_length=0.5, color=provider.BLUE))
+    shifted = provider.Group(
+        provider.Circle(radius=0.5, color=provider.GREEN).shift(provider.RIGHT * 10 + provider.UP * 6),
+        provider.Group(provider.Square(side_length=0.75, color=provider.YELLOW).shift(provider.RIGHT * 12 + provider.UP * 5)),
+    )
+    if scene is not None:
+        scene.add(offscreen, bordered, shifted)
+    initially_offscreen = bool(offscreen.is_off_screen())
+    border_return = bordered.align_on_border(provider.UP + provider.RIGHT, buff=0.3)
+    shift_return = shifted.shift_onto_screen(buff=0.3)
+    return {
+        "initially_offscreen": initially_offscreen,
+        "border_returns_self": border_return is bordered,
+        "border_right": _round_float(bordered.get_right()[0]),
+        "border_top": _round_float(bordered.get_top()[1]),
+        "shift_returns_self": shift_return is shifted,
+        "shifted_family": _object_observation(shifted),
+        "shifted_offscreen": bool(shifted.is_off_screen()),
+    }
+
+
+def _get_pieces_probe(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Line(
+        start=(-2.0, -0.5, 0.0),
+        end=(2.0, 0.5, 0.0),
+        color=provider.BLUE,
+        stroke_width=6.0,
+    )
+    source.set_fill(provider.RED, opacity=0.25)
+    source.rotate(0.2, about_point=(0.0, 0.0, 0.0)).shift(provider.UP * 0.4)
+    if scene is not None:
+        scene.add(source)
+
+    original_before = [
+        [float(component) for component in point[:2]]
+        for point in source.get_all_points()
+    ]
+    pieces = source.get_pieces(4)
+    empty = source.get_pieces(0)
+
+    def observe_piece(piece: Any) -> dict[str, Any]:
+        return {
+            "points": [
+                [float(component) for component in point[:2]]
+                for point in piece.get_all_points()
+            ],
+            "start": _point_observation(piece.get_start()),
+            "end": _point_observation(piece.get_end()),
+            "fill": _paint_rgb(piece.get_fill_color()),
+            "fill_opacity": float(piece.get_fill_opacity()),
+            "stroke": _paint_rgb(piece.get_stroke_color()),
+            "stroke_opacity": float(piece.get_stroke_opacity()),
+            "stroke_width": float(piece.get_stroke_width()),
+        }
+
+    return {
+        "group_type": type(pieces).__name__,
+        "pieces": [observe_piece(piece) for piece in pieces.submobjects],
+        "empty_type": type(empty).__name__,
+        "empty_count": len(empty.submobjects),
+        "source_before": original_before,
+        "source_after": [
+            [float(component) for component in point[:2]]
+            for point in source.get_all_points()
+        ],
+    }
+
+
+def _noon_get_pieces() -> Any:
+    return _get_pieces_probe(noon)
+
+
+def _manim_get_pieces() -> Any:
+    return _get_pieces_probe(manim)
+
+
+def _noon_get_pieces_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _get_pieces_probe(noon, scene)
+    )
+
+
+def _z_index_reference_probe(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Circle(radius=0.35).shift(
+        provider.LEFT * 1.25 + provider.DOWN * 0.4
+    )
+    reference = provider.Square(side_length=0.7).shift(
+        provider.RIGHT * 1.1 + provider.UP * 0.8
+    )
+    if scene is not None:
+        scene.add(source, reference)
+
+    source_center = _point_observation(source.get_center())
+    default_reference = _point_observation(source.get_z_index_reference_point())
+    reference_center = _point_observation(reference.get_center())
+    source.z_index_group = reference
+    grouped_reference = _point_observation(source.get_z_index_reference_point())
+    return {
+        "source_center": source_center,
+        "default_reference": default_reference,
+        "reference_center": reference_center,
+        "grouped_reference": grouped_reference,
+    }
+
+
+def _noon_z_index_reference() -> Any:
+    return _z_index_reference_probe(noon)
+
+
+def _manim_z_index_reference() -> Any:
+    return _z_index_reference_probe(manim)
+
+
+def _noon_z_index_reference_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _z_index_reference_probe(noon, scene)
+    )
+
+
+def _noon_family_frame_methods() -> Any:
+    return _family_frame_methods(noon)
+
+
+def _manim_family_frame_methods() -> Any:
+    return _family_frame_methods(manim)
+
+
+def _noon_family_frame_methods_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_frame_methods(noon, scene))
+
+
+def _family_position_function_methods(provider: Any, scene: Any | None = None) -> Any:
+    left = provider.Circle(radius=0.4, color=provider.RED).shift(provider.LEFT)
+    right = provider.Square(side_length=0.8, color=provider.BLUE).shift(provider.RIGHT)
+    nested = provider.Group(right)
+    family = provider.Group(left, nested)
+    if scene is not None:
+        scene.add(family)
+
+    def translate(point):
+        return (point[0] + 0.5, point[1] - 0.25, point[2])
+
+    root_result = family.apply_function_to_position(translate)
+    family.apply_function_to_submobject_positions(translate)
+    return {
+        "root_returns_self": root_result is family,
+        "left": _object_observation(left),
+        "nested": _object_observation(nested),
+        "right": _object_observation(right),
+        "family": _object_observation(family),
+    }
+
+
+def _noon_family_position_function_methods() -> Any:
+    return _family_position_function_methods(noon)
+
+
+def _manim_family_position_function_methods() -> Any:
+    return _family_position_function_methods(manim)
+
+
+def _noon_family_position_function_methods_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _family_position_function_methods(noon, scene)
+    )
+
+
+def _put_start_and_end_on(provider: Any, scene: Any | None = None) -> Any:
+    segment = provider.Line((-1.5, -0.5, 0), (0.5, 1, 0), color=provider.BLUE)
+    segment.scale(0.75, about_point=(-1.5, -0.5, 0))
+    segment.rotate(0.2, about_point=(0, 0, 0))
+    horizontal = provider.Line((-0.5, 0.75, 0), (0.75, -0.25, 0), color=provider.RED)
+    degenerate = provider.VMobject().set_points_as_corners([(0, 0, 0), (0, 0, 0)])
+    if scene is not None:
+        scene.add(segment, horizontal, degenerate)
+
+    returned = segment.put_start_and_end_on((1, -1, 0), (-0.5, 1.5, 0))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        horizontal_returned = horizontal.put_start_and_end_on((2, 1, 0), (4, 1, 0))
+        degenerate_returned = degenerate.put_start_and_end_on((3, -2, 0), (4, 1, 0))
+    return {
+        "returns_self": returned is segment,
+        "start": _point_observation(segment.get_start()),
+        "end": _point_observation(segment.get_end()),
+        "horizontal_returns_self": horizontal_returned is horizontal,
+        "horizontal_start": _point_observation(horizontal.get_start()),
+        "horizontal_end": _point_observation(horizontal.get_end()),
+        "degenerate_returns_self": degenerate_returned is degenerate,
+        "degenerate_start": _point_observation(degenerate.get_start()),
+        "degenerate_end": _point_observation(degenerate.get_end()),
+        "warnings": [str(warning.message) for warning in caught],
+    }
+
+
+def _noon_put_start_and_end_on() -> Any:
+    return _put_start_and_end_on(noon)
+
+
+def _manim_put_start_and_end_on() -> Any:
+    return _put_start_and_end_on(manim)
+
+
+def _noon_put_start_and_end_on_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _put_start_and_end_on(noon, scene))
+
+
+def _reduce_across_dimension(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((-2, -0.5, 0), (-1, 0.5, 0)).shift(provider.UP)
+    second = provider.Line((3, -1, 0), (4, 1, 0)).shift(provider.DOWN)
+    family = provider.Group(provider.Group(first, second), first)
+    if scene is not None:
+        scene.add(family)
+
+    calls = []
+
+    def reducer(values):
+        observed = [float(value) for value in values]
+        calls.append(observed)
+        return sum(observed)
+
+    empty = provider.Group()
+    return {
+        "minimum_x": family.reduce_across_dimension(min, 0),
+        "maximum_x": family.reduce_across_dimension(max, 0),
+        "minimum_y": family.reduce_across_dimension(min, 1),
+        "maximum_y": family.reduce_across_dimension(max, 1),
+        "minimum_z": family.reduce_across_dimension(min, 2),
+        "maximum_z": family.reduce_across_dimension(max, 2),
+        "custom_reduction": family.reduce_across_dimension(reducer, 0),
+        "custom_reducer_calls": calls,
+        "empty": empty.reduce_across_dimension(max, 0),
+    }
+
+
+def _noon_reduce_across_dimension() -> Any:
+    return _reduce_across_dimension(noon)
+
+
+def _manim_reduce_across_dimension() -> Any:
+    return _reduce_across_dimension(manim)
+
+
+def _noon_reduce_across_dimension_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _reduce_across_dimension(noon, scene)
+    )
+
+
+def _object_point_reduction(provider: Any, scene: Any | None = None) -> Any:
+    value = provider.Line((-2, 1, 0), (1, 4, 0)).shift(provider.RIGHT + provider.DOWN)
+    if scene is not None:
+        scene.add(value)
+    calls = []
+
+    def reducer(values):
+        observed = [float(component) for component in values]
+        calls.append(observed)
+        return sum(observed)
+
+    return {
+        "minimum_x": value.reduce_across_dimension(min, 0),
+        "maximum_x": value.reduce_across_dimension(max, 0),
+        "minimum_y": value.reduce_across_dimension(min, 1),
+        "maximum_y": value.reduce_across_dimension(max, 1),
+        "depth": value.reduce_across_dimension(max, 2),
+        "custom_reduction": value.reduce_across_dimension(reducer, 0),
+        "custom_reducer_calls": calls,
+        "all_points": [_point_observation(point) for point in value.get_all_points()],
+        "merged_points": [
+            _point_observation(point) for point in value.get_merged_array("points")
+        ],
+    }
+
+
+def _noon_object_point_reduction() -> Any:
+    return _object_point_reduction(noon)
+
+
+def _manim_object_point_reduction() -> Any:
+    return _object_point_reduction(manim)
+
+
+def _noon_object_point_reduction_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _object_point_reduction(noon, scene)
+    )
+
+
+def _object_split_layout_index(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Square(side_length=0.6).shift(
+        provider.LEFT * 2.0 + provider.DOWN * 0.75
+    )
+    target = provider.Rectangle(width=1.4, height=0.8).shift(
+        provider.RIGHT * 1.25 + provider.UP * 0.5
+    )
+    if scene is not None:
+        scene.add(source, target)
+    result = []
+    for index in (0, -1):
+        returned = source.next_to(
+            target, provider.RIGHT * 2.0, buff=0.3,
+            aligned_edge=provider.UP, index_of_submobject_to_align=index,
+            coor_mask=(1, 0.5, 1),
+        )
+        result.append({
+            "index": index, "source": _object_observation(source),
+            "target": _object_observation(target), "returns_self": returned is source,
+        })
+    return result
+
+
+def _noon_object_split_layout_index() -> Any:
+    return _object_split_layout_index(noon)
+
+
+def _manim_object_split_layout_index() -> Any:
+    return _object_split_layout_index(manim)
+
+
+def _noon_object_split_layout_index_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _object_split_layout_index(noon, scene)
+    )
+
+
+def _get_merged_points(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((-2, -0.5, 0), (-1, 0.5, 0)).shift(provider.UP)
+    second = provider.Line((3, -1, 0), (4, 1, 0)).shift(provider.DOWN)
+    family = provider.Group(provider.Group(first, second), first)
+    if scene is not None:
+        scene.add(family)
+    points = family.get_merged_array("points")
+    return [[float(coordinate) for coordinate in point[:2]] for point in points]
+
+
+def _noon_get_merged_points() -> Any:
+    return _get_merged_points(noon)
+
+
+def _manim_get_merged_points() -> Any:
+    return _get_merged_points(manim)
+
+
+def _noon_get_merged_points_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _get_merged_points(noon, scene))
+
+
+def _apply_over_attr_arrays(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+
+    root = provider.Line((-2, -0.5, 0), (-1, 0.5, 0))
+    child = provider.Line((3, -1, 0), (4, 1, 0))
+    family = provider.Group(root, child)
+    child_before = [
+        _point_observation(point) for point in child.get_nth_curve_points(0)
+    ]
+    if scene is not None:
+        scene.add(family)
+
+    calls = []
+
+    def translate(points):
+        rows = [[float(component) for component in point] for point in points]
+        calls.append(rows)
+        return points + np.asarray([1.5, -2.0, 0.0])
+
+    returned = root.apply_over_attr_arrays(translate)
+    return {
+        "returns_self": returned is root,
+        "calls": calls,
+        "root_points": [
+            _point_observation(point) for point in root.get_nth_curve_points(0)
+        ],
+        "child_before": child_before,
+        "child_points": [
+            _point_observation(point) for point in child.get_nth_curve_points(0)
+        ],
+    }
+
+
+def _noon_apply_over_attr_arrays() -> Any:
+    return _apply_over_attr_arrays(noon)
+
+
+def _manim_apply_over_attr_arrays() -> Any:
+    return _apply_over_attr_arrays(manim)
+
+
+def _noon_apply_over_attr_arrays_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _apply_over_attr_arrays(noon, scene)
+    )
+
+
+def _point_function_transforms(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+
+    first = provider.Line((1, -1, 0), (2, 0, 0))
+    second = provider.Line((3, 1, 0), (4, 2, 0))
+    pointwise_family = provider.Group(provider.Group(first, second), first)
+
+    multi_first = provider.Line((-2, -1, 0), (-1, 1, 0))
+    multi_second = provider.Line((2, -1, 0), (3, 1, 0))
+    multi_family = provider.Group(multi_first, multi_second)
+
+    complex_value = provider.Line((1, 0, 0), (2, 1, 0))
+    if scene is not None:
+        scene.add(pointwise_family, multi_family, complex_value)
+
+    calls = []
+
+    def pointwise(point):
+        observed = [float(component) for component in point]
+        calls.append(observed)
+        return np.asarray(
+            [observed[0] + 2.0, observed[1] - 1.0, observed[2]],
+            dtype=np.float64,
+        )
+
+    pointwise_returned = pointwise_family.apply_function(pointwise)
+    multi_returned = multi_family.apply_points_function_about_point(
+        lambda points: np.column_stack(
+            (-points[:, 0], points[:, 1], points[:, 2])
+        ),
+        about_point=(1.0, -1.0, 0.0),
+    )
+    complex_returned = complex_value.apply_complex_function(lambda value: 1j * value)
+
+    def curve_points(value):
+        return [_point_observation(point) for point in value.get_nth_curve_points(0)]
+
+    return {
+        "pointwise": {
+            "returns_self": pointwise_returned is pointwise_family,
+            "calls": calls,
+            "first": curve_points(first),
+            "second": curve_points(second),
+        },
+        "multi_mapping": {
+            "returns_self": multi_returned is multi_family,
+            "first": curve_points(multi_first),
+            "second": curve_points(multi_second),
+        },
+        "complex_mapping": {
+            "returns_self": complex_returned is complex_value,
+            "points": curve_points(complex_value),
+        },
+    }
+
+
+def _noon_point_function_transforms() -> Any:
+    return _point_function_transforms(noon)
+
+
+def _manim_point_function_transforms() -> Any:
+    return _point_function_transforms(manim)
+
+
+def _noon_point_function_transforms_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _point_function_transforms(noon, scene)
+    )
+
+
+def _apply_matrix(provider: Any, scene: Any | None = None) -> Any:
+    first = provider.Line((1, -1, 0), (2, 0, 0))
+    second = provider.Line((3, 1, 0), (4, 2, 0))
+    family = provider.Group(provider.Group(first, second), first)
+    rectangular = provider.Line((2, -1, 0), (3, 1, 0))
+    if scene is not None:
+        scene.add(family, rectangular)
+
+    family_returned = family.apply_matrix(
+        [[0.0, -1.0], [1.0, 0.0]], about_point=(1.0, 1.0, 0.0)
+    )
+    rectangular_returned = rectangular.apply_matrix(
+        [[1.0, 0.5, 1.0], [0.0, 1.0, 0.0]],
+        about_point=(1.0, -1.0, 0.0),
+    )
+
+    def curve_points(value):
+        return [_point_observation(point) for point in value.get_nth_curve_points(0)]
+
+    return {
+        "family": {
+            "returns_self": family_returned is family,
+            "first": curve_points(first),
+            "second": curve_points(second),
+        },
+        "rectangular": {
+            "returns_self": rectangular_returned is rectangular,
+            "points": curve_points(rectangular),
+        },
+    }
+
+
+def _noon_apply_matrix() -> Any:
+    return _apply_matrix(noon)
+
+
+def _manim_apply_matrix() -> Any:
+    return _apply_matrix(manim)
+
+
+def _noon_apply_matrix_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _apply_matrix(noon, scene))
+
+
+def _animation_override_registry(provider: Any) -> Any:
+    class Animation:
+        pass
+
+    class Base(provider.Mobject):
+        pass
+
+    def first_override(*args, **kwargs):
+        return args, kwargs
+
+    def second_override(*args, **kwargs):
+        return args, kwargs
+
+    Base.add_animation_override(Animation, first_override)
+    registered = Base.animation_override_for(Animation)
+
+    class Child(Base):
+        pass
+
+    try:
+        Base.add_animation_override(Animation, second_override)
+    except Exception as error:
+        duplicate_error = (type(error).__name__, str(error))
+    else:
+        duplicate_error = None
+
+    def intrinsic_override(self):
+        return self
+
+    undecorated_override = intrinsic_override
+    intrinsic_override = provider.override_animation(Animation)(intrinsic_override)
+    Intrinsic = type("Intrinsic", (provider.Mobject,), {
+        "intrinsic_override": intrinsic_override,
+    })
+    IntrinsicChild = type("IntrinsicChild", (Intrinsic,), {})
+
+    return {
+        "registered": registered is first_override,
+        "child_isolated": Child.animation_override_for(Animation) is None,
+        "duplicate_error": duplicate_error,
+        "decorator_preserves_function": intrinsic_override is undecorated_override,
+        "intrinsic_discovered": (
+            Intrinsic.animation_override_for(Animation)
+            is Intrinsic.intrinsic_override
+        ),
+        "intrinsic_inherited": (
+            IntrinsicChild.animation_override_for(Animation)
+            is IntrinsicChild.intrinsic_override
+        ),
+    }
+
+
+def _noon_animation_override_registry() -> Any:
+    return _animation_override_registry(noon)
+
+
+def _manim_animation_override_registry() -> Any:
+    return _animation_override_registry(manim)
+
+
+def _mobject_lifecycle_hooks(provider: Any) -> Any:
+    mobject = provider.Mobject()
+
+    class Custom(provider.Mobject):
+        def __init__(self):
+            self.hook_calls = []
+            super().__init__()
+
+        def generate_points(self):
+            self.hook_calls.append(["generate_points"])
+            return self
+
+        def init_colors(self, propagate_colors=True):
+            self.hook_calls.append(["init_colors", propagate_colors])
+            return self
+
+    custom = Custom()
+    return {
+        "generate_points_returns_self": mobject.generate_points() is mobject,
+        "init_colors_default_returns_self": mobject.init_colors() is mobject,
+        "init_colors_false_returns_self": (
+            mobject.init_colors(propagate_colors=False) is mobject
+        ),
+        "constructor_hook_order": custom.hook_calls,
+    }
+
+
+def _noon_mobject_lifecycle_hooks() -> Any:
+    return _mobject_lifecycle_hooks(noon)
+
+
+def _manim_mobject_lifecycle_hooks() -> Any:
+    return _mobject_lifecycle_hooks(manim)
+
+
+def _mobject_set_attributes(provider: Any) -> Any:
+    mobject = provider.Mobject()
+    empty_set_returns_self = mobject.set() is mobject
+    returned = mobject.set(name="set-probe", z_index=2.5, custom_value={"value": 7})
+    return {
+        "empty_set_returns_self": empty_set_returns_self,
+        "returns_self": returned is mobject,
+        "name": mobject.name,
+        "z_index": mobject.z_index,
+        "custom_value": mobject.custom_value,
+    }
+
+
+def _noon_mobject_set_attributes() -> Any:
+    return _mobject_set_attributes(noon)
+
+
+def _manim_mobject_set_attributes() -> Any:
+    return _mobject_set_attributes(manim)
+
+
+def _mobject_base_path_methods(provider: Any) -> Any:
+    mobject = object.__new__(provider.Mobject)
+
+    def capture_error(call):
+        try:
+            call()
+        except Exception as error:
+            return type(error).__name__, str(error)
+        return None
+
+    return {
+        "point_from_proportion": capture_error(
+            lambda: mobject.point_from_proportion(0.5)
+        ),
+        "proportion_from_point": capture_error(
+            lambda: mobject.proportion_from_point((0.0, 0.0, 0.0))
+        ),
+    }
+
+
+def _noon_mobject_base_path_methods() -> Any:
+    return _mobject_base_path_methods(noon)
+
+
+def _manim_mobject_base_path_methods() -> Any:
+    return _mobject_base_path_methods(manim)
+
+
+def _mobject_base_layout_methods(provider: Any) -> Any:
+    mobject = object.__new__(provider.Mobject)
+
+    def capture_error(call):
+        try:
+            call()
+        except Exception as error:
+            return type(error).__name__, str(error)
+        return None
+
+    def align_probe(count, other_count):
+        left = object.__new__(provider.Mobject)
+        right = object.__new__(provider.Mobject)
+        left.get_num_points = lambda: count
+        right.get_num_points = lambda: other_count
+        dispatches = []
+        left.align_points_with_larger = lambda larger: dispatches.append(
+            "left" if larger is right else "left-other"
+        )
+        right.align_points_with_larger = lambda larger: dispatches.append(
+            "right" if larger is left else "right-other"
+        )
+        returned = left.align_points(right)
+        return returned is left, dispatches
+
+    larger = object.__new__(provider.Mobject)
+    return {
+        "get_point_mobject": capture_error(lambda: mobject.get_point_mobject()),
+        "align_points_with_larger": capture_error(
+            lambda: mobject.align_points_with_larger(larger)
+        ),
+        "align_points_left_smaller": align_probe(2, 5),
+        "align_points_right_smaller": align_probe(5, 2),
+        "align_points_equal": align_probe(3, 3),
+    }
+
+
+def _noon_mobject_base_layout_methods() -> Any:
+    return _mobject_base_layout_methods(noon)
+
+
+def _manim_mobject_base_layout_methods() -> Any:
+    return _mobject_base_layout_methods(manim)
+
+
+def _mobject_depth_methods(provider: Any) -> Any:
+    mobject = provider.Square(side_length=2.0)
+
+    def geometry_profile():
+        center = mobject.get_center()
+        return {
+            "width": float(mobject.width),
+            "height": float(mobject.height),
+            "center": [float(center[0]), float(center[1])],
+        }
+
+    before = geometry_profile()
+    scaled = mobject.scale_to_fit_depth(3.0, about_point=object())
+    stretched = mobject.stretch_to_fit_depth(4.0, about_edge=object())
+    matched = mobject.match_depth(
+        provider.Rectangle(width=4.0, height=1.0), about_point=object()
+    )
+    mobject.depth = 5.0
+    return {
+        "depth": float(mobject.depth),
+        "scale_returns_self": scaled is mobject,
+        "stretch_returns_self": stretched is mobject,
+        "match_returns_self": matched is mobject,
+        "before": before,
+        "after": geometry_profile(),
+    }
+
+
+def _noon_mobject_depth_methods() -> Any:
+    return _mobject_depth_methods(noon)
+
+
+def _manim_mobject_depth_methods() -> Any:
+    return _mobject_depth_methods(manim)
+
+
+def _generic_dimension_fitting(provider: Any, scene: Any | None = None) -> Any:
+    observations = {}
+
+    def record(name, source, operation, target=None, *, unchanged=True):
+        if scene is not None:
+            scene.add(source)
+            if target is not None:
+                scene.add(target)
+        before = _object_observation(source)
+        target_before = None if target is None else _object_observation(target)
+        try:
+            returned = operation(source, target)
+            error_type = None
+        except Exception as error:
+            returned = None
+            error_type = type(error).__name__
+        observations[name] = {
+            "before": before, "after": _object_observation(source),
+            "target_before": target_before,
+            "target_after": None if target is None else _object_observation(target),
+            "returns_self": returned is source, "error_type": error_type,
+            "unchanged": unchanged,
+        }
+
+    def rectangle():
+        return provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT)
+
+    record("depth", rectangle(), lambda source, _: source.rescale_to_fit(5, 2))
+    record("depth_lazy_arguments", rectangle(), lambda source, _: source.rescale_to_fit(
+        object(), 2, stretch=True, about_point=object()))
+    record("match_depth_lazy_pivot", rectangle(), lambda source, target: source.match_dim_size(
+        target, 2, about_edge=object()), rectangle().scale(3))
+    leaf = rectangle()
+    def fit_aliased_family(source, _):
+        assert source.length_over_dim(2) == 0
+        return source.rescale_to_fit(float("nan"), 2)
+    record("aliased_family_depth", provider.VGroup(leaf, leaf),
+           fit_aliased_family)
+    record("zero_width_lazy_arguments", provider.Line((2, -1, 0), (2, 3, 0)),
+           lambda source, _: source.rescale_to_fit(object(), 0, about_point=object()))
+    record("zero_height_lazy_arguments", provider.Line((-1, 2, 0), (3, 2, 0)),
+           lambda source, _: source.rescale_to_fit(object(), 1, stretch=True, about_edge=object()))
+    record("width_control", rectangle(), lambda source, _: source.rescale_to_fit(4, 0),
+           unchanged=False)
+    record("height_stretch_control", rectangle(),
+           lambda source, _: source.rescale_to_fit(3, 1, stretch=True), unchanged=False)
+    for name, dim in [("negative_dimension", -1), ("above_range", 3),
+                      ("fractional_dimension", 1.0), ("nonindex_dimension", object())]:
+        record(name, rectangle(), lambda source, _, dim=dim: source.rescale_to_fit(3, dim))
+    return observations
+
+
+def _noon_generic_dimension_fitting() -> Any:
+    return _generic_dimension_fitting(noon)
+
+
+def _manim_generic_dimension_fitting() -> Any:
+    return _generic_dimension_fitting(manim)
+
+
+def _noon_generic_dimension_fitting_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _generic_dimension_fitting(noon, scene))
+
+
+def _resource_dimension_fitting(provider: Any, scene: Any | None = None) -> Any:
+    import numpy as np
+    observations = {}
+    for family in (False, True):
+        image = provider.ImageMobject(np.full((2, 4, 4), 255, dtype=np.uint8))
+        source = provider.Group(image, image) if family else image
+        if scene is not None:
+            scene.add(source)
+        fitted = source.rescale_to_fit(4, 0)
+        depth_fitted = source.rescale_to_fit(object(), 2, about_point=object())
+        observations["family" if family else "image"] = {
+            "returns_self": fitted is source and depth_fitted is source,
+            "width": float(source.width), "height": float(source.height),
+        }
+    return observations
+
+
+def _noon_resource_dimension_fitting() -> Any:
+    return _resource_dimension_fitting(noon)
+
+
+def _manim_resource_dimension_fitting() -> Any:
+    return _resource_dimension_fitting(manim)
+
+
+def _noon_resource_dimension_fitting_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _resource_dimension_fitting(noon, scene))
+
+
+def _mobject_z_index_by_z(provider: Any) -> Any:
+    left = provider.Square(side_length=1.0).shift(provider.LEFT)
+    right = provider.Circle(radius=0.5).shift(provider.RIGHT)
+    left.z_index = 3.0
+    right.z_index = -4.0
+    group = provider.Group(left, right)
+    returned = group.set_z_index_by_z_Point3D()
+    return {
+        "returns_self": returned is group,
+        "group_z_index": float(group.z_index),
+        "member_z_indices": [float(left.z_index), float(right.z_index)],
+    }
+
+
+def _noon_mobject_z_index_by_z() -> Any:
+    return _mobject_z_index_by_z(noon)
+
+
+def _manim_mobject_z_index_by_z() -> Any:
+    return _mobject_z_index_by_z(manim)
+
+
+def _mobject_surround(provider: Any, scene: Any | None = None) -> Any:
+    target = provider.Rectangle(width=2.0, height=1.0).shift(provider.RIGHT * 0.5)
+    # Square inherits Mobject.surround; Circle has a different buffer_factor API.
+    surrounder = provider.Square(side_length=0.5)
+    if scene is not None:
+        scene.add(target, surrounder)
+    returned = surrounder.surround(target, dim_to_match=1, buff=0.2)
+    center = surrounder.get_center()
+    return {
+        "returns_self": returned is surrounder,
+        "width": float(surrounder.width),
+        "height": float(surrounder.height),
+        "center": [float(center[0]), float(center[1])],
+    }
+
+
+def _noon_mobject_surround() -> Any:
+    return _mobject_surround(noon)
+
+
+def _manim_mobject_surround() -> Any:
+    return _mobject_surround(manim)
+
+
+def _noon_mobject_surround_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _mobject_surround(noon, scene)
+    )
+
+
+def _manim_mobject_surround_live() -> Any:
+    return _mobject_surround(manim)
+
+
+def _circle_surround_probe(provider: Any, scene: Any | None = None) -> Any:
+    observations = {}
+
+    def record(name, receiver, target, *, shared=False, **options):
+        if scene is not None:
+            if shared:
+                scene.add(target)
+            else:
+                scene.add(receiver, target)
+        before = _object_observation(receiver)
+        target_before = _object_observation(target)
+        def paint():
+            return [float(receiver.get_fill_opacity()),
+                    float(receiver.get_stroke_opacity()),
+                    float(receiver.get_stroke_width())]
+        paint_before = paint()
+        error_type = None
+        try:
+            returned = receiver.surround(target, **options)
+        except Exception as error:
+            # Keep each argument/error case visible without discarding the
+            # remaining success cases in this detached/live profile.
+            returned = None
+            error_type = type(error).__name__
+        observations[name] = {
+            "returns_self": returned is receiver, "shared": shared,
+            "error_type": error_type,
+            "before": before, "after": _object_observation(receiver),
+            "target_before": target_before, "target_after": _object_observation(target),
+            "paint_before": paint_before, "paint_after": paint(),
+        }
+
+    def target():
+        return provider.Rectangle(width=4.0, height=2.0).shift(provider.RIGHT + provider.DOWN)
+
+    for name, options in [
+        ("default", {}), ("height", {"dim_to_match": 1}),
+        ("depth", {"dim_to_match": 2}), ("negative_width", {"dim_to_match": -3}),
+        ("negative_height", {"dim_to_match": -2}), ("negative_depth", {"dim_to_match": -1}),
+        ("below_range", {"dim_to_match": -4}), ("above_range", {"dim_to_match": 3}),
+        ("fractional_dimension", {"dim_to_match": 1.0}),
+        ("negative_fractional_dimension", {"dim_to_match": -0.5}),
+        ("nonindex_dimension", {"dim_to_match": object()}),
+        ("stretch", {"stretch": True}),
+        ("stretch_ignored_dimension", {"stretch": True, "dim_to_match": object()}),
+        ("negative_buffer", {"buffer_factor": -0.5}),
+        ("zero_buffer", {"buffer_factor": 0.0}),
+    ]:
+        record(name, provider.Circle(radius=0.5).shift(3 * provider.LEFT), target(), **options)
+    record("ellipse", provider.Ellipse(width=4.0, height=2.0), target())
+    record("rotated_stretch", provider.Ellipse(width=4.0, height=2.0).rotate(0.3),
+           target(), stretch=True)
+    record("dot", provider.Dot(radius=0.1), target())
+    record("horizontal_line", provider.Circle(),
+           provider.Line((0.0, 0.0, 0.0), (4.0, 0.0, 0.0)))
+    for name, options in [("vertical_line", {}),
+                          ("vertical_height", {"dim_to_match": 1}),
+                          ("vertical_stretch", {"stretch": True})]:
+        record(name, provider.Circle(),
+               provider.Line((2.0, -1.0, 0.0), (2.0, 3.0, 0.0)), **options)
+    receiver = provider.Circle().shift(provider.RIGHT + provider.UP)
+    record("self", receiver, receiver, shared=True, buffer_factor=1.0)
+    for name, dimension in [("shared_width", 0), ("shared_height", 1), ("shared_depth", 2)]:
+        receiver = provider.Circle()
+        other = provider.Rectangle(width=2.0, height=1.0).shift(4 * provider.RIGHT)
+        family = provider.VGroup(provider.VGroup(receiver), other, receiver)
+        record(name, receiver, family, shared=True,
+               dim_to_match=dimension, buffer_factor=1.0)
+        observations[name]["other_after"] = _object_observation(other)
+    return observations
+
+
+def _noon_circle_surround() -> Any:
+    return _circle_surround_probe(noon)
+
+
+def _manim_circle_surround() -> Any:
+    return _circle_surround_probe(manim)
+
+
+def _noon_circle_surround_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _circle_surround_probe(noon, scene))
+
+
+def _mobject_add_background_rectangle(provider: Any, scene: Any | None = None) -> Any:
+    family = provider.Group(
+        provider.Circle(radius=0.25).shift(provider.LEFT),
+        provider.Square(side_length=0.5).shift(provider.RIGHT),
+    )
+    if scene is not None:
+        scene.add(family)
+    returned = family.add_background_rectangle(
+        color=provider.WHITE, opacity=0.4, buff=(0.2, 0.3)
+    )
+    background = family.background_rectangle
+    return {
+        "returns_self": returned is family,
+        "background_is_first": family.submobjects[0] is background,
+        "member_count": len(family.submobjects),
+        "background": _object_observation(background),
+        "fill_opacity": float(background.get_fill_opacity()),
+    }
+
+
+def _noon_mobject_add_background_rectangle() -> Any:
+    return _mobject_add_background_rectangle(noon)
+
+
+def _manim_mobject_add_background_rectangle() -> Any:
+    return _mobject_add_background_rectangle(manim)
+
+
+def _noon_mobject_add_background_rectangle_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _mobject_add_background_rectangle(noon, scene)
+    )
+
+
+def _mobject_match_z(provider: Any, scene: Any | None = None) -> Any:
+    receiver = provider.Circle(radius=0.3).shift(
+        provider.LEFT * 1.25 + provider.UP * 0.4
+    )
+    target = provider.Square(side_length=0.6).shift(
+        provider.RIGHT * 1.5 + provider.DOWN * 0.25
+    )
+    if scene is not None:
+        scene.add(receiver, target)
+
+    before = _object_observation(receiver)
+    matched = receiver.match_z(target, direction=provider.UP + provider.LEFT)
+    after_match = _object_observation(receiver)
+    set_result = receiver.set_coord(0.0, 2)
+    after_set = _object_observation(receiver)
+    return {
+        "match_returns_self": matched is receiver,
+        "set_returns_self": set_result is receiver,
+        "before": before,
+        "after_match": after_match,
+        "after_set": after_set,
+        "receiver_z": float(receiver.get_z()),
+        "target_z": float(target.get_z()),
+    }
+
+
+def _noon_mobject_match_z() -> Any:
+    return _mobject_match_z(noon)
+
+
+def _manim_mobject_match_z() -> Any:
+    return _mobject_match_z(manim)
+
+
+def _noon_mobject_match_z_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _mobject_match_z(noon, scene))
+
+
+def _family_arrange_submobjects(provider: Any, scene: Any | None = None) -> Any:
+    members = [
+        provider.Circle(radius=0.25).shift(provider.LEFT * 0.8),
+        provider.Square(side_length=0.5).shift(provider.RIGHT * 0.3),
+        provider.Rectangle(width=0.7, height=0.3).shift(provider.RIGHT),
+    ]
+    group = provider.Group(*members)
+    if scene is not None:
+        scene.add(group)
+    returned = group.arrange_submobjects(direction=provider.UP, buff=0.35, center=False)
+    return {"returns_self": returned is group, "members": _members_observation(group)}
+
+
+def _noon_family_arrange_submobjects() -> Any:
+    return _family_arrange_submobjects(noon)
+
+
+def _manim_family_arrange_submobjects() -> Any:
+    return _family_arrange_submobjects(manim)
+
+
+def _noon_family_arrange_submobjects_live() -> Any:
+    return _noon_live_scene_probe(lambda scene: _family_arrange_submobjects(noon, scene))
 
 
 def _noon_vgroup_shift() -> Any:
@@ -413,7 +2592,7 @@ def _path_queries_probe(api):
     return result
 
 
-def _cubic_bezier_probe(api):
+def _cubic_bezier_probe(api, scene=None):
     cases = [
         [(-2, 0, 0), (-1, 2, 0), (1, -2, 0), (2, 0, 0)],
         [(0, 0, 0)] * 4,
@@ -423,6 +2602,8 @@ def _cubic_bezier_probe(api):
     for index, points in enumerate(cases):
         options = {} if index < 2 else {"color": api.GREEN, "stroke_width": 6, "fill_opacity": 0.4}
         curve = api.CubicBezier(*points, **options)
+        if scene is not None:
+            scene.add(curve)
         if index == 2:
             curve.scale(0.75).rotate(0.3).shift(api.RIGHT * 0.375 + api.DOWN * 0.5)
         result.append({
@@ -456,7 +2637,739 @@ def _path_point_counts(api):
     counts.append(path.get_num_points())
     path.rotate(0.3).shift(api.RIGHT)
     counts.append(path.get_num_points())
+    configured = api.VMobject(
+        n_points_per_cubic_curve=3,
+        tolerance_for_point_equality=2e-5,
+    )
+    counts.extend((
+        configured.n_points_per_cubic_curve,
+        configured.n_points_per_curve,
+        configured.tolerance_for_point_equality,
+    ))
     return counts
+
+
+def _family_point_count_probe(api, scene=None):
+    """Observe Manim's own-point count separately from descendant geometry."""
+    group_leaf = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    vector_leaf = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    group = api.Group(group_leaf)
+    vector_group = api.VGroup(vector_leaf)
+    if scene is not None:
+        scene.add(group, vector_group)
+
+    def observe(family, leaf):
+        before = {
+            "root": family.get_num_points(),
+            "has_points": family.has_points(),
+            "has_no_points": family.has_no_points(),
+            "leaf": leaf.get_num_points(),
+        }
+        leaf.clear_points()
+        after = {
+            "root": family.get_num_points(),
+            "has_points": family.has_points(),
+            "has_no_points": family.has_no_points(),
+            "leaf": leaf.get_num_points(),
+        }
+        return {"before": before, "after": after}
+
+    return {
+        "group": observe(group, group_leaf),
+        "vgroup": observe(vector_group, vector_leaf),
+    }
+
+
+def _cubic_tuple_groups(api):
+    path = api.VMobject().add_subpath([
+        (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0),
+        (2, 1, 0), (3, 1, 0), (3, 2, 0), (4, 2, 0),
+    ])
+
+    def observe(groups):
+        return [
+            [[_point_observation(point) for point in group] for group in groups]
+        ]
+
+    default = observe(path.get_cubic_bezier_tuples())
+    path.n_points_per_cubic_curve = 3
+    custom = observe(path.get_cubic_bezier_tuples())
+    return {"default": default, "custom_stride": custom}
+
+
+def _proportion_from_point(api):
+    path = api.VMobject().add_subpath([
+        (-2, 0, 0), (-1.5, 0, 0), (-0.5, 0, 0), (0, 0, 0),
+        (0, 0, 0), (0.5, 0, 0), (1.5, 0, 0), (2, 0, 0),
+    ])
+    loop = api.VMobject().start_new_path((0, 0, 0)).add_cubic_bezier_curve_to(
+        (1, 0, 0), (-1, 0, 0), (0, 0, 0)
+    )
+    return {
+        "path": [
+            float(path.proportion_from_point(point))
+            for point in ((-1, 0, 0), (0, 0, 0), (1, 0, 0))
+        ],
+        "multiple_roots_choose_latest": float(loop.proportion_from_point((0, 0, 0))),
+    }
+
+
+def _inverse_endpoint_parameters(api, scene=None):
+    observations = []
+    for angle in [0.0, 0.1, 0.25, 0.3, 1.0, 2.0]:
+        for sx, sy in [(1.0, 1.0), (1.3, 0.7), (0.25, 2.5)]:
+            for x, y in [(0.0, 0.0), (7.0, -3.0), (10000.0, 20000.0), (1000000.0, -2000000.0)]:
+                path = api.CubicBezier((-3, -1, 0), (-1, 2, 0), (1, -2, 0), (3, 1, 0))
+                if scene is not None:
+                    scene.add(path)
+                path.stretch(sx, 0, about_point=api.ORIGIN)
+                path.stretch(sy, 1, about_point=api.ORIGIN)
+                path.rotate(angle, about_point=api.ORIGIN).shift((x, y, 0))
+                end = path.get_end()
+                alpha = float(path.proportion_from_point(end))
+                observations.append({
+                    "angle": angle, "scale": [sx, sy], "shift": [x, y],
+                    "alpha": alpha, "in_unit_interval": 0 <= alpha <= 1,
+                    "forward_endpoint_identical": tuple(path.point_from_proportion(alpha)) == tuple(end),
+                })
+    strides = []
+    for stride in [2, 3, 5]:
+        path = api.VMobject()
+        if scene is not None:
+            scene.add(path)
+        path.set_points([
+            (0, 0, 0), (1, 1, 0), (-1, 1, 0), (0, 0, 0),
+            (0, 0, 0), (2 / 3, 0, 0), (4 / 3, 0, 0), (2, 0, 0),
+        ])
+        path.n_points_per_cubic_curve = stride
+        path.rotate(0.3, about_point=api.ORIGIN).shift((7, -3, 0))
+        end = path.get_nth_curve_points(path.get_num_curves() - 1)[-1]
+        strides.append({"stride": stride, "alpha": float(path.proportion_from_point(end))})
+    return {"endpoints": observations, "custom_strides": strides}
+
+
+def _curve_function_queries(api):
+    import numpy as np
+
+    path = api.VMobject().start_new_path((0, 0, 0))
+    path.add_cubic_bezier_curve_to((1, 0, 0), (1, 1, 0), (2, 1, 0))
+    path.add_cubic_bezier_curve_to((3, 1, 0), (3, 2, 0), (4, 2, 0))
+    family_first = api.VMobject().add_cubic_bezier_curve(
+        (0, 0, 0), (40, 20, 0), (40, -20, 0), (2, 0, 0)
+    )
+    family_second = api.VMobject().add_cubic_bezier_curve(
+        (3, 1, 0), (3, 40, 0), (5, 40, 0), (6, 1, 0)
+    )
+    vector_family = api.VGroup(family_first, family_second)
+    empty_vector_family = api.VGroup()
+    alias_first = api.VMobject().add_cubic_bezier_curve(
+        (0, 0, 0), (40, 20, 0), (40, -20, 0), (2, 0, 0)
+    )
+    alias_second = api.VMobject().add_cubic_bezier_curve(
+        (3, 1, 0), (3, 40, 0), (5, 40, 0), (6, 1, 0)
+    )
+    aliased_vector_family = api.VGroup(
+        api.VGroup(alias_first, alias_second), alias_first
+    )
+    default_stride_anchor_edit = api.VMobject().set_anchors_and_handles(
+        [(0, 0, 0), (2, 0, 0)],
+        [(1, 0, 0), (3, 0, 0)],
+        [(1, 1, 0), (3, 1, 0)],
+        [(2, 1, 0), (4, 1, 0)],
+    )
+    custom_stride_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0)]
+    )
+    custom_stride_path.n_points_per_cubic_curve = 2
+    direction_points = [(0, 1, 0), (1, 1, 0), (1, 2, 0), (2, 0, 0)]
+    positive_stride_direction = api.VMobject().set_points(direction_points)
+    positive_stride_direction.n_points_per_cubic_curve = 2
+    negative_stride_direction = api.VMobject().set_points(direction_points)
+    negative_stride_direction.n_points_per_cubic_curve = -2
+    default_stride_direction = api.VMobject().set_points(direction_points)
+    custom_stride_boundary_path = api.VMobject().add_subpath([
+        (0, 0, 0), (30, 0, 0), (1, 0, 0), (2, 0, 0),
+    ])
+    custom_stride_boundary_path.n_points_per_cubic_curve = 2
+    high_grade_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0), (2, 1, 0), (3, 1, 0)]
+    )
+    high_grade_path.n_points_per_cubic_curve = 5
+    negative_stride_path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 0, 0)]
+    )
+    negative_stride_path.n_points_per_cubic_curve = -1
+    parameters = np.array([[0.0], [0.25], [0.5], [1.0]])
+
+    def sample(function):
+        return {
+            "name": function.__name__,
+            "scalar": [float(value) for value in function(0.5)],
+            "column_vector": [
+                [float(value) for value in row]
+                for row in function(parameters)
+            ],
+        }
+
+    def point_array_contract(point):
+        return {"type": type(point).__name__, "dtype": str(point.dtype)}
+
+    def capture(call):
+        try:
+            return {"value": call()}
+        except Exception as error:
+            return {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+
+    def zero_sample_function_with_length():
+        function, length = path.get_nth_curve_function_with_length(
+            0, sample_points=0
+        )
+        return {"curve": sample(function), "length": float(length)}
+
+    individual = path.get_nth_curve_function(1)
+    with_length, length = path.get_nth_curve_function_with_length(
+        0, sample_points=6
+    )
+
+    def escaped_curve_after_generator_error(with_lengths):
+        stream = (
+            path.get_curve_functions_with_lengths(sample_points=6)
+            if with_lengths else path.get_curve_functions()
+        )
+        yielded = next(stream)
+        function = yielded[0] if with_lengths else yielded
+        try:
+            stream.throw(ValueError("stop querying"))
+        except ValueError as error:
+            message = str(error)
+        return {"error_message": message, "curve": sample(function)}
+
+    return {
+        "sampled_lengths": {
+            "default_pieces": [
+                float(value) for value in path.get_nth_curve_length_pieces(0)
+            ],
+            "six_point_pieces": [
+                float(value)
+                for value in path.get_nth_curve_length_pieces(0, sample_points=6)
+            ],
+            "single_point_pieces": [
+                float(value)
+                for value in path.get_nth_curve_length_pieces(0, sample_points=1)
+            ],
+            "zero_point_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(0, sample_points=0)
+                ]
+            ),
+            "zero_sample_length": capture(
+                lambda: float(path.get_nth_curve_length(0, sample_points=0))
+            ),
+            "zero_sample_function_with_length": capture(
+                zero_sample_function_with_length
+            ),
+            "default_length": float(path.get_nth_curve_length(1)),
+            "six_point_length": float(path.get_nth_curve_length(1, sample_points=6)),
+            "zero_sample_arc_length": capture(lambda: float(path.get_arc_length(0))),
+            "single_sample_arc_length": float(path.get_arc_length(1)),
+        },
+        "individual": sample(individual),
+        "individual_with_length": {
+            "curve": sample(with_length),
+            "length": float(length),
+        },
+        "functions": [sample(function) for function in path.get_curve_functions()],
+        "functions_with_lengths": [
+            {"curve": sample(function), "length": float(curve_length)}
+            for function, curve_length in path.get_curve_functions_with_lengths(
+                sample_points=6
+            )
+        ],
+        "escaped_after_generator_error": {
+            "functions": escaped_curve_after_generator_error(False),
+            "functions_with_lengths": escaped_curve_after_generator_error(True),
+        },
+        "vector_family_boundary": [
+            _point_observation(point)
+            for point in vector_family.get_points_defining_boundary()
+        ],
+        "empty_vector_family_boundary_shape": list(
+            empty_vector_family.get_points_defining_boundary().shape
+        ),
+        "aliased_vector_family_boundary": [
+            _point_observation(point)
+            for point in aliased_vector_family.get_points_defining_boundary()
+        ],
+        "default_stride_anchor_edit": [
+            _point_observation(point)
+            for point in default_stride_anchor_edit.get_anchors()
+        ],
+        "mutable_custom_stride": {
+            "count": custom_stride_path.get_num_curves(),
+            "endpoint_arrays": {
+                "start": point_array_contract(custom_stride_path.get_start()),
+                "end": point_array_contract(custom_stride_path.get_end()),
+            },
+            "direction": {
+                "positive_stride": positive_stride_direction.get_direction(),
+                "negative_stride": negative_stride_direction.get_direction(),
+                "default_stride": default_stride_direction.get_direction(),
+            },
+            "arc_length": float(
+                custom_stride_path.get_arc_length(sample_points_per_curve=2)
+            ),
+            "negative_stride_arc_length": capture(
+                lambda: float(negative_stride_path.get_arc_length(-1))
+            ),
+            "start_anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_start_anchors()
+            ],
+            "end_anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_end_anchors()
+            ],
+            "anchors": [
+                _point_observation(point)
+                for point in custom_stride_path.get_anchors()
+            ],
+            "anchors_and_handles": [
+                [_point_observation(point) for point in group]
+                for group in custom_stride_path.get_anchors_and_handles()
+            ],
+            "subpaths": [
+                [_point_observation(point) for point in subpath]
+                for subpath in custom_stride_path.get_subpaths()
+            ],
+            "boundary": [
+                _point_observation(point)
+                for point in custom_stride_path.get_points_defining_boundary()
+            ],
+            "points_from_proportion": [
+                _point_observation(custom_stride_path.point_from_proportion(alpha))
+                for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
+            ],
+            "proportions_from_points": [
+                float(custom_stride_path.proportion_from_point(point))
+                for point in ((1.0 / 6.0, 0.0, 0.0), (5.0 / 6.0, 0.0, 0.0))
+            ],
+            "high_grade_proportions_from_points": [
+                float(
+                    high_grade_path.proportion_from_point(
+                        tuple(
+                            float(component)
+                            for component in high_grade_path.get_nth_curve_function(index)(0.5)
+                        )
+                    )
+                )
+                for index in range(2)
+            ],
+            "functions": [
+                sample(function)
+                for function in custom_stride_path.get_curve_functions()
+            ],
+            "function_with_lengths": [
+                {"curve": sample(function), "length": float(curve_length)}
+                for function, curve_length in custom_stride_path.get_curve_functions_with_lengths(
+                    sample_points=2
+                )
+            ],
+            "nth_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(1))
+            ),
+            "nth_length": capture(
+                lambda: float(
+                    custom_stride_path.get_nth_curve_length(0, sample_points=2)
+                )
+            ),
+            "negative_previous_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(-2))
+            ),
+            "negative_last_function": capture(
+                lambda: sample(custom_stride_path.get_nth_curve_function(-1))
+            ),
+            "high_grade": {
+                "count": high_grade_path.get_num_curves(),
+                "functions": [
+                    sample(function)
+                    for function in high_grade_path.get_curve_functions()
+                ],
+                "function_with_lengths": [
+                    {
+                        "curve": sample(function),
+                        "length": float(curve_length),
+                    }
+                    for function, curve_length in (
+                        high_grade_path.get_curve_functions_with_lengths(
+                            sample_points=2
+                        )
+                    )
+                ],
+            },
+        },
+        "mutable_stride_boundary_queries": {
+            "anchors": [
+                _point_observation(point)
+                for point in custom_stride_boundary_path.get_anchors()
+            ],
+            "critical_point": _point_observation(
+                custom_stride_boundary_path.get_critical_point(api.RIGHT)
+            ),
+            "center": _point_observation(custom_stride_boundary_path.get_center()),
+            "x_min": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=0, key=-1)
+            ),
+            "x_max": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=0, key=1)
+            ),
+            "z_max": float(
+                custom_stride_boundary_path.get_extremum_along_dim(dim=2, key=1)
+            ),
+            "boundary_point": _point_observation(
+                custom_stride_boundary_path.get_boundary_point(api.RIGHT)
+            ),
+        },
+        "functions_with_unknown_length_keyword": capture(
+            lambda: list(path.get_curve_functions_with_lengths(unsupported=True))
+        ),
+        "negative_previous_curve": {
+            "function": capture(
+                lambda: sample(path.get_nth_curve_function(-2))
+            ),
+            "length_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -2, sample_points=2
+                    )
+                ]
+            ),
+            "length": capture(
+                lambda: float(path.get_nth_curve_length(-2, sample_points=2))
+            ),
+            "function_with_length": capture(
+                lambda: _sample_negative_curve_with_length(path, sample)
+            ),
+        },
+        "negative_last_curve": {
+            "function": capture(
+                lambda: sample(path.get_nth_curve_function(-1))
+            ),
+            "length_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -1, sample_points=2
+                    )
+                ]
+            ),
+            "zero_sample_pieces": capture(
+                lambda: [
+                    float(value)
+                    for value in path.get_nth_curve_length_pieces(
+                        -1, sample_points=0
+                    )
+                ]
+            ),
+        },
+        "empty_functions": list(api.VMobject().get_curve_functions()),
+        "empty_functions_with_invalid_length_samples": [
+            list(
+                api.VMobject().get_curve_functions_with_lengths(
+                    sample_points=sample_points
+                )
+            )
+            for sample_points in (-1, 2.5)
+        ],
+        "empty_functions_with_unknown_length_keyword": capture(
+            lambda: list(
+                api.VMobject().get_curve_functions_with_lengths(unsupported=True)
+            )
+        ),
+        "empty_arc_lengths": [
+            api.VMobject().get_arc_length(sample_points)
+            for sample_points in (0, 1, -1, 2.5)
+        ],
+    }
+
+
+def _raw_point_mutations(api):
+    import numpy as np
+
+    initial = np.array(
+        [(float(index), float(index * 2), 0.0) for index in range(7)]
+    )
+    appended = np.array([(7.0, 14.0, 0.0), (8.0, 16.0, 0.0)])
+
+    def snapshot(value):
+        return {
+            "count": value.get_num_points(),
+            "points": [
+                _point_observation(point) for point in value.get_all_points()
+            ],
+            "start_anchors": [
+                _point_observation(point) for point in value.get_start_anchors()
+            ],
+            "start": _point_observation(value.get_start()),
+            "end": _point_observation(value.get_end()),
+        }
+
+    set_path = api.VMobject().set_points(initial.copy())
+    append_path = api.VMobject().set_points(initial.copy()).append_points(appended)
+    started_path = api.VMobject().set_points(initial.copy())
+    started_path.start_new_path((9.0, 9.0, 0.0))
+    custom_stride_started_path = api.VMobject()
+    custom_stride_started_path.n_points_per_cubic_curve = 5
+    custom_stride_started_path.set_points(initial.copy())
+    custom_stride_started_path.start_new_path((9.0, 9.0, 0.0))
+    custom_stride_path = api.VMobject()
+    custom_stride_path.n_points_per_cubic_curve = 5
+    custom_stride_path.set_points(initial.copy()).append_points(appended)
+    resized_up = api.VMobject().set_points(initial.copy()).resize_points(10)
+    resized_down = api.VMobject().set_points(initial.copy()).resize_points(3)
+    resized_custom = api.VMobject().set_points(initial.copy()).resize_points(
+        5,
+        resize_func=lambda points, length: np.resize(
+            points[::-1], (length, *points.shape[1:])
+        ),
+    )
+    return {
+        "set": snapshot(set_path),
+        "append": snapshot(append_path),
+        "start_new_path": snapshot(started_path),
+        "custom_stride_start_new_path": snapshot(custom_stride_started_path),
+        "custom_stride_append": snapshot(custom_stride_path),
+        "resize_up": snapshot(resized_up),
+        "resize_down": snapshot(resized_down),
+        "resize_custom": snapshot(resized_custom),
+    }
+
+
+def _raw_point_curve_appends(api):
+    import numpy as np
+
+    point = lambda *coordinates: np.asarray(coordinates, dtype=np.float64)
+    result = {}
+    for point_count in (5, 7):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        for operation in ("line", "quadratic", "cubic"):
+            value = api.VMobject().set_points(initial.copy())
+            if operation == "line":
+                value.add_line_to(point(9.0, -1.0, 0.0))
+            elif operation == "quadratic":
+                value.add_quadratic_bezier_curve_to(
+                    point(8.0, 3.0, 0.0), point(10.0, -1.0, 0.0)
+                )
+            else:
+                value.add_cubic_bezier_curve_to(
+                    point(8.0, 1.0, 0.0), point(9.0, 2.0, 0.0), point(11.0, 0.0, 0.0)
+                )
+            result[f"{point_count}_{operation}"] = {
+                "count": value.get_num_points(),
+                "points": [_point_observation(point) for point in value.get_all_points()],
+            }
+    return result
+
+
+def _raw_point_line_custom_samples(api):
+    import numpy as np
+
+    result = {}
+    endpoint = np.asarray((9.0, -1.0, 0.0), dtype=np.float64)
+    samples = np.array([0.0, 0.25, 0.75, 1.0])
+    for point_count in (1, 4):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        value = api.VMobject().set_points(initial.copy())
+        value._bezier_t_values = samples.copy()
+        pending_before = value.has_new_path_started()
+        value.add_line_to(endpoint.copy())
+        result[str(point_count)] = {
+            "pending_before": pending_before,
+            "count": value.get_num_points(),
+            "points": [_point_observation(point) for point in value.get_all_points()],
+        }
+    return result
+
+
+def _raw_point_smooth_curve_appends(api):
+    import numpy as np
+
+    point = lambda *coordinates: np.asarray(coordinates, dtype=np.float64)
+    result = {}
+    for point_count in (5, 7):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        for explicit in (False, True):
+            value = api.VMobject().set_points(initial.copy())
+            if explicit:
+                value.add_smooth_curve_to(point(7.0, 2.0, 0.0), point(11.0, -1.0, 0.0))
+            else:
+                value.add_smooth_curve_to(point(11.0, -1.0, 0.0))
+            result[f"{point_count}_{'explicit' if explicit else 'default'}"] = {
+                "count": value.get_num_points(),
+                "points": [_point_observation(point) for point in value.get_all_points()],
+            }
+    return result
+
+
+def _raw_point_custom_stride_curve_appends(api):
+    import numpy as np
+
+    point = lambda *coordinates: np.asarray(coordinates, dtype=np.float64)
+    result = {}
+    for point_count in (5, 6):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        for operation in ("line", "quadratic", "cubic", "smooth", "smooth_explicit"):
+            value = api.VMobject().set_points(initial.copy())
+            # Manim's stride is mutable. Mutate it after construction so the
+            # default four Bezier samples remain while pending-anchor checks
+            # use the new five-point grouping.
+            value.n_points_per_cubic_curve = 5
+            pending_before = value.has_new_path_started()
+            if operation == "line":
+                value.add_line_to(point(11.0, -1.0, 0.0))
+            elif operation == "quadratic":
+                value.add_quadratic_bezier_curve_to(
+                    point(8.0, 2.0, 0.0), point(11.0, -1.0, 0.0)
+                )
+            elif operation == "cubic":
+                value.add_cubic_bezier_curve_to(
+                    point(7.0, 1.0, 0.0), point(9.0, 2.0, 0.0), point(11.0, -1.0, 0.0)
+                )
+            elif operation == "smooth":
+                value.add_smooth_curve_to(point(11.0, -1.0, 0.0))
+            else:
+                value.add_smooth_curve_to(point(7.0, 2.0, 0.0), point(11.0, -1.0, 0.0))
+            result[f"{point_count}_{operation}"] = {
+                "count": value.get_num_points(),
+                "pending_before": pending_before,
+                "points": [_point_observation(point) for point in value.get_all_points()],
+            }
+    return result
+
+
+def _raw_point_custom_stride_corners(api):
+    import numpy as np
+
+    result = {}
+    for point_count in (5, 6):
+        initial = np.array(
+            [(float(index), float(index % 2), 0.0) for index in range(point_count)]
+        )
+        value = api.VMobject().set_points(initial.copy())
+        value.n_points_per_cubic_curve = 5
+        pending_before = value.has_new_path_started()
+        value.add_points_as_corners([(7.0, 1.0, 0.0), (10.0, -1.0, 0.0)])
+        result[str(point_count)] = {
+            "count": value.get_num_points(),
+            "pending_before": pending_before,
+            "points": [_point_observation(point) for point in value.get_all_points()],
+        }
+    return result
+
+
+def _raw_point_custom_stride_vectorized_append(api):
+    import numpy as np
+
+    source_points = np.array([(20.0, 1.0, 0.0), (21.0, 2.0, 0.0), (22.0, 3.0, 0.0)])
+    source = api.VMobject().set_points(source_points.copy())
+    result = {}
+    for point_count in (5, 6):
+        initial = np.array(
+            [(float(index), float(-index), 0.0) for index in range(point_count)]
+        )
+        destination = api.VMobject().set_points(initial.copy())
+        destination.n_points_per_cubic_curve = 5
+        pending_before = destination.has_new_path_started()
+        destination.append_vectorized_mobject(source)
+        result[str(point_count)] = {
+            "pending_before": pending_before,
+            "count": destination.get_num_points(),
+            "points": [_point_observation(point) for point in destination.get_all_points()],
+        }
+    return result
+
+
+def _raw_point_custom_stride_close_path(api):
+    import numpy as np
+
+    result = {}
+    for point_count in (10, 11):
+        initial = np.array(
+            [(float(index), float(-index), 0.0) for index in range(point_count)]
+        )
+        value = api.VMobject().set_points(initial.copy())
+        value.n_points_per_cubic_curve = 5
+        pending_before = value.has_new_path_started()
+        value.close_path()
+        result[str(point_count)] = {
+            "pending_before": pending_before,
+            "count": value.get_num_points(),
+            "points": [_point_observation(point) for point in value.get_all_points()],
+        }
+    return result
+
+
+def _sample_negative_curve_with_length(path, sample):
+    function, length = path.get_nth_curve_function_with_length(-2, sample_points=2)
+    return {"curve": sample(function), "length": float(length)}
+
+
+def _nth_curve_point_queries(api):
+    path = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0)]
+    )
+    empty = api.VMobject()
+
+    def capture(call):
+        try:
+            return {"value": call()}
+        except Exception as error:
+            return {
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+
+    def points_at(value, index):
+        return [_point_observation(point) for point in value.get_nth_curve_points(index)]
+
+    observations = {
+        "curve_count": path.get_num_curves(),
+        "first": points_at(path, 0),
+        "last_positive": points_at(path, 2),
+        "negative_last": points_at(path, -1),
+        "negative_second": points_at(path, -2),
+        "negative_first": points_at(path, -3),
+        "negative_before_start": points_at(path, -4),
+        "past_end": capture(lambda: points_at(path, 3)),
+        "fractional_index": capture(lambda: points_at(path, 0.5)),
+        "empty_negative_last": points_at(empty, -1),
+        "empty_zero": capture(lambda: points_at(empty, 0)),
+    }
+    path.n_points_per_cubic_curve = 3
+    observations["custom_stride"] = {
+        "curve_count": path.get_num_curves(),
+        "last": points_at(path, 3),
+    }
+    path.n_points_per_cubic_curve = 3.5
+    fractional_curve_count = path.get_num_curves()
+    observations["noninteger_stride"] = {
+        "curve_count": fractional_curve_count,
+        "curve_count_type": type(fractional_curve_count).__name__,
+        "slice": capture(lambda: points_at(path, 0)),
+    }
+    return observations
 
 
 def _z_index_probe(api):
@@ -597,6 +3510,41 @@ def _manim_replace_stretch() -> Any:
     target = manim.Rectangle(width=2.0, height=1.0).shift(manim.LEFT * 0.7 + manim.UP * 0.2)
     source.replace(target, stretch=True)
     return _object_observation(source)
+
+
+def _replace_live_probe(provider: Any, stretch: bool, scene: Any | None = None) -> Any:
+    source = provider.Circle(radius=0.25)
+    target = provider.Rectangle(width=2.0, height=1.0).shift(
+        provider.LEFT * 0.7 + provider.UP * 0.2
+    )
+    if scene is not None:
+        scene.add(source, target)
+    returned = source.replace(target, stretch=stretch)
+    return {
+        "returns_self": returned is source,
+        "source": _object_observation(source),
+        "target": _object_observation(target),
+    }
+
+
+def _noon_replace_width_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _replace_live_probe(noon, False, scene)
+    )
+
+
+def _manim_replace_width_live() -> Any:
+    return _replace_live_probe(manim, False)
+
+
+def _noon_replace_stretch_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _replace_live_probe(noon, True, scene)
+    )
+
+
+def _manim_replace_stretch_live() -> Any:
+    return _replace_live_probe(manim, True)
 
 
 
@@ -851,9 +3799,24 @@ def _zero_extent_replace(api):
 
 def _paint_rgb(color):
     # Normalize provider color representations only; never alter scene semantics.
+    if color is None:
+        return None
     if hasattr(color, "to_rgb"):
         return [float(value) for value in color.to_rgb()]
     return [color.red, color.green, color.blue]
+
+
+def _solid_paint_observation(value):
+    return {
+        "fill_color": _paint_rgb(value.get_fill_color()),
+        "fill_opacity": _round_float(value.get_fill_opacity()),
+        "stroke_color": _paint_rgb(value.get_stroke_color()),
+        "stroke_width": _round_float(value.get_stroke_width()),
+        "stroke_opacity": _round_float(value.get_stroke_opacity()),
+        "background_stroke_color": _paint_rgb(value.get_stroke_color(background=True)),
+        "background_stroke_width": _round_float(value.get_stroke_width(background=True)),
+        "background_stroke_opacity": _round_float(value.get_stroke_opacity(background=True)),
+    }
 
 
 def _paint_queries_gradients(api):
@@ -872,6 +3835,699 @@ def _paint_queries_gradients(api):
     first.set_color(first.get_color())
     observations.append([first.get_fill_opacity(), first.get_stroke_opacity()])
     return observations
+
+
+def _recursive_family_paint_probe(api, scene=None):
+    first = api.Square(side_length=1).set_background_stroke(
+        color=api.RED, width=3, opacity=0.8
+    )
+    second = api.Circle(radius=0.5).set_background_stroke(
+        color=api.BLUE, width=2, opacity=0.6
+    )
+    nested = api.VGroup(first, second)
+    family = api.VGroup(nested, first)
+    unrelated = api.Square(side_length=0.4).set_fill(api.PURPLE, opacity=0.2)
+    unrelated_before = _solid_paint_observation(unrelated)
+    if scene is not None:
+        scene.add(family, unrelated)
+
+    def observe():
+        return {
+            "roots": [_solid_paint_observation(value) for value in (family, nested)],
+            "leaves": [_solid_paint_observation(value) for value in (first, second)],
+        }
+
+    returned = [family.set_fill(api.GREEN, opacity=0.4) is family]
+    after_fill = observe()
+    returned.append(family.set_stroke(api.BLUE, width=8, opacity=0.6) is family)
+    after_stroke = observe()
+    returned.append(family.set_opacity(0.25) is family)
+    after_opacity = observe()
+    return {
+        "returns": returned,
+        "after_fill": after_fill,
+        "after_stroke": after_stroke,
+        "after_opacity": after_opacity,
+        "unrelated_before": unrelated_before,
+        "unrelated_after": _solid_paint_observation(unrelated),
+        "expected_colors": {"green": _paint_rgb(api.GREEN), "blue": _paint_rgb(api.BLUE)},
+    }
+
+
+def _recursive_family_fade_probe(api, scene=None):
+    first = api.Square(side_length=1)
+    second = api.Circle(radius=0.5)
+    shared = api.VGroup(first)
+    nested = api.VGroup(shared, second)
+    family = api.VGroup(nested, shared)
+    family.set_style(
+        fill_color=api.RED, fill_opacity=0.8,
+        stroke_color=api.BLUE, stroke_opacity=0.4,
+        background_stroke_color=api.GREEN, background_stroke_width=3,
+        background_stroke_opacity=0.6,
+    )
+    unrelated = api.Square(side_length=0.4).set_fill(api.PURPLE, opacity=0.2)
+    empty = api.VGroup()
+    plain_vector = api.VGroup(api.Square(side_length=0.3))
+    plain_vector.set_style(fill_opacity=0.8, stroke_opacity=0.4,
+                           background_stroke_opacity=0.6)
+    plain = api.Group(plain_vector, api.Group(plain_vector), color=api.PURPLE)
+    if scene is not None:
+        scene.add(family, unrelated, empty, plain)
+
+    def observe():
+        return {
+            "roots": [_solid_paint_observation(value) for value in (family, nested, shared)],
+            "leaves": [_solid_paint_observation(value) for value in (first, second)],
+        }
+
+    before = observe()
+    unrelated_before = _solid_paint_observation(unrelated)
+    returned = [family.fade(0.5) is family]
+    after_first = observe()
+    returned.append(family.fade(0) is family)
+    after_zero = observe()
+    returned.append(family.fade(0.5) is family)
+    after_second = observe()
+    empty_before = _solid_paint_observation(empty)
+    empty_returned = empty.fade(0.5) is empty
+    plain_color = _paint_rgb(plain.get_color())
+    plain_before = _solid_paint_observation(plain_vector)
+    plain_returned = plain.fade(0.5) is plain
+    return {
+        "returns": returned, "before": before,
+        "after_first": after_first, "after_zero": after_zero, "after_second": after_second,
+        "empty_returned": empty_returned, "empty_before": empty_before,
+        "empty": _solid_paint_observation(empty),
+        "plain": {
+            "returned_self": plain_returned,
+            "color_before": plain_color, "color_after": _paint_rgb(plain.get_color()),
+            "before": plain_before, "after": _solid_paint_observation(plain_vector),
+        },
+        "unrelated_before": unrelated_before,
+        "unrelated_after": _solid_paint_observation(unrelated),
+    }
+
+
+def _family_own_paint_probe(api):
+    def rgb(mobject):
+        return _paint_rgb(mobject.get_color())
+
+    plain_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    plain = api.Group(*plain_children)
+    constructor_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    explicit = api.Group(*constructor_children, color=api.GREEN)
+
+    root_only_children = [api.Circle(color=api.RED), api.Square(color=api.BLUE)]
+    root_only = api.Group(*root_only_children)
+    root_only.set_color(api.GREEN, family=False)
+    late_child = api.Triangle(color=api.RED)
+    root_only.add(late_child)
+
+    vector_root_only = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    vector_root_only.set_fill(api.GREEN, 0.35, family=False)
+    root_fill_style = [
+        rgb(vector_root_only),
+        _paint_rgb(vector_root_only.get_fill_color()),
+        vector_root_only.get_fill_opacity(),
+        vector_root_only.get_stroke_opacity(),
+        [rgb(member) for member in vector_root_only.submobjects],
+    ]
+    root_opacity_children_before = [
+        [
+            member.get_fill_opacity(),
+            member.get_stroke_opacity(),
+            member.get_stroke_opacity(background=True),
+        ]
+        for member in vector_root_only.submobjects
+    ]
+    vector_root_only.set_opacity(0.6, family=False)
+    root_opacity_style = [
+        rgb(vector_root_only),
+        vector_root_only.get_fill_opacity(),
+        vector_root_only.get_stroke_opacity(),
+        vector_root_only.get_stroke_opacity(background=True),
+        [rgb(member) for member in vector_root_only.submobjects],
+        [
+            [
+                member.get_fill_opacity(),
+                member.get_stroke_opacity(),
+                member.get_stroke_opacity(background=True),
+            ]
+            for member in vector_root_only.submobjects
+        ],
+        root_opacity_children_before,
+    ]
+    vector_root_only.set_stroke(api.BLUE, width=4, opacity=0.45, family=False)
+    root_stroke_style = [
+        _paint_rgb(vector_root_only.get_stroke_color()),
+        vector_root_only.get_stroke_width(),
+        vector_root_only.get_stroke_opacity(),
+        [_paint_rgb(member.get_stroke_color()) for member in vector_root_only.submobjects],
+    ]
+
+    background_root = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    background_root_children_before = [
+        rgb(member) for member in background_root.submobjects
+    ]
+    background_root.set_background_stroke(
+        color=api.BLUE, width=7, opacity=0.4, family=False
+    )
+    root_background_stroke_observation = [
+        _paint_rgb(background_root.get_stroke_color(background=True)),
+        background_root.get_stroke_width(background=True),
+        background_root.get_stroke_opacity(background=True),
+        background_root_children_before,
+        [rgb(member) for member in background_root.submobjects],
+    ]
+
+    vector_style_root = api.VGroup(
+        api.Circle(color=api.RED), api.Square(color=api.BLUE)
+    )
+    vector_style_root_children_before = [
+        rgb(member) for member in vector_style_root.submobjects
+    ]
+    vector_style_root.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        background_stroke_color=api.BLUE,
+        background_stroke_width=6,
+        background_stroke_opacity=0.55,
+        family=False,
+    )
+    root_style = vector_style_root.get_style(simple=True)
+    root_style_observation = [
+        _paint_rgb(root_style["fill_color"]),
+        root_style["fill_opacity"],
+        _paint_rgb(root_style["stroke_color"]),
+        root_style["stroke_width"],
+        root_style["stroke_opacity"],
+        _paint_rgb(vector_style_root.get_stroke_color(background=True)),
+        vector_style_root.get_stroke_width(background=True),
+        vector_style_root.get_stroke_opacity(background=True),
+        vector_style_root_children_before,
+        [rgb(member) for member in vector_style_root.submobjects],
+    ]
+    full_style = vector_style_root.get_style()
+    full_style_observation = [
+        [
+            [None if color is None else _paint_rgb(color) for color in full_style["fill_color"]],
+            [float(value) for value in full_style["fill_opacity"]],
+            [None if color is None else _paint_rgb(color) for color in full_style["stroke_color"]],
+            float(full_style["stroke_opacity"]),
+            full_style["stroke_width"],
+        ],
+        [
+            [
+                None if color is None else _paint_rgb(color)
+                for color in full_style["background_stroke_color"]
+            ],
+            full_style["background_stroke_width"],
+            full_style["background_stroke_opacity"],
+            full_style["sheen_factor"],
+            [float(value) for value in full_style["sheen_direction"]],
+            full_style["background_image"],
+        ],
+    ]
+
+    match_source_children = [api.Circle(color=api.RED), api.Square(color=api.YELLOW)]
+    match_source = api.VGroup(*match_source_children)
+    match_source.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_width=5,
+        stroke_opacity=0.4,
+        family=False,
+    )
+    match_receiver_children = [api.Circle(color=api.BLUE), api.Square(color=api.RED)]
+    match_receiver = api.VGroup(*match_receiver_children)
+    match_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    match_receiver.match_style(match_source, family=False)
+    matched_style = match_receiver.get_style(simple=True)
+    root_only_match = [
+        _paint_rgb(matched_style["fill_color"]),
+        matched_style["fill_opacity"],
+        _paint_rgb(matched_style["stroke_color"]),
+        matched_style["stroke_width"],
+        matched_style["stroke_opacity"],
+        [
+            [rgb(member), _paint_rgb(member.get_stroke_color()), member.get_stroke_width()]
+            for member in match_receiver_children
+        ],
+    ]
+
+    recursive_source_nested = api.VGroup(api.Circle(color=api.RED))
+    recursive_source_nested.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.3,
+        stroke_color=api.YELLOW,
+        stroke_width=7,
+        stroke_opacity=0.55,
+        family=False,
+    )
+    recursive_source = api.VGroup(
+        recursive_source_nested,
+        api.Square(color=api.YELLOW),
+    )
+    recursive_source.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.35,
+        family=False,
+    )
+    recursive_receiver_nested = api.VGroup(api.Circle(color=api.BLUE))
+    recursive_receiver_nested.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.9,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    recursive_receiver = api.VGroup(
+        recursive_receiver_nested,
+        api.Square(color=api.RED),
+    )
+    recursive_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    recursive_receiver.match_style(recursive_source)
+    recursive_root_style = recursive_receiver.get_style(simple=True)
+    recursive_nested_style = recursive_receiver_nested.get_style(simple=True)
+    recursive_match = [
+        [
+            _paint_rgb(recursive_root_style["fill_color"]),
+            recursive_root_style["fill_opacity"],
+            _paint_rgb(recursive_root_style["stroke_color"]),
+            recursive_root_style["stroke_width"],
+            recursive_root_style["stroke_opacity"],
+        ],
+        [
+            _paint_rgb(recursive_nested_style["fill_color"]),
+            recursive_nested_style["fill_opacity"],
+            _paint_rgb(recursive_nested_style["stroke_color"]),
+            recursive_nested_style["stroke_width"],
+            recursive_nested_style["stroke_opacity"],
+        ],
+        [
+            [
+                _paint_rgb(member.get_fill_color()),
+                member.get_fill_opacity(),
+                member.get_stroke_width(),
+            ]
+            for member in (recursive_receiver_nested.submobjects[0], recursive_receiver.submobjects[1])
+        ],
+    ]
+
+    fanout_receiver_nested = api.VGroup(api.Circle(color=api.BLUE))
+    fanout_receiver = api.VGroup(
+        fanout_receiver_nested,
+        api.Square(color=api.RED),
+    )
+    fanout_receiver.set_style(
+        fill_color=api.YELLOW,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=2,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    fanout_receiver_nested.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.9,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    empty_style_donor = api.VGroup()
+    empty_style_donor.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_width=5,
+        stroke_opacity=0.4,
+        family=False,
+    )
+    fanout_receiver.match_style(empty_style_donor)
+    fanout_match = [
+        _paint_rgb(fanout_receiver.get_fill_color()),
+        fanout_receiver.get_fill_opacity(),
+        _paint_rgb(fanout_receiver.get_stroke_color()),
+        fanout_receiver.get_stroke_width(),
+        fanout_receiver.get_stroke_opacity(),
+        [
+            [
+                _paint_rgb(node.get_fill_color()),
+                node.get_fill_opacity(),
+                _paint_rgb(node.get_stroke_color()),
+                node.get_stroke_width(),
+                node.get_stroke_opacity(),
+            ]
+            for node in (
+                fanout_receiver_nested,
+                fanout_receiver_nested.submobjects[0],
+                fanout_receiver.submobjects[1],
+            )
+        ],
+    ]
+
+    empty = api.Group()
+    empty.set_color(api.YELLOW, family=False)
+
+    gradient = api.VGroup(*(api.Square() for _ in range(3)))
+    gradient.set_color_by_gradient(api.RED, api.BLUE)
+
+    shared = api.Circle(color=api.GREEN)
+    nested = api.Group(shared, api.Square(color=api.YELLOW))
+    aliased = api.Group(nested, shared)
+    aliased.set_color(api.BLUE, family=False)
+    nested.set_color(api.RED, family=False)
+
+    restorable = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    restorable.save_state()
+    restorable.set_color(api.GREEN)
+    restorable.restore()
+
+    restorable_style = api.VGroup(
+        api.Circle(color=api.RED), api.Square(color=api.BLUE)
+    )
+    restorable_style.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.3,
+        stroke_color=api.BLUE,
+        stroke_width=3,
+        stroke_opacity=0.5,
+        family=False,
+    )
+    restorable_style.save_state()
+    restorable_style.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.8,
+        stroke_color=api.YELLOW,
+        stroke_width=7,
+        stroke_opacity=0.9,
+        family=False,
+    )
+    restorable_style.restore()
+    restored_root_style = restorable_style.get_style(simple=True)
+    root_style_restore_observation = [
+        _paint_rgb(restored_root_style["fill_color"]),
+        restored_root_style["fill_opacity"],
+        _paint_rgb(restored_root_style["stroke_color"]),
+        restored_root_style["stroke_width"],
+        restored_root_style["stroke_opacity"],
+        [rgb(member) for member in restorable_style.submobjects],
+    ]
+
+    leaf_background = api.Square(color=api.RED)
+    leaf_background_returned_self = leaf_background.set_stroke(
+        color=api.BLUE, width=3, opacity=0.4, background=True
+    ) is leaf_background
+    leaf_background_observation = {
+        "returned_self": leaf_background_returned_self,
+        "color": _paint_rgb(leaf_background.get_stroke_color(background=True)),
+        "width": leaf_background.get_stroke_width(background=True),
+        "opacity": leaf_background.get_stroke_opacity(background=True),
+        "rgba": [
+            [float(channel) for channel in row]
+            for row in leaf_background.get_stroke_rgbas(background=True)
+        ],
+    }
+    leaf_background.set_opacity(0.6)
+    leaf_background_observation["set_opacity"] = leaf_background.get_stroke_opacity(
+        background=True
+    )
+    leaf_background.fade(0.5)
+    leaf_background_observation["fade"] = leaf_background.get_stroke_opacity(
+        background=True
+    )
+
+    recursive_background = api.VGroup(
+        api.Circle(color=api.RED), api.VGroup(api.Square(color=api.BLUE))
+    )
+    recursive_background_returned_self = recursive_background.set_background_stroke(
+        color=api.GREEN, width=2, opacity=0.35
+    ) is recursive_background
+    recursive_background_observation = [
+        recursive_background_returned_self,
+        [
+            [
+                _paint_rgb(member.get_stroke_color(background=True)),
+                member.get_stroke_width(background=True),
+                member.get_stroke_opacity(background=True),
+            ]
+            for member in recursive_background.get_family()
+        ],
+    ]
+
+    return {
+        "plain_default": [rgb(plain), [rgb(member) for member in plain.submobjects]],
+        "explicit_constructor_color": [
+            rgb(explicit), [rgb(member) for member in constructor_children]
+        ],
+        "root_only_and_late_add": [
+            rgb(root_only), [rgb(member) for member in root_only.submobjects]
+        ],
+        "vgroup_root_only_fill_stroke_and_opacity": [
+            root_fill_style, root_opacity_style, root_stroke_style
+        ],
+        "vgroup_root_only_set_style": root_style_observation,
+        "vgroup_root_only_background_stroke_setter": root_background_stroke_observation,
+        "leaf_background_stroke": leaf_background_observation,
+        "recursive_background_stroke": recursive_background_observation,
+        "vgroup_root_full_style": full_style_observation,
+        "vgroup_root_only_match_style": root_only_match,
+        "vgroup_recursive_match_style": recursive_match,
+        "vgroup_empty_donor_match_style": fanout_match,
+        "empty_root_only": [rgb(empty), len(empty.submobjects)],
+        "gradient_root_and_leaves": [
+            rgb(gradient), [rgb(member) for member in gradient.submobjects]
+        ],
+        "nested_shared_root_only": [
+            rgb(aliased), rgb(nested), rgb(shared), rgb(nested.submobjects[1]),
+            aliased.submobjects[1] is shared,
+            aliased.submobjects[0].submobjects[0] is shared,
+        ],
+        "vgroup_save_restore": [
+            rgb(restorable), [rgb(member) for member in restorable.submobjects]
+        ],
+        "vgroup_root_style_save_restore": root_style_restore_observation,
+    }
+
+
+def _vgroup_root_style_copy_target_probe(api, scene=None):
+    child = api.VMobject().start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    child.set_fill(api.RED, opacity=0.25).set_stroke(api.RED, width=2, opacity=0.5)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        family=False,
+    )
+    if scene is not None:
+        scene.add(family)
+
+    copied = family.copy()
+    target = family.generate_target()
+    if scene is not None:
+        scene.add(copied, target)
+    copied.set_style(fill_color=api.YELLOW, family=False)
+    target.set_style(stroke_color=api.WHITE, stroke_width=7, family=False)
+
+    def profile(value):
+        style = value.get_style(simple=True)
+        return {
+            "fill_color": _paint_rgb(style["fill_color"]),
+            "fill_opacity": float(style["fill_opacity"]),
+            "stroke_color": _paint_rgb(style["stroke_color"]),
+            "stroke_width": float(style["stroke_width"]),
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "child_fill": _paint_rgb(value.submobjects[0].get_fill_color()),
+            "child_stroke": _paint_rgb(value.submobjects[0].get_stroke_color()),
+        }
+
+    return {
+        "source": profile(family),
+        "copy": profile(copied),
+        "target": profile(target),
+    }
+
+
+def _plain_group_restore_extension_probe(api):
+    family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    family.save_state()
+    family.set_color(api.GREEN)
+    try:
+        family.restore()
+    except Exception as error:
+        return {"status": "raised", "error_type": type(error).__name__}
+    return {
+        "status": "restored",
+        "root": _paint_rgb(family.get_color()),
+        "children": [_paint_rgb(member.get_color()) for member in family.submobjects],
+    }
+
+
+def _plain_group_nonrecursive_fade_probe(api, scene=None):
+    child = api.VMobject(color=api.BLUE, fill_opacity=0.4, stroke_opacity=0.6)
+    family = api.Group(child)
+    if scene is not None:
+        scene.add(family)
+
+    def profile():
+        return {
+            "color": _paint_rgb(child.get_color()),
+            "fill_opacity": float(child.get_fill_opacity()),
+            "stroke_opacity": float(child.get_stroke_opacity()),
+        }
+
+    before = profile()
+    returned_self = family.fade(float("nan"), family=False) is family
+    return {"returned_self": returned_self, "before": before, "after": profile()}
+
+
+def _vgroup_nonrecursive_fade_probe(api, scene=None):
+    children = [
+        api.Circle(color=api.BLUE, fill_opacity=0.4, stroke_opacity=0.6),
+        api.Square(color=api.RED, fill_opacity=0.2, stroke_opacity=0.8),
+    ]
+    family = api.VGroup(*children)
+    if scene is not None:
+        scene.add(family)
+
+    def profile():
+        return {
+            "root": [
+                float(family.get_fill_opacity()),
+                float(family.get_stroke_opacity()),
+                float(family.get_stroke_opacity(background=True)),
+            ],
+            "children": [
+                [
+                    float(child.get_fill_opacity()),
+                    float(child.get_stroke_opacity()),
+                    float(child.get_stroke_opacity(background=True)),
+                ]
+                for child in children
+            ],
+        }
+
+    returned_self = family.fade(0.25, family=False) is family
+    return {"returned_self": returned_self, **profile()}
+
+
+def _vgroup_root_style_play_probe(api, scene=None):
+    child = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.RED,
+        stroke_opacity=0.5,
+        stroke_width=2,
+    ).start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.1,
+        stroke_color=api.YELLOW,
+        stroke_width=2,
+        stroke_opacity=0.3,
+        family=False,
+    )
+    if scene is None:
+        scene = api.Scene()
+    scene.add(family)
+    target = family.copy().set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.7,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.8,
+        family=False,
+    )
+    animation = family.animate.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.7,
+        stroke_color=api.BLUE,
+        stroke_width=6,
+        stroke_opacity=0.8,
+        family=False,
+    )
+
+    def profile(value):
+        style = value.get_style(simple=True)
+        leaf = value.submobjects[0]
+        return {
+            "fill_color": _paint_rgb(style["fill_color"]),
+            "fill_opacity": float(style["fill_opacity"]),
+            "stroke_color": _paint_rgb(style["stroke_color"]),
+            "stroke_width": float(style["stroke_width"]),
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "child_fill": _paint_rgb(leaf.get_fill_color()),
+            "child_stroke": _paint_rgb(leaf.get_stroke_color()),
+        }
+
+    before_profile = profile(family)
+    target_profile = profile(target)
+    scene.play(animation, run_time=1, rate_func=api.linear)
+    return {
+        "source_before": before_profile,
+        "target": target_profile,
+        "after": profile(family),
+        "child_after": {
+            "fill_color": _paint_rgb(child.get_fill_color()),
+            "fill_opacity": float(child.get_fill_opacity()),
+            "stroke_color": _paint_rgb(child.get_stroke_color()),
+            "stroke_width": float(child.get_stroke_width()),
+            "stroke_opacity": float(child.get_stroke_opacity()),
+        },
+    }
+
+
+def _family_own_paint_play_probe(api, scene=None):
+    """Observe root-only family color after an ordinary method animation."""
+    family = api.Group(api.Circle(color=api.RED), api.Square(color=api.BLUE), color=api.GREEN)
+    if scene is None:
+        scene = api.Scene()
+    scene.add(family)
+    before = _paint_rgb(family.get_color())
+    animation = family.animate.set_color(api.YELLOW, family=False)
+    target = getattr(family, "target", None)
+    if target is None:
+        target = animation.target
+    target_color = _paint_rgb(target.get_color())
+    scene.play(
+        animation,
+        run_time=1,
+        rate_func=api.linear,
+    )
+    return {
+        "before": before,
+        "target": target_color,
+        "after": _paint_rgb(family.get_color()),
+        "children": [_paint_rgb(member.get_color()) for member in family.submobjects],
+    }
 
 
 def _arc_geometry(api):
@@ -1006,16 +4662,156 @@ def _world_stretch(api):
 def _path_alignment(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     a = api.Line(point(0, 0), point(3, 0)).shift(api.UP)
+    a.set_fill(api.RED, opacity=0.25).set_stroke(api.GREEN, opacity=0.4, width=2)
     b = api.VMobject().start_new_path(point(0, 0))
     b.add_cubic_bezier_curve_to(point(1, 2), point(2, 2), point(3, 0))
+    b.set_fill(api.BLUE, opacity=0.75).set_stroke(api.YELLOW, opacity=0.8, width=5)
     b.insert_n_curves(4)
     a.align_points(b)
     observations = [[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (a, b)]
+    observations.append([
+        [
+            [list(rgba) for rgba in obj.get_fill_rgbas()],
+            [list(rgba) for rgba in obj.get_stroke_rgbas()],
+            [list(rgba) for rgba in obj.get_stroke_rgbas(background=True)],
+            float(obj.get_stroke_width()),
+            float(obj.get_stroke_width(background=True)),
+        ]
+        for obj in (a, b)
+    ])
     empty = api.VMobject()
     square = api.Square(side_length=2)
     empty.align_points(square)
     observations.extend([[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (empty, square)])
     return observations
+
+
+def _interpolate_color_probe(api, scene=None):
+    receiver = api.VMobject(
+        color=api.WHITE,
+        fill_opacity=0.65,
+        stroke_color=api.GREEN,
+        stroke_opacity=0.5,
+        stroke_width=3,
+    )
+    start = api.VMobject(
+        color=api.RED,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_opacity=0.25,
+        stroke_width=2,
+    ).set_sheen_direction((-1.0, 0.0, 0.0))
+    end = api.VMobject(
+        color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_opacity=0.75,
+        stroke_width=6,
+    ).set_sheen_direction((1.0, 2.0, 0.0))
+    if scene is not None:
+        scene.add(receiver, start, end)
+    returned = receiver.interpolate_color(start, end, 0.25)
+
+    def rows(values):
+        return [[float(component) for component in row] for row in values]
+
+    return {
+        "returned_self": returned is receiver,
+        "fill": rows(receiver.get_fill_rgbas()),
+        "fill_opacity": float(receiver.get_fill_opacity()),
+        "stroke": rows(receiver.get_stroke_rgbas()),
+        "stroke_opacity": float(receiver.get_stroke_opacity()),
+        "stroke_width": float(receiver.get_stroke_width()),
+        "sheen_direction": [float(value) for value in receiver.get_sheen_direction()],
+    }
+
+
+def _vgroup_interpolation_probe(api, *, full_interpolation=False, scene=None):
+    receiver = api.VGroup(api.Dot())
+    start = api.VGroup(api.Dot())
+    end = api.VGroup(api.Dot())
+    receiver.set_style(
+        fill_color=api.WHITE,
+        fill_opacity=0.65,
+        stroke_color=api.GREEN,
+        stroke_width=3,
+        stroke_opacity=0.5,
+        background_stroke_color=api.BLACK,
+        background_stroke_width=0,
+        background_stroke_opacity=0.7,
+        family=False,
+    )
+    start.set_style(
+        fill_color=api.RED,
+        fill_opacity=0.2,
+        stroke_color=api.BLUE,
+        stroke_width=2,
+        stroke_opacity=0.25,
+        background_stroke_color=api.GREEN,
+        background_stroke_width=2,
+        background_stroke_opacity=0.2,
+        family=False,
+    ).set_sheen_direction((-1.0, 0.0, 0.0), family=False)
+    end.set_style(
+        fill_color=api.BLUE,
+        fill_opacity=0.8,
+        stroke_color=api.RED,
+        stroke_width=6,
+        stroke_opacity=0.75,
+        background_stroke_color=api.WHITE,
+        background_stroke_width=6,
+        background_stroke_opacity=0.6,
+        family=False,
+    ).set_sheen_direction((1.0, 2.0, 0.0), family=False)
+    if scene is not None:
+        scene.add(receiver, start, end)
+
+    child_before = [
+        receiver[0].get_fill_rgbas().tolist(),
+        receiver[0].get_stroke_rgbas().tolist(),
+    ]
+    operation = receiver.interpolate if full_interpolation else receiver.interpolate_color
+    returned = operation(start, end, 0.25)
+
+    def rows(values):
+        return [[float(component) for component in row] for row in values]
+
+    child_after = [
+        receiver[0].get_fill_rgbas().tolist(),
+        receiver[0].get_stroke_rgbas().tolist(),
+    ]
+    return {
+        "returned_self": returned is receiver,
+        "fill": rows(receiver.get_fill_rgbas()),
+        "stroke": rows(receiver.get_stroke_rgbas()),
+        "background_stroke": rows(receiver.get_stroke_rgbas(background=True)),
+        "stroke_width": float(receiver.get_stroke_width()),
+        "background_stroke_width": float(receiver.get_stroke_width(background=True)),
+        "sheen_direction": [float(value) for value in receiver.get_sheen_direction()],
+        "child_unchanged": child_before == child_after,
+    }
+
+
+def _mobject_interpolate_probe(api, scene=None):
+    receiver = api.Line(start=(-2, 0, 0), end=(-1, 0, 0), color=api.GREEN)
+    start = api.Line(start=(0, 0, 0), end=(3, 0, 0), color=api.RED)
+    end = api.Line(start=(4, 2, 0), end=(7, 2, 0), color=api.BLUE)
+    receiver.shift((10, 0, 0))
+    start.shift((1, 0, 0))
+    end.shift((3, -2, 0))
+    if scene is not None:
+        scene.add(receiver, start, end)
+    returned = receiver.interpolate(start, end, 0.25)
+    points = receiver.get_all_points()
+    if hasattr(points, "tolist"):
+        points = points.tolist()
+    return {
+        "returned_self": returned is receiver,
+        "points": [[float(component) for component in point[:2]] for point in points],
+        "stroke": [[float(component) for component in row]
+                   for row in receiver.get_stroke_rgbas()],
+        "stroke_width": float(receiver.get_stroke_width()),
+    }
 
 
 def _boolean_geometry(api):
@@ -1031,14 +4827,20 @@ def _boolean_geometry(api):
 
 
 def _path_smoothing(api):
+    import numpy as np
+
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.VMobject().set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
+    custom = api.VMobject()
+    custom._bezier_t_values = np.array([0.0, 0.25, 0.75, 1.0])
+    custom.set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
     closed = api.Square(side_length=2).shift(api.RIGHT * 2 + api.UP * 2)
     family = api.VGroup(source, closed)
     def observe():
         return [[[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()]
                 for value in (source, closed)]
-    result = [observe()]
+    result = [observe(), [[list(p)[:2] for p in column]
+                          for column in custom.get_anchors_and_handles()]]
     family.make_smooth()
     result.append(observe())
     family.make_jagged()
@@ -1059,6 +4861,11 @@ def _path_subcurves(api):
     path.start_new_path(point(6, 0)).add_line_to(point(8, 0))
     path.start_new_path(point(8, 0))
     result.append(observe(path))
+    pending = api.VMobject().start_new_path(point(1, 1))
+    result.append([pending.is_closed()])
+    custom_tolerance = api.VMobject(tolerance_for_point_equality=2e-5)
+    custom_tolerance.start_new_path(point(0, 0)).add_line_to(point(1e-5, 0))
+    result.append([custom_tolerance.is_closed()])
     return result
 
 
@@ -1095,6 +4902,563 @@ def _path_selection(api):
     return result
 
 
+def _curves_as_submobjects_probe(api, scene=None):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject(
+        stroke_color=api.BLUE,
+        stroke_width=3.0,
+        stroke_opacity=0.75,
+    ).start_new_path(point(0, 0))
+    source.add_cubic_bezier_curve_to(point(0, 2), point(2, 2), point(2, 0))
+    source.add_line_to(point(5, 0))
+    if scene is not None:
+        scene.add(source)
+
+    curves = api.CurvesAsSubmobjects(source)
+    if scene is not None:
+        scene.add(curves)
+    parts = curves.submobjects
+    return {
+        "part_count": len(parts),
+        "part_point_counts": [part.get_num_points() for part in parts],
+        "part_lengths": [_round_float(part.get_arc_length()) for part in parts],
+        "part_styles": [
+            [
+                _paint_rgb(part.get_stroke_color()),
+                _round_float(part.get_stroke_width()),
+                _round_float(part.get_stroke_opacity()),
+            ]
+            for part in parts
+        ],
+        "samples": [
+            _point_observation(curves.point_from_proportion(alpha))
+            for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
+        ],
+    }
+
+
+def _noon_curves_as_submobjects_live():
+    return _noon_live_scene_probe(
+        lambda scene: _curves_as_submobjects_probe(noon, scene)
+    )
+
+
+def _path_pieces(api):
+    source = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (2, 0, 0), (2, 2, 0)]
+    )
+    group = source.get_pieces(2)
+    return {
+        "type": type(group).__name__,
+        "pieces": [
+            {
+                "count": piece.get_num_points(),
+                "start": _point_observation(piece.get_start()),
+                "end": _point_observation(piece.get_end()),
+                "length": float(piece.get_arc_length()),
+            }
+            for piece in group.submobjects
+        ],
+        "zero_pieces": len(source.get_pieces(0).submobjects),
+        "negative_one_pieces": len(source.get_pieces(-1).submobjects),
+    }
+
+
+def _point_mobject_probe(api):
+    source = api.VMobject(
+        color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+    source.set_points_as_corners([(0, 0, 0), (2, 0, 0), (2, 2, 0)])
+    point = source.get_point_mobject((3, -1, 0))
+    center_point = source.get_point_mobject()
+    default = api.VectorizedPoint()
+    default.set_location((4, 5, 0))
+
+    def observe(value):
+        return {
+            "type": type(value).__name__,
+            "point_count": value.get_num_points(),
+            "location": _point_observation(value.get_location()),
+            "size": [float(value.width), float(value.height)],
+            "paint": [
+                _paint_rgb(value.get_fill_color()),
+                _paint_rgb(value.get_stroke_color()),
+                float(value.get_fill_opacity()),
+                float(value.get_stroke_opacity()),
+                float(value.get_stroke_width()),
+            ],
+        }
+
+    return {
+        "styled": observe(point),
+        "center": observe(center_point),
+        "direct": observe(default),
+    }
+
+
+def _paint_array_observation(value):
+    fill_rgbas = value.get_fill_rgbas()
+    stroke_rgbas = value.get_stroke_rgbas()
+    return {
+        "fill_rgbas": fill_rgbas.tolist(),
+        "fill_dtype": str(fill_rgbas.dtype),
+        "fill_colors": [_paint_rgb(color) for color in value.get_fill_colors()],
+        "fill_opacities": value.get_fill_opacities().tolist(),
+        "stroke_rgbas": stroke_rgbas.tolist(),
+        "stroke_dtype": str(stroke_rgbas.dtype),
+        "stroke_colors": [_paint_rgb(color) for color in value.get_stroke_colors()],
+        "stroke_opacities": value.get_stroke_opacities().tolist(),
+    }
+
+
+def _paint_array_probe(api):
+    styled = api.VMobject(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+    transparent_black = api.VectorizedPoint()
+    return {
+        "styled": _paint_array_observation(styled),
+        "transparent_black": _paint_array_observation(transparent_black),
+    }
+
+
+def _vgroup_root_paint_array_probe(api, scene=None):
+    child = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.RED,
+        stroke_opacity=0.5,
+        stroke_width=2,
+    ).start_new_path((0, 0, 0)).add_line_to(api.RIGHT)
+    family = api.VGroup(child)
+    family.set_style(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.BLUE,
+        stroke_width=4,
+        stroke_opacity=0.45,
+        family=False,
+    )
+    if scene is not None:
+        scene.add(family)
+    return {
+        "root": _paint_array_observation(family),
+        "child": _paint_array_observation(child),
+    }
+
+
+def _vmobject_init_colors_probe(api, scene=None):
+    def make_family():
+        first = api.Square(side_length=1).set_style(
+            fill_color=api.RED,
+            fill_opacity=0.2,
+            stroke_color=api.BLUE,
+            stroke_width=2,
+            stroke_opacity=0.4,
+        )
+        second = api.Square(side_length=1).set_style(
+            fill_color=api.YELLOW,
+            fill_opacity=0.3,
+            stroke_color=api.GREEN,
+            stroke_width=3,
+            stroke_opacity=0.5,
+        )
+        family = api.VGroup(first, second)
+        family.set_style(
+            fill_color=api.PURPLE,
+            fill_opacity=0.6,
+            stroke_color=api.ORANGE,
+            stroke_width=5,
+            stroke_opacity=0.7,
+            family=False,
+        )
+        first.set_background_stroke(color=api.BLUE, width=2, opacity=0.2)
+        second.set_background_stroke(color=api.RED, width=3, opacity=0.3)
+        family.set_background_stroke(color=api.GREEN, width=5, opacity=0.6, family=False)
+        if scene is not None:
+            scene.add(family)
+        return family, first, second
+
+    family, first, second = make_family()
+
+    style = _solid_paint_observation
+
+    before = {"root": style(family), "children": [style(first), style(second)]}
+    returned_self = family.init_colors() is family
+    propagated = {"root": style(family), "children": [style(first), style(second)]}
+
+    local, local_first, local_second = make_family()
+    before_local = {
+        "root": style(local),
+        "children": [style(local_first), style(local_second)],
+    }
+    local_returned_self = local.init_colors(propagate_colors=False) is local
+    non_propagated = {
+        "root": style(local),
+        "children": [style(local_first), style(local_second)],
+    }
+    return {
+        "propagated": {"returned_self": returned_self, "before": before,
+                       "after": propagated},
+        "family_false": {"returned_self": local_returned_self,
+                         "before": before_local, "after": non_propagated},
+    }
+
+
+def _cap_style_probe(api, scene=None):
+    cap_type = api.CapStyleType
+    cap_names = ("AUTO", "ROUND", "BUTT", "SQUARE")
+    caps = [getattr(cap_type, name) for name in cap_names]
+    default_value = api.VMobject()
+    if scene is not None:
+        scene.add(default_value)
+    constructed = []
+    for cap in caps:
+        value = api.VMobject(cap_style=cap)
+        if scene is not None:
+            scene.add(value)
+        constructed.append({"requested": cap.name, "observed": value.cap_style.name})
+
+    mutations = []
+    for cap in caps:
+        value = api.VMobject()
+        if scene is not None:
+            scene.add(value)
+        returned_self = value.set_cap_style(cap) is value
+        mutations.append({"requested": cap.name, "observed": value.cap_style.name,
+                          "returned_self": returned_self})
+
+    child = api.VMobject()
+    family = api.VGroup(child)
+    if scene is not None:
+        scene.add(family)
+    family_returned_self = family.set_cap_style(cap_type.SQUARE) is family
+    child_returned_self = child.set_cap_style(cap_type.BUTT) is child
+    return {
+        "default": default_value.cap_style.name,
+        "constructed": constructed,
+        "mutations": mutations,
+        "family": {
+            "root": family.cap_style.name,
+            "child": child.cap_style.name,
+            "root_returned_self": family_returned_self,
+            "child_returned_self": child_returned_self,
+        },
+    }
+
+
+def _shade_in_3d_probe(api, scene=None):
+    default_value = api.VMobject()
+    constructed = api.VMobject(shade_in_3d=False)
+    child = api.VMobject()
+    family = api.VGroup(child, shade_in_3d=False)
+    if scene is not None:
+        scene.add(default_value, constructed, family)
+    return {
+        "default": default_value.shade_in_3d,
+        "constructed": constructed.shade_in_3d,
+        "set_returns_self": default_value.set_shade_in_3d(False) is default_value,
+        "family_set_returns_self": family.set_shade_in_3d(False) is family,
+        "family_root": family.shade_in_3d,
+        "child_unchanged": child.shade_in_3d is False,
+    }
+
+
+def _generate_rgbas_array_probe(api):
+    value = api.VMobject()
+    cases = (
+        (None, 0.25),
+        ([api.RED, api.BLUE], 0.5),
+        (api.GREEN, [0.2, 0.8]),
+        (["RED", "#FFFF00"], [None, 0.6]),
+        ([(0.1, 0.25, 0.5), (255, 128, 0)], [0.3, 0.6]),
+        ([(0.1, 0.2, 0.3, 0.4), (0.9, 0.8, 0.7, 0.6)], [0.3, 0.5]),
+        (["#F08", "#11223380"], [0.2, 0.4]),
+        (SimpleNamespace(get_hex=lambda: "#123456"), 0.9),
+    )
+    result = []
+    for color, opacity in cases:
+        array = value.generate_rgbas_array(color, opacity)
+        result.append({
+            "values": [[_round_float(component) for component in row] for row in array],
+            "shape": list(array.shape),
+            "dtype": str(array.dtype),
+        })
+    return result
+
+
+def _update_rgbas_array_probe(api, scene=None):
+    value = api.VMobject(
+        fill_color=api.RED,
+        fill_opacity=0.25,
+        stroke_color=api.BLUE,
+        stroke_opacity=0.4,
+        stroke_width=3,
+    )
+    if scene is not None:
+        scene.add(value)
+
+    def style(obj):
+        return {
+            "fill_color": _paint_rgb(obj.get_fill_color()),
+            "fill_opacity": _round_float(obj.get_fill_opacity()),
+            "stroke_color": _paint_rgb(obj.get_stroke_color()),
+            "stroke_opacity": _round_float(obj.get_stroke_opacity()),
+            "stroke_width": _round_float(obj.get_stroke_width()),
+        }
+
+    before = style(value)
+    returned = [value.update_rgbas_array("fill_rgbas", api.YELLOW) is value]
+    after_fill_color = style(value)
+    returned.extend([
+        value.update_rgbas_array("fill_rgbas", opacity=0.75) is value,
+        value.update_rgbas_array("fill_rgbas") is value,
+        value.update_rgbas_array("stroke_rgbas", "#FF8000AA") is value,
+    ])
+    after_stroke_color = style(value)
+    returned.append(
+        value.update_rgbas_array("stroke_rgbas", opacity=[0.65]) is value
+    )
+    after = style(value)
+
+    child = api.VMobject(fill_color=api.RED, fill_opacity=0.2)
+    family = api.VGroup(child)
+    family.set_style(fill_color=api.BLUE, fill_opacity=0.6, family=False)
+    if scene is not None:
+        scene.add(family)
+    family_before = {"root": style(family), "child": style(child)}
+    family_returned = family.update_rgbas_array(
+        "fill_rgbas", color=api.GREEN, opacity=0.35
+    ) is family
+    family_after = {"root": style(family), "child": style(child)}
+    value.set_background_stroke(color=api.BLUE, width=4, opacity=0.2)
+    background_returns = [
+        value.update_rgbas_array("background_stroke_rgbas", color=api.GREEN) is value,
+        value.update_rgbas_array("background_stroke_rgbas", opacity=0.45) is value,
+        value.update_rgbas_array("background_stroke_rgbas") is value,
+    ]
+    background = {
+        "returns": background_returns,
+        "color": _paint_rgb(value.get_stroke_color(background=True)),
+        "width": _round_float(value.get_stroke_width(background=True)),
+        "opacity": _round_float(value.get_stroke_opacity(background=True)),
+    }
+    return {
+        "background": background,
+        "returns": returned,
+        "expected": {
+            "yellow": _paint_rgb(api.YELLOW),
+            "green": _paint_rgb(api.GREEN),
+        },
+        "before": before,
+        "after_fill_color": after_fill_color,
+        "after_stroke_color": after_stroke_color,
+        "after": after,
+        "family": {
+            "returned_self": family_returned,
+            "before": family_before,
+            "after": family_after,
+        },
+    }
+
+
+def _style_query_probe(api):
+    source = api.VMobject(
+        fill_color=api.GREEN,
+        fill_opacity=0.35,
+        stroke_color=api.RED,
+        stroke_opacity=0.6,
+        stroke_width=4,
+    )
+    default_mutator_returns_self = [
+        source.set_stroke(background=True) is source,
+        source.set_background_stroke() is source,
+        source.set_cap_style(api.CapStyleType.AUTO) is source,
+        source.set_sheen(0.0, (-1.0, 1.0, 0.0)) is source,
+        source.set_sheen_direction((-1.0, 1.0, 0.0)) is source,
+        source.rotate_sheen_direction(0.0) is source,
+    ]
+
+    def observe(value):
+        style = value.get_style()
+        simple = value.get_style(simple=True)
+        return {
+            "keys": sorted(style),
+            "types": {
+                "fill_color_list": isinstance(style["fill_color"], list),
+                "fill_opacity_array": getattr(style["fill_opacity"], "ndim", 0) > 0,
+                "stroke_color_list": isinstance(style["stroke_color"], list),
+                "stroke_opacity_array": getattr(style["stroke_opacity"], "ndim", 0) > 0,
+                "background_stroke_color_list": isinstance(style["background_stroke_color"], list),
+                "background_stroke_opacity_array": getattr(style["background_stroke_opacity"], "ndim", 0) > 0,
+                "sheen_direction_array": getattr(style["sheen_direction"], "ndim", 0) > 0,
+            },
+            "stroke_opacity": float(style["stroke_opacity"]),
+            "stroke_width": float(style["stroke_width"]),
+            "fill_colors": [_paint_rgb(color) for color in style["fill_color"]],
+            "fill_opacities": style["fill_opacity"].tolist(),
+            "stroke_colors": [_paint_rgb(color) for color in style["stroke_color"]],
+            "stroke_opacities": style["stroke_opacity"].tolist()
+            if getattr(style["stroke_opacity"], "ndim", 0) > 0
+            else float(style["stroke_opacity"]),
+            "background_stroke_colors": [
+                _paint_rgb(color) for color in style["background_stroke_color"]
+            ],
+            "background_stroke_width": float(style["background_stroke_width"]),
+            "background_stroke_opacity": style["background_stroke_opacity"].tolist()
+            if getattr(style["background_stroke_opacity"], "ndim", 0) > 0
+            else float(style["background_stroke_opacity"]),
+            "sheen_factor": float(style["sheen_factor"]),
+            "sheen_direction": [float(component) for component in style["sheen_direction"]],
+            "background_image": style["background_image"],
+            "simple": {
+                "fill_color": _paint_rgb(simple["fill_color"]),
+                "fill_opacity": float(simple["fill_opacity"]),
+                "stroke_color": _paint_rgb(simple["stroke_color"]),
+                "stroke_opacity": float(simple["stroke_opacity"]),
+                "stroke_width": float(simple["stroke_width"]),
+            },
+        }
+
+    full_style = source.get_style()
+    round_trip = api.VMobject().set_style(**full_style)
+    return {
+        "source": observe(source),
+        "round_trip": observe(round_trip),
+        "default_mutator_returns_self": default_mutator_returns_self,
+    }
+
+
+def _inactive_sheen_direction_style_probe(api):
+    omitted_factor = api.VMobject()
+    omitted_result = omitted_factor.set_style(sheen_direction=api.UP)
+    zero_factor = api.VMobject()
+    zero_result = zero_factor.set_style(
+        sheen_factor=0.0,
+        sheen_direction=api.RIGHT,
+    )
+
+    def observe(value, result):
+        return {
+            "returns_self": result is value,
+            "factor": float(value.get_sheen_factor()),
+            "direction": [float(component) for component in value.get_sheen_direction()],
+        }
+
+    return {
+        "omitted_factor": observe(omitted_factor, omitted_result),
+        "zero_factor": observe(zero_factor, zero_result),
+    }
+
+
+def _sheen_direction_probe(api, scene=None):
+    first = api.VMobject()
+    second = api.VMobject()
+    nested = api.VGroup(first, second)
+    root = api.VGroup(first, nested)
+    if scene is not None:
+        scene.add(root)
+
+    def direction(value):
+        return [float(component) for component in value.get_sheen_direction()]
+
+    recursive_result = root.set_sheen_direction((0.0, 1.0, 0.0), family=True)
+    recursive = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "second": direction(second),
+        "alias_identity": root.submobjects[0] is root.submobjects[1].submobjects[0],
+        "returns_self": recursive_result is root,
+    }
+    root_only_result = root.set_sheen_direction([1.0, 0.0], family=False)
+    root_only = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "returns_self": root_only_result is root,
+    }
+    rotate_result = root.rotate_sheen_direction(
+        api.PI / 2, axis=(0.0, 0.0, 1.0), family=True
+    )
+    rotated = {
+        "root": direction(root),
+        "nested": direction(nested),
+        "first": direction(first),
+        "second": direction(second),
+        "returns_self": rotate_result is root,
+    }
+    return {"recursive": recursive, "root_only": root_only, "rotated": rotated}
+
+
+def _sheen_direction_constructor_probe(api, scene=None):
+    two_dimensional = api.VMobject(sheen_factor=0.0, sheen_direction=(0.25, -0.5))
+    three_dimensional = api.VMobject(
+        sheen_factor=0.0, sheen_direction=(0.75, -1.0, 0.5)
+    )
+    if scene is not None:
+        scene.add(two_dimensional, three_dimensional)
+    return {
+        "two_dimensional": [
+            float(component) for component in two_dimensional.get_sheen_direction()
+        ],
+        "three_dimensional": [
+            float(component) for component in three_dimensional.get_sheen_direction()
+        ],
+        "factors": [
+            float(two_dimensional.get_sheen_factor()),
+            float(three_dimensional.get_sheen_factor()),
+        ],
+    }
+
+
+def _gradient_start_end_probe(api):
+    value = api.Rectangle(width=2, height=1).shift(0.4 * api.RIGHT + 0.2 * api.UP)
+    start, end = value.get_gradient_start_and_end_points()
+    return {
+        "start": [_round_float(component) for component in start],
+        "end": [_round_float(component) for component in end],
+    }
+
+
+def _background_image_default_probe(api):
+    donor = api.VMobject()
+    value = api.VMobject(fill_color=api.RED, stroke_color=api.BLUE)
+    match_returns_self = value.match_background_image(donor) is value
+    match_paint = [
+        _paint_rgb(value.get_fill_color()),
+        _paint_rgb(value.get_stroke_color()),
+    ]
+    color_returns_self = value.color_using_background_image(None) is value
+    color_paint = [
+        _paint_rgb(value.get_fill_color()),
+        _paint_rgb(value.get_stroke_color()),
+    ]
+    family = api.VGroup(api.Circle(color=api.RED), api.Square(color=api.BLUE))
+    family_returns_self = family.color_using_background_image(None) is family
+    family_paint = [
+        _paint_rgb(member.get_fill_color()) for member in family.submobjects
+    ]
+    return {
+        "match_returns_self": match_returns_self,
+        "match_paint": match_paint,
+        "color_returns_self": color_returns_self,
+        "color_paint": color_paint,
+        "family_returns_self": family_returns_self,
+        "family_paint": family_paint,
+        "background_images_none": [value.get_background_image() is None,
+                                    family.get_background_image() is None],
+    }
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -1116,7 +5480,260 @@ def _path_editing(api):
     original = path.copy()
     path.shift(api.RIGHT * 4).rotate(0.6)
     path.set_points_as_corners([(1, -1, 0), (3, -1, 0), (2, 1, 0), (1, -1, 0)])
-    return [[_object_observation(obj), list(obj.get_start())[:2], list(obj.get_end())[:2], obj.get_arc_length()] for obj in (path, original)]
+
+    def observe(value):
+        return {
+            "curves": value.get_num_curves(),
+            "start": _point_observation(value.get_start()),
+            "end": _point_observation(value.get_end()),
+            "anchors": [_point_observation(point) for point in value.get_anchors()],
+            "subpaths": [[_point_observation(point) for point in subpath]
+                         for subpath in value.get_subpaths()],
+            "curve_points": [
+                [_point_observation(point) for point in value.get_nth_curve_points(index)]
+                for index in range(value.get_num_curves())
+            ],
+        }
+
+    corners = api.VMobject().set_points_as_corners([(-2, 0, 0), (0, 0, 0)])
+    corners.add_points_as_corners([(1, 1, 0), (2, 0, 0)])
+
+    subpath = api.VMobject()
+    subpath.add_subpath([
+        [0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 1, 0],
+        [2, 1, 0], [3, 1, 0], [3, 2, 0], [4, 2, 0],
+    ])
+
+    anchors = api.VMobject().set_anchors_and_handles(
+        [(-1, 0, 0), (1, 0, 0)],
+        [(-1, 1, 0), (1, 1, 0)],
+        [(0, 1, 0), (2, 1, 0)],
+        [(0, 0, 0), (2, 0, 0)],
+    )
+
+    smooth_default = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_default.add_smooth_curve_to((6, 3, 0))
+
+    smooth_explicit = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    smooth_explicit.add_smooth_curve_to((6, 0, 0), (7, -2, 0))
+
+    smooth_after_cubic = api.VMobject().start_new_path(api.LEFT * 3)
+    smooth_after_cubic.add_cubic_bezier_curve_to(
+        api.LEFT * 2 + api.UP * 2,
+        api.LEFT + api.UP * 2,
+        api.UP,
+    )
+    smooth_after_cubic.add_smooth_curve_to(api.RIGHT * 3 + api.UP)
+
+    smooth_pending = api.VMobject()
+    smooth_pending.start_new_path(api.RIGHT * 2)
+    smooth_pending.add_smooth_curve_to(api.UP * 20 + api.RIGHT * 4)
+
+    destination = api.VMobject().set_points_as_corners([(-1, 0, 0), (0, 0, 0)])
+    destination.start_new_path((1, 0, 0))
+    source = api.VMobject().set_points_as_corners([(3, 0, 0), (4, 1, 0)])
+    destination.append_vectorized_mobject(source)
+
+    scaled_line = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    scaled_line.scale_handle_to_anchor_distances(0.5)
+    scaled_quadratic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_quadratic.add_quadratic_bezier_curve_to(api.UP * 3, api.RIGHT * 6)
+    scaled_quadratic.scale_handle_to_anchor_distances(0.5)
+    scaled_cubic = api.VMobject().start_new_path(api.ORIGIN)
+    scaled_cubic.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    scaled_cubic.scale_handle_to_anchor_distances(1.5)
+    scaled_closed = api.VMobject().set_points_as_corners(
+        [(0, 0, 0), (3, 0, 0), (3, 3, 0)]
+    ).close_path()
+    scaled_closed.scale_handle_to_anchor_distances(0.25)
+    unchanged_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    unchanged_handles.scale_handle_to_anchor_distances(1.0)
+    collapsed_handles = api.VMobject().set_points_as_corners([(0, 0, 0), (3, 0, 0)])
+    collapsed_handles.scale_handle_to_anchor_distances(0.0)
+    reversed_handles = api.VMobject().start_new_path(api.ORIGIN)
+    reversed_handles.add_cubic_bezier_curve_to(
+        api.RIGHT * 2 + api.UP,
+        api.RIGHT * 4 + api.UP,
+        api.RIGHT * 6,
+    )
+    reversed_handles.scale_handle_to_anchor_distances(-0.5)
+
+    point_comparison = api.VMobject()
+    point_comparison.tolerance_for_point_equality = 2.0e-4
+    point_equality = {
+        "absolute_tolerance": point_comparison.consider_points_equals(
+            [0.0, 0.0, 0.0], [1.5e-4, 0.0, 0.0]
+        ),
+        "relative_tolerance": point_comparison.consider_points_equals(
+            [100_000.0, 0.0, 0.0], [100_001.0, 0.0, 0.0]
+        ),
+        "relative_direction": [
+            point_comparison.consider_points_equals(
+                [100_000.0, 0.0, 0.0], [100_001.000205, 0.0, 0.0]
+            ),
+            point_comparison.consider_points_equals(
+                [100_001.000205, 0.0, 0.0], [100_000.0, 0.0, 0.0]
+            ),
+        ],
+        "nan": point_comparison.consider_points_equals(
+            [float("nan"), 0.0, 0.0], [float("nan"), 0.0, 0.0]
+        ),
+        "matching_infinity": point_comparison.consider_points_equals(
+            [float("inf"), 0.0, 0.0], [float("inf"), 0.0, 0.0]
+        ),
+        "two_dimensional_ignores_z": point_comparison.consider_points_equals_2d(
+            [1.0, 2.0, 0.0], [1.0, 2.0, 100.0]
+        ),
+    }
+    split_points = [
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0],
+        [3.0000005, 0.0, 0.0], [4.0, 0.0, 0.0], [5.0, 0.0, 0.0], [6.0, 0.0, 0.0],
+        [6.0, 0.0, 0.1], [7.0, 0.0, 0.1], [8.0, 0.0, 0.1], [9.0, 0.0, 0.1],
+        [9.0, 0.0, 0.1], [10.0, 0.0, 0.1], [11.0, 0.0, 0.1], [12.0, 0.0, 0.1],
+    ]
+    manim_reference = getattr(api, "__name__", None) == "manim"
+    if manim_reference:
+        import numpy as np
+
+        split_points = np.asarray(split_points)
+    nonfinite_split_points = [
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, float("inf")],
+        [3.0, 0.0, float("inf")], [4.0, 0.0, 0.0], [5.0, 0.0, 0.0], [6.0, 0.0, float("nan")],
+        [6.0, 0.0, float("nan")], [7.0, 0.0, 0.0], [8.0, 0.0, 0.0], [9.0, 0.0, 0.0],
+    ]
+    if manim_reference:
+        nonfinite_split_points = np.asarray(nonfinite_split_points)
+    overflow_split_points = [
+        [-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.7e308, 0.0, 0.0],
+        [1.7e308, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0],
+    ]
+    if manim_reference:
+        overflow_split_points = np.asarray(overflow_split_points)
+    split_query = api.VMobject()
+    split_query.tolerance_for_point_equality = 1.0e-6
+    overflow_query = api.VMobject()
+    overflow_query.tolerance_for_point_equality = float("inf")
+
+    def as_index_rows(indices):
+        return indices.tolist() if hasattr(indices, "tolist") else indices
+
+    subpath_splits = {
+        "three_dimensional": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points)
+        ),
+        "two_dimensional": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points, n_dims=2)
+        ),
+        "negative_dimension_slice": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points, n_dims=-1)
+        ),
+        "short_input": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(split_points[:3])
+        ),
+        "nonfinite_boundaries": as_index_rows(
+            split_query.get_subpath_split_indices_from_points(nonfinite_split_points)
+        ),
+        "overflowing_difference": as_index_rows(
+            overflow_query.get_subpath_split_indices_from_points(overflow_split_points)
+        ),
+    }
+    cubic_tuple_points = [
+        [float(index), float(index + 1), float(index + 2)] for index in range(10)
+    ]
+    if manim_reference:
+        cubic_tuple_points = np.asarray(cubic_tuple_points)
+    cubic_tuple_query = api.VMobject()
+    custom_stride_query = api.VMobject()
+    custom_stride_query.n_points_per_cubic_curve = 3
+
+    def as_nested_list(value):
+        return value.tolist() if hasattr(value, "tolist") else value
+
+    cubic_tuple_groups = {
+        "generated": [
+            as_nested_list(group)
+            for group in cubic_tuple_query.gen_cubic_bezier_tuples_from_points(
+                cubic_tuple_points
+            )
+        ],
+        "array": as_nested_list(
+            cubic_tuple_query.get_cubic_bezier_tuples_from_points(cubic_tuple_points)
+        ),
+        "custom_stride": as_nested_list(
+            custom_stride_query.get_cubic_bezier_tuples_from_points(cubic_tuple_points)
+        ),
+    }
+    subpath_method_points = [
+        [0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0],
+        [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0],
+        [6, 0, 1], [7, 0, 1], [8, 0, 1], [9, 0, 1],
+        [10, 0, 2],
+    ]
+    if manim_reference:
+        subpath_method_points = np.asarray(subpath_method_points)
+    subpath_method_query = api.VMobject()
+    subpath_method_groups = {
+        "full_dimensions": [
+            as_nested_list(group)
+            for group in subpath_method_query.get_subpaths_from_points(
+                subpath_method_points
+            )
+        ],
+        "two_dimensions": [
+            as_nested_list(group)
+            for group in subpath_method_query.gen_subpaths_from_points_2d(
+                subpath_method_points
+            )
+        ],
+        "custom_stride": [
+            as_nested_list(group)
+            for group in custom_stride_query.get_subpaths_from_points(
+                cubic_tuple_points
+            )
+        ],
+    }
+
+    return {
+        "replacement": [[_object_observation(obj), observe(obj)] for obj in (path, original)],
+        "append_corners": observe(corners),
+        "subpath": observe(subpath),
+        "set_anchors_and_handles": observe(anchors),
+        "smooth_curve_default_handle": observe(smooth_default),
+        "smooth_curve_explicit_handle": observe(smooth_explicit),
+        "smooth_curve_after_cubic": observe(smooth_after_cubic),
+        "smooth_curve_pending_subpath": observe(smooth_pending),
+        "append_vectorized_mobject": observe(destination),
+        "scaled_line_handles": observe(scaled_line),
+        "scaled_quadratic_handles": observe(scaled_quadratic),
+        "scaled_cubic_handles": observe(scaled_cubic),
+        "scaled_closed_handles": observe(scaled_closed),
+        "unit_handle_scale": observe(unchanged_handles),
+        "zero_handle_scale": observe(collapsed_handles),
+        "negative_handle_scale": observe(reversed_handles),
+        "point_equality": point_equality,
+        "subpath_split_indices": subpath_splits,
+        "cubic_bezier_tuple_groups": cubic_tuple_groups,
+        "subpath_point_groups": subpath_method_groups,
+    }
+
+
+def _set_points_as_corners_custom_constructor_samples(api):
+    import numpy as np
+
+    value = api.VMobject()
+    value._bezier_t_values = np.array([0.0, 0.25, 0.75, 1.0])
+    value.set_points_as_corners([(0, 0, 0), (2, 0, 0), (2, 2, 0)])
+    return {
+        "points": [_point_observation(point) for point in value.get_all_points()],
+        "subpaths": [
+            [_point_observation(point) for point in subpath]
+            for subpath in value.get_subpaths()
+        ],
+    }
 
 
 def _point_matching(api):
@@ -1222,24 +5839,146 @@ FIXTURES = [
     *[Fixture(f"riemann_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _riemann_probe(noon, c, scene)),
               lambda c=case: _riemann_probe(manim, c), tolerance=2e-5)
       for case in ("center", "right", "bounded", "blend", "unsigned")],
-    # Manim's per-glyph SVG styling perturbs the measured width by ~2.84e-5
-    # relative for this fixture, even though changing paint cannot change the
-    # shaped glyphs. Keep this tolerance local so meaningful layout drift still
-    # fails the default geometry comparison everywhere else.
+    # Manim's per-glyph SVG styling perturbs the measured width by ~3.55e-5
+    # relative in the pinned local reference environment, even though changing
+    # paint cannot change the shaped glyphs. Keep this tolerance local so
+    # meaningful layout drift still fails the default geometry comparison.
     Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
-            lambda: _text_range_color_observation(manim), tolerance=3e-5),
+            lambda: _text_range_color_observation(manim), tolerance=4e-5),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
     Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
     Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
+    Fixture("interpolate_color", lambda: _interpolate_color_probe(noon),
+            lambda: _interpolate_color_probe(manim), 1e-5),
+    Fixture("interpolate_color_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _interpolate_color_probe(noon, scene)
+            ),
+            lambda: _interpolate_color_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate_color",
+            lambda: _vgroup_interpolation_probe(noon),
+            lambda: _vgroup_interpolation_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate_color_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_interpolation_probe(noon, scene=scene)
+            ),
+            lambda: _vgroup_interpolation_probe(manim), 1e-5),
+    Fixture("mobject_interpolate", lambda: _mobject_interpolate_probe(noon),
+            lambda: _mobject_interpolate_probe(manim), 1e-5),
+    Fixture("mobject_interpolate_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _mobject_interpolate_probe(noon, scene)
+            ),
+            lambda: _mobject_interpolate_probe(manim), 1e-5),
+    Fixture("vgroup_interpolate",
+            lambda: _vgroup_interpolation_probe(noon, full_interpolation=True),
+            lambda: _vgroup_interpolation_probe(manim, full_interpolation=True), 1e-5),
+    Fixture("vgroup_interpolate_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_interpolation_probe(
+                    noon, full_interpolation=True, scene=scene
+                )
+            ),
+            lambda: _vgroup_interpolation_probe(manim, full_interpolation=True), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
+    Fixture("path_pieces", lambda: _path_pieces(noon), lambda: _path_pieces(manim), 1e-5),
+    Fixture("point_mobject", lambda: _point_mobject_probe(noon), lambda: _point_mobject_probe(manim), 1e-5),
+    Fixture("paint_arrays", lambda: _paint_array_probe(noon), lambda: _paint_array_probe(manim), 1e-5),
+    Fixture("vgroup_root_paint_arrays",
+            lambda: _vgroup_root_paint_array_probe(noon),
+            lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
+    Fixture("vgroup_root_paint_arrays_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vgroup_root_paint_array_probe(noon, scene)
+            ),
+            lambda: _vgroup_root_paint_array_probe(manim), 1e-5),
+    Fixture("recursive_family_paint", lambda: _recursive_family_paint_probe(noon),
+            lambda: _recursive_family_paint_probe(manim), 1e-5),
+    Fixture("recursive_family_paint_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _recursive_family_paint_probe(noon, scene)
+            ), lambda: _recursive_family_paint_probe(manim), 1e-5),
+    Fixture("recursive_family_fade", lambda: _recursive_family_fade_probe(noon),
+            lambda: _recursive_family_fade_probe(manim), 1e-5),
+    Fixture("recursive_family_fade_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _recursive_family_fade_probe(noon, scene)
+            ), lambda: _recursive_family_fade_probe(manim), 1e-5),
+    Fixture("cap_style", lambda: _cap_style_probe(noon), lambda: _cap_style_probe(manim)),
+    Fixture("cap_style_live",
+            lambda: _noon_live_scene_probe(lambda scene: _cap_style_probe(noon, scene)),
+            lambda: _cap_style_probe(manim)),
+    Fixture("shade_in_3d",
+            lambda: _shade_in_3d_probe(noon),
+            lambda: _shade_in_3d_probe(manim)),
+    Fixture("shade_in_3d_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _shade_in_3d_probe(noon, scene)
+            ),
+            lambda: _shade_in_3d_probe(manim)),
+    Fixture("generate_rgbas_array",
+            lambda: _generate_rgbas_array_probe(noon),
+            lambda: _generate_rgbas_array_probe(manim)),
+    Fixture("update_rgbas_array",
+            lambda: _update_rgbas_array_probe(noon),
+            lambda: _update_rgbas_array_probe(manim), 1e-5),
+    Fixture("update_rgbas_array_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _update_rgbas_array_probe(noon, scene)
+            ),
+            lambda: _update_rgbas_array_probe(manim), 1e-5),
+    Fixture("vmobject_init_colors",
+            lambda: _vmobject_init_colors_probe(noon),
+            lambda: _vmobject_init_colors_probe(manim), 1e-5),
+    Fixture("vmobject_init_colors_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _vmobject_init_colors_probe(noon, scene)
+            ),
+            lambda: _vmobject_init_colors_probe(manim), 1e-5),
+    Fixture(
+        "plain_group_fade_family_false",
+        lambda: _plain_group_nonrecursive_fade_probe(noon),
+        lambda: _plain_group_nonrecursive_fade_probe(manim),
+    ),
+    Fixture(
+        "plain_group_fade_family_false_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _plain_group_nonrecursive_fade_probe(noon, scene)
+        ),
+        lambda: _plain_group_nonrecursive_fade_probe(manim),
+    ),
+    Fixture(
+        "vgroup_fade_family_false",
+        lambda: _vgroup_nonrecursive_fade_probe(noon),
+        lambda: _vgroup_nonrecursive_fade_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_fade_family_false_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _vgroup_nonrecursive_fade_probe(noon, scene)
+        ),
+        lambda: _vgroup_nonrecursive_fade_probe(manim),
+        1e-5,
+    ),
+    Fixture("style_queries", lambda: _style_query_probe(noon), lambda: _style_query_probe(manim), 1e-5),
+    Fixture("gradient_start_end", lambda: _gradient_start_end_probe(noon),
+            lambda: _gradient_start_end_probe(manim), 1e-5),
+    Fixture("background_image_default", lambda: _background_image_default_probe(noon),
+            lambda: _background_image_default_probe(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
+    Fixture("curves_as_submobjects", lambda: _curves_as_submobjects_probe(noon),
+            lambda: _curves_as_submobjects_probe(manim), 1e-5),
+    Fixture("curves_as_submobjects_live", _noon_curves_as_submobjects_live,
+            lambda: _curves_as_submobjects_probe(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
+    Fixture("set_points_as_corners_custom_constructor_samples", lambda: _set_points_as_corners_custom_constructor_samples(noon), lambda: _set_points_as_corners_custom_constructor_samples(manim), 1e-5),
     Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
     Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),
     Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),
@@ -1247,18 +5986,216 @@ FIXTURES = [
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
+    Fixture("family_own_paint", lambda: _family_own_paint_probe(noon), lambda: _family_own_paint_probe(manim), 1e-5),
+    Fixture(
+        "family_own_paint_live",
+        lambda: _noon_live_scene_probe(lambda _scene: _family_own_paint_probe(noon)),
+        lambda: _family_own_paint_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "family_own_paint_play_live",
+        lambda: _family_own_paint_play_probe(noon),
+        lambda: _family_own_paint_play_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_copy_target",
+        lambda: _vgroup_root_style_copy_target_probe(noon),
+        lambda: _vgroup_root_style_copy_target_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_copy_target_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _vgroup_root_style_copy_target_probe(noon, scene)
+        ),
+        lambda: _vgroup_root_style_copy_target_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_play",
+        lambda: _vgroup_root_style_play_probe(noon),
+        lambda: _vgroup_root_style_play_probe(manim),
+        1e-5,
+    ),
+    Fixture(
+        "vgroup_root_style_play_live",
+        lambda: _noon_live_scene_probe(
+            lambda scene: _vgroup_root_style_play_probe(noon, scene)
+        ),
+        lambda: _vgroup_root_style_play_probe(manim),
+        1e-5,
+    ),
     Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
+    Fixture("cubic_bezier_live",
+            lambda: _noon_live_scene_probe(lambda scene: _cubic_bezier_probe(noon, scene)),
+            lambda: _cubic_bezier_probe(manim), 1e-5),
     Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
+    Fixture("family_point_counts", lambda: _family_point_count_probe(noon),
+            lambda: _family_point_count_probe(manim)),
+    Fixture("family_point_counts_live",
+            lambda: _noon_live_scene_probe(lambda scene: _family_point_count_probe(noon, scene)),
+            lambda: _family_point_count_probe(manim)),
+    Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
+    Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
+    Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),
+            lambda: _inverse_endpoint_parameters(manim), 0.0),
+    Fixture("inverse_endpoint_parameters_live",
+            lambda: _noon_live_scene_probe(lambda scene: _inverse_endpoint_parameters(noon, scene)),
+            lambda: _inverse_endpoint_parameters(manim), 0.0),
+    Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
+    Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
+    Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),
+    Fixture("raw_point_line_custom_samples", lambda: _raw_point_line_custom_samples(noon), lambda: _raw_point_line_custom_samples(manim), 1e-5),
+    Fixture("raw_point_smooth_curve_appends", lambda: _raw_point_smooth_curve_appends(noon), lambda: _raw_point_smooth_curve_appends(manim), 1e-5),
+    Fixture("raw_point_custom_stride_curve_appends", lambda: _raw_point_custom_stride_curve_appends(noon), lambda: _raw_point_custom_stride_curve_appends(manim), 1e-5),
+    Fixture("raw_point_custom_stride_corners", lambda: _raw_point_custom_stride_corners(noon), lambda: _raw_point_custom_stride_corners(manim), 1e-5),
+    Fixture("raw_point_custom_stride_vectorized_append", lambda: _raw_point_custom_stride_vectorized_append(noon), lambda: _raw_point_custom_stride_vectorized_append(manim), 1e-5),
+    Fixture("raw_point_custom_stride_close_path", lambda: _raw_point_custom_stride_close_path(noon), lambda: _raw_point_custom_stride_close_path(manim), 1e-5),
+    Fixture("nth_curve_point_queries", lambda: _nth_curve_point_queries(noon), lambda: _nth_curve_point_queries(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),
     Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
+    Fixture("inactive_sheen_direction_style",
+            lambda: _inactive_sheen_direction_style_probe(noon),
+            lambda: _inactive_sheen_direction_style_probe(manim)),
+    Fixture("sheen_direction",
+            lambda: _sheen_direction_probe(noon),
+            lambda: _sheen_direction_probe(manim), 1e-5),
+    Fixture("sheen_direction_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _sheen_direction_probe(noon, scene)
+            ),
+            lambda: _sheen_direction_probe(manim), 1e-5),
+    Fixture("sheen_direction_constructor",
+            lambda: _sheen_direction_constructor_probe(noon),
+            lambda: _sheen_direction_constructor_probe(manim), 1e-5),
+    Fixture("sheen_direction_constructor_live",
+            lambda: _noon_live_scene_probe(
+                lambda scene: _sheen_direction_constructor_probe(noon, scene)
+            ),
+            lambda: _sheen_direction_constructor_probe(manim), 1e-5),
 
 
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
+    Fixture("group_insert", _noon_family_insert, _manim_family_insert),
+    Fixture("group_insert_live", _noon_family_insert_live, _manim_family_insert),
+    Fixture("group_add_to_back", _noon_family_add_to_back, _manim_family_add_to_back),
+    Fixture("group_add_to_back_live", _noon_family_add_to_back_live, _manim_family_add_to_back),
+    Fixture("group_invert_direct", _noon_family_invert_direct, _manim_family_invert_direct),
+    Fixture("group_invert_direct_live", _noon_family_invert_direct_live, _manim_family_invert_direct),
+    Fixture("group_invert_recursive", _noon_family_invert_recursive, _manim_family_invert_recursive),
+    Fixture("group_invert_recursive_live", _noon_family_invert_recursive_live, _manim_family_invert_recursive),
+    Fixture("group_sort_default", _noon_family_sort, lambda: _family_sort(manim)),
+    Fixture("group_sort_default_live", _noon_family_sort_live, lambda: _family_sort(manim)),
+    Fixture("group_sort_point_key", _noon_family_sort_point_key, _manim_family_sort_point_key),
+    Fixture("group_sort_point_key_live", _noon_family_sort_point_key_live, _manim_family_sort_point_key),
+    Fixture("group_sort_submobjects_key", _noon_family_sort_alias, _manim_family_sort_alias),
+    Fixture("group_sort_submobjects_key_live", _noon_family_sort_alias_live, _manim_family_sort_alias),
+    Fixture("group_shuffle", _noon_family_shuffle, _manim_family_shuffle),
+    Fixture("group_shuffle_live", _noon_family_shuffle_live, _manim_family_shuffle),
+    Fixture("group_shuffle_submobjects", _noon_family_shuffle_alias, _manim_family_shuffle_alias),
+    Fixture("group_shuffle_submobjects_live", _noon_family_shuffle_alias_live, _manim_family_shuffle_alias),
+    Fixture("family_reverse_points", _noon_family_reverse_points, _manim_family_reverse_points),
+    Fixture("family_reverse_points_live", _noon_family_reverse_points_live, _manim_family_reverse_points),
+    Fixture("family_repeat_points", _noon_family_repeat_points, _manim_family_repeat_points),
+    Fixture("family_repeat_points_live", _noon_family_repeat_points_live, _manim_family_repeat_points),
+    Fixture("family_space_out_submobjects", _noon_family_space_out_submobjects, _manim_family_space_out_submobjects),
+    Fixture("family_space_out_submobjects_live", _noon_family_space_out_submobjects_live, _manim_family_space_out_submobjects),
+    Fixture("family_frame_methods", _noon_family_frame_methods, _manim_family_frame_methods),
+    Fixture("family_frame_methods_live", _noon_family_frame_methods_live, _manim_family_frame_methods),
+    Fixture("mobject_get_pieces", _noon_get_pieces, _manim_get_pieces),
+    Fixture("mobject_get_pieces_live", _noon_get_pieces_live, _manim_get_pieces),
+    Fixture("mobject_z_index_reference_point", _noon_z_index_reference, _manim_z_index_reference),
+    Fixture("mobject_z_index_reference_point_live", _noon_z_index_reference_live, _manim_z_index_reference),
+    Fixture("family_position_function_methods", _noon_family_position_function_methods, _manim_family_position_function_methods),
+    Fixture("family_position_function_methods_live", _noon_family_position_function_methods_live, _manim_family_position_function_methods),
+    Fixture("put_start_and_end_on", _noon_put_start_and_end_on, _manim_put_start_and_end_on),
+    Fixture("put_start_and_end_on_live", _noon_put_start_and_end_on_live, _manim_put_start_and_end_on),
+    Fixture("reduce_across_dimension", _noon_reduce_across_dimension, _manim_reduce_across_dimension),
+    Fixture("reduce_across_dimension_live", _noon_reduce_across_dimension_live, _manim_reduce_across_dimension),
+    Fixture("object_point_reduction", _noon_object_point_reduction, _manim_object_point_reduction),
+    Fixture("object_point_reduction_live", _noon_object_point_reduction_live, _manim_object_point_reduction),
+    Fixture("object_split_layout_index", _noon_object_split_layout_index, _manim_object_split_layout_index),
+    Fixture("object_split_layout_index_live", _noon_object_split_layout_index_live, _manim_object_split_layout_index),
+    Fixture("get_merged_array_points", _noon_get_merged_points, _manim_get_merged_points),
+    Fixture("get_merged_array_points_live", _noon_get_merged_points_live, _manim_get_merged_points),
+    Fixture("apply_over_attr_arrays",
+            _noon_apply_over_attr_arrays, _manim_apply_over_attr_arrays),
+    Fixture("apply_over_attr_arrays_live",
+            _noon_apply_over_attr_arrays_live, _manim_apply_over_attr_arrays),
+    Fixture("point_function_transforms",
+            _noon_point_function_transforms,
+            _manim_point_function_transforms,
+            1e-5),
+    Fixture("point_function_transforms_live",
+            _noon_point_function_transforms_live,
+            _manim_point_function_transforms,
+            1e-5),
+    Fixture("apply_matrix", _noon_apply_matrix, _manim_apply_matrix, 1e-5),
+    Fixture("apply_matrix_live", _noon_apply_matrix_live, _manim_apply_matrix, 1e-5),
+    Fixture("animation_override_registry",
+            _noon_animation_override_registry,
+            _manim_animation_override_registry),
+    Fixture("mobject_lifecycle_hooks",
+            _noon_mobject_lifecycle_hooks,
+            _manim_mobject_lifecycle_hooks),
+    Fixture("mobject_set_attributes",
+            _noon_mobject_set_attributes,
+            _manim_mobject_set_attributes),
+    Fixture("mobject_base_path_methods",
+            _noon_mobject_base_path_methods,
+            _manim_mobject_base_path_methods),
+    Fixture("mobject_base_layout_methods",
+            _noon_mobject_base_layout_methods,
+            _manim_mobject_base_layout_methods),
+    Fixture("mobject_depth_methods",
+            _noon_mobject_depth_methods,
+            _manim_mobject_depth_methods),
+    Fixture("generic_dimension_fitting", _noon_generic_dimension_fitting,
+            _manim_generic_dimension_fitting, 1e-5),
+    Fixture("generic_dimension_fitting_live", _noon_generic_dimension_fitting_live,
+            _manim_generic_dimension_fitting, 1e-5),
+    Fixture("resource_dimension_fitting", _noon_resource_dimension_fitting,
+            _manim_resource_dimension_fitting, 1e-5),
+    Fixture("resource_dimension_fitting_live", _noon_resource_dimension_fitting_live,
+            _manim_resource_dimension_fitting, 1e-5),
+    Fixture("mobject_z_index_by_z",
+            _noon_mobject_z_index_by_z,
+            _manim_mobject_z_index_by_z),
+    Fixture("mobject_surround",
+            _noon_mobject_surround,
+            _manim_mobject_surround,
+            1e-5),
+    Fixture("mobject_surround_live",
+            _noon_mobject_surround_live,
+            _manim_mobject_surround_live,
+            1e-5),
+    Fixture("circle_surround", _noon_circle_surround, _manim_circle_surround, 1e-5),
+    Fixture("circle_surround_live", _noon_circle_surround_live, _manim_circle_surround, 1e-5),
+    Fixture("mobject_add_background_rectangle",
+            _noon_mobject_add_background_rectangle,
+            _manim_mobject_add_background_rectangle,
+            1e-5),
+    Fixture("mobject_add_background_rectangle_live",
+            _noon_mobject_add_background_rectangle_live,
+            _manim_mobject_add_background_rectangle,
+            1e-5),
+    Fixture("mobject_match_z",
+            _noon_mobject_match_z,
+            _manim_mobject_match_z,
+            1e-5),
+    Fixture("mobject_match_z_live",
+            _noon_mobject_match_z_live,
+            _manim_mobject_match_z,
+            1e-5),
+    Fixture("group_arrange_submobjects", _noon_family_arrange_submobjects, _manim_family_arrange_submobjects),
+    Fixture("group_arrange_submobjects_live", _noon_family_arrange_submobjects_live, _manim_family_arrange_submobjects),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
@@ -1285,13 +6222,62 @@ FIXTURES = [
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
     Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
     Fixture("next_to", _noon_next_to, _manim_next_to),
+    Fixture("next_to_live", _noon_next_to_live, _manim_next_to_live),
+    Fixture("next_to_point_live", _noon_next_to_point_live, _manim_next_to_point_live),
     Fixture("align_to_top", _noon_align_to_top, _manim_align_to_top),
+    Fixture("align_to_top_live", _noon_align_to_top_live, _manim_align_to_top),
+    Fixture("align_to_point_right", _noon_align_to_point_right, _manim_align_to_point_right),
+    Fixture("align_to_point_right_live", _noon_align_to_point_right_live, _manim_align_to_point_right),
+    Fixture("align_to_group_top", _noon_align_to_group_top, _manim_align_to_group_top),
+    Fixture("align_to_group_top_live", _noon_align_to_group_top_live, _manim_align_to_group_top),
     Fixture("to_edge", _noon_to_edge, _manim_to_edge),
+    Fixture("to_edge_live", _noon_to_edge_live, _manim_to_edge),
     Fixture("to_corner", _noon_to_corner, _manim_to_corner),
+    Fixture("to_corner_live", _noon_to_corner_live, _manim_to_corner),
+    Fixture("align_on_border", _noon_align_on_border, _manim_align_on_border),
+    Fixture("align_on_border_live", _noon_align_on_border_live, _manim_align_on_border),
     Fixture("vgroup_arrange", _noon_arrange, _manim_arrange),
     Fixture("set_xy", _noon_set_xy, _manim_set_xy),
+    Fixture("set_z_zero", _noon_set_z_zero, _manim_set_z_zero),
+    Fixture("apply_to_family", lambda: _apply_to_family_probe(noon),
+            lambda: _apply_to_family_probe(manim)),
+    Fixture("family_updaters", lambda: _family_updaters_probe(noon),
+            lambda: _family_updaters_probe(manim)),
+    Fixture("time_based_updaters", lambda: _time_based_updaters_probe(noon),
+            lambda: _time_based_updaters_probe(manim)),
+    Fixture("always_builder", lambda: _always_builder_probe(noon),
+            lambda: _always_builder_probe(manim)),
+    Fixture("match_updaters", lambda: _match_updaters_probe(noon),
+            lambda: _match_updaters_probe(manim)),
+    Fixture("mobject_update", lambda: _mobject_update_probe(noon),
+            lambda: _mobject_update_probe(manim)),
+    Fixture("updater_suspension", lambda: _updater_suspension_probe(noon),
+            lambda: _updater_suspension_probe(manim)),
+    Fixture("to_original_color", lambda: _to_original_color_probe(noon),
+            lambda: _to_original_color_probe(manim)),
+    Fixture("base_mobject_color_gradient", lambda: _base_mobject_color_gradient_probe(noon),
+            lambda: _base_mobject_color_gradient_probe(manim)),
+    Fixture("base_mobject_set_color", lambda: _base_mobject_set_color_probe(noon),
+            lambda: _base_mobject_set_color_probe(manim)),
+    Fixture("radial_family_gradient", lambda: _radial_family_gradient_probe(noon),
+            lambda: _radial_family_gradient_probe(manim)),
+    Fixture("family_fade_to", lambda: _family_fade_to_probe(noon),
+            lambda: _family_fade_to_probe(manim)),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
+    Fixture("group_add_n_more_submobjects", _noon_group_add_n_more_submobjects, _manim_group_add_n_more_submobjects),
+    Fixture("group_add_n_more_submobjects_live", _noon_group_add_n_more_submobjects_live, _manim_group_add_n_more_submobjects),
+    Fixture("group_align_submobjects", _noon_group_align_submobjects, _manim_group_align_submobjects),
+    Fixture("group_align_submobjects_live", _noon_group_align_submobjects_live, _manim_group_align_submobjects),
+    Fixture("leaf_arrange_submobjects", _noon_leaf_arrange_submobjects, _manim_leaf_arrange_submobjects),
+    Fixture("leaf_arrange_submobjects_live", _noon_leaf_arrange_submobjects_live, _manim_leaf_arrange_submobjects),
+    Fixture("leaf_align_submobjects", _noon_leaf_align_submobjects, _manim_leaf_align_submobjects),
+    Fixture("leaf_align_submobjects_live", _noon_leaf_align_submobjects_live, _manim_leaf_align_submobjects),
+    Fixture("group_align_data", _noon_group_align_data, _manim_group_align_data),
+    Fixture("group_align_data_live", _noon_group_align_data_live, _manim_group_align_data),
+    Fixture("repeat_submobject", _noon_repeat_submobject, _manim_repeat_submobject),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
+    Fixture("vdict_mapping", _noon_vdict_mapping, _manim_vdict_mapping),
+    Fixture("vdict_mapping_live", _noon_vdict_mapping_live, _manim_vdict_mapping),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
     Fixture("vgroup_slicing", _noon_vgroup_slicing, _manim_vgroup_slicing),
     Fixture(
@@ -1318,7 +6304,9 @@ FIXTURES = [
     Fixture("save_restore", _noon_save_restore, _manim_save_restore),
     Fixture("become", _noon_become, _manim_become),
     Fixture("replace_width", _noon_replace_width, _manim_replace_width),
+    Fixture("replace_width_live", _noon_replace_width_live, _manim_replace_width_live),
     Fixture("replace_stretch", _noon_replace_stretch, _manim_replace_stretch),
+    Fixture("replace_stretch_live", _noon_replace_stretch_live, _manim_replace_stretch_live),
     Fixture("critical_points", _noon_critical_points, _manim_critical_points),
     Fixture("set_coord_direction", _noon_set_coord_direction, _manim_set_coord_direction),
     Fixture("scale_to_fit_width", _noon_scale_to_fit_width, _manim_scale_to_fit_width),
@@ -1330,15 +6318,26 @@ FIXTURES = [
     Fixture("rotate_about_origin", _noon_rotate_about_origin, _manim_rotate_about_origin),
 ]
 
-# Explicitly tracked but not yet differential-gated.  Keep this list close to the
-# harness so unsupported behavior is never silently treated as a mismatch.
+# Explicitly tracked but not yet common-success differential-gated. Keep this
+# list close to the harness so unsupported behavior and intentional divergences
+# are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
-    "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
+    "circle_surround_extended_inputs": "The shared Rust Circle.surround scalar planar profile is enrolled in detached/live comparison, including aliases, signed buffers, stretched ellipses and zero-depth fitting. Staged callbacks, vector buffers, spatial geometry, and exact failure-class equivalence for empty targets remain unqualified under #2011/#2012. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/geometry/arc.py#L660-L711.",
+    "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
+    "plain_group_save_restore": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 Group.restore() delegates to base Mobject.become(), whose base interpolate_color() raises NotImplementedError for a plain Group. Noon restores shared Rust family state for Group; scripts/manim-differential-noon.mjs separately checks root and child colors through actual product Pyodide. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2161-L2166 and #L3172-L3180.",
+    "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
+    "family_insert_assignment": "Duplicate direct-child Mobject.insert remains unsupported by Noon’s identity-unique Rust family edge model. The pinned Mobject class has no __setitem__; indexed assignment is not part of this API. See #74 for the family-edge identity constraint.",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
+    "always_builder_live": "The detached always-builder profile is common-success tested. Adding an always-builder updater to a scene-owned target after live execution bootstrap is explicitly unsupported: the canonical Rust callback graph requires preorder enrollment before playback. The product probe records the enrollment failure; callback staging/enrollment remains open under #2011.",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",
+    "vmobject_shade_in_3d": "VMobject and VGroup accept the pinned planar default shade_in_3d=False, expose the false state, and preserve set_shade_in_3d(False) identity in detached/live fixtures. Enabling 3D vector shading or z_index_as_group is rejected before mutation because spatial shading and group-z-index semantics are not backed by shared renderer/runtime state. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/types/vectorized_mobject.py#L119-L149 and #L735-L742.",
     "style_channels": "fill/stroke/object opacity integration is being migrated onto the #62 semantic style contract",
+    "background_stroke_and_sheen": "Solid leaf and recursive background-stroke paint uses shared Rust style and layered path rendering. Detached/live fixtures exercise background setters/getters, nested family roots and leaves, init_colors, scalar RGBA updates, leaf opacity, and fade. Staged callback background reads/writes, nonzero sheen factors, and gradient rendering remain unsupported; pinned background-stroke raster parity remains unqualified. Sheen direction set/query/rotation metadata has detached/live fixtures.",
+    "background_image_methods": "None-image coloring and matching a no-image source are supported; actual images require shared image paint",
+    "set_z": "setting z=0 is a supported planar no-op; nonzero z movement requires spatial geometry",
+    "vgroup_root_style": "The common-success profile covers VGroup's one-row float64 root solid-paint arrays/getters, simple/full get_style, and root-only fade/set_opacity/set_style/set_background_stroke(family=False) in detached/live fixtures. Root background color, width, and opacity publish atomically with foreground style and leave children unchanged; copy and become retain the metadata. The family root has no points, so this retained background-stroke profile has no raster effect. Recursive solid background-stroke setters now update nested family roots and leaves atomically. Staged callback background reads/writes, nonzero sheen, image resources, and multi-color per-object arrays remain unsupported.",
 }
 
 
@@ -1386,6 +6385,18 @@ def load_noon_observations(path: Path) -> dict[str, Any]:
     return observations
 
 
+def _route_manim_logs_to_stderr() -> None:
+    """Keep Rich diagnostics from contaminating machine-readable JSON output."""
+    if manim is None:
+        return
+    for handler in manim.logger.handlers:
+        console = getattr(handler, "console", None)
+        if console is not None:
+            console.file = sys.stderr
+        elif hasattr(handler, "stream"):
+            handler.stream = sys.stderr
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="emit machine-readable results")
@@ -1396,6 +6407,8 @@ def main() -> int:
 
     if manim is None:
         raise SystemExit("Install the pinned ManimCE reference to compare observations")
+    if args.json:
+        _route_manim_logs_to_stderr()
     if manim.__version__ != PINNED_MANIM_VERSION:
         raise SystemExit(
             f"expected ManimCE {PINNED_MANIM_VERSION}, found {manim.__version__}; "
@@ -1406,9 +6419,19 @@ def main() -> int:
     failures = 0
     for fixture in FIXTURES:
         noon_value = observations[fixture.name]
-        manim_value = fixture.manim_probe()
-        differences = _compare(noon_value, manim_value, fixture.tolerance)
-        status = "pass" if not differences else "mismatch"
+        reference_error = None
+        try:
+            manim_value = fixture.manim_probe()
+        except Exception as error:
+            # Preserve every fixture's evidence even if one reference probe is
+            # malformed. An error still fails the command and cannot count as parity.
+            manim_value = None
+            reference_error = {"type": type(error).__name__, "message": str(error)}
+            differences = [f"reference probe raised {type(error).__name__}: {error}"]
+            status = "error"
+        else:
+            differences = _compare(noon_value, manim_value, fixture.tolerance)
+            status = "pass" if not differences else "mismatch"
         failures += bool(differences)
         results.append(
             {
@@ -1419,6 +6442,8 @@ def main() -> int:
                 "differences": differences,
             }
         )
+        if reference_error is not None:
+            results[-1]["reference_error"] = reference_error
 
     payload = {
         "manim_version": manim.__version__,
@@ -1435,7 +6460,7 @@ def main() -> int:
                 print(f"  {difference}")
         print(f"\n{len(FIXTURES) - failures}/{len(FIXTURES)} supported fixtures match ManimCE {manim.__version__}")
         if UNSUPPORTED:
-            print(f"{len(UNSUPPORTED)} explicitly unsupported/deferred semantic areas")
+            print(f"{len(UNSUPPORTED)} explicitly unsupported/deferred/divergent semantic areas")
 
     return 1 if failures else 0
 

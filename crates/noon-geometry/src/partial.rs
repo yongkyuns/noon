@@ -151,10 +151,7 @@ impl PathProportionPlan {
                     count: self.curves.len(),
                 })?;
         let mut pieces = Vec::new();
-        if sample_points == 0 {
-            return Err(PathProportionError::InvalidSampleCount);
-        }
-        if sample_points == 1 {
+        if sample_points < 2 {
             return Ok(pieces);
         }
         pieces
@@ -279,7 +276,7 @@ impl PathProportionPlan {
     pub fn arc_length(&self, sample_points: Option<usize>) -> Result<f64, PathProportionError> {
         let samples = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
         if samples < 2 {
-            return Err(PathProportionError::InvalidSampleCount);
+            return Ok(0.0);
         }
         if samples == MANIM_LENGTH_SAMPLE_POINTS {
             return Ok(self.total_length);
@@ -815,10 +812,9 @@ mod tests {
             assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
         }
         assert!(plan.curve_length_pieces(0, 1).unwrap().is_empty());
-        assert_eq!(
-            plan.curve_length_pieces(0, 0),
-            Err(PathProportionError::InvalidSampleCount)
-        );
+        assert!(plan.curve_length_pieces(0, 0).unwrap().is_empty());
+        assert_eq!(plan.arc_length(Some(0)).unwrap(), 0.0);
+        assert_eq!(plan.arc_length(Some(1)).unwrap(), 0.0);
         assert!(matches!(
             plan.curve_length_pieces(1, 5),
             Err(PathProportionError::InvalidCurveIndex { index: 1, count: 1 })

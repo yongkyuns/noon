@@ -1,6 +1,7 @@
 """The Python facade cannot substitute a document engine for Rust semantics."""
 import math
 import unittest
+from unittest.mock import Mock, patch
 import _noon_ir
 from noon import Circle, Color, Scene, VectorPath
 
@@ -48,6 +49,25 @@ class SceneBoundaryTests(unittest.TestCase):
     def test_non_finite_color_is_rejected(self):
         with self.assertRaises(ValueError):
             Color(math.inf, 0, 0)
+
+    def test_base_mobject_set_color_matches_pinned_default_and_argument_surface(self):
+        from noon import Mobject
+
+        value = Mobject.__new__(Mobject)
+        operations = Mock()
+        operations._canonical_set_color.return_value = value
+        with patch("noon._callback_operations", return_value=operations):
+            self.assertIs(value.set_color(), value)
+            default_color = operations._canonical_set_color.call_args.args[1]
+            self.assertEqual(default_color, Color(1.0, 1.0, 0.0))
+
+            self.assertIs(
+                value.set_color("#00FF00", alpha=0.25, family=False),
+                value,
+            )
+            parsed_color = operations._canonical_set_color.call_args.args[1]
+            self.assertEqual(parsed_color, Color(0.0, 1.0, 0.0))
+        self.assertEqual(operations._canonical_set_color.call_count, 2)
 
     def test_path_commands_remain_inert_language_input(self):
         path = VectorPath().move_to((0, 0)).line_to((1, 0)).quadratic_to((2, 1), (1, 2))

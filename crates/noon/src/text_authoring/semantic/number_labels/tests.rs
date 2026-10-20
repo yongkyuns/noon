@@ -333,23 +333,42 @@ fn number_plane_coordinate_labels_use_shared_layout_and_attach_atomically() {
 fn late_transaction_failure_discards_text_without_interning_fonts() {
     let mut scene = Scene::new();
     let sentinel = scene.circle(0.5).unwrap();
+    let invalid_parent = scene
+        .integration_store()
+        .borrow_mut()
+        .insert_semantic_input_signal(0.0_f64)
+        .unwrap();
     let before = sentinel.state().unwrap();
     let revision = scene.revision();
     let count = counts(&scene);
     let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
     let prepared = prepare(frame, None, &NumberLabelOptions::default()).unwrap();
-    // Real shaped resources are inserted before this late non-family-parent
+    // Real shaped resources are inserted before this late non-authoring-parent
     // failure. No scene cloning, deletion of existing text, or leaked fonts.
     assert!(publish(
         Rc::clone(scene.integration_store()),
-        vec![(Some(sentinel.node_id()), prepared)]
+        vec![(Some(invalid_parent), prepared)]
     )
     .is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(counts(&scene), count);
     assert_eq!(sentinel.state().unwrap(), before);
     let prepared = prepare(frame, None, &NumberLabelOptions::default()).unwrap();
-    assert!(publish(Rc::clone(scene.integration_store()), vec![(None, prepared)]).is_ok());
+    let labels = publish(
+        Rc::clone(scene.integration_store()),
+        vec![(Some(sentinel.node_id()), prepared)],
+    )
+    .unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(sentinel.node_id())
+            .unwrap()
+            .members(),
+        [labels[0].node_id()]
+    );
+    assert_eq!(sentinel.state().unwrap(), before);
 }
 
 #[test]

@@ -240,7 +240,7 @@ pub use family_callback_layout::{
 };
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
-pub use family_copy::FamilyCopy;
+pub use family_copy::{FamilyCopy, MobjectCopy, SemanticCopy};
 pub use family_grid::{FamilyGridOptions, GridFlow};
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
 pub use family_style::StyleUpdate;
@@ -280,17 +280,18 @@ pub use noon_core::{
     GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
     RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFunctionPlotRole, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle,
-    SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, SourceIdentity,
-    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError,
-    TextSourceFill, TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK,
-    BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
-    DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD,
-    GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK,
-    MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B,
-    PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU,
-    TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
-    YELLOW_C, YELLOW_D, YELLOW_E,
+    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSheenDirection,
+    SemanticSignalValue, SemanticStyle, SemanticTransform2_5D, SemanticTransformInterpolation,
+    SemanticVec3, SourceIdentity, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style,
+    TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan, TextSourceStyleError,
+    Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E,
+    DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B,
+    GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
+    MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D,
+    PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B,
+    TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
+    YELLOW_E,
 };
 pub use noon_core::{
     CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshResource, SemanticCamera3D,
@@ -315,7 +316,11 @@ pub use noon_runtime::{
 };
 #[cfg(feature = "latex")]
 pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
-pub use path_queries::PathQuery;
+pub use path_queries::{
+    manim_cubic_bezier_point_ranges, manim_points_2d_close, manim_points_allclose,
+    manim_subpath_ranges, manim_subpath_split_indices, reduce_point_boundary,
+    reduce_point_extremum, PathQuery, PointReductionTree,
+};
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;

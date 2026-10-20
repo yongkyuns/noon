@@ -13,6 +13,7 @@ const POLYGON_QUAD_FLAG: u32 = 67108864u;
 const POLYGON_CORNER_SHIFT: u32 = 27u;
 const POLYGON_TIGHT_FLAG: u32 = 536870912u;
 const PATH_PROGRESS_MASK: u32 = 33554431u;
+const PATH_BACKGROUND_STROKE_FLAG: u32 = 2147483648u;
 
 struct PathVertexInput {
     @location(0) local: vec2<f32>,
@@ -29,6 +30,7 @@ struct PathVertexInput {
     @location(11) polygon_b: vec4<f32>,
     @location(12) polygon_c: vec4<f32>,
     @location(13) polygon_d: vec4<f32>,
+    @location(14) background_stroke: vec4<f32>,
 };
 
 struct PathVertexOutput {
@@ -56,6 +58,7 @@ struct CompactPathVertexInput {
     @location(8) metrics: vec2<f32>,
     @location(9) flags: vec2<u32>,
     @location(10) path_params: vec2<f32>,
+    @location(14) background_stroke: vec4<f32>,
 };
 
 // Ordinary tessellated paths never use polygon coverage. Keep their stage
@@ -192,10 +195,15 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
 
     let fill_enabled = (input.flags.x & 1u) != 0u;
     let stroke_enabled = (input.flags.y & 1u) != 0u;
-    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
-    let authored_enabled = select(fill_enabled, stroke_enabled, is_stroke);
+    let is_background_stroke = (input.surface_and_progress & PATH_BACKGROUND_STROKE_FLAG) != 0u;
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled && !is_background_stroke;
+    let authored_enabled = is_background_stroke || select(fill_enabled, stroke_enabled, is_stroke);
     let enabled = authored_enabled || (is_stroke && derive_creation_stroke);
-    let authored_color = select(input.fill, input.stroke, is_stroke);
+    let authored_color = select(
+        select(input.fill, input.stroke, is_stroke),
+        input.background_stroke,
+        is_background_stroke,
+    );
     let color = select(authored_color, input.fill, is_stroke && derive_creation_stroke);
     var creation_outline_alpha = 1.0;
     if is_stroke && derive_creation_stroke {
@@ -225,10 +233,15 @@ fn vs_path_compact(input: CompactPathVertexInput) -> CompactPathVertexOutput {
     let world = vec2<f32>(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y) + input.translation;
     let fill_enabled = (input.flags.x & 1u) != 0u;
     let stroke_enabled = (input.flags.y & 1u) != 0u;
-    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
-    let authored_enabled = select(fill_enabled, stroke_enabled, is_stroke);
+    let is_background_stroke = (input.surface_and_progress & PATH_BACKGROUND_STROKE_FLAG) != 0u;
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled && !is_background_stroke;
+    let authored_enabled = is_background_stroke || select(fill_enabled, stroke_enabled, is_stroke);
     let enabled = authored_enabled || (is_stroke && derive_creation_stroke);
-    let authored_color = select(input.fill, input.stroke, is_stroke);
+    let authored_color = select(
+        select(input.fill, input.stroke, is_stroke),
+        input.background_stroke,
+        is_background_stroke,
+    );
     let color = select(authored_color, input.fill, is_stroke && derive_creation_stroke);
     var creation_outline_alpha = 1.0;
     if is_stroke && derive_creation_stroke {

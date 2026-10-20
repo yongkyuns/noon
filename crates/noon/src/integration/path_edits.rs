@@ -15,6 +15,17 @@ use std::{cell::RefCell, rc::Rc};
 /// All variants use the same coherent effective-state capture, validation,
 /// scoped immutable-resource rollback and semantic publication as Scene.
 pub enum BorrowedPathEdit<'a> {
+    Clear {
+        object: &'a Mobject,
+    },
+    RawPoints {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
+    AppendRawPoints {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
     SmoothCorners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -27,12 +38,34 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         points: &'a [Vec2],
     },
+    CornersWithSamples {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+        bezier_t_values: &'a [f64; 4],
+    },
     Line {
         object: &'a Mobject,
         point: Vec2,
     },
+    LineWithStride {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+    },
+    LineWithSamples {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+        bezier_t_values: &'a [f64; 4],
+    },
     Close {
         object: &'a Mobject,
+    },
+    CloseWithStride {
+        object: &'a Mobject,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &'a [f64],
     },
     Reverse {
         object: &'a Mobject,
@@ -41,10 +74,21 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         point: Vec2,
     },
+    StartWithStride {
+        object: &'a Mobject,
+        point: Vec2,
+        stride: i32,
+    },
     Quadratic {
         object: &'a Mobject,
         control: Vec2,
         anchor: Vec2,
+    },
+    QuadraticWithStride {
+        object: &'a Mobject,
+        control: Vec2,
+        anchor: Vec2,
+        stride: i32,
     },
     Cubic {
         object: &'a Mobject,
@@ -52,9 +96,65 @@ pub enum BorrowedPathEdit<'a> {
         control2: Vec2,
         anchor: Vec2,
     },
+    CubicWithStride {
+        object: &'a Mobject,
+        control1: Vec2,
+        control2: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    },
+    SmoothCurve {
+        object: &'a Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+    },
+    SmoothCurveWithStride {
+        object: &'a Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+        stride: i32,
+    },
+    CubicCurve {
+        object: &'a Mobject,
+        anchor1: Vec2,
+        handle1: Vec2,
+        handle2: Vec2,
+        anchor2: Vec2,
+    },
+    CubicCurves {
+        object: &'a Mobject,
+        curves: &'a [[Vec2; 4]],
+    },
+    SetCubicCurves {
+        object: &'a Mobject,
+        curves: &'a [[Vec2; 4]],
+    },
+    AppendVectorized {
+        object: &'a Mobject,
+        source: &'a Mobject,
+    },
+    AppendVectorizedWithStride {
+        object: &'a Mobject,
+        source: &'a Mobject,
+        stride: i32,
+    },
+    AppendCorners {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
+    AppendCornersWithStride {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+        stride: i32,
+        bezier_t_values: &'a [f64],
+    },
     Subdivide {
         object: &'a Mobject,
         additional: usize,
+    },
+    ScaleHandles {
+        object: &'a Mobject,
+        factor: f64,
     },
     Partial {
         object: &'a Mobject,
@@ -65,6 +165,20 @@ pub enum BorrowedPathEdit<'a> {
     FamilyAnchorMode {
         family: &'a MobjectFamily,
         smooth: bool,
+    },
+    FamilyReversePoints {
+        family: &'a MobjectFamily,
+    },
+    ReversePoints {
+        object: &'a Mobject,
+    },
+    FamilyRepeatPoints {
+        family: &'a MobjectFamily,
+        count: usize,
+    },
+    RepeatPoints {
+        object: &'a Mobject,
+        count: usize,
     },
 }
 
@@ -82,28 +196,164 @@ pub fn publish_borrowed_path_edit(
     // Cross-object partial selection and family edits have their own coherent
     // capture requirements, but still publish through the same Rust authority.
     let (object, operation) = match edit {
+        BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
+        BorrowedPathEdit::RawPoints { object, points } => (object, PathEdit::RawPoints(points)),
+        BorrowedPathEdit::AppendRawPoints { object, points } => {
+            (object, PathEdit::AppendRawPoints(points))
+        }
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
         }
         BorrowedPathEdit::AnchorMode { object, smooth } => (object, PathEdit::AnchorMode(smooth)),
         BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
+        BorrowedPathEdit::CornersWithSamples {
+            object,
+            points,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::CornersWithSamples {
+                points,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
+        BorrowedPathEdit::LineWithStride {
+            object,
+            point,
+            stride,
+        } => (object, PathEdit::LineWithStride(point, stride)),
+        BorrowedPathEdit::LineWithSamples {
+            object,
+            point,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::LineWithSamples {
+                point,
+                stride,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
+        BorrowedPathEdit::CloseWithStride {
+            object,
+            stride,
+            tolerance,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::CloseWithStride {
+                stride,
+                tolerance,
+                bezier_t_values,
+            },
+        ),
         BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
-        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start(point)),
+        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start { point, stride: 4 }),
+        BorrowedPathEdit::StartWithStride {
+            object,
+            point,
+            stride,
+        } => (object, PathEdit::Start { point, stride }),
         BorrowedPathEdit::Quadratic {
             object,
             control,
             anchor,
         } => (object, PathEdit::Quadratic(control, anchor)),
+        BorrowedPathEdit::QuadraticWithStride {
+            object,
+            control,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::QuadraticWithStride(control, anchor, stride),
+        ),
         BorrowedPathEdit::Cubic {
             object,
             control1,
             control2,
             anchor,
         } => (object, PathEdit::Cubic(control1, control2, anchor)),
+        BorrowedPathEdit::CubicWithStride {
+            object,
+            control1,
+            control2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::CubicWithStride(control1, control2, anchor, stride),
+        ),
+        BorrowedPathEdit::SmoothCurve {
+            object,
+            handle2,
+            anchor,
+        } => (object, PathEdit::SmoothCurve { handle2, anchor }),
+        BorrowedPathEdit::SmoothCurveWithStride {
+            object,
+            handle2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::SmoothCurveWithStride {
+                handle2,
+                anchor,
+                stride,
+            },
+        ),
+        BorrowedPathEdit::CubicCurve {
+            object,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        } => (
+            object,
+            PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
+        ),
+        BorrowedPathEdit::CubicCurves { object, curves } => (object, PathEdit::CubicCurves(curves)),
+        BorrowedPathEdit::SetCubicCurves { object, curves } => {
+            (object, PathEdit::SetCubicCurves(curves))
+        }
+        BorrowedPathEdit::AppendCorners { object, points } => {
+            (object, PathEdit::AppendCorners(points))
+        }
+        BorrowedPathEdit::AppendCornersWithStride {
+            object,
+            points,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::AppendCornersWithStride {
+                points,
+                stride,
+                bezier_t_values,
+            },
+        ),
+        BorrowedPathEdit::AppendVectorized { object, source } => {
+            return path_editing::publish_running_append_vectorized_mobject(
+                store, root, execution, object, source,
+            );
+        }
+        BorrowedPathEdit::AppendVectorizedWithStride {
+            object,
+            source,
+            stride,
+        } => {
+            return path_editing::publish_running_append_vectorized_mobject_with_stride(
+                store, root, execution, object, source, stride,
+            );
+        }
         BorrowedPathEdit::Subdivide { object, additional } => {
             (object, PathEdit::Subdivide(additional))
+        }
+        BorrowedPathEdit::ScaleHandles { object, factor } => {
+            (object, PathEdit::ScaleHandles(factor))
         }
         BorrowedPathEdit::Partial {
             object,
@@ -118,6 +368,26 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::FamilyAnchorMode { family, smooth } => {
             return path_editing::publish_running_family_anchor_mode(
                 store, root, execution, family, smooth,
+            );
+        }
+        BorrowedPathEdit::FamilyReversePoints { family } => {
+            return path_editing::publish_running_family_reverse_points(
+                store, root, execution, family,
+            );
+        }
+        BorrowedPathEdit::ReversePoints { object } => {
+            return path_editing::publish_running_object_reverse_points(
+                store, root, execution, object,
+            );
+        }
+        BorrowedPathEdit::FamilyRepeatPoints { family, count } => {
+            return path_editing::publish_running_family_repeat_points(
+                store, root, execution, family, count,
+            );
+        }
+        BorrowedPathEdit::RepeatPoints { object, count } => {
+            return path_editing::publish_running_object_repeat_points(
+                store, root, execution, object, count,
             );
         }
     };

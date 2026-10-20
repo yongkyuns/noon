@@ -75,6 +75,8 @@ impl FramePreparer {
             if entry.path == *path
                 && entry.stroke_transform == stroke_transform
                 && entry.stroke_width_bits == style.stroke_width.to_bits()
+                && entry.background_stroke_width_bits
+                    == super::effective_background_stroke_width(style).to_bits()
                 && entry.stroke_join == style.stroke_join
                 && entry.stroke_cap == style.stroke_cap
                 && entry.fill_enabled == style.fill.is_some()
@@ -118,6 +120,7 @@ impl FramePreparer {
             path: path.clone(),
             stroke_transform,
             stroke_width_bits: style.stroke_width.to_bits(),
+            background_stroke_width_bits: super::effective_background_stroke_width(style).to_bits(),
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
             fill_enabled: style.fill.is_some(),

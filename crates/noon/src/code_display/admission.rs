@@ -272,6 +272,7 @@ impl PreparedCode {
             stroke_join: StrokeJoin::Miter,
             stroke_cap: StrokeCap::Butt,
             object_opacity: 1.0,
+            ..SemanticStyle::default()
         };
         let buttons = if window {
             [0xff5f56, 0xffbd2e, 0x27c93f]

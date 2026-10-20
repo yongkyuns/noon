@@ -480,7 +480,9 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
                 | SemanticMutation::ReplaceStyle { .. }
+                | SemanticMutation::SetSheenDirection { .. }
                 | SemanticMutation::SetFamilyColor { .. }
+                | SemanticMutation::SetFamilyStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
@@ -728,7 +730,6 @@ fn collect_prepared_anchor_leaves(
         if let Some(node) = prepared.planned_node_id(node) {
             members.push(node);
         }
-        return Ok(());
     }
     for child in prepared.family_members(node)? {
         collect_prepared_anchor_leaves(prepared, child, visited, members)?;
@@ -863,7 +864,7 @@ fn collect_existing_graph_roots(
     if semantic.graph_declaration().is_some() {
         roots.insert(node);
     }
-    if matches!(semantic.kind(), SemanticNodeKind::Family(_)) {
+    if semantic.can_own_members() {
         for member in semantic.members_iter() {
             collect_existing_graph_roots(store, member, seen, roots)?;
         }
@@ -1033,21 +1034,19 @@ fn collect_prepared_entry_leaves(
             {
                 leaves.push(node);
             }
-            Ok(())
         }
         Err(
             SemanticTransactionReadError::NotObject(_)
             | SemanticTransactionReadError::Existing(
                 noon_core::SemanticSceneOperationError::NotSemanticObject(_),
             ),
-        ) => {
-            for member in prepared.family_members(node)? {
-                collect_prepared_entry_leaves(prepared, member, reachability, seen, leaves)?;
-            }
-            Ok(())
-        }
-        Err(error) => Err(error.into()),
+        ) => {}
+        Err(error) => return Err(error.into()),
     }
+    for member in prepared.family_members(node)? {
+        collect_prepared_entry_leaves(prepared, member, reachability, seen, leaves)?;
+    }
+    Ok(())
 }
 
 fn collect_existing_exit_leaves(
@@ -1090,14 +1089,13 @@ fn collect_existing_exit_leaves(
                 leaves.push(node);
             }
         }
-        SemanticNodeKind::Family(_) => {
-            for member in semantic.members() {
-                collect_existing_exit_leaves(store, member, reachability, seen, leaves)?;
-            }
-        }
+        SemanticNodeKind::Family(_) => {}
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
         | SemanticNodeKind::Effect(_) => {}
+    }
+    for member in semantic.members_iter() {
+        collect_existing_exit_leaves(store, member, reachability, seen, leaves)?;
     }
     Ok(())
 }
@@ -1254,6 +1252,8 @@ fn lower_semantic_publication(
             // Family color is authored metadata on a non-rendered root. It
             // commits coherently but has no renderable object value projection.
             SemanticMutation::SetFamilyColor { .. }
+            | SemanticMutation::SetFamilyStyle { .. }
+            | SemanticMutation::SetSheenDirection { .. }
             | SemanticMutation::SetBarMetadata { .. }
             | SemanticMutation::SetAngleValue { .. }
             | SemanticMutation::UpdateEffect { .. } => {}

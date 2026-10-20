@@ -86,6 +86,61 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotIn(name, policy["overrides"])
 
+    def test_mobject_methods_are_not_classified_as_top_level_exports(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        for name in ("add_background_rectangle", "match_z"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, policy["overrides"])
+
+    def test_mobject_always_disposition_covers_live_callback_invocation(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        reason = policy["overrides"]["Mobject"]["reason"]
+        self.assertIn("Mobject.always returns a builder", reason)
+        self.assertIn("Detached and scene-owned objects register each updater before its immediate call", reason)
+        self.assertIn("scripts/manim-differential.py:always_builder", policy["overrides"]["Mobject"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:always_builder_live", policy["overrides"]["Mobject"]["evidence"])
+
+    def test_curves_as_submobjects_is_exported_with_a_bounded_disposition(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        self.assertIn("CurvesAsSubmobjects", coverage.noon_public_exports())
+        disposition = policy["overrides"]["CurvesAsSubmobjects"]
+        self.assertEqual(disposition["status"], "partial")
+        self.assertIn("point_from_proportion", disposition["reason"])
+        self.assertIn("scripts/manim-differential.py:curves_as_submobjects_live", disposition["evidence"])
+
+    def test_group_membership_growth_is_disposed_with_atomic_rust_evidence(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        reason = policy["overrides"]["Group"]["reason"]
+        self.assertIn("add_n_more_submobjects()", reason)
+        self.assertIn("align_submobjects()", reason)
+        self.assertIn("one shared Rust transaction", reason)
+        self.assertIn("scripts/manim-differential.py:group_add_n_more_submobjects_live",
+                      policy["overrides"]["Group"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:group_align_submobjects_live",
+                      policy["overrides"]["Group"]["evidence"])
+
+    def test_leaf_arrangement_records_shared_move_and_live_fixture(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        reason = policy["overrides"]["Mobject"]["reason"]
+        self.assertIn("arrange_submobjects() center a point-owning leaf", reason)
+        self.assertIn("align_submobjects() matches the leaf-to-leaf no-op", reason)
+        self.assertIn("Mobject.align_data() composes null-point", reason)
+        self.assertIn("different point-ownership states reject before mutation", reason)
+        self.assertIn("scripts/manim-differential.py:leaf_arrange_submobjects_live",
+                      policy["overrides"]["Mobject"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:leaf_align_submobjects_live",
+                      policy["overrides"]["Mobject"]["evidence"])
+        self.assertIn("scripts/manim-differential.py:group_align_data_live",
+                      policy["overrides"]["Mobject"]["evidence"])
+
+    def test_vdict_is_exported_with_shared_family_evidence_and_show_keys_limit(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        self.assertIn("VDict", coverage.noon_public_exports())
+        disposition = policy["overrides"]["VDict"]
+        self.assertEqual(disposition["status"], "partial")
+        self.assertIn("show_keys", disposition["reason"])
+        self.assertIn("scripts/manim-differential.py:vdict_mapping_live", disposition["evidence"])
+
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())

@@ -170,6 +170,25 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertIs(child._scene, self.scene)
         self.assertIs(target._scene, self.scene)
 
+    def test_empty_group_add_forwards_root_without_allocating_leaf_bindings(self):
+        group = Group(100)
+        next_id = self.scene._next_object_id
+        self.scene.add(group)
+        self.assertEqual(self.context.edits[-1], ("add", (), ((None, 100),)))
+        self.assertEqual(self.scene._next_object_id, next_id)
+        self.assertEqual(self.scene._object_keys, {})
+        self.assertIs(self.scene._canonical_membership_wrappers["100:0"], group)
+        self.assertIs(group._canonical_live_target_context, self.context)
+
+    def test_rejected_empty_group_add_leaves_wrapper_registry_unchanged(self):
+        group = Group(100)
+        self.context.reject = True
+        before = self.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "injected Rust publication rejection"):
+            self.scene.add(group)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(hasattr(group, "_canonical_live_target_context"))
+
     def test_group_derived_surface_routes_family_and_single_mesh_membership(self):
         SurfaceWrapper = type("SurfaceWrapper", (Group, self.Mobject), {})
         family_leaf = self.mobject(70)

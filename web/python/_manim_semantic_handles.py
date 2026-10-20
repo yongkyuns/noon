@@ -10,6 +10,8 @@ from _noon_errors import engine_call, raise_engine_error
 
 import copy
 import json
+import numbers
+import operator
 import sys
 from typing import Any
 
@@ -230,25 +232,44 @@ def _constructor_color(name: str, value: object) -> _base.Color:
     return _compat._as_color(name, value)
 
 
-def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) -> None:
+def _apply_shared_constructor_options(
+    handle: object,
+    kwargs: dict[str, Any],
+    *,
+    allow_sheen_direction: bool = False,
+) -> None:
     """Apply Python constructor coercions to one shared typed target.
 
     The target is an inert Rust geometry candidate. Rust validates semantic
     state before publication; Python only applies public argument coercions.
     """
     options = dict(kwargs)
+    cap_style = options.pop("cap_style", _CONSTRUCTOR_MISSING)
+    if cap_style is not _CONSTRUCTOR_MISSING:
+        if "stroke_cap" in options:
+            raise TypeError("cap_style and stroke_cap cannot both be supplied")
+        options["stroke_cap"] = _ir._stroke_cap(cap_style)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
         "stroke_width", "stroke_width_mode", "stroke_join", "stroke_cap",
         "opacity", "fill_color", "stroke_color", "fill_opacity",
         "stroke_opacity", "z_index",
     }
+    if allow_sheen_direction:
+        allowed.update({"sheen_direction", "sheen_factor"})
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise TypeError(f"unsupported Mobject constructor option(s): {', '.join(unknown)}")
+    if "sheen_factor" in options and _ir._finite_number(
+        "sheen factor", options["sheen_factor"]
+    ) != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
 
     if "z_index" in options:
         engine_call(handle.setZIndex, _ir._finite_number("z_index", options["z_index"]))
+    if "sheen_direction" in options:
+        values, dimensions = _sheen_direction_components(options["sheen_direction"])
+        engine_call(handle.setSheenDirection, *values, dimensions)
     if "position" in options:
         value = _ir._vec2("position", options["position"])
         engine_call(handle.setTranslation, value["x"], value["y"])
@@ -405,7 +426,9 @@ def _empty_path_init(
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     options = engine_call(_geometry_options.emptyPath)
     _apply_constructor_color(options, parsed)
-    _apply_shared_constructor_options(options, kwargs)
+    _apply_shared_constructor_options(
+        options, kwargs, allow_sheen_direction=(kind == "VMobject")
+    )
     _attach_geometry_options(self, options, kind)
 
 
@@ -649,6 +672,23 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
     return _clone_mobject(self)
 
 
+def _vmobject_path_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        return (
+            getattr(context, "queryMobjectPath", None) is not None
+            and getattr(
+                context, "queryMobjectPathBoundaryExtremumAlongDim", None
+            ) is not None
+        )
+    handle = _handle_for(value)
+    return (
+        handle is not None
+        and hasattr(handle, "pathQuery")
+        and hasattr(handle, "pathBoundaryExtremumAlongDim")
+    )
+
+
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     """Clone a detached target through Rust's explicit target-editor boundary."""
 
@@ -659,6 +699,11 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
+    if (
+        isinstance(self, _compat.VMobject)
+        and _vmobject_path_boundary_queries_available(self)
+    ):
+        return _get_critical_point(self, _base.ORIGIN)
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
@@ -674,6 +719,13 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
+    if isinstance(self, _compat.VMobject):
+        if self.get_num_points() == 0:
+            return _base.ORIGIN
+        return _base.Vec2(
+            _extremum_along_dim_observation(self, 0, axis.x),
+            _extremum_along_dim_observation(self, 1, axis.y),
+        )
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
@@ -773,8 +825,8 @@ def _move_to(
     return self
 
 
-def _dimension_fit_source(self, dim):
-    if dim not in (0, 1):
+def _dimension_fit_source(self, dim, *, planar_depth=False):
+    if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
         raise NotImplementedError("Noon currently exposes width/height fitting only")
     anchor = _layout_anchor(self)
     if anchor is None:
@@ -792,9 +844,15 @@ def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
 
 
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
-    anchor, context = _dimension_fit_source(self, dim)
-    pivot = _pivot_arguments(about_point, about_edge)
-    length = float(length)
+    dim = _fitting_dimension_index(dim)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    # Manim ignores length/pivot arguments when the shared source extent is
+    # zero. Avoid coercing them, but still let Rust validate the anchor and own
+    # the no-op decision from its coherent fitting snapshot.
+    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
+    pivot = ((0., 0., False) if zero_extent
+             else _pivot_arguments(about_point, about_edge))
+    length = 0.0 if zero_extent else float(length)
     try:
         if context is None:
             engine_call(anchor.rescaleToFit, length, dim, bool(stretch), *pivot)
@@ -808,8 +866,11 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
 def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, about_edge=None):
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("dimension match target must be a Mobject")
-    anchor, context = _dimension_fit_source(self, dim)
-    pivot = _pivot_arguments(about_point, about_edge)
+    dim = _fitting_dimension_index(dim)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
+    pivot = ((0., 0., False) if zero_extent
+             else _pivot_arguments(about_point, about_edge))
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("dimension matching requires a shared Rust target")
@@ -821,6 +882,23 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
     except Exception as error:
         raise_engine_error(error)
     return self
+
+
+def _dimension_fit_extent(anchor, context, dim):
+    if context is None:
+        return engine_call(anchor.dimensionLength, dim)
+    return engine_call(context.queryLayoutDimensionLength, anchor, dim)
+
+
+def _fitting_dimension_index(dim):
+    # rescale_to_fit measures length through reduce_across_dimension, whose
+    # range assertions precede NumPy's integer-index validation.
+    assert dim >= 0
+    assert dim <= 2
+    try:
+        return operator.index(dim)
+    except TypeError as error:
+        raise IndexError("only integers are valid dimension indices") from error
 
 
 def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:
@@ -1055,7 +1133,16 @@ def _replace(
             raise ValueError("callback replacement target belongs to another Scene")
         callback_context.replace_layout(self, mobject, dim_to_match, stretch)
         return self
-    source, context = _dimension_fit_source(self, dim_to_match)
+    source, target, context = _replacement_anchors(self, mobject, dim_to_match)
+    if context is None:
+        engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
+    else:
+        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
+    return self
+
+
+def _replacement_anchors(self, mobject, dimension):
+    source, context = _dimension_fit_source(self, dimension)
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
@@ -1064,10 +1151,33 @@ def _replace(
                    else _live_mutation_context(mobject))
     if context is None:
         context = _live_constructor_context("replace")
+    return source, target, context
+
+
+def _circle_surround(self, mobject, dim_to_match=0, stretch=False, buffer_factor=1.2):
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("Circle surround target must be a Mobject")
+    from _manim_updaters import _canonical_phase_context
+
+    if (_canonical_phase_context(self) is not None
+            or _canonical_phase_context(mobject) is not None):
+        raise NotImplementedError("Circle.surround requires a non-staged layout")
+    stretch = bool(stretch)
+    # replace(stretch=True) never inspects the dimension. Otherwise Manim's
+    # reduce_across_dimension asserts its range before NumPy indexes the points.
+    dimension = 0
+    if not stretch:
+        assert dim_to_match >= 0
+        assert dim_to_match <= 2
+        try:
+            dimension = operator.index(dim_to_match)
+        except TypeError as error:
+            raise IndexError("Circle surround dimension must be an integer index") from error
+    source, target, context = _replacement_anchors(self, mobject, 0)
     if context is None:
-        engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
+        engine_call(source.surroundCircle, target, dimension, stretch, float(buffer_factor))
     else:
-        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
+        engine_call(context.liveSurroundCircle, source, target, dimension, stretch, float(buffer_factor))
     return self
 
 
@@ -1199,11 +1309,27 @@ def _align_to(
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("alignment requires current shared Rust semantic handles")
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets do not support layout alignment"
-        )
     axis = _base._as_vec2(direction)
+    context = _live_mutation_context(self) or _live_constructor_context()
+    if context is not None:
+        mask_x = 1.0 if axis.x != 0.0 else 0.0
+        mask_y = 1.0 if axis.y != 0.0 else 0.0
+        try:
+            if isinstance(mobject_or_point, (_base.Mobject, _compat.Group)):
+                target = _layout_anchor(mobject_or_point)
+                if target is None:
+                    raise RuntimeError(
+                        "alignment target requires current shared Rust semantic handles"
+                    )
+                engine_call(context.liveMoveToLayout, handle, target,
+                            axis.x, axis.y, mask_x, mask_y)
+            else:
+                point = _base._as_vec2(mobject_or_point)
+                engine_call(context.liveMoveToPoint, handle, point.x, point.y,
+                            axis.x, axis.y, mask_x, mask_y)
+        except Exception as error:
+            raise_engine_error(error)
+        return self
     if _is_shared_family(mobject_or_point):
         target = _layout_anchor(mobject_or_point)
         if target is None:
@@ -1228,10 +1354,19 @@ def _align_on_frame(
     handle = _handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         raise RuntimeError("Mobject frame alignment requires a current shared Rust semantic handle")
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets do not support frame alignment"
-        )
+    context = _live_mutation_context(self) or _live_constructor_context()
+    if context is not None:
+        try:
+            engine_call(
+                context.liveAlignMobjectOnFrame,
+                handle,
+                direction.x,
+                direction.y,
+                float(buff),
+            )
+        except Exception as error:
+            raise_engine_error(error)
+        return self
     engine_call(handle.alignOnFrame, direction.x, direction.y, float(buff))
     return self
 
@@ -1241,6 +1376,14 @@ def _paint_color(self, channel):
     phase = _canonical_phase_context(self)
     if phase is not None:
         raise NotImplementedError("paint color getters in host callbacks require staged color observation")
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is not None:
+        method = getattr(family_handle, f"own{channel.title()}Color", None)
+        if method is not None:
+            color = engine_call(method)
+            if color is None:
+                return None
+            return _base.Color(float(color.red), float(color.green), float(color.blue), 1.0)
     color = _typed_manim_observation(self, f"{channel}Color", f"queryMobject{channel.title()}Color")
     if color is None:
         return None
@@ -1249,10 +1392,15 @@ def _paint_color(self, channel):
 
 def _get_stroke_width(self, background=False):
     if background:
-        raise NotImplementedError("background strokes require shared background paint")
+        return _get_background_stroke_width(self)
     from _manim_updaters import _canonical_phase_context
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError("stroke width getters in host callbacks require staged width observation")
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is not None:
+        method = getattr(family_handle, "ownStrokeWidth", None)
+        if method is not None:
+            return float(engine_call(method)) * 100.0
     width = _typed_manim_observation(self, "strokeWidth", "queryMobjectStrokeWidth", handle_property=True)
     if width is None:
         raise RuntimeError("paint observations require the shared Rust authoring host")
@@ -1282,46 +1430,617 @@ def _set_color_by_gradient(self, *colors):
     return self
 
 
+def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color):
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+        raise NotImplementedError(
+            "radial gradients in host callbacks require staged paint publication"
+        )
+    inner = _compat._as_color("inner gradient color", inner_color)
+    outer = _compat._as_color("outer gradient color", outer_color)
+    radius = _compat._ir._finite_number("radius", radius)
+    if center is None:
+        center = (*self.get_center(), 0.0)
+    elif isinstance(center, _base.Vec2):
+        center = (center.x, center.y, 0.0)
+    else:
+        try:
+            dimensions = len(center)
+        except (TypeError, AttributeError):
+            dimensions = None
+        if dimensions not in (2, 3):
+            raise TypeError("expected a two- or three-component vector")
+        try:
+            center = tuple(float(center[index]) for index in range(dimensions))
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("expected a two- or three-component numeric vector") from error
+        if dimensions == 2:
+            center = (*center, 0.0)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("radial gradients require the shared Rust authoring host")
+    arguments = _gradient_components((inner, outer))
+    if context is None:
+        engine_call(
+            target.setRadialColorGradient,
+            *center,
+            radius,
+            arguments,
+        )
+    else:
+        engine_call(
+            getattr(context, f"liveSet{suffix}ColorRadialGradient"),
+            target,
+            *center,
+            radius,
+            arguments,
+        )
+    return self
+
+
 def _style_target(value):
     if _is_shared_family(value):
         return value._semantic_family_handle, _group_target_context(value), "Family"
     return _handle_for(value), _live_mutation_context(value), ""
 
 
-def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
-               stroke_width=None, stroke_opacity=None, family=True, **kwargs):
-    if kwargs:
-        raise NotImplementedError("unsupported shared style option(s): " + ", ".join(sorted(kwargs)))
+def _style_value(value, name):
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise NotImplementedError(
+                f"multi-value {name} requires shared gradient paint"
+            )
+        return value[0]
+    return value
+
+
+def _style_color(value, name):
+    if value is None:
+        return None
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        value = value[0]
+        if value is None:
+            return None
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) in (3, 4)
+        and all(isinstance(component, numbers.Real) for component in value)
+    ):
+        components = [
+            _ir._unit_interval(f"{name} component", component)
+            for component in value
+        ]
+        return _base.Color(*components)
+    if isinstance(value, (list, tuple)):
+        raise NotImplementedError(
+            f"multi-color {name} requires shared gradient paint"
+        )
+    return _compat._as_color(name, value)
+
+
+def _interpolate_manim_style(self, mobject1, mobject2, alpha):
+    """Publish VMobject's supported color fields through one Rust operation."""
+    objects = (self, mobject1, mobject2)
+    family_profile = all(
+        isinstance(value, _compat.VGroup) and _is_shared_family(value)
+        for value in objects
+    )
+    leaf_profile = all(
+        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        for value in objects
+    )
+    if not family_profile and not leaf_profile:
+        raise NotImplementedError(
+            "VMobject.interpolate_color requires three VMobjects or three shared VGroups"
+        )
+    from _manim_updaters import _canonical_phase_context
+    if any(_canonical_phase_context(value) is not None for value in objects):
+        raise NotImplementedError(
+            "VMobject.interpolate_color in host callbacks requires staged style publication"
+        )
+
+    amount = _ir._finite_number("alpha", alpha)
+    if family_profile:
+        receiver = self._semantic_family_handle
+        start = mobject1._semantic_family_handle
+        end = mobject2._semantic_family_handle
+        context = _group_target_context(self)
+        if context is None:
+            engine_call(receiver.interpolateManimStyle, start, end, amount)
+        else:
+            engine_call(
+                context.liveInterpolateFamilyManimStyle,
+                receiver,
+                start,
+                end,
+                amount,
+            )
+        return self
+
+    target = _handle_for(self)
+    start = _handle_for(mobject1)
+    end = _handle_for(mobject2)
+    if target is None or start is None or end is None:
+        raise RuntimeError(
+            "VMobject.interpolate_color requires current shared Rust semantic handles"
+        )
+
+    context = _live_mutation_context(self)
+    if context is None:
+        engine_call(target.interpolateManimStyle, start, end, amount)
+    else:
+        engine_call(
+            context.liveInterpolateMobjectStyle,
+            target,
+            start,
+            end,
+            amount,
+        )
+    return self
+
+
+def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
+    """Publish VMobject's default straight-path point and style interpolation in Rust."""
+    family_receiver = isinstance(self, _compat.VGroup) and _is_shared_family(self)
+    if not isinstance(self, _compat.VMobject) and not family_receiver:
+        raise NotImplementedError("Please override in a child class.")
+    objects = (self, mobject1, mobject2)
+    family_profile = all(
+        isinstance(value, _compat.VGroup) and _is_shared_family(value)
+        for value in objects
+    )
+    leaf_profile = all(
+        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        for value in objects
+    )
+    if not family_profile and not leaf_profile:
+        raise NotImplementedError(
+            "Mobject.interpolate requires three VMobjects or three shared VGroups"
+        )
+    if type(self).interpolate_color is not _compat.VMobject.interpolate_color:
+        raise NotImplementedError(
+            "Mobject.interpolate subclass interpolate_color overrides require host dispatch"
+        )
+    from _manim_user_vectors import straight_path
+    if path_func is not straight_path():
+        raise NotImplementedError(
+            "Mobject.interpolate custom path_func callbacks require shared Rust path support"
+        )
+    from _manim_updaters import _canonical_phase_context
+    if any(_canonical_phase_context(value) is not None for value in objects):
+        raise NotImplementedError(
+            "Mobject.interpolate in host callbacks requires staged geometry publication"
+        )
+
+    amount = _ir._finite_number("alpha", alpha)
+    if family_profile:
+        if any(
+            engine_call(value._semantic_family_handle.pointCount) != 0
+            for value in objects
+        ):
+            raise NotImplementedError(
+                "Mobject.interpolate requires point-free shared VGroup roots"
+            )
+        return _interpolate_manim_style(self, mobject1, mobject2, amount)
+
+    target = _handle_for(self)
+    start = _handle_for(mobject1)
+    end = _handle_for(mobject2)
+    if target is None or start is None or end is None:
+        raise RuntimeError(
+            "Mobject.interpolate requires current shared Rust semantic handles"
+        )
+
+    context = _live_mutation_context(self)
+    if context is None:
+        engine_call(target.interpolateManim, start, end, amount)
+    else:
+        engine_call(
+            context.liveInterpolateMobject,
+            target,
+            start,
+            end,
+            amount,
+        )
+    return self
+
+
+def _set_style(
+    self,
+    fill_color=None,
+    fill_opacity=None,
+    stroke_color=None,
+    stroke_width=None,
+    stroke_opacity=None,
+    background_stroke_color=None,
+    background_stroke_width=None,
+    background_stroke_opacity=None,
+    sheen_factor=None,
+    sheen_direction=None,
+    background_image=None,
+    family=True,
+):
+    fill_color = _style_color(fill_color, "fill color")
+    stroke_color = _style_color(stroke_color, "stroke color")
+    fill_opacity = _style_value(fill_opacity, "fill opacity")
+    stroke_opacity = _style_value(stroke_opacity, "stroke opacity")
+    background_stroke_color = _style_color(
+        background_stroke_color, "background stroke color"
+    )
+    background_stroke_width = _style_value(
+        background_stroke_width, "background stroke width"
+    )
+    background_stroke_opacity = _style_value(
+        background_stroke_opacity, "background stroke opacity"
+    )
+
+    # VGroup family=False addresses the point-free family root, whose style is
+    # stored separately from its rendered leaves.
+    root_background_stroke = None
+    if not family and isinstance(self, _compat.VGroup) and any(
+        value is not None
+        for value in (
+            background_stroke_color,
+            background_stroke_width,
+            background_stroke_opacity,
+        )
+    ):
+        root_background_stroke = (
+            background_stroke_color,
+            None
+            if background_stroke_width is None
+            else _compat._manim_stroke_width(background_stroke_width),
+            None
+            if background_stroke_opacity is None
+            else _compat._opacity("background stroke opacity", background_stroke_opacity),
+        )
+    if sheen_factor is not None and _ir._finite_number("sheen factor", sheen_factor) != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
+    if background_image:
+        raise NotImplementedError("background images require shared image paint")
+
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")
-    if not family and _is_shared_family(self):
-        raise NotImplementedError("non-recursive Group style requires shared family style state")
+    own_family_style = not family and _is_shared_family(self)
     arguments = (*_family_color_arguments(fill_color),
                  None if fill_opacity is None else _compat._opacity("fill opacity", fill_opacity),
                  *_family_color_arguments(stroke_color),
                  None if stroke_width is None else _compat._manim_stroke_width(stroke_width),
                  None if stroke_opacity is None else _compat._opacity("stroke opacity", stroke_opacity))
+    background_arguments = (
+        *_family_color_arguments(background_stroke_color),
+        None
+        if background_stroke_width is None
+        else _compat._manim_stroke_width(background_stroke_width),
+        None
+        if background_stroke_opacity is None
+        else _compat._opacity("background stroke opacity", background_stroke_opacity),
+    )
     handle, context, suffix = _style_target(self)
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
-    if context is None:
-        engine_call(handle.setStyle, *arguments)
+    if root_background_stroke is not None and context is None:
+        engine_call(
+            handle.setOwnStyleWithBackgroundStroke,
+            *arguments,
+            *_family_color_arguments(root_background_stroke[0]),
+            root_background_stroke[1],
+            root_background_stroke[2],
+        )
+    elif root_background_stroke is not None:
+        engine_call(
+            context.liveSetFamilyOwnStyleWithBackgroundStroke,
+            handle,
+            *arguments,
+            *_family_color_arguments(root_background_stroke[0]),
+            root_background_stroke[1],
+            root_background_stroke[2],
+        )
+    elif context is None:
+        method_name = "setOwnStyle" if own_family_style else "setStyle"
+        if own_family_style:
+            engine_call(getattr(handle, method_name), *arguments)
+        else:
+            engine_call(getattr(handle, method_name), *arguments, *background_arguments)
     else:
-        engine_call(getattr(context, f"liveSet{suffix}Style"), handle, *arguments)
+        method_suffix = f"{suffix}Own" if own_family_style else suffix
+        if own_family_style:
+            engine_call(getattr(context, f"liveSet{method_suffix}Style"), handle, *arguments)
+        else:
+            engine_call(
+                getattr(context, f"liveSet{method_suffix}Style"),
+                handle,
+                *arguments,
+                *background_arguments,
+            )
     return self
+
+
+def _set_background_stroke(self, color=None, width=None, opacity=None, family=True):
+    if color is None and width is None and opacity is None:
+        return self
+    return _set_style(
+        self,
+        background_stroke_color=color,
+        background_stroke_width=width,
+        background_stroke_opacity=opacity,
+        family=family,
+    )
+
+
+def _get_background_stroke_style(self):
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
+
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(self) is not None
+    ):
+        raise NotImplementedError(
+            "background-stroke queries require staged style observation"
+        )
+    if family_handle is not None:
+        color_method = getattr(family_handle, "ownBackgroundStrokeColor", None)
+        width_method = getattr(family_handle, "ownBackgroundStrokeWidth", None)
+        opacity_method = getattr(family_handle, "ownBackgroundStrokeOpacity", None)
+        if color_method is not None and width_method is not None and opacity_method is not None:
+            color = engine_call(color_method)
+            return (
+                _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
+                float(engine_call(width_method)),
+                float(engine_call(opacity_method)),
+            )
+
+    color = _typed_manim_observation(
+        self, "backgroundStrokeColor", "queryMobjectBackgroundStrokeColor"
+    )
+    width = _typed_manim_observation(
+        self,
+        "backgroundStrokeWidth",
+        "queryMobjectBackgroundStrokeWidth",
+        handle_property=True,
+    )
+    opacity = _typed_manim_observation(
+        self,
+        "backgroundStrokeOpacity",
+        "queryMobjectBackgroundStrokeOpacity",
+        handle_property=True,
+    )
+    if width is None or opacity is None:
+        raise RuntimeError("background-stroke observations require the shared Rust authoring host")
+    if color is None:
+        color = _base.BLACK
+    return (
+        _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
+        float(width),
+        float(opacity),
+    )
+
+
+def _get_background_stroke_color(self):
+    return _get_background_stroke_style(self)[0]
+
+
+def _get_background_stroke_width(self):
+    return _get_background_stroke_style(self)[1] * 100.0
+
+
+def _get_background_stroke_opacity(self):
+    return _get_background_stroke_style(self)[2]
+
+
+def _sheen_direction_components(direction):
+    if hasattr(direction, "tolist"):
+        direction = direction.tolist()
+    elif not isinstance(direction, (list, tuple)):
+        try:
+            direction = tuple(direction)
+        except TypeError:
+            raise TypeError("sheen direction must be a 2D or 3D vector") from None
+    if not isinstance(direction, (list, tuple)) or len(direction) not in (2, 3):
+        raise ValueError("sheen direction must contain two or three components")
+    dimensions = len(direction)
+    values = tuple(
+        _ir._finite_number(f"sheen direction[{index}]", value)
+        for index, value in enumerate(direction)
+    )
+    if dimensions == 2:
+        values = (*values, 0.0)
+    return values, dimensions
+
+
+def _sheen_rotation_axis(axis):
+    values, _dimensions = _sheen_direction_components(axis)
+    return values
+
+
+def _check_sheen_callback_write(self):
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(self) is not None
+    ):
+        raise NotImplementedError(
+            "sheen direction updates in staged callbacks require staged metadata publication"
+        )
+
+
+def _set_sheen_direction(self, direction, family=True):
+    values, dimensions = _sheen_direction_components(direction)
+    _check_sheen_callback_write(self)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("sheen direction updates require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.setSheenDirection, *values, dimensions, bool(family))
+        else:
+            engine_call(
+                context.liveSetFamilySheenDirection,
+                target,
+                *values,
+                dimensions,
+                bool(family),
+            )
+    elif context is None:
+        engine_call(target.setSheenDirection, *values, dimensions, bool(family))
+    else:
+        engine_call(
+            context.liveSetMobjectSheenDirection,
+            target,
+            *values,
+            dimensions,
+            bool(family),
+        )
+    return self
+
+
+def _set_sheen(self, factor, direction=None, family=True):
+    value = _ir._finite_number("sheen factor", factor)
+    if value != 0.0:
+        raise NotImplementedError("2D sheen requires shared gradient paint")
+    if direction is not None:
+        return _set_sheen_direction(self, direction, family)
+    return self
+
+
+def _set_cap_style(self, cap_style):
+    cap = _ir._stroke_cap(cap_style)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("cap styles require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.setStrokeCap, cap)
+        else:
+            engine_call(context.liveSetFamilyOwnStrokeCap, target, cap)
+    elif context is None:
+        engine_call(target.setStrokeCap, cap)
+    else:
+        engine_call(context.liveSetStrokeCap, target, cap)
+    return self
+
+
+def _get_cap_style(self):
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("cap styles require the shared Rust authoring host")
+    if suffix == "Family":
+        cap = engine_call(target.ownStrokeCap)
+    elif context is None:
+        # wasm-bindgen exposes strokeCap as a JavaScript property getter.
+        cap = target.strokeCap
+    else:
+        cap = engine_call(context.queryMobjectStrokeCap, target)
+    return getattr(_base.CapStyleType, str(cap).upper())
+
+
+def _rotate_sheen_direction(self, angle, axis, family=True):
+    value = _ir._finite_number("sheen rotation angle", angle)
+    if value == 0.0:
+        return self
+    axis = _sheen_rotation_axis(axis)
+    _check_sheen_callback_write(self)
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("sheen direction updates require the shared Rust authoring host")
+    if suffix == "Family":
+        if context is None:
+            engine_call(target.rotateSheenDirection, value, *axis, bool(family))
+        else:
+            engine_call(
+                context.liveRotateFamilySheenDirection,
+                target,
+                value,
+                *axis,
+                bool(family),
+            )
+    elif context is None:
+        engine_call(target.rotateSheenDirection, value, *axis, bool(family))
+    else:
+        engine_call(
+            context.liveRotateMobjectSheenDirection,
+            target,
+            value,
+            *axis,
+            bool(family),
+        )
+    return self
+
+
+def _get_sheen_direction(self):
+    target, _context, suffix = _style_target(self)
+    if target is None:
+        values = (-1.0, 1.0, 0.0)
+    elif suffix == "Family":
+        values = engine_call(target.ownSheenDirection)
+    else:
+        values = engine_call(target.sheenDirection)
+    try:
+        import numpy as np
+    except ImportError:
+        return list(values)
+    return np.asarray(values, dtype=np.float64)
+
+
+def _get_gradient_start_and_end_points(self):
+    direction = [float(value) for value in self.get_sheen_direction()]
+    if direction[2] != 0.0:
+        raise NotImplementedError("3D sheen gradients require spatial geometry")
+    center = self.get_center()
+    right = self.get_edge_center(_base.RIGHT) - center
+    up = self.get_edge_center(_base.UP) - center
+    offset = right * direction[0] + up * direction[1]
+    return (
+        _compat._manim_point3(center - offset),
+        _compat._manim_point3(center + offset),
+    )
+
+
+def _color_using_background_image(self, background_image):
+    if background_image is not None:
+        raise NotImplementedError("background images require shared image paint")
+    self.set_color(_base.WHITE)
+    return self
+
+
+def _match_background_image(self, vmobject):
+    background_image = vmobject.get_background_image()
+    if background_image is not None:
+        raise NotImplementedError("background images require shared image paint")
+    return self.color_using_background_image(None)
 
 
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
-    if _is_shared_family(self) != _is_shared_family(vmobject):
-        raise NotImplementedError("mixed object/family style matching requires shared family style state")
-    if not family and _is_shared_family(self):
-        raise NotImplementedError("non-recursive Group style requires shared family style state")
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("match_style in host callbacks requires staged style capture")
+    if not family:
+        get_style = getattr(vmobject, "get_style", None)
+        receiver_get_style = getattr(self, "get_style", None)
+        set_style = getattr(self, "set_style", None)
+        if (
+            not callable(receiver_get_style)
+            or not callable(get_style)
+            or not callable(set_style)
+        ):
+            raise NotImplementedError(
+                "non-recursive style matching requires vector style access"
+            )
+        # Match only the receiver's VMobject root. set_style(..., family=False)
+        # keeps the write atomic and routes live VGroup roots through Rust too.
+        return set_style(**get_style(simple=True), family=False)
+    if _is_shared_family(self) != _is_shared_family(vmobject):
+        raise NotImplementedError("mixed object/family style matching requires shared family style state")
     source, context, suffix = _style_target(self)
     target, target_context, _ = _style_target(vmobject)
     if source is None or target is None:
@@ -1480,6 +2199,14 @@ def _paint_opacity_observation(value: object, layer: str):
     if phase is not None:
         paint = getattr(phase[2].style, layer)
         return 0.0 if paint is None else float(paint[3])
+    family_handle = getattr(value, "_semantic_family_handle", None)
+    if family_handle is not None:
+        from _manim_updaters import _canonical_phase_context
+        if _canonical_phase_context(value) is not None:
+            raise NotImplementedError("family root paint getters require staged style observation")
+        method = getattr(family_handle, f"own{layer.title()}Opacity", None)
+        if method is not None:
+            return engine_call(method)
     return _typed_manim_observation(
         value, f"{layer}Opacity", f"queryMobject{layer.title()}Opacity", handle_property=True
     )
@@ -1527,6 +2254,8 @@ def _group_paint(self, operation, arguments):
     if phase is not None:
         if operation == "OwnColor":
             raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
+        if operation in {"OwnFill", "OwnStroke", "OwnOpacity"}:
+            raise NotImplementedError("callback root-only Group paint requires staged family style writes")
         phase.paint_family(handle, operation, arguments)
         return self
     context = _group_target_context(self)
@@ -1553,24 +2282,57 @@ def _group_set_color(self, color, family=True):
     return _group_paint(self, "Color" if family else "OwnColor", arguments)
 
 
-def _group_set_fill(self, color=None, opacity=None):
+def _group_set_fill(self, color=None, opacity=None, family=True):
     alpha = None if opacity is None else _compat._opacity("fill opacity", opacity)
-    return _group_paint(self, "Fill", (*_family_color_arguments(color), alpha))
+    operation = "Fill" if family else "OwnFill"
+    return _group_paint(self, operation, (*_family_color_arguments(color), alpha))
 
 
-def _group_set_stroke(self, color=None, width=None, opacity=None):
+def _group_set_stroke(self, color=None, width=None, opacity=None, family=True):
     stroke_width = None if width is None else _compat._manim_stroke_width(width)
     alpha = None if opacity is None else _compat._opacity("stroke opacity", opacity)
-    return _group_paint(self, "Stroke", (*_family_color_arguments(color), stroke_width, alpha))
+    operation = "Stroke" if family else "OwnStroke"
+    return _group_paint(
+        self, operation, (*_family_color_arguments(color), stroke_width, alpha)
+    )
 
 
-def _group_set_opacity(self, opacity):
+def _group_set_opacity(self, opacity, family=True):
     alpha = _compat._opacity("opacity", opacity)
-    return _group_paint(self, "Opacity", (alpha,))
+    operation = "Opacity" if family else "OwnOpacity"
+    return _group_paint(self, operation, (alpha,))
 
 
 def _fade(self, darkness=0.5, family=True):
+    if (
+        not family
+        and isinstance(self, _compat.Group)
+        and not isinstance(self, _compat.VGroup)
+    ):
+        # Base Manim Mobject.fade only walks submobjects; with family=False a
+        # plain Group therefore returns unchanged without reading darkness.
+        return self
     darkness = _compat._opacity("darkness", darkness)
+    if not family and isinstance(self, _compat.VGroup):
+        from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+
+        if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+            raise NotImplementedError(
+                "root-only VGroup fade is unavailable inside staged callbacks"
+            )
+        handle, context, _suffix = _style_target(self)
+        if handle is None:
+            raise RuntimeError("VGroup fade requires the shared Rust authoring host")
+        if context is None:
+            engine_call(handle.fadeOwn, darkness, operation="VMobject.fade")
+        else:
+            engine_call(
+                context.liveFadeFamilyOwn,
+                handle,
+                darkness,
+                operation="VMobject.fade",
+            )
+        return self
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")
     handle, context, suffix = _style_target(self)
@@ -1864,6 +2626,269 @@ def _group_layout_observation(value: _compat.Group):
     return layout
 
 
+def _all_points_observation(value: _base.Mobject):
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyAllPoints, family)
+        return engine_call(family.allPoints)
+    return _typed_manim_observation(
+        value,
+        "allPoints",
+        "queryMobjectAllPoints",
+    )
+
+
+def _point_reduction_tree_observation(value: _base.Mobject):
+    """Return Rust-owned family nesting and per-object effective point arrays."""
+    if not _is_shared_family(value):
+        return _typed_manim_observation(
+            value,
+            "pointReductionTree",
+            "queryMobjectPointReductionTree",
+        )
+    family = value._semantic_family_handle
+    context = _group_live_layout_context(value)
+    if context is not None:
+        return engine_call(context.queryFamilyPointReductionTree, family)
+    return engine_call(family.pointReductionTree)
+
+
+def _merged_points_observation(value: _base.Mobject):
+    """Return Rust-flattened recursive points for one object or family."""
+    if not _is_shared_family(value):
+        return _all_points_observation(value)
+    family = value._semantic_family_handle
+    context = _group_live_layout_context(value)
+    if context is not None:
+        return engine_call(context.queryFamilyMergedPoints, family)
+    return engine_call(family.mergedPoints)
+
+
+def _family_point_count_observation(value: _base.Mobject) -> int | None:
+    if not _is_shared_family(value):
+        return None
+    # Family nodes own membership but no point array of their own, matching
+    # Mobject.get_num_points() on Manim Group/VGroup instances.
+    return int(engine_call(value._semantic_family_handle.pointCount))
+
+
+def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
+    if isinstance(value, _compat.VMobject):
+        try:
+            stride = operator.index(
+                getattr(value, "n_points_per_cubic_curve", 4)
+            )
+        except TypeError:
+            stride = None
+        if stride != 4:
+            from _manim_updaters import canonical_callback_phase_active
+
+            if canonical_callback_phase_active():
+                raise NotImplementedError(
+                    "custom-stride VMobject extrema are unavailable during staged callbacks"
+                )
+            if dim == 2:
+                return 0.0
+            anchors = value.get_anchors()
+            coordinates = [
+                float(coordinate)
+                for point in anchors
+                for coordinate in (point[0], point[1])
+            ]
+            result = _extremum_from_points_observation(
+                value, coordinates, 2, dim, key
+            )
+            if result is None:
+                raise NotImplementedError(
+                    "custom-stride VMobject extrema require a shared Rust handle"
+                )
+            return float(result)
+        return _point_query_observation(
+            value,
+            "PathBoundaryExtremumAlongDim",
+            dim,
+            key,
+        )
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(context.queryFamilyExtremumAlongDim, family, dim, key)
+        return engine_call(family.extremumAlongDim, dim, key)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, "queryMobjectExtremumAlongDim", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, dim, key)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(handle.extremumAlongDim, dim, key)
+
+
+def _point_query_observation(value: _base.Mobject, operation: str, *arguments):
+    handle_method = operation[0].lower() + operation[1:]
+    if _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _group_live_layout_context(value)
+        if context is not None:
+            return engine_call(
+                getattr(context, f"queryFamily{operation}"),
+                family,
+                *arguments,
+            )
+        return engine_call(getattr(family, handle_method), *arguments)
+
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    if _is_bound(value):
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, f"queryMobject{operation}", None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return engine_call(query, semantic_handle, *arguments)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return engine_call(getattr(handle, handle_method), *arguments)
+
+
+def _center_of_mass_observation(value: _base.Mobject):
+    return _point_query_observation(value, "CenterOfMass")
+
+
+def _boundary_point_observation(
+    value: _base.Mobject,
+    direction_x: float,
+    direction_y: float,
+):
+    if isinstance(value, _compat.VMobject):
+        try:
+            stride = operator.index(
+                getattr(value, "n_points_per_cubic_curve", 4)
+            )
+        except TypeError:
+            stride = None
+        if stride != 4:
+            from _manim_updaters import canonical_callback_phase_active
+
+            if canonical_callback_phase_active():
+                raise NotImplementedError(
+                    "custom-stride VMobject boundary points are unavailable during staged callbacks"
+                )
+            anchors = value.get_anchors()
+            coordinates = [
+                float(coordinate)
+                for point in anchors
+                for coordinate in (point[0], point[1])
+            ]
+            result = _boundary_point_from_points_observation(
+                value, coordinates, 2, direction_x, direction_y
+            )
+            if result is None:
+                raise NotImplementedError(
+                    "custom-stride VMobject boundary points require a shared Rust handle"
+                )
+            return result
+        return _point_query_observation(
+            value,
+            "PathBoundaryPoint",
+            direction_x,
+            direction_y,
+        )
+    return _point_query_observation(
+        value,
+        "BoundaryPoint",
+        direction_x,
+        direction_y,
+    )
+
+
+def _path_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "PathBoundaryPoints")
+
+
+def _path_boundary_extremum_along_dim_observation(
+    value: _base.Mobject,
+    dim: int,
+    key: float,
+):
+    return _point_query_observation(
+        value,
+        "PathBoundaryExtremumAlongDim",
+        dim,
+        key,
+    )
+
+
+def _length_over_dim_observation(value: _base.Mobject, dim: int):
+    return _point_query_observation(value, "LengthOverDim", dim)
+
+
+def _extremum_from_points_observation(
+    value: _base.Mobject,
+    coordinates: list[float],
+    point_dimensions: int,
+    dim: int,
+    key: float,
+):
+    if _is_shared_family(value):
+        return engine_call(
+            value._semantic_family_handle.extremumFromPoints,
+            coordinates,
+            point_dimensions,
+            dim,
+            key,
+        )
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    return engine_call(
+        handle.extremumFromPoints,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
+
+
+def _boundary_point_from_points_observation(
+    value: _base.Mobject,
+    coordinates: list[float],
+    point_dimensions: int,
+    direction_x: float,
+    direction_y: float,
+):
+    if _is_shared_family(value):
+        return None
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    return engine_call(
+        handle.boundaryPointFromPoints,
+        coordinates,
+        point_dimensions,
+        direction_x,
+        direction_y,
+    )
+
+
 def _is_shared_family(value: object) -> bool:
     return (
         isinstance(value, _compat.Group)
@@ -2017,6 +3042,193 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.Group:
+    _validate_group_members(self, (mobject,))
+
+    # Let Python's own list implementation apply __index__, negative-index
+    # adjustment, clamping, and overflow behavior exactly as Manim does.
+    current = list(self.submobjects)
+    probe = list(current)
+    marker = object()
+    probe.insert(index, marker)
+    position = probe.index(marker)
+
+    key = _family_wrapper_key(mobject)
+    if any(_family_wrapper_key(member) == key for member in current):
+        raise NotImplementedError(
+            "Mobject.insert cannot repeat a direct member identity because Noon "
+            "semantic families store each child identity once"
+        )
+
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", (mobject,))
+    if context is not None:
+        engine_call(
+            context.liveInsertFamilyMember,
+            family_handle,
+            position,
+            batch,
+            operation="Mobject.insert",
+        )
+    else:
+        engine_call(
+            family_handle.insertMember,
+            position,
+            batch,
+            operation="Mobject.insert",
+        )
+    self._semantic_member_wrappers[key] = mobject
+    return self
+
+
+def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    _validate_group_members(self, mobjects)
+    if not mobjects:
+        return self
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", mobjects)
+    if context is not None:
+        engine_call(
+            context.livePrependFamilyMembers,
+            family_handle,
+            batch,
+            operation="Mobject.add_to_back",
+        )
+    else:
+        engine_call(
+            family_handle.prependMembers,
+            batch,
+            operation="Mobject.add_to_back",
+        )
+    for value in mobjects:
+        self._semantic_member_wrappers[_family_wrapper_key(value)] = value
+    return self
+
+
+def _group_add_n_more_submobjects(
+    self: _compat.Group, n: int
+) -> _compat.Group | None:
+    if n == 0:
+        return None
+    additions = operator.index(n)
+    current = tuple(self.submobjects)
+    current_count = len(current)
+    if current_count == 0:
+        if additions <= 0:
+            return None
+        ordered = tuple(self.get_point_mobject() for _ in range(additions))
+        empty_result = True
+    else:
+        target_count = current_count + additions
+        if target_count <= 0:
+            return self
+        repeat_indices = [
+            (index * current_count) // target_count
+            for index in range(target_count)
+        ]
+        split_factors = [
+            repeat_indices.count(index) for index in range(current_count)
+        ]
+        expanded = []
+        for member, split_factor in zip(current, split_factors, strict=True):
+            expanded.append(member)
+            for _ in range(1, split_factor):
+                repeated = self.repeat_submobject(member)
+                repeated.fade(1)
+                expanded.append(repeated)
+        ordered = tuple(expanded)
+        empty_result = False
+        if len(ordered) == current_count and all(
+            before is after for before, after in zip(current, ordered, strict=True)
+        ):
+            return self
+
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", ordered)
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(
+            context.livePrependFamilyMembers,
+            family_handle,
+            batch,
+            operation="Mobject.add_n_more_submobjects",
+        )
+    else:
+        engine_call(
+            family_handle.prependMembers,
+            batch,
+            operation="Mobject.add_n_more_submobjects",
+        )
+    for member in ordered:
+        self._semantic_member_wrappers[_family_wrapper_key(member)] = member
+    return None if empty_result else self
+
+
+def _group_invert(self: _compat.Group, recursive: bool = False) -> _compat.Group:
+    family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    recursive = bool(recursive)
+    if context is not None:
+        engine_call(
+            context.liveInvertFamilyMembers,
+            family_handle,
+            recursive,
+            operation="Mobject.invert",
+        )
+    else:
+        engine_call(
+            family_handle.invertMembers,
+            recursive,
+            operation="Mobject.invert",
+        )
+    return self
+
+
+def _group_sort(
+    self: _compat.Group,
+    point_to_num_func: Callable[[Any], float] = lambda point: point[0],
+    submob_func: Callable[[_compat.Mobject], Any] | None = None,
+) -> _compat.Group:
+    context = _live_constructor_context("family")
+    members = tuple(self.submobjects)
+    key = submob_func
+    if key is None:
+        key = lambda member: point_to_num_func(member.get_center())
+    ordered = tuple(sorted(members, key=key))
+    if all(before is after for before, after in zip(members, ordered)):
+        return self
+    batch = _family_membership_batch(context, "add", ordered)
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(context.livePrependFamilyMembers, family_handle, batch)
+    else:
+        engine_call(family_handle.prependMembers, batch)
+    return self
+
+
+def _group_shuffle(self: _compat.Group, recursive: bool = False) -> _compat.Group:
+    import random
+
+    if recursive:
+        raise NotImplementedError(
+            "recursive family shuffle is not supported until Rust owns its family traversal"
+        )
+    context = _live_constructor_context("family")
+    members = list(self.submobjects)
+    random.shuffle(members)
+    if all(before is after for before, after in zip(self.submobjects, members)):
+        return self
+    batch = _family_membership_batch(context, "add", tuple(members))
+    family_handle = self._semantic_family_handle
+    if context is not None:
+        engine_call(context.livePrependFamilyMembers, family_handle, batch)
+    else:
+        engine_call(family_handle.prependMembers, batch)
+    return self
+
+
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self
@@ -2042,13 +3254,13 @@ def _group_target_context(value: object) -> object | None:
         if id(member) in seen:
             return
         seen.add(id(member))
+        context = _live_mutation_context(member)
+        if context is not None:
+            contexts.append(context)
         if _is_shared_family(member):
             for child in member.submobjects:
                 collect(child)
             return
-        context = _live_mutation_context(member)
-        if context is not None:
-            contexts.append(context)
 
     collect(value)
     if not contexts:

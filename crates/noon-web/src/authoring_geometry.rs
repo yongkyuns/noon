@@ -154,6 +154,19 @@ impl WasmManimGeometryOptions {
         self.options.set_stroke_cap(cap).map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = setSheenDirection)]
+    pub fn set_sheen_direction(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_sheen_direction(x, y, z, dimensions)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = setObjectOpacity)]
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
         self.options.set_object_opacity(opacity).map_err(js_error)
@@ -443,6 +456,19 @@ pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
         .chunks_exact(2)
         .map(|pair| point(pair[0], pair[1]))
         .collect()
+}
+
+pub(crate) fn cubic_curves(values: &[f64]) -> Result<Vec<[Vec2; 4]>, JsValue> {
+    let points = points(values)?;
+    if points.len() % 4 != 0 {
+        return Err(js_error(
+            "cubic Bézier point data must contain complete groups of four",
+        ));
+    }
+    Ok(points
+        .chunks_exact(4)
+        .map(|points| [points[0], points[1], points[2], points[3]])
+        .collect())
 }
 
 #[cfg(all(

@@ -15,6 +15,7 @@ fn stroke_style() -> Style {
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     }
 }
 
@@ -286,6 +287,7 @@ fn certified_closed_filled_path_transform_compiles() {
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     };
     let source = VectorPath::new()
         .move_to(Vec2::new(-1.0, -1.0))
@@ -339,6 +341,7 @@ fn self_intersecting_filled_path_transform_retains_ordered_endpoints() {
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     };
     let source = VectorPath::new()
         .move_to(Vec2::new(-1.0, -1.0))

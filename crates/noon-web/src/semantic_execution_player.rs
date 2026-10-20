@@ -751,6 +751,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_mobject_on_frame(
+        &mut self,
+        mobject: &noon::Mobject,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_on_frame(mobject, direction, buff))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_become_family(
         &mut self,
         source: &noon::MobjectFamily,
@@ -762,6 +773,30 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RawPoints {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_append_points(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendRawPoints {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_points_as_corners(
         &mut self,
         source: &noon::Mobject,
@@ -770,6 +805,30 @@ impl SemanticExecutionPlayer {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners {
             object: source,
             points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points_as_corners_with_samples(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CornersWithSamples {
+            object: source,
+            points,
+            bezier_t_values,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_clear_points(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Clear {
+            object: source,
         })
     }
 
@@ -802,14 +861,46 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_start_new_path_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::StartWithStride {
+            object: source,
+            point,
+            stride,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_add_line_to(
         &mut self,
         source: &noon::Mobject,
         point: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithStride {
             object: source,
             point,
+            stride,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_line_to_with_samples(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+        stride: i32,
+        bezier_t_values: &[f64; 4],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithSamples {
+            object: source,
+            point,
+            stride,
+            bezier_t_values,
         })
     }
 
@@ -819,11 +910,13 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         control: noon_core::Vec2,
         anchor: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Quadratic {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::QuadraticWithStride {
             object: source,
             control,
             anchor,
+            stride,
         })
     }
 
@@ -834,13 +927,145 @@ impl SemanticExecutionPlayer {
         control1: noon_core::Vec2,
         control2: noon_core::Vec2,
         anchor: noon_core::Vec2,
+        stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Cubic {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicWithStride {
             object: source,
             control1,
             control2,
             anchor,
+            stride,
         })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_smooth_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        handle2: Option<noon_core::Vec2>,
+        anchor: noon_core::Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
+                object: source,
+                handle2,
+                anchor,
+                stride,
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_handle_to_anchor_distances(
+        &mut self,
+        source: &noon::Mobject,
+        factor: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ScaleHandles {
+            object: source,
+            factor,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curve(
+        &mut self,
+        source: &noon::Mobject,
+        anchor1: noon_core::Vec2,
+        handle1: noon_core::Vec2,
+        handle2: noon_core::Vec2,
+        anchor2: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurve {
+            object: source,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curves(
+        &mut self,
+        source: &noon::Mobject,
+        curves: &[[noon_core::Vec2; 4]],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurves {
+            object: source,
+            curves,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_cubic_bezier_curves(
+        &mut self,
+        source: &noon::Mobject,
+        curves: &[[noon_core::Vec2; 4]],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurves {
+            object: source,
+            curves,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_points_as_corners(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCorners {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_points_as_corners_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+        stride: i32,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::AppendCornersWithStride {
+                object: source,
+                points,
+                stride,
+                bezier_t_values,
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_append_vectorized_mobject(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendVectorized {
+            object,
+            source,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_append_vectorized_mobject_with_stride(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+        stride: i32,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
+                object,
+                source,
+                stride,
+            },
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -874,6 +1099,50 @@ impl SemanticExecutionPlayer {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyAnchorMode {
             family,
             smooth,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyReversePoints {
+            family,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_points(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ReversePoints {
+            object,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_repeat_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+        count: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyRepeatPoints {
+            family,
+            count,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_repeat_points(
+        &mut self,
+        object: &noon::Mobject,
+        count: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RepeatPoints {
+            object,
+            count,
         })
     }
     #[cfg(target_arch = "wasm32")]
@@ -944,6 +1213,22 @@ impl SemanticExecutionPlayer {
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Close {
             object: source,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_close_path_with_stride(
+        &mut self,
+        source: &noon::Mobject,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: &[f64],
+    ) -> Result<(), AuthoringFailure> {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CloseWithStride {
+            object: source,
+            stride,
+            tolerance,
+            bezier_t_values,
         })
     }
 
@@ -1116,6 +1401,34 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_color_radial_gradient(
+        &mut self,
+        target: &noon::Mobject,
+        center: (f64, f64, f64),
+        radius: f64,
+        inner: noon::Color,
+        outer: noon::Color,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.set_color_by_radial_gradient(target, center, radius, inner, outer)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_color_radial_gradient(
+        &mut self,
+        target: &noon::MobjectFamily,
+        center: (f64, f64, f64),
+        radius: f64,
+        inner: noon::Color,
+        outer: noon::Color,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.set_family_color_by_radial_gradient(target, center, radius, inner, outer)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_fill_color(
         &mut self,
         target: &noon::Mobject,
@@ -1137,12 +1450,92 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_stroke_width(target))
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| {
+            target.background_stroke_color()?;
+            let color = live
+                .effective(target)?
+                .style
+                .background_stroke
+                .map(|color| noon_core::Color {
+                    alpha: 1.0,
+                    ..color
+                });
+            Ok(color)
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_width(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(f64::from(
+                live.effective(target)?.style.background_stroke_width,
+            ))
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_background_stroke_opacity(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(live
+                .effective(target)?
+                .style
+                .background_stroke
+                .map_or(1.0, |color| f64::from(color.alpha)))
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_stroke_cap(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_cap(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_stroke_cap(
+        &mut self,
+        target: &noon::Mobject,
+        cap: &str,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_stroke_cap(target, cap))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_style(
         &mut self,
         source: &noon::Mobject,
         update: noon::StyleUpdate,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_interpolate_manim_style(
+        &mut self,
+        receiver: &noon::Mobject,
+        start: &noon::Mobject,
+        end: &noon::Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.interpolate_manim_style(receiver, start, end, alpha))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_interpolate_manim(
+        &mut self,
+        receiver: &noon::Mobject,
+        start: &noon::Mobject,
+        end: &noon::Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.interpolate_manim(receiver, start, end, alpha))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1161,6 +1554,107 @@ impl SemanticExecutionPlayer {
         update: noon::StyleUpdate,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_sheen_direction(
+        &mut self,
+        source: &noon::MobjectTarget<'_>,
+        direction: noon_core::SemanticSheenDirection,
+        family: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_sheen_direction(source, direction, family))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_rotate_sheen_direction(
+        &mut self,
+        source: &noon::MobjectTarget<'_>,
+        angle: f64,
+        axis: noon_core::SemanticVec3,
+        family: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.rotate_sheen_direction(source, angle, axis, family))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_interpolate_family_manim_style(
+        &mut self,
+        receiver: &noon::MobjectFamily,
+        start: &noon::MobjectFamily,
+        end: &noon::MobjectFamily,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.interpolate_family_manim_style(receiver, start, end, alpha)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_style_with_background_stroke(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+        background_stroke_color: Option<noon::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.set_family_own_style_with_background_stroke(
+                source,
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_opacity(
+        &mut self,
+        source: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_opacity(source, opacity))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_background_stroke_opacity(
+        &mut self,
+        source: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.set_family_own_background_stroke_opacity(source, opacity)
+        })
+        .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_fade_family_own(
+        &mut self,
+        source: &noon::MobjectFamily,
+        darkness: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_family_own(source, darkness))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_stroke_cap(
+        &mut self,
+        source: &noon::MobjectFamily,
+        cap: &str,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_stroke_cap(source, cap))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1505,6 +1999,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_layout_dimension_length(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.dimension_length(source, dimension))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rescale_to_fit(
         &mut self,
         source: &noon::LayoutAnchor,
@@ -1527,6 +2030,20 @@ impl SemanticExecutionPlayer {
         stretch: bool,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.replace_layout(source, target, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_surround_circle(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.surround_circle(source, target, dimension, stretch, buffer_factor)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1906,6 +2423,95 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_all_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_all_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_point_reduction_tree(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_point_reduction_tree(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_extremum_along_dim(&semantics, &self.session, target, dim, key)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_extremum_along_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_extremum_along_dim(
+            &semantics,
+            &self.session,
+            target,
+            dim,
+            key,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_length_over_dim(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        dim: usize,
+    ) -> Result<f64, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_length_over_dim(&semantics, &self.session, target, dim)
+            .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
@@ -1922,6 +2528,61 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_line_endpoints(mobject)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_center_of_mass(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_center_of_mass(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_path_boundary_point(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_path_boundary_point(
+            &semantics,
+            &self.session,
+            target,
+            direction_x,
+            direction_y,
+        )
         .map_err(AuthoringFailure::from)
     }
 
@@ -2544,6 +3205,64 @@ impl SemanticExecutionPlayer {
         } else {
             live.remove_family_members(family, members)
         }
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_prepend_family_members(
+        &mut self,
+        family: &noon::MobjectFamily,
+        members: &[noon::MobjectTarget<'_>],
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        )
+        .prepend_family_members(family, members)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_insert_family_member(
+        &mut self,
+        family: &noon::MobjectFamily,
+        index: usize,
+        member: noon::MobjectTarget<'_>,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        )
+        .insert_family_member(family, index, member)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_invert_family_members(
+        &mut self,
+        family: &noon::MobjectFamily,
+        recursive: bool,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        )
+        .invert_family_members(family, recursive)
         .map_err(AuthoringFailure::from)
     }
 

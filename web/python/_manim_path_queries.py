@@ -3,10 +3,39 @@ import operator
 import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
-from _manim_semantic_handles import _typed_manim_observation
+from _manim_semantic_handles import (
+    _all_points_observation,
+    _boundary_point_observation,
+    _center_of_mass_observation,
+    _extremum_along_dim_observation,
+    _extremum_from_points_observation,
+    _family_point_count_observation,
+    _length_over_dim_observation,
+    _merged_points_observation,
+    _path_boundary_points_observation,
+    _point_reduction_tree_observation,
+    _typed_manim_observation,
+    _handle_for,
+)
+
+
+def _reject_staged_custom_stride_query(value):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if integer_stride != 4:
+        from _manim_updaters import canonical_callback_phase_active
+
+        if canonical_callback_phase_active():
+            raise NotImplementedError(
+                "custom-stride VMobject path queries are unavailable during staged callbacks"
+            )
 
 
 def _query(value):
+    _reject_staged_custom_stride_query(value)
     query = _typed_manim_observation(value, "pathQuery", "queryMobjectPath")
     if query is None:
         raise RuntimeError("path queries require the shared Rust authoring host")
@@ -17,19 +46,137 @@ def point_from_proportion(value, alpha):
     alpha = _ir._finite_number("alpha", alpha)
     query = _query(value)
     try:
+        stride = getattr(value, "n_points_per_cubic_curve", 4)
+        try:
+            integer_stride = operator.index(stride)
+        except TypeError:
+            integer_stride = None
+        if integer_stride != 4:
+            return _custom_stride_point_from_proportion(
+                value, alpha, query, stride
+            )
+
         coordinates = engine_call(query.pointFromProportion, alpha)
         return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
     finally:
         query.free()
 
 
-def arc_length(value, sample_points_per_curve):
-    samples = None if sample_points_per_curve is None else operator.index(sample_points_per_curve)
-    if samples is not None and not 2 <= samples <= 0xFFFFFFFF:
-        raise ValueError("sample_points_per_curve must be between 2 and 4294967295")
+def _custom_stride_point_from_proportion(value, alpha, query, stride):
+    if alpha < 0 or alpha > 1:
+        raise ValueError(f"Alpha {alpha} not between 0 and 1.")
+    point_count = int(query.pointCount)
+    if point_count == 0:
+        raise Exception(
+            "Cannot call Mobject.point_from_proportion for a Mobject with no points"
+        )
+    if alpha == 1:
+        points = engine_call(query.points)
+        return _base.Vec2(float(points[-2]), float(points[-1]))
+
+    count = point_count // stride
+    selections = []
+    lengths = []
+    for index in range(count):
+        selection = _nth_curve_selection(value, index, query)
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        length = _curve_length_from_selection(query, selection, None)
+        selections.append(selection)
+        lengths.append(length)
+
+    target_length = alpha * sum(lengths)
+    current_length = 0.0
+    for selection, length in zip(selections, lengths):
+        if current_length + length >= target_length:
+            residue = (
+                (target_length - current_length) / length
+                if length != 0
+                else 0.0
+            )
+            coordinates = engine_call(
+                query.bezierPointsAtRange,
+                selection[1],
+                selection[2],
+                [residue],
+            )
+            return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+        current_length += length
+    raise Exception(
+        "Not sure how you reached here, please file a bug report at "
+        "https://github.com/ManimCommunity/manim/issues/new/choose"
+    )
+
+
+def proportion_from_point(value, point):
+    """Return the shared Rust path's arc-length proportion for a point on it."""
+    try:
+        dimensions = len(point)
+    except (TypeError, AttributeError):
+        raise ValueError("point must have two or three coordinates") from None
+    if dimensions == 2:
+        coordinates = (float(point[0]), float(point[1]), 0.0)
+    elif dimensions == 3:
+        coordinates = (float(point[0]), float(point[1]), float(point[2]))
+    else:
+        raise ValueError("point must have two or three coordinates")
+
     query = _query(value)
     try:
-        return float(engine_call(query.arcLength, samples))
+        stride = getattr(value, "n_points_per_cubic_curve", 4)
+        try:
+            integer_stride = operator.index(stride)
+        except TypeError:
+            integer_stride = None
+        if integer_stride != 4:
+            return _custom_stride_proportion_from_point(
+                value, query, stride, coordinates, point
+            )
+        proportion = engine_call(query.proportionFromPoint, *coordinates)
+        if proportion is None:
+            raise ValueError(f"Point {point} does not lie on this curve.")
+        return float(proportion)
+    finally:
+        query.free()
+
+
+def _custom_stride_proportion_from_point(value, query, stride, coordinates, point):
+    point_count = int(query.pointCount)
+    count = point_count // stride
+    ranges = []
+    for index in range(count):
+        selection = _nth_curve_selection(value, index, query)
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        if selection[0] == "cubic":
+            start = 4 * selection[1]
+            ranges.extend((start, start + 4))
+        else:
+            ranges.extend((selection[1], selection[2]))
+    proportion = engine_call(query.proportionFromPointForRanges, ranges, *coordinates)
+    if proportion is None:
+        raise ValueError(f"Point {point} does not lie on this curve.")
+    return float(proportion)
+
+
+def arc_length(value, sample_points_per_curve):
+    query = _query(value)
+    try:
+        point_count = int(query.pointCount)
+        curve_count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
+        curve_indices = range(curve_count)
+        if curve_count <= 0:
+            return 0.0
+        samples = _curve_sample_count(sample_points_per_curve)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
+        total = 0.0
+        for index in curve_indices:
+            selection = _nth_curve_selection(value, index, query)
+            if selection is None:
+                raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+            total += _curve_length_from_selection(query, selection, samples)
+        return float(total)
     finally:
         query.free()
 
@@ -38,6 +185,22 @@ def endpoint(value, end):
     query = _query(value)
     try:
         coordinates = engine_call(query.end if end else query.start)
+        # ManimCE returns independent NumPy point rows for get_start/get_end.
+        # Reuse the optional array conversion used by the other path queries,
+        # retaining Vec2 for installations without NumPy.
+        return _points_array([
+            _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+        ])[0]
+    finally:
+        query.free()
+
+
+def last_point(value):
+    query = _query(value)
+    try:
+        if int(query.pointCount) == 0:
+            raise IndexError("index -1 is out of bounds for axis 0 with size 0")
+        coordinates = engine_call(query.end)
         return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
     finally:
         query.free()
@@ -47,15 +210,77 @@ def _points(coordinates):
     return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
 
 
+def _points_array(points):
+    """Match Manim's NumPy point containers when NumPy is available."""
+    try:
+        import numpy as np
+    except ImportError:
+        return points
+    rows = [[float(point[0]), float(point[1])] for point in points]
+    return np.asarray(rows, dtype=np.float64).reshape((-1, 2))
+
+
+def _point_rows(points):
+    """Return Manim's list of NumPy point rows when NumPy is available."""
+    try:
+        import numpy as np
+    except ImportError:
+        return points
+    return list(_points_array(points))
+
+
+def _cubic_bezier_point_ranges(value, point_count):
+    points_per_curve = operator.index(
+        getattr(value, "n_points_per_cubic_curve", 4)
+    )
+    if point_count > 0xFFFFFFFF:
+        raise ValueError("points exceed the supported array size")
+    if points_per_curve == 0:
+        # Preserve the source helper's native integer modulo error.
+        point_count % points_per_curve
+    try:
+        stride_number = float(points_per_curve)
+    except OverflowError:
+        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("cubic tuple queries require a shared Rust Mobject handle")
+    ranges = engine_call(handle.cubicBezierPointRanges, point_count, stride_number)
+    indices = [int(index) for index in ranges]
+    if len(indices) % 2:
+        raise RuntimeError("Rust cubic tuple query returned an incomplete range")
+    return indices
+
+
+def _curve_count_for_point_count(value, point_count):
+    points_per_curve = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(points_per_curve)
+    except TypeError:
+        # Manim's property is mutable and get_num_curves uses Python's //
+        # directly, so preserve its behavior for non-integer assignments.
+        return point_count // points_per_curve
+    points_per_curve = integer_stride
+    if points_per_curve <= 0:
+        # Match len(self.points) // n_points_per_cubic_curve, including the
+        # source's negative result and division-by-zero error.
+        return point_count // points_per_curve
+    return len(_cubic_bezier_point_ranges(value, point_count)) // 2
+
+
 def curve_count(value):
     query = _query(value)
     try:
-        return int(query.curveCount)
+        point_count = int(query.pointCount)
     finally:
         query.free()
+    return _curve_count_for_point_count(value, point_count)
 
 
 def point_count(value):
+    family_count = _family_point_count_observation(value)
+    if family_count is not None:
+        return family_count
     query = _query(value)
     try:
         return int(query.pointCount)
@@ -63,13 +288,419 @@ def point_count(value):
         query.free()
 
 
-def curve_points(value, n):
-    index = operator.index(n)
-    if not 0 <= index <= 0xFFFFFFFF:
-        raise IndexError("curve index must be between 0 and 4294967295")
+def all_points(value):
+    coordinates = _all_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_all_points requires a valid shared Rust handle")
+    return _format_points(coordinates)
+
+
+def merged_array(value, array_attr):
+    """Return Rust-owned points in Manim's recursive pre-order family profile."""
+    if array_attr != "points":
+        raise NotImplementedError(
+            "get_merged_array currently supports only the shared Rust points array"
+        )
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "merged-array queries are unavailable during staged callbacks"
+        )
+
+    coordinates = _merged_points_observation(value)
+    if coordinates is None:
+        query = _query(value)
+        try:
+            coordinates = engine_call(query.points)
+        finally:
+            query.free()
+    return _format_points(coordinates)
+
+
+def reduce_across_dimension(value, reduce_func, dim):
+    """Reduce Rust-owned point snapshots in Manim's recursive family order."""
+
+    assert dim >= 0
+    assert dim <= 2
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError(
+            "dimension reduction queries are unavailable during staged callbacks"
+        )
+
+    tree = _point_reduction_tree_observation(value)
+    if tree is None:
+        query = _query(value)
+        try:
+            tree = (engine_call(query.points), ())
+        finally:
+            query.free()
+    return _reduce_point_reduction_tree(tree, reduce_func, dim)
+
+
+def _reduce_point_reduction_tree(tree, reduce_func, dim):
+    """Invoke arbitrary Python reducers over a Rust-supplied semantic tree."""
+    coordinates = [float(value) for value in tree[0]]
+    if len(coordinates) % 2:
+        raise RuntimeError("point reduction tree returned an incomplete planar point")
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as error:
+        if error.name != "numpy":
+            raise
+        np = None
+
+    result = None
+    if coordinates:
+        if np is not None:
+            points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+            values = np.zeros(len(points), dtype=points.dtype) if dim == 2 else points[:, dim]
+        else:
+            points = list(zip(coordinates[::2], coordinates[1::2]))
+            values = [0.0] * len(points) if dim == 2 else [point[dim] for point in points]
+        result = reduce_func(values)
+
+    children = tree[1]
+    for index in range(len(children)):
+        child_value = _reduce_point_reduction_tree(children[index], reduce_func, dim)
+        if result is None:
+            result = child_value
+        elif child_value is not None:
+            result = reduce_func([child_value, result])
+    return result
+
+
+def boundary_points(value):
+    try:
+        integer_stride = operator.index(
+            getattr(value, "n_points_per_cubic_curve", 4)
+        )
+    except TypeError:
+        integer_stride = None
+    # Manim's VGroup inherits VMobject.get_points_defining_boundary, which
+    # concatenates anchors across the full family. A retained Noon family has
+    # no point array of its own, so resolve its Rust-ordered family wrappers
+    # and ask each vector leaf for its Rust-backed anchor snapshot.
+    has_family_handle = getattr(value, "_semantic_family_handle", None) is not None
+    if integer_stride != 4 or has_family_handle:
+        family = value.get_family()
+
+        def member_anchors(member):
+            get_anchors = getattr(member, "get_anchors", None)
+            return () if get_anchors is None else get_anchors()
+
+        anchors = [
+            point
+            for member in family
+            for point in member_anchors(member)
+        ]
+        try:
+            import numpy as np
+        except ImportError:
+            return anchors
+        result = np.asarray(
+            [[float(point[0]), float(point[1])] for point in anchors],
+            dtype=np.float64,
+        )
+        # The pinned VMobject implementation calls np.array(tuple(...))
+        # without forcing a second dimension, so an empty VGroup returns (0,).
+        return result if has_family_handle else result.reshape((-1, 2))
+    coordinates = _path_boundary_points_observation(value)
+    if coordinates is None:
+        raise NotImplementedError(
+            "get_points_defining_boundary requires a valid shared Rust handle"
+        )
+    return _format_points(coordinates)
+
+
+def consider_points_equals(value, p0, p1):
+    """Adapt NumPy point-array broadcasting, then compare values in Rust."""
+    try:
+        import numpy as np
+    except ImportError:
+        left = [float(component) for component in p0]
+        right = [float(component) for component in p1]
+        if len(left) != len(right):
+            raise ValueError("point arrays must have equal lengths when NumPy is unavailable")
+    else:
+        left_array, right_array = np.broadcast_arrays(np.asarray(p0), np.asarray(p1))
+        left = left_array.astype(np.float64, copy=False).reshape(-1).tolist()
+        right = right_array.astype(np.float64, copy=False).reshape(-1).tolist()
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("point equality requires a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    return bool(engine_call(handle.pointsAllClose, left, right, tolerance))
+
+
+def consider_points_equals_2d(value, p0, p1):
+    left = [float(p0[0]), float(p0[1])]
+    right = [float(p1[0]), float(p1[1])]
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("point equality requires a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    return bool(engine_call(handle.points2dClose, left, right, tolerance))
+
+
+def _subpath_range_indices(value, points, n_dims, *, compare_2d, drop_short_ranges):
+    if n_dims is not None:
+        n_dims = operator.index(n_dims)
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+        try:
+            rows = [list(row) for row in points]
+        except (TypeError, ValueError) as error:
+            raise ValueError("points must be a two-dimensional point array") from error
+        point_count = len(rows)
+        point_dimensions = len(rows[0]) if rows else 0
+        if any(len(row) != point_dimensions for row in rows):
+            raise ValueError("point rows must have a consistent number of dimensions")
+        coordinates = [float(coordinate) for row in rows for coordinate in row]
+    else:
+        array = np.asarray(points, dtype=np.float64)
+        if array.ndim != 2:
+            raise ValueError("points must be a two-dimensional point array")
+        point_count, point_dimensions = array.shape
+        coordinates = array.reshape(-1).tolist()
+
+    if point_count > 0xFFFFFFFF or point_dimensions > 0xFFFFFFFF:
+        raise ValueError("points exceed the supported array size")
+    if compare_2d:
+        compared_dimensions = 2
+    elif n_dims is None:
+        compared_dimensions = point_dimensions
+    else:
+        compared_dimensions = slice(None, n_dims).indices(point_dimensions)[1]
+    points_per_curve = operator.index(
+        getattr(value, "n_points_per_cubic_curve", 4)
+    )
+    if points_per_curve == 0:
+        # Preserve the source's zero-step error before calling the Rust query.
+        range(0, point_count, points_per_curve)
+    try:
+        stride_number = float(points_per_curve)
+    except OverflowError:
+        stride_number = float("inf") if points_per_curve > 0 else float("-inf")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("subpath queries require a shared Rust Mobject handle")
+    tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+    indices = engine_call(
+        handle.subpathRanges,
+        coordinates,
+        point_count,
+        point_dimensions,
+        compared_dimensions,
+        stride_number,
+        tolerance,
+        drop_short_ranges,
+    )
+    indices = [int(index) for index in indices]
+    if len(indices) % 2:
+        raise RuntimeError("Rust subpath query returned an incomplete index range")
+    return np, indices
+
+
+def subpath_split_indices(value, points, n_dims=3):
+    """Return Manim's [start, end) point ranges for connected cubic runs."""
+    np, indices = _subpath_range_indices(
+        value,
+        points,
+        n_dims,
+        compare_2d=False,
+        drop_short_ranges=False,
+    )
+    if np is None:
+        return [indices[index:index + 2] for index in range(0, len(indices), 2)]
+    return np.asarray(indices, dtype=np.int_).reshape((-1, 2))
+
+
+def subpaths_from_points(value, points):
+    """Return Manim's non-short connected point slices as a list."""
+    _, indices = _subpath_range_indices(
+        value,
+        points,
+        None,
+        compare_2d=False,
+        drop_short_ranges=True,
+    )
+    return [
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    ]
+
+
+def gen_subpaths_from_points_2d(value, points):
+    """Yield connected point slices using ManimCE's planar anchor comparison."""
+    _, indices = _subpath_range_indices(
+        value,
+        points,
+        None,
+        compare_2d=True,
+        drop_short_ranges=True,
+    )
+    return (
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    )
+
+
+def gen_cubic_bezier_tuples_from_points(value, points):
+    """Group complete point strides using Rust-computed slice boundaries."""
+    point_count = len(points)
+    indices = _cubic_bezier_point_ranges(value, point_count)
+    return tuple(
+        points[indices[index]:indices[index + 1]]
+        for index in range(0, len(indices), 2)
+    )
+
+
+def cubic_bezier_tuples_from_points(value, points):
+    """Return the NumPy array built from ManimCE's complete cubic point groups."""
+    groups = gen_cubic_bezier_tuples_from_points(value, points)
+    try:
+        import numpy as np
+    except ImportError:
+        return [list(group) for group in groups]
+    return np.array(groups)
+
+
+def cubic_bezier_tuples(value):
+    """Group the object's current Rust-owned point snapshot by cubic stride."""
     query = _query(value)
     try:
-        return _points(engine_call(query.curvePoints, index))
+        coordinates = engine_call(query.points)
+    finally:
+        query.free()
+    return cubic_bezier_tuples_from_points(value, _format_points(coordinates))
+
+
+def _format_points(coordinates):
+    try:
+        import numpy as np
+    except ImportError:
+        return _points(coordinates)
+    return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+
+
+def center_of_mass(value):
+    coordinates = _center_of_mass_observation(value)
+    if coordinates is None:
+        raise NotImplementedError("get_center_of_mass requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def _point_direction_xy(direction):
+    try:
+        dimensions = len(direction)
+    except (TypeError, AttributeError):
+        return _base._as_vec2(direction)
+    if dimensions == 2:
+        return _base._as_vec2(direction)
+    if dimensions == 3:
+        return _base.Vec2(float(direction[0]), float(direction[1]))
+    raise TypeError("expected a two- or three-component vector")
+
+
+def boundary_point(value, direction):
+    axis = _point_direction_xy(direction)
+    coordinates = _boundary_point_observation(value, axis.x, axis.y)
+    if coordinates is None:
+        raise NotImplementedError("get_boundary_point requires a valid shared Rust handle")
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+
+
+def length_over_dim(value, dim):
+    dim = _normalize_point_dimension(dim, 3)
+    result = _length_over_dim_observation(value, dim)
+    if result is None:
+        raise NotImplementedError("length_over_dim requires a valid shared Rust handle")
+    return float(result)
+
+
+def _normalize_point_dimension(dim, point_dimensions):
+    dim = operator.index(dim)
+    normalized = dim if dim >= 0 else point_dimensions + dim
+    if not 0 <= normalized < point_dimensions:
+        raise IndexError(
+            f"index {dim} is out of bounds for axis 1 with size {point_dimensions}"
+        )
+    return normalized
+
+
+def extremum_along_dim(value, points=None, dim=0, key=0):
+    dim = operator.index(dim)
+    key = float(key)
+    if points is None:
+        dim = _normalize_point_dimension(dim, 3)
+        result = _extremum_along_dim_observation(value, dim, key)
+        if result is None:
+            raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+        return float(result)
+
+    try:
+        import numpy as np
+    except ImportError:
+        rows = [list(row) for row in points]
+        if not rows:
+            raise IndexError("too many indices for array: array is 1-dimensional, but 2 were indexed")
+        point_dimensions = len(rows[0])
+        if any(len(row) != point_dimensions for row in rows):
+            raise ValueError("point rows must have a consistent number of dimensions")
+        dim = _normalize_point_dimension(dim, point_dimensions)
+        coordinates = [float(coordinate) for row in rows for coordinate in row]
+    else:
+        array = np.asarray(points)
+        # Indexing only shapes the input like Manim's NumPy path; Rust performs
+        # the min/max/midpoint reduction over the selected coordinate values.
+        selected = array[:, dim]
+        coordinates = selected.astype(np.float64, copy=False).reshape(-1).tolist()
+        point_dimensions = 1
+        dim = 0
+
+    result = _extremum_from_points_observation(
+        value,
+        coordinates,
+        point_dimensions,
+        dim,
+        key,
+    )
+    if result is None:
+        raise NotImplementedError("get_extremum_along_dim requires a valid shared Rust handle")
+    return float(result)
+
+
+def has_new_path_started(value):
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_cubic_curve exceeds the supported path stride")
+    if stride == 0:
+        raise ZeroDivisionError("integer modulo by zero")
+    query = _query(value)
+    try:
+        arguments = () if stride == 4 else (stride,)
+        return bool(engine_call(query.hasNewPathStarted, *arguments))
+    finally:
+        query.free()
+
+
+def curve_points(value, n):
+    # Match VMobject.get_nth_curve_points(): it only asserts the upper bound,
+    # then uses Python slicing over the stored point array. In particular,
+    # negative indices retain the source's slice behavior.
+    assert n < value.get_num_curves()
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    query = _query(value)
+    try:
+        points = _points(engine_call(query.points))
+        selected = points[stride * n : stride * (n + 1)]
+        return _points_array(selected)
     finally:
         query.free()
 
@@ -85,11 +716,34 @@ def _curve_sample_count(sample_points):
     return samples
 
 
-def _assert_curve_index(query, index):
-    if index < 0:
-        raise IndexError("curve index must be non-negative")
-    if index >= int(query.curveCount):
-        raise AssertionError
+def _raise_zero_sample_length_axis_error():
+    """Match NumPy's empty one-dimensional norm failure in Manim's sampler."""
+    import numpy as np
+
+    axis_error = getattr(np, "AxisError", None)
+    if axis_error is None:
+        axis_error = np.exceptions.AxisError
+    raise axis_error(1, ndim=1)
+
+
+def _nth_curve_selection(value, index, query):
+    """Resolve Manim's Python point slice to a Rust cubic or arbitrary range."""
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    point_count = int(query.pointCount)
+    curve_count = point_count // stride
+    assert index < curve_count
+    start, stop, _ = slice(stride * index, stride * (index + 1)).indices(
+        point_count
+    )
+    if start >= stop:
+        return None
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if integer_stride == 4 and stop - start == 4 and start % 4 == 0:
+        return ("cubic", start // 4)
+    return ("range", start, stop)
 
 
 class _CurveQuerySnapshot:
@@ -131,31 +785,119 @@ def _curve_callable(snapshot, index):
     return curve
 
 
-def _curve_functions(value, with_lengths, sample_points=None):
-    import numpy as np
+def _bezier_curve_name(point_count):
+    return {
+        1: "zero_bezier",
+        2: "linear_bezier",
+        3: "quadratic_bezier",
+        4: "cubic_bezier",
+    }.get(point_count, "nth_grade_bezier")
 
-    samples = _curve_sample_count(sample_points) if with_lengths else None
+
+def _range_curve_callable(snapshot, start, stop):
+    def curve(t):
+        import numpy as np
+
+        parameters = np.asarray(t, dtype=np.float64)
+        flat = parameters.reshape(-1).tolist()
+        coordinates = engine_call(
+            snapshot.query.bezierPointsAtRange, start, stop, flat
+        )
+        points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
+        if parameters.ndim == 0:
+            return points[0]
+        if stop - start > 4:
+            # Manim's nth_grade_bezier flattens every array input to one
+            # leading sample dimension, even when the input is multidimensional.
+            return points
+        if parameters.ndim == 2 and parameters.shape[1] == 1:
+            return points.reshape((parameters.shape[0], 3))
+        return points.reshape((*parameters.shape, 3))
+
+    curve.__name__ = _bezier_curve_name(stop - start)
+    return curve
+
+
+def _selected_curve_callable(snapshot, selection):
+    if selection[0] == "cubic":
+        return _curve_callable(snapshot, selection[1])
+    return _range_curve_callable(snapshot, selection[1], selection[2])
+
+
+def _curve_length_from_selection(query, selection, samples):
+    if selection[0] == "cubic":
+        return float(engine_call(query.curveLength, selection[1], samples))
+    pieces = engine_call(
+        query.bezierLengthPiecesRange,
+        selection[1],
+        selection[2],
+        samples,
+    )
+    return float(sum(pieces))
+
+
+def _empty_curve_callable():
+    def curve(_t):
+        raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+
+    curve.__name__ = "nth_grade_bezier"
+    return curve
+
+
+def _curve_functions(value, with_lengths, sample_points=None, extra_kwargs=None):
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     # Yielded callables share this owner. Generator failure must not release
     # the query while any previously returned callable still needs it.
-    count = int(query.curveCount)
-    for index in range(count):
-        function = _curve_callable(snapshot, index)
+    point_count = int(query.pointCount)
+    count = point_count // getattr(value, "n_points_per_cubic_curve", 4)
+    curve_indices = range(count)
+    if with_lengths and count > 0 and extra_kwargs:
+        unexpected = set(extra_kwargs) - {"sample_points"}
+        if unexpected:
+            # Match Manim's lazy per-curve dispatch, including subclass
+            # overrides and Python's bound-method TypeError text.
+            for index in curve_indices:
+                yield value.get_nth_curve_function_with_length(
+                    index, **extra_kwargs
+                )
+            return
+    samples = (
+        _curve_sample_count(sample_points)
+        if with_lengths and count > 0
+        else None
+    )
+    if with_lengths and count > 0 and samples == 0:
+        _raise_zero_sample_length_axis_error()
+    for index in curve_indices:
+        selection = _nth_curve_selection(value, index, query)
+        function = (
+            _empty_curve_callable()
+            if selection is None
+            else _selected_curve_callable(snapshot, selection)
+        )
         if with_lengths:
-            length = np.float64(engine_call(query.curveLength, index, samples))
+            import numpy as np
+
+            if selection is None:
+                raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+            length = np.float64(
+                _curve_length_from_selection(query, selection, samples)
+            )
             yield function, length
         else:
             yield function
 
 
 def curve_function(value, n):
-    index = operator.index(n)
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
-        _assert_curve_index(query, index)
-        return _curve_callable(snapshot, index)
+        selection = _nth_curve_selection(value, n, query)
+        if selection is None:
+            snapshot.__del__()
+            return _empty_curve_callable()
+        return _selected_curve_callable(snapshot, selection)
     except Exception:
         snapshot.__del__()
         raise
@@ -164,14 +906,19 @@ def curve_function(value, n):
 def curve_function_with_length(value, n, sample_points=None):
     import numpy as np
 
-    index = operator.index(n)
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     snapshot = _CurveQuerySnapshot(query)
     try:
-        _assert_curve_index(query, index)
-        function = _curve_callable(snapshot, index)
-        length = np.float64(engine_call(query.curveLength, index, samples))
+        selection = _nth_curve_selection(value, n, query)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        function = _selected_curve_callable(snapshot, selection)
+        length = np.float64(
+            _curve_length_from_selection(query, selection, samples)
+        )
         return function, length
     except Exception:
         snapshot.__del__()
@@ -183,19 +930,36 @@ def curve_functions(value):
 
 
 def curve_functions_with_lengths(value, **kwargs):
-    unexpected = set(kwargs) - {"sample_points"}
-    if unexpected:
-        name = sorted(unexpected)[0]
-        raise TypeError(f"unexpected keyword argument: {name!r}")
     yield from _curve_functions(
-        value, with_lengths=True, sample_points=kwargs.get("sample_points")
+        value,
+        with_lengths=True,
+        sample_points=kwargs.get("sample_points"),
+        extra_kwargs=kwargs,
     )
 
 
 def path_direction(value):
+    stride_value = getattr(value, "n_points_per_cubic_curve", 4)
+    if stride_value is None:
+        stride = 1
+    else:
+        try:
+            stride = operator.index(stride_value)
+        except TypeError:
+            # Preserve the exact Python slice validation used by
+            # get_start_anchors(), including its native TypeError message.
+            slice(None, None, stride_value).indices(0)
+            raise AssertionError("invalid slice step unexpectedly succeeded")
+    if stride == 0:
+        # NumPy raises before Manim reaches the shoelace reduction.
+        slice(None, None, stride).indices(0)
+    if not -(1 << 31) <= stride < (1 << 31):
+        raise ValueError("n_points_per_cubic_curve exceeds the supported path stride")
     query = _query(value)
     try:
-        return str(engine_call(query.direction))
+        if stride == 4:
+            return str(engine_call(query.direction))
+        return str(engine_call(query.directionWithStride, stride))
     finally:
         query.free()
 
@@ -203,15 +967,27 @@ def path_direction(value):
 def curve_length_pieces(value, n, sample_points):
     import numpy as np
 
-    index = operator.index(n)
-    if index < 0:
-        raise IndexError("curve index must be between 0 and 4294967295")
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     try:
-        _assert_curve_index(query, index)
+        selection = _nth_curve_selection(value, n, query)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        if selection[0] == "cubic":
+            pieces = engine_call(
+                query.curveLengthPieces, selection[1], samples
+            )
+        else:
+            pieces = engine_call(
+                query.bezierLengthPiecesRange,
+                selection[1],
+                selection[2],
+                samples,
+            )
         return np.asarray(
-            engine_call(query.curveLengthPieces, index, samples), dtype=np.float64
+            pieces, dtype=np.float64
         )
     finally:
         query.free()
@@ -220,39 +996,96 @@ def curve_length_pieces(value, n, sample_points):
 def curve_length(value, n, sample_points):
     import numpy as np
 
-    index = operator.index(n)
-    if index < 0:
-        raise IndexError("curve index must be between 0 and 4294967295")
-    samples = _curve_sample_count(sample_points)
     query = _query(value)
     try:
-        _assert_curve_index(query, index)
-        return np.float64(engine_call(query.curveLength, index, samples))
+        selection = _nth_curve_selection(value, n, query)
+        samples = _curve_sample_count(sample_points)
+        if samples == 0:
+            _raise_zero_sample_length_axis_error()
+        if selection is None:
+            raise IndexError("index 0 is out of bounds for axis 1 with size 0")
+        return np.float64(_curve_length_from_selection(query, selection, samples))
     finally:
         query.free()
 
 
 def path_points(value, method):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            starts = points[::stride]
+            if method == "startAnchors":
+                return _points_array(starts)
+            ends = points[stride - 1 :: stride]
+            if method == "endAnchors":
+                return _points_array(ends)
+            return _point_rows(
+                [point for pair in zip(starts, ends, strict=True) for point in pair]
+            )
+        finally:
+            query.free()
     query = _query(value)
     try:
-        return _points(engine_call(getattr(query, method)))
+        points = _points(engine_call(getattr(query, method)))
+        return _point_rows(points) if method == "anchors" else _points_array(points)
     finally:
         query.free()
 
 
 def anchors_and_handles(value):
+    stride = operator.index(getattr(value, "n_points_per_cubic_curve", 4))
+    if stride > 0xFFFFFFFF:
+        raise ValueError("n_points_per_cubic_curve exceeds the supported array size")
+    if stride <= 0:
+        return []
+    if stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            return [
+                _points_array(points[index::stride])
+                for index in range(stride)
+            ]
+        finally:
+            query.free()
     query = _query(value)
     try:
-        return [_points(engine_call(getattr(query, method))) for method in
-                ("startAnchors", "firstHandles", "secondHandles", "endAnchors")]
+        return [
+            _points_array(_points(engine_call(getattr(query, method))))
+            for method in ("startAnchors", "firstHandles", "secondHandles", "endAnchors")
+        ]
     finally:
         query.free()
 
 
 def subpaths(value):
+    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    try:
+        integer_stride = operator.index(stride)
+    except TypeError:
+        integer_stride = None
+    if integer_stride != 4:
+        query = _query(value)
+        try:
+            points = _points(engine_call(query.points))
+            return [
+                _points_array(points)
+                for points in subpaths_from_points(value, points)
+            ]
+        finally:
+            query.free()
     query = _query(value)
     try:
-        return [_points(points) for points in engine_call(query.subpaths)]
+        return [
+            _points_array(_points(points))
+            for points in engine_call(query.subpaths)
+        ]
     finally:
         query.free()
 
@@ -260,7 +1093,10 @@ def subpaths(value):
 def is_closed(value):
     query = _query(value)
     try:
-        return bool(engine_call(query.isClosed))
+        if int(query.pointCount) == 0:
+            raise IndexError("index 0 is out of bounds for axis 0 with size 0")
+        tolerance = float(getattr(value, "tolerance_for_point_equality", 1e-6))
+        return bool(engine_call(query.isClosed, tolerance))
     finally:
         query.free()
 

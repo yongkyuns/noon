@@ -307,9 +307,10 @@ impl<'a, 'store> OrderView<'a, 'store> {
                     self.collect_leaves(child.into(), seen, output)?;
                 }
             }
-        } else if self.is_object(node)? {
-            output.insert(node);
         } else {
+            if self.is_object(node)? {
+                output.insert(node);
+            }
             let mut child = self.first(node)?;
             while let Some(member) = child {
                 self.collect_leaves(member, seen, output)?;
@@ -424,6 +425,15 @@ impl<'a, 'store> FirstOccurrences<'a, 'store> {
         &mut self,
         mut path: Rc<Occurrence>,
     ) -> Result<Option<Node>, SemanticPublicationLoweringError> {
+        // An object's own draw precedes its children. Only after that subtree
+        // is exhausted may the successor come from a sibling or ancestor.
+        let mut child = self.view.first(path.node)?;
+        while let Some(member) = child {
+            if let Some(leaf) = self.first_leaf(member, &path)? {
+                return Ok(Some(leaf));
+            }
+            child = self.view.next(path.node, member)?;
+        }
         while let Some(parent) = path.parent.clone() {
             let mut next = self.view.next(parent.node, path.node)?;
             while let Some(node) = next {
@@ -461,7 +471,7 @@ pub fn validate_semantic_publication_root(
     root: SemanticNodeId,
 ) -> Result<(), SemanticPublicationLoweringError> {
     let root_node = node_for_root_order(store, root)?;
-    if !matches!(root_node.kind(), SemanticNodeKind::Family(_)) {
+    if !root_node.can_own_members() {
         return Err(
             SemanticLoweringError::Store(noon_core::SemanticStoreError::NotFamily(root)).into(),
         );
@@ -603,6 +613,38 @@ mod tests {
     }
 
     #[test]
+    fn point_owning_subtree_reorder_keeps_own_draw_before_its_children() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let objects = (0..3)
+            .map(|_| {
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }))
+            })
+            .collect::<Vec<_>>();
+        store.add_member(objects[0], objects[1]).unwrap();
+        store.add_member(root, objects[2]).unwrap();
+        store.add_member(root, objects[0]).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.reorder_member(root, objects[0], Some(objects[2]));
+        let prepared = transaction.prepare(&mut store).unwrap();
+        assert_eq!(
+            prepare_semantic_root_order(&prepared, root).unwrap(),
+            [
+                ExecutionPatch::ReorderObject {
+                    object: semantic_execution_object_id(objects[1]),
+                    before: Some(semantic_execution_object_id(objects[2])),
+                },
+                ExecutionPatch::ReorderObject {
+                    object: semantic_execution_object_id(objects[0]),
+                    before: Some(semantic_execution_object_id(objects[1])),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn empty_anchor_uses_the_next_root_leaf_without_publishing() {
         let mut store = SemanticStore::new();
         let root = store.insert_family();
@@ -641,17 +683,14 @@ mod tests {
     #[test]
     fn invalid_roots_are_rejected_even_without_root_mutations() {
         let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
+        let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
         let unknown = SemanticNodeId::new(u32::MAX, 0);
         let prepared = SemanticMutationTransaction::new()
             .prepare(&mut store)
             .unwrap();
         for (root, expected) in [
             (unknown, noon_core::SemanticStoreError::UnknownNode(unknown)),
-            (object, noon_core::SemanticStoreError::NotFamily(object)),
+            (signal, noon_core::SemanticStoreError::NotFamily(signal)),
         ] {
             assert!(matches!(prepare_semantic_root_order(&prepared, root),
                 Err(SemanticPublicationLoweringError::Value(SemanticLoweringError::Store(error)))
@@ -698,9 +737,10 @@ mod tests {
                     before: Some(semantic_execution_object_id(first)),
                 }],
             );
-            // Includes reverse-parent paths and successor validation, but still no
-            // prefix, unrelated family, or unused anchor-tail traversal.
-            assert_eq!(NODES_VISITED.with(|count| count.get()), 12);
+            // Includes reverse-parent paths, successor validation and two local
+            // child-adjacency reads for point-owning nodes. No unrelated prefix,
+            // family or unused anchor tail is traversed.
+            assert_eq!(NODES_VISITED.with(|count| count.get()), 14);
         }
     }
 

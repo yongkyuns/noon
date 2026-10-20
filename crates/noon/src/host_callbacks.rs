@@ -1049,6 +1049,7 @@ mod tests {
         assert_eq!(effective, authored);
         assert_eq!(effective.fill.unwrap().alpha, 0.4);
         assert_eq!(effective.stroke.unwrap().alpha, 0.4);
+        assert_eq!(effective.background_stroke.unwrap().alpha, 0.4);
         assert_eq!(effective.opacity, before.opacity);
         assert_eq!(effective.stroke_width, before.stroke_width);
         for opacity in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
@@ -1057,6 +1058,7 @@ mod tests {
         let unpainted = Style {
             fill: None,
             stroke: None,
+            background_stroke: None,
             ..before
         };
         assert_eq!(
@@ -1082,10 +1084,12 @@ mod tests {
         );
         assert_eq!(next.fill.unwrap().alpha, 0.4);
         assert_eq!(next.stroke.unwrap().alpha, 0.25);
+        assert_eq!(next.background_stroke.unwrap().alpha, 0.5);
         assert_eq!(next.opacity, before.opacity);
         let unpainted = Style {
             fill: None,
             stroke: None,
+            background_stroke: None,
             ..before
         };
         assert_eq!(

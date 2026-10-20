@@ -40,8 +40,9 @@ fn reveal_derivative_runs_before_reveal_control_flow() {
 
 #[test]
 fn fill_only_partial_reveal_derives_a_visible_outline() {
-    assert!(SHADER
-        .contains("let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;"));
+    assert!(SHADER.contains(
+        "let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled && !is_background_stroke;"
+    ));
     assert!(
         SHADER.contains("let enabled = authored_enabled || (is_stroke && derive_creation_stroke);")
     );

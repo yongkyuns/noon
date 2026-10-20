@@ -46,7 +46,9 @@ const expectedJavascriptSurface = [
   "createManimRectangle(",
   "createManimLine(",
   "export class WasmManimGeometryOptions",
+  "setSheenDirection(",
   "export class WasmAuthoringVectorPath",
+  "proportionFromPointForRanges(",
   "createManimGeometry(",
   "beginUnderline(",
   "static dot(",
@@ -63,10 +65,16 @@ const expectedJavascriptSurface = [
   "arrangeOptions(",
   "setAligner(",
   "export class WasmLayoutAnchor",
+  "dimensionLength(dimension)",
+  "queryLayoutDimensionLength(source, dimension)",
   "layoutAnchor(",
   "liveNextLayoutTo(",
   "liveNextLayoutToPoint(",
   "export class WasmAuthoringMobjectHandle",
+  "addLineToWithSamples(",
+  "cubicBezierPointRanges(",
+  "subpathSplitIndices(",
+  "subpathRanges(",
   "export class SemanticExecutionPlayer",
   "seekDirect(",
   "resourceBundleBytes(",
@@ -85,8 +93,11 @@ const expectedJavascriptSurface = [
   "driveLiveSegmentFromWallTime(",
   "completeLiveSegment(",
   "export class CanonicalAuthoringSceneContext",
+  "liveAddLineToWithSamples(",
   "export class WasmMobjectLayoutObservation",
   "queryMobjectLayout(",
+  "queryMobjectPointReductionTree(",
+  "wasmauthoringmobjecthandle_pointReductionTree(",
   "resumeExecutionPlayer(",
   "drainReturnedPublicationJson(",
   "export class WasmCallbackTransform",
@@ -214,6 +225,11 @@ const expectedJavascriptSurface = [
   "setStrokeWidthMode(",
   "setStrokeJoin(",
   "setStrokeCap(",
+  "ownStrokeCap(",
+  "get strokeCap()",
+  "queryMobjectStrokeCap(",
+  "liveSetStrokeCap(",
+  "liveSetFamilyOwnStrokeCap(",
   "setObjectOpacity(",
   "manimMoveToHandle(",
   "manimMoveToPoint(",
@@ -263,6 +279,8 @@ const expectedTypeSurface = [
   "setAligner(",
   "export class WasmLayoutAnchor",
   "layoutAnchor(",
+  "dimensionLength(dimension: number): number",
+  "queryLayoutDimensionLength(source: WasmLayoutAnchor, dimension: number): number",
   "liveNextLayoutTo(",
   "liveNextLayoutToPoint(",
   "export class WasmAuthoringMobjectHandle",
@@ -292,12 +310,16 @@ const expectedTypeSurface = [
   "liveAlignFamilyToMobject(",
   "liveAlignFamilyToFamily(",
   "queryMobjectLayout(handle: WasmAuthoringMobjectHandle): WasmMobjectLayoutObservation",
+  "queryMobjectPointReductionTree(handle: WasmAuthoringMobjectHandle): Array<any>",
   "manimLineEndpoints(): WasmManimLineEndpoints",
   "manimColor(): WasmManimColor",
   "queryMobjectLineEndpoints(handle: WasmAuthoringMobjectHandle): WasmManimLineEndpoints",
   "queryMobjectColor(handle: WasmAuthoringMobjectHandle): WasmManimColor",
   "queryMobjectFillOpacity(handle: WasmAuthoringMobjectHandle): number",
   "queryMobjectStrokeOpacity(handle: WasmAuthoringMobjectHandle): number",
+  "subpathSplitIndices(",
+  "subpathRanges(",
+  "cubicBezierPointRanges(",
 
   "resumeExecutionPlayer(): SemanticExecutionPlayer",
   "export class WasmMobjectLayoutObservation",
@@ -415,6 +437,7 @@ const expectedTypeSurface = [
   "localPathQuery(): WasmPathQuery",
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
   "pointFromProportion(alpha: number): Float64Array",
+  "proportionFromPointForRanges(ranges: Uint32Array, x: number, y: number, z: number): number | undefined",
   "liveCopyFamily(source: WasmAuthoringFamilyHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
   "mobjectFor(source: WasmAuthoringMobjectHandle): WasmAuthoringMobjectHandle",
   "familyFor(source: WasmAuthoringFamilyHandle): WasmAuthoringFamilyHandle",
@@ -455,6 +478,11 @@ const expectedTypeSurface = [
   "setStrokeWidthMode(mode: string): void",
   "setStrokeJoin(join: string): void",
   "setStrokeCap(cap: string): void",
+  "ownStrokeCap(): string",
+  "readonly strokeCap: string",
+  "queryMobjectStrokeCap(target: WasmAuthoringMobjectHandle): string",
+  "liveSetStrokeCap(handle: WasmAuthoringMobjectHandle, cap: string): void",
+  "liveSetFamilyOwnStrokeCap(source: WasmAuthoringFamilyHandle, cap: string): void",
   "setObjectOpacity(opacity: number): void",
   "manimMoveToHandle(",
   "manimMoveToPoint(",
@@ -501,7 +529,9 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectPolynomialRatesRenderer(",
     "export function createDirectStyleOperationsSmokeRenderer(",
     "export function createDirectDimensionFittingSmokeRenderer(",
+    "export function createDirectObjectMembershipSmokeRenderer(",
     "export function createDirectFamilyReplacementSmokeRenderer(",
+    "export function createDirectCircleSurroundSmokeRenderer(",
     "export function createDirectFamilyAffineSmokeRenderer(",
     "export function createDirectFamilyPaintSmokeRenderer(",
     "export function createDirectPlanarAffineSmokeRenderer(",
@@ -585,7 +615,9 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectPolynomialRatesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectStyleOperationsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectDimensionFittingSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectObjectMembershipSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyReplacementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectCircleSurroundSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPlanarAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -652,6 +684,18 @@ for (const fragment of expectedJavascriptSurface) {
   if (!javascript.includes(fragment)) {
     throw new Error(`Generated JavaScript is missing: ${fragment}`);
   }
+}
+
+const geometryOptionsClassStart = declarations.indexOf("export class WasmManimGeometryOptions");
+const nextDeclarationClass = declarations.indexOf("export class ", geometryOptionsClassStart + 1);
+const geometryOptionsDeclaration = declarations.slice(
+  geometryOptionsClassStart,
+  nextDeclarationClass === -1 ? undefined : nextDeclarationClass,
+);
+if (!geometryOptionsDeclaration.includes(
+  "setSheenDirection(x: number, y: number, z: number, dimensions: number): void;",
+)) {
+  throw new Error("WASM declarations are missing typed VMobject sheen-direction constructor support");
 }
 for (const fragment of expectedTypeSurface) {
   if (!declarations.includes(fragment)) {
