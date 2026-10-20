@@ -17,7 +17,7 @@ async function fixture(endpoint) {
     }),
     createExecutionClient: () => ({
       async prepare() {},
-      async startSemanticExecution() {},
+      async startSemanticExecution() { return { render: { time: 0 } }; },
       async sampleToAuthoredTime(time, options) {
         calls.push({ time, options });
         const complete = options?.stopAtSourceCompletion === true && time >= endpoint;

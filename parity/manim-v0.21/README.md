@@ -420,3 +420,15 @@ forward-query checks and add exact endpoint/stride observations. The checked-in
 Rust/native/direct-WASM and Python path examples contain inverse assertions with
 unchanged visible geometry and duration. Current-head release-WASM/product, raster
 and hosted gates remain required; broader class/array/callback contracts stay open.
+
+
+Browser preview starts at the time of its first presented runtime publication.
+Explicit live work before an ordinary synchronous play therefore keeps its
+existing authored time. The paired path-query example exercises that mixed flow
+without changing its source or 2.2-second timeline, and has identical final pixels
+on WebGPU/WebGL2. Lifecycle tests reject malformed initial times, starts beyond
+the preview time limit, nonzero static frames and later backward samples.
+Synchronous ordinary play still requires a JSPI-capable browser; the no-JSPI
+rejection remains explicit. These bounded checks do not qualify every host or
+broader class/array/callback contract. Full current-source and hosted gates remain
+required before merge.

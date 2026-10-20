@@ -20,7 +20,7 @@ test("preview session preserves the caller authoring context", async (t) => {
   };
   const execution = {
     prepare: async () => {},
-    startSemanticExecution: async () => {},
+    startSemanticExecution: async () => ({ render: { time: 0 } }),
     sampleToAuthoredTime: async (time) => ({ time }),
     metrics: async () => ({ metrics: { backend: "WebGL2", objectCount: 0, drawCalls: 0 } }),
     terminate() {},

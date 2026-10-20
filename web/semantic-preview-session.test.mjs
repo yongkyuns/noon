@@ -33,6 +33,7 @@ function fixture(t, overrides = {}, limits = {}) {
       assert.equal(options.authoringClient, authoring);
       assert.equal(options.pacing, "external_samples");
       assert.equal(options.transportMode, "transferable");
+      return { render: { time: 0 } };
     },
     sampleToAuthoredTime: async (time) => { calls.push(time); return { time }; },
     metrics: async () => ({ metrics: { backend: "WebGL2", objectCount: 2, drawCalls: 1 } }),
@@ -71,6 +72,56 @@ test("reported actual time is not replaced with requested time", async (t) => {
   const sample = await session.sample(2);
   assert.equal(sample.frame.requestedTime, 2);
   assert.equal(sample.frame.publishedTime, 1);
+});
+
+test("startup samples the first presented authored time after explicit live work", async (t) => {
+  const { session, calls } = fixture(t, { execution: {
+    startSemanticExecution: async () => {
+      calls.push("start");
+      return { render: { time: 1.2 } };
+    },
+    sampleToAuthoredTime: async time => {
+      assert.ok(time >= 1.2, "the runtime must not receive a backward initial sample");
+      calls.push(time);
+      return { time };
+    },
+  } });
+  const ready = await session.open("explicit live work, then ordinary play");
+  assert.equal(ready.frame.requestedTime, 1.2);
+  assert.equal(ready.frame.publishedTime, 1.2);
+  assert.equal(ready.sourceState, "running");
+  assert.equal(ready.authoredDuration, null);
+  await assert.rejects(session.sample(0), /backwards/);
+  assert.deepEqual(calls, ["prepare", "start", 1.2]);
+  assert.equal((await session.sample(2.2)).frame.publishedTime, 2.2);
+  assert.deepEqual(calls, ["prepare", "start", 1.2, 2.2]);
+});
+
+test("invalid first-frame time retires startup without sampling", async (t) => {
+  for (const time of [undefined, null, NaN, Infinity, -1, "1.2"]) {
+    const { session, calls } = fixture(t, { execution: {
+      startSemanticExecution: async () => {
+        calls.push("start");
+        return { render: { time } };
+      },
+    } });
+    await assert.rejects(session.open("scene"), /invalid initial frame time/);
+    assert.equal(session.snapshot.state, "failed");
+    assert.equal(session.snapshot.frame, null);
+    assert.deepEqual(calls, ["prepare", "start", "execution:terminate", "authoring:terminate"]);
+  }
+});
+
+test("first presented time must satisfy the preview time limit", async (t) => {
+  const { session, calls } = fixture(t, { execution: {
+    startSemanticExecution: async () => {
+      calls.push("start");
+      return { render: { time: 2.2 } };
+    },
+  } }, { maxTimeSeconds: 2 });
+  await assert.rejects(session.open("scene"), /sampling limit/);
+  assert.equal(session.snapshot.frame, null);
+  assert.deepEqual(calls, ["prepare", "start", "execution:terminate", "authoring:terminate"]);
 });
 
 test("invalid or backward sampling never calls the engine or poisons a valid session", async (t) => {
@@ -121,6 +172,7 @@ test("static source attaches its completed context paused and samples only time 
         assert.equal(options.initiallyPaused, true);
         assert.equal(options.pacing, undefined);
         calls.push("static:start");
+        return { render: { time: 0 } };
       },
       advanceTo: async time => { calls.push(time); return { time }; },
       sampleToAuthoredTime: async () => { throw new Error("static source has no continuation"); },
@@ -144,6 +196,20 @@ test("completed timed source cannot bypass the live continuation contract", asyn
   } });
   await assert.rejects(session.open("timed scene"), /no semantic continuation/);
   assert.deepEqual(calls, ["authoring:terminate"]);
+});
+
+test("a completed static context cannot publish a nonzero initial time", async (t) => {
+  const { session, calls } = fixture(t, {
+    authoring: { run: async () => ({ kind: "semantic_scene", duration: 0,
+      semanticExecution: { contextId: "static-context", continuationGeneration: null } }) },
+    execution: { startSemanticExecution: async () => {
+      calls.push("static:start");
+      return { render: { time: 1.2 } };
+    } },
+  });
+  await assert.rejects(session.open("static scene"), /only its authored time-zero/);
+  assert.equal(session.snapshot.frame, null);
+  assert.deepEqual(calls, ["prepare", "static:start", "execution:terminate", "authoring:terminate"]);
 });
 
 test("source failure before attachment retires the authoring worker", async (t) => {
