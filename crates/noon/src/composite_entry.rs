@@ -1,19 +1,18 @@
 //! Shared admission for one retained object-or-family composite entry.
 
+use crate::{AuthoringError, Mobject, MobjectFamily, MobjectTarget};
 #[cfg(any(feature = "native-text", feature = "latex", test))]
-use crate::AuthoringError;
-use crate::{Mobject, MobjectFamily, MobjectTarget};
+use noon_core::SemanticObjectState;
+use noon_core::{SemanticNodeId, SemanticStore};
 #[cfg(any(feature = "native-text", feature = "latex", test))]
-use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
-use std::rc::Rc;
-#[cfg(any(feature = "native-text", feature = "latex", test))]
-use std::{cell::RefCell, collections::BTreeMap};
+use std::collections::BTreeMap;
+use std::{cell::RefCell, rc::Rc};
 
 /// An owned retained entry root returned by composite display families.
 ///
 /// Construction APIs borrow [`MobjectTarget`] so callers keep their original
 /// root identity. Query APIs need an owned handle and use this common form for
-/// tables and matrices without flattening family entries.
+/// ordinary families, tables and matrices without flattening family entries.
 #[derive(Clone, Debug)]
 pub enum CompositeEntryHandle {
     Mobject(Mobject),
@@ -41,19 +40,25 @@ impl CompositeEntryHandle {
         }
     }
 
-    #[cfg(any(feature = "native-text", feature = "latex"))]
     pub(crate) fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
     ) -> Result<Self, AuthoringError> {
-        let kind = store.borrow().node(node).map(|value| value.kind().clone());
-        match kind {
-            Some(noon_core::SemanticNodeKind::AuthoringObject) => {
-                Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?))
-            }
-            Some(noon_core::SemanticNodeKind::Family(_)) => Ok(Self::Family(
-                MobjectFamily::from_node(Rc::clone(&store), node)?,
-            )),
+        // Read only the kind tag; a family declaration can contain large data.
+        let is_family = store
+            .borrow()
+            .node(node)
+            .and_then(|value| match value.kind() {
+                noon_core::SemanticNodeKind::AuthoringObject => Some(false),
+                noon_core::SemanticNodeKind::Family(_) => Some(true),
+                _ => None,
+            });
+        match is_family {
+            Some(false) => Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?)),
+            Some(true) => Ok(Self::Family(MobjectFamily::from_node(
+                Rc::clone(&store),
+                node,
+            )?)),
             _ => Err(AuthoringError::Semantic(
                 noon_core::SemanticSceneOperationError::UnknownNode(node),
             )),

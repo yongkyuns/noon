@@ -2007,12 +2007,19 @@ mod wasm {
 
         #[wasm_bindgen(getter, js_name = memberCount)]
         pub fn member_count(&self) -> Result<usize, JsValue> {
+            self.family.member_count().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = memberAt)]
+        pub fn member_at(&self, index: usize) -> Result<JsValue, JsValue> {
             self.family
-                .integration_store()
-                .borrow()
-                .semantic_family_checked(self.family.node_id())
-                .map(|node| node.member_count())
-                .map_err(typed_js_error)
+                .member_at(index)
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(js_error)
         }
 
         /// Observe authoritative family order when a frontend requests members.
