@@ -138,6 +138,9 @@ case "$wasm_profile" in
     ;;
 esac
 
+# Validate before wasm-pack's own metadata lookup can rewrite a stale lock.
+cargo metadata --locked --format-version 1 > /dev/null
+
 wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg "--$wasm_profile")
 if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
@@ -150,6 +153,9 @@ fi
 if [[ "${NOON_REPLAY_SMOKE:-0}" == "1" ]]; then
   wasm_pack_args+=(--features replay-smoke)
 fi
+
+# CI and production must use the reviewed workspace dependency resolution.
+wasm_pack_args+=(-- --locked)
 
 worker_pid=""
 if (( parallel_worker == 1 )); then
