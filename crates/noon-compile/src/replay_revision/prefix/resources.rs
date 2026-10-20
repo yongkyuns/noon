@@ -207,10 +207,7 @@ mod tests {
         // Unknown ID at a later version: no evidence of which version belongs
         // to each prior timestamp, even if the latest version is available.
         assert_eq!(
-            scene.prefix_resource_delta(
-                &[revision(original.id)],
-                &CompiledResources::default()
-            ),
+            scene.prefix_resource_delta(&[revision(original.id)], &CompiledResources::default()),
             Err(CompiledResourceError::ConflictingGeometryId(original.id))
         );
 
