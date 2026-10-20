@@ -614,6 +614,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .candidate_mutations()
             .filter_map(|mutation| match mutation {
                 SemanticMutation::SetZIndex { node: object, .. }
+                | SemanticMutation::SetDrawEnabled { node: object, .. }
+                | SemanticMutation::SetFamilyColor { node: object, .. }
+                | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
                 | SemanticMutation::SetClickIndicate { object, .. }
@@ -897,6 +900,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Ok(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
             }
             _ => Err(SemanticTransactionReadError::NotFamily(node)),
+        }
+    }
+
+    /// Read proposed root drawing eligibility without manufacturing object content.
+    pub fn draw_enabled(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<bool, SemanticTransactionReadError> {
+        let node = node.into();
+        // The z-index query validates lifetime and authoring capabilities for the
+        // same presentation, including unmaterialized and pending family roots.
+        self.z_index(node)?;
+        if let Some(enabled) = self.preflight.staged_drawing.get(&node) {
+            return Ok(*enabled);
+        }
+        if let Ok(state) = self.object_state(node) {
+            return Ok(state.draw_enabled());
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .and_then(|node| node.presentation())
+                .map(|p| p.draw_enabled)
+                .ok_or(SemanticTransactionReadError::NotObject(node)),
+            SemanticTransactionNodeRef::Pending(_) => Ok(true),
         }
     }
 
@@ -1637,6 +1666,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_updating_suspended(suspended);
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::UpdaterSuspension { target: node });
+                }
+                SemanticMutation::SetDrawEnabled { node, enabled } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted authoring node")
+                        .set_draw_enabled(enabled);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::DrawEnabled { node });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);

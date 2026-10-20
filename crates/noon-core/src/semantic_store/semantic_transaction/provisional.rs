@@ -295,6 +295,29 @@ impl<'a> TransactionNodeCatalog<'a> {
     }
 
     /// Called only after validating an authoring node, including pending tokens.
+    pub(super) fn draw_enabled(&self, node: SemanticTransactionNodeRef) -> Option<bool> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)?
+                .presentation()
+                .map(|p| p.draw_enabled),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Some(state.draw_enabled()),
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Family { state: None, .. }
+                    | SemanticNodeCreation::PendingPathObject { .. },
+                ) => Some(true),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn family_z_index(&self, node: SemanticTransactionNodeRef) -> Option<f64> {
         match node {
             SemanticTransactionNodeRef::Existing(node) => {
@@ -828,6 +851,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::SheenDirection(object)
         | SemanticMutationKey::UpdaterSuspension(object)
         | SemanticMutationKey::ZIndex(object)
+        | SemanticMutationKey::DrawEnabled(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
             SemanticTransactionNodeRef::Pending(token) => Some(token),
@@ -873,7 +897,8 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
         }
-        SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
+        SemanticMutationKey::DrawEnabled(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
         | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target))
         | SemanticMutationKey::SpatialCompositionDomain(SemanticTransactionNodeRef::Existing(
             target,

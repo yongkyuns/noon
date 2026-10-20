@@ -339,6 +339,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -350,6 +351,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -443,6 +445,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text = texts.insert(text_resource()).unwrap();
         let object = FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

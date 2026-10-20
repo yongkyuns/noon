@@ -239,3 +239,81 @@ fn owned_family_creation_reserves_capacity_and_invalid_content_is_atomic() {
     assert!(tx.apply(&mut store).is_err());
     assert_eq!(store.len(), 0);
 }
+
+#[test]
+fn family_drawing_eligibility_survives_materialization_in_either_transaction_order() {
+    for content_first in [false, true] {
+        let mut store = SemanticStore::new();
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family());
+        if content_first {
+            tx.replace_content(root, content());
+        }
+        tx.set_draw_enabled(root, false);
+        if !content_first {
+            tx.replace_content(root, content());
+        }
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert!(!prepared.draw_enabled(root).unwrap());
+        let wanted = prepared.proposed_object_state(root).unwrap();
+        assert!(!wanted.draw_enabled());
+        assert_eq!(wanted.style, SemanticStyle::manim_family_root(Color::WHITE));
+        let root = prepared.commit().resolve(root).unwrap();
+        assert_eq!(store.semantic_object_state_checked(root).unwrap(), &wanted);
+        assert!(
+            !store
+                .node(root)
+                .unwrap()
+                .presentation()
+                .unwrap()
+                .draw_enabled
+        );
+    }
+}
+
+#[test]
+fn unmaterialized_family_drawing_edit_is_local_atomic_and_idempotent() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let before = store.node(root).unwrap().clone();
+    let mut invalid = SemanticMutationTransaction::new();
+    invalid
+        .set_draw_enabled(root, false)
+        .set_z_index(root, f64::NAN);
+    assert!(invalid.apply(&mut store).is_err());
+    assert_eq!(store.node(root).unwrap(), &before);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_draw_enabled(root, false);
+    let prepared = tx.prepare(&mut store).unwrap();
+    assert!(!prepared.draw_enabled(root).unwrap());
+    assert!(prepared.object_state(root).is_err());
+    prepared.commit();
+    assert_eq!(store.len(), 1);
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+    let revision = store.scene_revision();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_draw_enabled(root, false);
+    assert!(tx.apply(&mut store).unwrap().impacts().is_empty());
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
+fn duplicate_drawing_edits_reject_existing_and_pending_roots_without_commit() {
+    for pending in [false, true] {
+        let mut store = SemanticStore::new();
+        let existing = store.insert_family();
+        let before = store.node(existing).unwrap().clone();
+        let mut tx = SemanticMutationTransaction::new();
+        let root: SemanticTransactionNodeRef = if pending {
+            tx.create_node(SemanticNodeCreation::family()).into()
+        } else {
+            existing.into()
+        };
+        tx.set_draw_enabled(root, false)
+            .set_draw_enabled(root, true);
+        assert!(tx.apply(&mut store).is_err());
+        assert_eq!(store.node(existing).unwrap(), &before);
+        assert_eq!(store.len(), 1);
+    }
+}

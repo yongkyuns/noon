@@ -153,6 +153,10 @@ pub enum SemanticMutation {
         node: SemanticTransactionNodeRef,
         value: f64,
     },
+    SetDrawEnabled {
+        node: SemanticTransactionNodeRef,
+        enabled: bool,
+    },
     SetFamilyColor {
         node: SemanticTransactionNodeRef,
         color: crate::Color,
@@ -258,6 +262,7 @@ impl SemanticMutation {
             | Self::SetSheenDirection { node: object, .. }
             | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
+            | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
@@ -348,6 +353,7 @@ impl SemanticMutation {
             | Self::SetSheenDirection { node: object, .. }
             | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
+            | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetClickIndicate { object, .. }
@@ -427,6 +433,7 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::UpdaterSuspension(*node))
             }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
+            Self::SetDrawEnabled { node, .. } => Some(SemanticMutationKey::DrawEnabled(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
                 object, property, ..
@@ -486,6 +493,7 @@ pub(super) enum SemanticMutationKey {
     SheenDirection(SemanticTransactionNodeRef),
     UpdaterSuspension(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
+    DrawEnabled(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
@@ -529,6 +537,9 @@ pub enum SemanticMutationImpact {
         node: SemanticNodeId,
     },
     ZIndex {
+        node: SemanticNodeId,
+    },
+    DrawEnabled {
         node: SemanticNodeId,
     },
     SignalValue {
@@ -649,6 +660,7 @@ pub(super) struct SemanticTransactionPreflight {
     staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
     staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
+    staged_drawing: HashMap<SemanticTransactionNodeRef, bool>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
     /// Final constructor fields for transaction-only retained paths. This is a
@@ -1165,6 +1177,19 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetZIndex {
             node: node.into(),
             value,
+        });
+        self
+    }
+
+    /// Change root draw eligibility without changing paint, geometry or membership.
+    pub fn set_draw_enabled(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetDrawEnabled {
+            node: node.into(),
+            enabled,
         });
         self
     }
@@ -2234,6 +2259,7 @@ impl SemanticMutationTransaction {
         let mut staged_sheen_directions = HashMap::new();
         let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
+        let mut staged_drawing = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
         let mut staged_spatial_anchors = HashMap::new();
@@ -2638,6 +2664,9 @@ impl SemanticMutationTransaction {
                             if let Some(style) = staged_family_styles.get(object) {
                                 state.style = style.clone();
                             }
+                            if let Some(enabled) = staged_drawing.get(object) {
+                                state.set_draw_enabled(*enabled);
+                            }
                             if let Some(value) = staged_family_z.get(object) {
                                 state.set_z_index(*value);
                             }
@@ -3034,6 +3063,24 @@ impl SemanticMutationTransaction {
                         .expect("validated authoring node suspension state");
                     changed.push(previous != *suspended);
                     staged_updating_suspended.insert(*node, *suspended);
+                }
+                SemanticMutation::SetDrawEnabled { node, enabled } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
+                    let previous = staged_drawing
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.draw_enabled(*node))
+                        .expect("authoring presentation");
+                    changed.push(previous != *enabled);
+                    staged_drawing.insert(*node, *enabled);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.set_draw_enabled(*enabled);
+                    }
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -3617,6 +3664,7 @@ impl SemanticMutationTransaction {
         }
         staged_family_colors.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_styles.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
+        staged_drawing.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
@@ -3626,6 +3674,7 @@ impl SemanticMutationTransaction {
             staged_family_colors,
             staged_family_styles,
             staged_family_z,
+            staged_drawing,
             changed,
             staged_objects,
             staged_spatial_anchors,

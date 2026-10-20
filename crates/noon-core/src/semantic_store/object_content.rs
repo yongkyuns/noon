@@ -513,6 +513,14 @@ impl SemanticObjectState {
         self.presentation
     }
 
+    pub const fn draw_enabled(&self) -> bool {
+        self.presentation.draw_enabled
+    }
+
+    pub fn set_draw_enabled(&mut self, enabled: bool) {
+        self.presentation.draw_enabled = enabled;
+    }
+
     pub const fn z_index(&self) -> f64 {
         self.presentation.z_index
     }

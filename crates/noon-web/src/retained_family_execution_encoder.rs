@@ -929,6 +929,7 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -940,6 +941,7 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -972,6 +974,7 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -983,6 +986,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,

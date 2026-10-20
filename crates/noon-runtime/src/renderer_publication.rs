@@ -499,6 +499,7 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,

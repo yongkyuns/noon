@@ -414,7 +414,9 @@ impl SpatialGpuState {
                         )
                         .ok_or(SpatialPrepareError::InvalidCamera)?;
                         cameras.insert(index, camera);
-                    } else if spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh {
+                    } else if object.draw_enabled
+                        && spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh
+                    {
                         let Some(GeometryRef::External(id)) = object.content.geometry() else {
                             return Err(SpatialPrepareError::MissingMesh(index));
                         };
@@ -1752,6 +1754,7 @@ mod tests {
             time: 0.0,
             objects: (0..2)
                 .map(|index| noon_runtime::FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     id: noon_core::ObjectId::new(index + 1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),

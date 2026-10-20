@@ -394,11 +394,34 @@ fn default_semantic_opacity() -> f64 {
 }
 
 /// Painter metadata is independent from transform hierarchy and style.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SemanticPresentation {
+    /// Drawing eligibility is independent from authored paint and query geometry.
+    #[serde(
+        default = "default_draw_enabled",
+        skip_serializing_if = "is_draw_enabled_default"
+    )]
+    pub draw_enabled: bool,
     pub z_index: f64,
     /// Stable insertion/painter tie-break assigned by the semantic store.
     pub insertion_order: u64,
+}
+
+fn default_draw_enabled() -> bool {
+    true
+}
+fn is_draw_enabled_default(value: &bool) -> bool {
+    *value
+}
+
+impl Default for SemanticPresentation {
+    fn default() -> Self {
+        Self {
+            draw_enabled: true,
+            z_index: 0.0,
+            insertion_order: 0,
+        }
+    }
 }
 
 /// Family identity remains stable when its root acquires ordinary content.
@@ -444,6 +467,7 @@ impl SemanticFamilyPresentation {
         let mut state = super::SemanticObjectState::new(content);
         state.style = self.own_style.clone();
         state.sheen_direction = self.own_sheen_direction;
+        state.set_draw_enabled(self.presentation.draw_enabled);
         state.set_z_index(self.presentation.z_index);
         state.assign_insertion_order(self.presentation.insertion_order);
         state
@@ -753,11 +777,13 @@ mod tests {
     fn painter_key_uses_z_then_stable_insertion_order() {
         assert!(
             SemanticPresentation {
+                draw_enabled: true,
                 z_index: 2.0,
                 insertion_order: 0,
             }
             .order_key()
                 > SemanticPresentation {
+                    draw_enabled: true,
                     z_index: 1.0,
                     insertion_order: 100,
                 }

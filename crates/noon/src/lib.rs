@@ -94,6 +94,7 @@ pub mod effects {
         EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
     };
 }
+mod drawing;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;

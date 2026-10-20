@@ -516,6 +516,11 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 overlay.set_spatial(scene, *object, spatial.clone());
             }
+            ExecutionPatch::SetDrawEnabled { object, .. } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+            }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));

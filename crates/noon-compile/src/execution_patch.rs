@@ -67,6 +67,11 @@ pub enum ExecutionPatch {
         object: ObjectId,
         value: f64,
     },
+    /// Root drawing eligibility; does not change semantic query geometry.
+    SetDrawEnabled {
+        object: ObjectId,
+        enabled: bool,
+    },
     SetStyle {
         object: ObjectId,
         style: Style,

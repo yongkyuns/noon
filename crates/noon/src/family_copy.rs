@@ -178,6 +178,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             is_family,
             members,
             family_z,
+            draw_enabled,
             family_color,
             family_style,
             family_background_stroke_color,
@@ -196,6 +197,9 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                     true,
                     node.members_iter().collect::<Vec<_>>(),
                     Some(node.presentation().expect("family presentation").z_index),
+                    node.presentation()
+                        .expect("family presentation")
+                        .draw_enabled,
                     node.family_color(),
                     node.family_style().cloned(),
                     node.family_background_stroke_color(),
@@ -209,6 +213,9 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                     false,
                     node.members_iter().collect::<Vec<_>>(),
                     None,
+                    node.presentation()
+                        .expect("object presentation")
+                        .draw_enabled,
                     None,
                     None,
                     None,
@@ -264,6 +271,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             (false, None) => unreachable!("validated object owns a payload"),
         };
         let pending = transaction.create_node(creation);
+        transaction.set_draw_enabled(pending, draw_enabled);
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }

@@ -471,6 +471,18 @@ impl SemanticNode {
         self.object_state = Some(state);
     }
 
+    pub(crate) fn set_draw_enabled(&mut self, enabled: bool) {
+        if let Some(state) = &mut self.object_state {
+            state.set_draw_enabled(enabled);
+        } else if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) =
+            &mut self.kind
+        {
+            state.presentation.draw_enabled = enabled;
+        } else {
+            unreachable!("validated authoring node");
+        }
+    }
+
     pub(crate) fn set_z_index(&mut self, value: f64) {
         if let Some(state) = &mut self.object_state {
             state.set_z_index(value);
