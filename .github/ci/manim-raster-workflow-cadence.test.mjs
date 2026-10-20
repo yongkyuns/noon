@@ -20,10 +20,13 @@ test("native Manim comparisons install the repository toolchain in job-private s
   const source = await readFile(new URL("../workflows/manim-differential.yml", import.meta.url), "utf8");
   const job = source.split("\n  semantics:\n")[1];
   assert.ok(job, "missing native semantic comparisons");
-  assert.match(job.split("\n    steps:\n")[0], /RUSTUP_HOME: \$\{\{ runner\.temp \}\}\/noon-rustup/,
-    "all Rust subprocesses must use storage isolated from preinstalled toolchains");
   const setup = job.split("      - name: Install pinned Rust toolchain\n")[1]?.split("      - name:")[0];
   assert.ok(setup, "install before the comparison scripts invoke Cargo");
+  assert.doesNotMatch(job.split("\n    steps:\n")[0], /RUSTUP_HOME/,
+    "the runner context is available in step env, not job env");
+  assert.match(setup, /RUSTUP_HOME: \$\{\{ runner\.temp \}\}\/noon-rustup/);
+  assert.ok(setup.includes('echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"'),
+    "later comparison subprocesses must use the same isolated installation");
   assert.match(setup, /^          rustup install$/m, "select rust-toolchain.toml, including its components and targets");
   assert.match(setup, /^          rustup show active-toolchain$/m);
   assert.match(setup, /^          rustc --version --verbose$/m);
