@@ -1116,10 +1116,16 @@ class _FamilyMethods:
         raise AttributeError("Group has no single runtime style in Noon")
 
     def __iter__(self) -> Iterator[object]:
-        return iter(self.submobjects)
+        from _manim_semantic_handles import _group_iter
+        return _group_iter(self)
 
     def __len__(self) -> int:
-        return int(self._semantic_family_handle.memberCount)
+        from _manim_semantic_handles import _group_length
+        return _group_length(self)
+
+    def split(self):
+        from _manim_semantic_handles import _group_split
+        return _group_split(self)
 
     def __getitem__(self, index: int | slice) -> object:
         if isinstance(index, slice):

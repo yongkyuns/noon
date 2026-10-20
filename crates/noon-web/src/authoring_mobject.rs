@@ -1234,6 +1234,39 @@ mod wasm {
         }
     }
 
+    fn family_point_inclusion(
+        family: &noon::MobjectFamily,
+        include: Option<bool>,
+    ) -> Result<bool, JsValue> {
+        match include {
+            Some(value) => Ok(value),
+            None => family
+                .get_num_points()
+                .map(|count| count != 0)
+                .map_err(typed_js_error),
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmFamilyIterator {
+        iterator: noon::FamilyIterator,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilyIterator {
+        #[wasm_bindgen(js_name = nextMember)]
+        pub fn next_member(&mut self) -> Result<JsValue, JsValue> {
+            self.iterator
+                .next()
+                .transpose()
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
     #[wasm_bindgen]
     pub struct WasmFamilyMemberView {
         view: noon::FamilyMemberView,
@@ -1259,6 +1292,60 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = splitCount)]
+        pub fn split_count(&self, include_self: Option<bool>) -> Result<usize, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_count_with_self(family_point_inclusion(&family, include_self)?)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitAt)]
+        pub fn split_at(
+            &self,
+            index: usize,
+            include_self: Option<bool>,
+        ) -> Result<JsValue, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_at_with_self(index, family_point_inclusion(&family, include_self)?)
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitKeys)]
+        pub fn split_keys(&self, include_self: Option<bool>) -> Result<Vec<String>, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_members_with_self(family_point_inclusion(&family, include_self)?)
+                .map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|entry| {
+                            let node = match entry {
+                                noon::CompositeEntryHandle::Mobject(value) => value.node_id(),
+                                noon::CompositeEntryHandle::Family(value) => value.node_id(),
+                            };
+                            format!("{}:{}", node.slot(), node.generation())
+                        })
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitIterator)]
+        pub fn split_iterator(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilyIterator, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_iter_with_self(family_point_inclusion(&family, include_self)?)
+                .map(|iterator| WasmFamilyIterator { iterator })
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = memberView)]
         pub fn member_view(&self) -> Result<WasmFamilyMemberView, JsValue> {
             self.semantic_family()?

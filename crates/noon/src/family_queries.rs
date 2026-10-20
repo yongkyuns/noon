@@ -26,6 +26,46 @@ impl FamilyMemberView {
             .transpose()
     }
 }
+/// A fused split iterator over a captured own-root prefix and member container.
+/// Membership edits follow that container's lifetime; member values stay live.
+#[derive(Debug)]
+pub struct FamilyIterator {
+    prefix: Option<MobjectFamily>,
+    members: Option<FamilyMemberView>,
+    index: usize,
+}
+impl Iterator for FamilyIterator {
+    type Item = Result<CompositeEntryHandle, AuthoringError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(root) = self.prefix.take() {
+            if let Err(error) = root.validate() {
+                self.members = None;
+                return Some(Err(error));
+            }
+            return Some(Ok(CompositeEntryHandle::Family(root)));
+        }
+        match self.members.as_ref()?.member_at(self.index) {
+            Ok(Some(member)) => {
+                if let Some(next) = self.index.checked_add(1) {
+                    self.index = next;
+                } else {
+                    self.members = None;
+                }
+                Some(Ok(member))
+            }
+            Ok(None) => {
+                self.members = None;
+                None
+            }
+            Err(error) => {
+                self.members = None;
+                Some(Err(error))
+            }
+        }
+    }
+}
+impl std::iter::FusedIterator for FamilyIterator {}
+
 fn member_view_error(error: noon_core::SemanticMemberViewError) -> AuthoringError {
     match error {
         noon_core::SemanticMemberViewError::ForeignStore => AuthoringError::ForeignStore,
@@ -58,14 +98,43 @@ impl MobjectFamily {
 
     /// Count the root (only when it owns points) plus its direct members.
     pub fn split_count(&self) -> Result<usize, AuthoringError> {
-        Ok(self.member_count()? + usize::from(self.get_num_points()? != 0))
+        self.split_count_with_self(self.get_num_points()? != 0)
+    }
+
+    /// A query profile may supply own-root inclusion, e.g. a language override.
+    pub fn split_count_with_self(&self, include_self: bool) -> Result<usize, AuthoringError> {
+        Ok(self.member_count()? + usize::from(include_self))
+    }
+
+    /// Capture inclusion and list identity now, before the first iterator step.
+    pub fn split_iter(&self) -> Result<FamilyIterator, AuthoringError> {
+        self.split_iter_with_self(self.get_num_points()? != 0)
+    }
+    pub fn split_iter_with_self(
+        &self,
+        include_self: bool,
+    ) -> Result<FamilyIterator, AuthoringError> {
+        Ok(FamilyIterator {
+            prefix: include_self.then(|| self.clone()),
+            members: Some(self.member_view()?),
+            index: 0,
+        })
     }
 
     /// Read a normalized split index against current points and membership.
     /// A host may normalize against an earlier count and mutate the root before
     /// this read. The current own-point predicate decides whether rank zero is self.
     pub fn split_at(&self, index: usize) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
-        if self.get_num_points()? != 0 {
+        self.split_at_with_self(index, self.get_num_points()? != 0)
+    }
+
+    pub fn split_at_with_self(
+        &self,
+        index: usize,
+        include_self: bool,
+    ) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+        self.validate()?;
+        if include_self {
             if index == 0 {
                 return Ok(Some(CompositeEntryHandle::Family(self.clone())));
             }
@@ -77,7 +146,14 @@ impl MobjectFamily {
 
     /// Snapshot self inclusion and direct members without allocating semantic nodes.
     pub fn split_members(&self) -> Result<Vec<CompositeEntryHandle>, AuthoringError> {
-        let include_self = self.get_num_points()? != 0;
+        self.split_members_with_self(self.get_num_points()? != 0)
+    }
+
+    pub fn split_members_with_self(
+        &self,
+        include_self: bool,
+    ) -> Result<Vec<CompositeEntryHandle>, AuthoringError> {
+        self.validate()?;
         let ids = self
             .integration_store()
             .borrow()
@@ -237,3 +313,6 @@ mod tests {
         assert!(group.member_at(0).is_err());
     }
 }
+
+#[cfg(all(test, feature = "diagnostics"))]
+mod reference_tests;

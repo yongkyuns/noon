@@ -101,5 +101,32 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
     family_class.editMembership = edit
     family_class.memberKeys = lambda self: [_key(identity) for identity in self.members]
     family_class.memberAt = lambda self, index: registry[self.members[index]] if index < len(self.members) else None
+    install_split_queries(family_class, lambda self: [registry[key] for key in self.members], keys=lambda self: self.memberKeys())
     setattr(target, "noonCreateAuthoringFamilyHandle" if js else "_create_family_handle", create)
     setattr(target, "noonAuthoringMembershipBatch" if js else "_new_membership_batch", FakeMembershipBatch)
+
+
+class _ScriptedFamilyIterator:
+    """Forwarding-only static fixture; native/browser tests own edit semantics."""
+    def __init__(self, members):
+        self.members = iter(members)
+
+    def nextMember(self):
+        return next(self.members, None)
+
+    def free(self):
+        pass
+
+
+def install_split_queries(family_class, members, *, keys=None):
+    """Describe fixture results for the typed split contract, without an engine."""
+    family_class.splitCount = lambda self, include=None: len(members(self)) + bool(include)
+    family_class.splitAt = lambda self, index, include=None: (
+        self if include and index == 0 else
+        (members(self)[index - bool(include)] if index - bool(include) < len(members(self)) else None)
+    )
+    family_class.splitIterator = lambda self, include=None: _ScriptedFamilyIterator(
+        ([self] if include else []) + list(members(self)))
+    if keys is not None:
+        family_class.splitKeys = lambda self, include=None: (
+            [_key(_identity(self))] if include else []) + list(keys(self))

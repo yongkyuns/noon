@@ -1,0 +1,8858 @@
+{
+  "schemaVersion": 1,
+  "manimVersion": "0.21.0",
+  "scope": "Iterator prefix and member-list capture at creation; removal/insert/reorder in place versus add/prepend replacement, point edits, and fused exhaustion. Raw list writes, copy/become, callbacks and slicing qualify separately.",
+  "generatorSha256": "3f64f59b636a3418e23890ef46f516110398709d9faafeebaf2997d3014cfc4c",
+  "methodSourceSha256": {
+    "__iter__": "2945980b1bd719ac1ef4f89009d72af1e98a61dbe7b50d3f857cf180b59dd51d",
+    "__len__": "b4d9af9f920651fa6ac9ea0da2c5c38c9a46265cc94ade80b72c7397ce7377d0",
+    "split": "d9fdf53261eb7068149f70eb24cfa6c7675b9a9234db9be1d538eaedd9fe78cd",
+    "add": "77a94538fa0a931eeb9cf8977fde560d739c11d098d11b7cd62dee953134b8fd",
+    "add_to_back": "668167e46939b09b1c3672f540effbc025b3e0e0135556ef3caa0e4c85021f57",
+    "remove": "b57f7a7caadb6f17c0e9a2211a2b3ed39f43c48949238387901aba2ab78b4aa8",
+    "insert": "b4a66e5643bb20550d1024b82b062277a991ec489c262f63440a15c09a5d00ae",
+    "invert": "32cd88271fe4883b3c51ee2b74292792b9b48e1779babaf76031152d9c33d2ae"
+  },
+  "cases": [
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 1,
+        "split": [
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 0,
+        "split": [],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 3,
+        "split": [
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 1,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 1,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 1,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "none"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "remove_first"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "clear_children"
+      },
+      "consumed": [],
+      "remaining": [
+        "self"
+      ],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "append_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "add_empty"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "prepend_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "insert_extra"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "reverse"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "set_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 0,
+        "action": "clear_points"
+      },
+      "consumed": [],
+      "remaining": [
+        "self",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "none"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "extra",
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "b",
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 1,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a",
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "a"
+      ],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 2,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "none"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "remove_first"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 2,
+        "split": [
+          "self",
+          "b"
+        ],
+        "children": [
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "clear_children"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 1,
+        "split": [
+          "self"
+        ],
+        "children": []
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "append_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "a",
+          "b",
+          "extra"
+        ],
+        "children": [
+          "a",
+          "b",
+          "extra"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "add_empty"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "prepend_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "insert_extra"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [
+        "b"
+      ],
+      "after": {
+        "points": 5,
+        "length": 4,
+        "split": [
+          "self",
+          "extra",
+          "a",
+          "b"
+        ],
+        "children": [
+          "extra",
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "reverse"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 5,
+        "length": 3,
+        "split": [
+          "self",
+          "b",
+          "a"
+        ],
+        "children": [
+          "b",
+          "a"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "set_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 4,
+        "length": 3,
+        "split": [
+          "self",
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 5,
+        "consumed": 3,
+        "action": "clear_points"
+      },
+      "consumed": [
+        "self",
+        "a",
+        "b"
+      ],
+      "remaining": [],
+      "after": {
+        "points": 0,
+        "length": 2,
+        "split": [
+          "a",
+          "b"
+        ],
+        "children": [
+          "a",
+          "b"
+        ]
+      },
+      "staysExhausted": true
+    }
+  ]
+}
