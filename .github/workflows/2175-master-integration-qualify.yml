@@ -124,10 +124,147 @@ jobs:
           set -euo pipefail
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
+          # Both original, unchanged 30-second browser smokes are required gates.
+          # Run WebGL even if WebGPU fails; preserve each original exit status.
+          set +e
           NOON_BROWSER_SMOKE_BACKEND=webgpu NOON_BROWSER_SMOKE_ARTIFACTS="$PROOF_DIR/browser-webgpu" node scripts/browser-smoke.mjs 2>&1 | tee "$PROOF_DIR/browser-webgpu.log"
+          webgpu_status=${PIPESTATUS[0]}
           NOON_BROWSER_SMOKE_BACKEND=webgl NOON_BROWSER_SMOKE_ARTIFACTS="$PROOF_DIR/browser-webgl" node scripts/browser-smoke.mjs 2>&1 | tee "$PROOF_DIR/browser-webgl.log"
+          webgl_status=${PIPESTATUS[0]}
+          set -e
+          printf 'WebGPU original smoke exit=%s\nWebGL original smoke exit=%s\n' "$webgpu_status" "$webgl_status" | tee "$PROOF_DIR/browser-smoke-status.txt"
+          diagnostic_modes=""
+          if (( webgpu_status != 0 )); then diagnostic_modes="$diagnostic_modes webgpu"; fi
+          if (( webgl_status != 0 )); then diagnostic_modes="$diagnostic_modes webgl"; fi
+          if [[ -n "$diagnostic_modes" ]]; then
+            # Independent, research-only probe: no edits to product code, smoke
+            # fixture, scripts/browser-smoke.mjs, limits, timeouts or thresholds.
+            # Capture browser events, WASM resource timings and readiness stages.
+            set +e
+            NOON_DIAG_MODES="$diagnostic_modes" node --input-type=module <<'NODE' 2>&1 | tee "$PROOF_DIR/browser-diagnostic.log"
+          import { spawn } from "node:child_process";
+          import { mkdir, writeFile } from "node:fs/promises";
+          import path from "node:path";
+          import playwright from "playwright";
+          const { chromium } = playwright;
+          const root = process.cwd();
+          const modes = (process.env.NOON_DIAG_MODES ?? "").trim().split(/\s+/).filter(Boolean);
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          for (const backend of modes) {
+            const dest = path.join(process.env.PROOF_DIR, "browser-" + backend);
+            await mkdir(dest, { recursive: true });
+            const port = backend === "webgpu" ? 43831 : 43832;
+            const base = "http://127.0.0.1:" + port;
+            const report = { backend, startedAt: new Date().toISOString(), samples: [], events: [] };
+            const record = (kind, value) => {
+              if (report.events.length < 150) report.events.push({ elapsedMs: Date.now() - started, kind, value });
+            };
+            const started = Date.now();
+            const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", root], { stdio: ["ignore", "pipe", "pipe"] });
+            let serverOutput = "";
+            for (const stream of [server.stdout, server.stderr]) stream.on("data", (chunk) => {
+              serverOutput = (serverOutput + chunk.toString()).slice(-12000);
+            });
+            let browser, page;
+            try {
+              let available = false;
+              for (let i = 0; i < 80; i++) {
+                try {
+                  const response = await fetch(base + "/web/browser-smoke.html");
+                  if (response.ok) { available = true; break; }
+                } catch {}
+                await sleep(100);
+              }
+              if (!available) throw new Error("diagnostic HTTP server not ready");
+              const args = backend === "webgpu" ? [
+                "--enable-unsafe-webgpu", "--enable-unsafe-swiftshader",
+                "--use-webgpu-adapter=swiftshader", "--use-gpu-in-tests",
+                "--ignore-gpu-blocklist", "--enable-features=Vulkan",
+                "--use-gl=angle", "--use-angle=swiftshader",
+                "--use-vulkan=swiftshader", "--disable-gpu-sandbox",
+                "--disable-dev-shm-usage",
+              ] : [
+                "--disable-features=WebGPU", "--enable-unsafe-swiftshader",
+                "--ignore-gpu-blocklist", "--use-gl=angle",
+                "--use-angle=swiftshader", "--disable-gpu-sandbox",
+                "--disable-dev-shm-usage",
+              ];
+              browser = await chromium.launch({ channel: "chromium", headless: true, args });
+              report.chromiumVersion = browser.version();
+              page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
+              page.on("pageerror", (error) => record("pageerror", String(error)));
+              page.on("console", (message) => record("console-" + message.type(), message.text().slice(0, 1500)));
+              page.on("requestfailed", (request) => record("requestfailed", {
+                url: request.url(), reason: request.failure()?.errorText ?? null,
+              }));
+              page.on("response", (response) => {
+                const url = response.url();
+                if (response.status() >= 400 || /(\.wasm|noon_web\.js)/.test(url))
+                  record("response", { status: response.status(), url });
+              });
+              page.on("crash", () => record("page-crash", true));
+              await page.goto(base + "/web/browser-smoke.html", { waitUntil: "load", timeout: 30000 });
+              for (let i = 0; i < 8; i++) {
+                const snapshot = await Promise.race([
+                  page.evaluate(() => ({
+                    documentReadyState: document.readyState,
+                    webgpuExposed: !!navigator.gpu,
+                    noonSmoke: window.noonSmoke?.state ? {
+                      ready: window.noonSmoke.state.ready,
+                      error: window.noonSmoke.state.error,
+                      frames: window.noonSmoke.state.frames,
+                    } : null,
+                    directSmoke: window.noonDirectExecutionSmoke ? {
+                      ready: window.noonDirectExecutionSmoke.ready,
+                      error: window.noonDirectExecutionSmoke.error,
+                    } : null,
+                    resources: performance.getEntriesByType("resource").slice(-40).map((e) => ({
+                      name: new URL(e.name).pathname,
+                      durationMs: Math.round(e.duration),
+                      responseEndMs: Math.round(e.responseEnd),
+                      decodedBytes: e.decodedBodySize,
+                    })),
+                  })).catch((error) => ({ evaluateError: String(error) })),
+                  sleep(3000).then(() => ({ evaluateTimeoutMs: 3000 })),
+                ]);
+                report.samples.push({ elapsedMs: Date.now() - started, ...snapshot });
+                if (snapshot.noonSmoke?.ready) break;
+                await sleep(5000);
+              }
+              await page.screenshot({ path: path.join(dest, "diagnostic-startup.png"), timeout: 5000 });
+            } catch (error) {
+              report.diagnosticError = String(error?.stack ?? error);
+            } finally {
+              report.durationMs = Date.now() - started;
+              report.serverOutputTail = serverOutput;
+              if (browser) try { await Promise.race([browser.close(), sleep(5000)]); } catch {}
+              server.kill("SIGTERM");
+              await writeFile(path.join(dest, "diagnostic-startup.json"), JSON.stringify(report, null, 2) + "\n");
+              console.log("Research-only startup diagnostic " + backend + ": " + JSON.stringify({
+                durationMs: report.durationMs,
+                error: report.diagnosticError ?? null,
+                samples: report.samples.map((s) => ({
+                  elapsedMs: s.elapsedMs,
+                  ready: s.noonSmoke?.ready ?? null,
+                  stateError: s.noonSmoke?.error ?? null,
+                  resourceCount: s.resources?.length ?? null,
+                  evaluateTimeoutMs: s.evaluateTimeoutMs ?? null,
+                })),
+                eventCount: report.events.length,
+              }));
+            }
+          }
+          NODE
+            diagnostic_status=${PIPESTATUS[0]}
+            set -e
+            printf 'Research diagnostic exit=%s\n' "$diagnostic_status" | tee "$PROOF_DIR/browser-diagnostic-status.txt"
+          fi
+          test "$webgpu_status" -eq 0
+          test "$webgl_status" -eq 0
 
       - name: Verify tested staged merge has not changed and preserve exact source identity
+        # Verify source provenance even when a preceding qualification fails.
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
