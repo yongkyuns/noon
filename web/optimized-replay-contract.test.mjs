@@ -84,8 +84,9 @@ async function buildArguments(env) {
       return null;
     }
     const args = (await readFile(argsFile, "utf8")).trim().split("\n");
-    assert.deepEqual(args.slice(-2), ["--", "--locked"],
-      "all build profiles must forward --locked after wasm-pack's own options");
+    assert.equal(args.at(-1), "--locked");
+    assert.ok(!args.includes("--"),
+      "wasm-pack must not forward a separator after Cargo feature options");
     return args;
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
@@ -112,6 +113,14 @@ test("renderer diagnostic feature does not silently opt into replay", async () =
   const args = await buildArguments({ NOON_RENDERER_SMOKE: "1" });
   assert.equal(args[args.indexOf("--features") + 1], "renderer-smoke");
   assert.ok(!args.includes("replay-smoke"));
+});
+
+test("development renderer build forwards locked Cargo feature options", async () => {
+  const args = await buildArguments({ NOON_WASM_PROFILE: "dev",
+    NOON_WASM_SKIP_OPT: "1", NOON_RENDERER_SMOKE: "1" });
+  assert.ok(args.includes("--dev"));
+  assert.ok(args.includes("--no-opt"));
+  assert.equal(args[args.indexOf("--features") + 1], "renderer-smoke");
 });
 
 test("all six replay fixtures and original sampling remain mandatory", async () => {

@@ -155,7 +155,8 @@ if [[ "${NOON_REPLAY_SMOKE:-0}" == "1" ]]; then
 fi
 
 # CI and production must use the reviewed workspace dependency resolution.
-wasm_pack_args+=(-- --locked)
+# A separator here becomes a Cargo argument after any --features option.
+wasm_pack_args+=(--locked)
 
 worker_pid=""
 if (( parallel_worker == 1 )); then
