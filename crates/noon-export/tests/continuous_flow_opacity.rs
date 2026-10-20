@@ -154,8 +154,7 @@ fn moving_flow_opacity_matches_static_oracle_and_retained_seek_pixels() {
                 let frame = capture.capture(&mut session).unwrap();
                 assert_eq!(frame.receipt.published_time, TIMES[index]);
                 assert_eq!(
-                    frame.rgba,
-                    images[index],
+                    frame.rgba, images[index],
                     "retained {shape}/{direction} pixels at t={}",
                     TIMES[index]
                 );
