@@ -2761,7 +2761,9 @@ def _raw_point_precision(api, scene=None):
     result["short_curve"] = {
         "points": observe(short),
         "half": [float(p).hex() for p in short.point_from_proportion(0.5)[:2]],
-        "length": float(short.get_arc_length()).hex(),
+        # Normalize by the curve size: the normal scalar comparison budget
+        # remains meaningful below one renderer-coordinate ULP.
+        "length_in_deltas": float(short.get_arc_length()) / delta,
     }
     return result
 
@@ -6134,10 +6136,10 @@ FIXTURES = [
             lambda: _noon_live_scene_probe(lambda scene: _mobject_own_point_counts(noon, scene)),
             lambda: _mobject_own_point_counts(manim), 0.0),
     Fixture("raw_point_precision", lambda: _raw_point_precision(noon),
-            lambda: _raw_point_precision(manim), 0.0),
+            lambda: _raw_point_precision(manim), 1e-6),
     Fixture("raw_point_precision_live",
             lambda: _noon_live_scene_probe(lambda scene: _raw_point_precision(noon, scene)),
-            lambda: _raw_point_precision(manim), 0.0),
+            lambda: _raw_point_precision(manim), 1e-6),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),

@@ -203,10 +203,17 @@ impl PathQuery {
             return Ok(Vec::new());
         }
         let mut pieces = Vec::with_capacity(sample_points - 1);
-        let denominator = (sample_points - 1) as f64;
+        let step = 1.0 / (sample_points - 1) as f64;
         let mut previous = evaluate_bezier_points(&controls, 0.0);
         for sample in 1..sample_points {
-            let current = evaluate_bezier_points(&controls, sample as f64 / denominator);
+            let current = evaluate_bezier_points(
+                &controls,
+                if sample + 1 == sample_points {
+                    1.0
+                } else {
+                    sample as f64 * step
+                },
+            );
             pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
             previous = current;
         }
@@ -246,9 +253,13 @@ impl PathQuery {
         }
         let mut pieces = Vec::with_capacity(sample_points - 1);
         let mut previous = controls[0];
-        let denominator = (sample_points - 1) as f64;
+        let step = 1.0 / (sample_points - 1) as f64;
         for sample in 1..sample_points {
-            let t = sample as f64 / denominator;
+            let t = if sample + 1 == sample_points {
+                1.0
+            } else {
+                sample as f64 * step
+            };
             let current = evaluate_cubic(controls, t);
             pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
             previous = current;
@@ -569,17 +580,11 @@ pub(crate) fn points_coincide(left: (f64, f64), right: (f64, f64)) -> bool {
 }
 
 fn evaluate_cubic(controls: [(f64, f64); 4], t: f64) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * u * controls[0].0
-            + 3.0 * u * u * t * controls[1].0
-            + 3.0 * u * t * t * controls[2].0
-            + t * t * t * controls[3].0,
-        u * u * u * controls[0].1
-            + 3.0 * u * u * t * controls[1].1
-            + 3.0 * u * t * t * controls[2].1
-            + t * t * t * controls[3].1,
-    )
+    let point = noon_geometry::cubic_bezier_point_f64(
+        controls.map(|(x, y)| noon_core::SemanticVec3::new(x, y, 0.0)),
+        t,
+    );
+    (point.x, point.y)
 }
 
 fn evaluate_bezier_points(controls: &[(f64, f64)], t: f64) -> (f64, f64) {

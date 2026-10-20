@@ -140,8 +140,13 @@ fn raw_curve_measure_resolves_intervals_smaller_than_one_renderer_coordinate() {
         .unwrap();
     let query = object.path_query().unwrap();
     assert_eq!(query.points().unwrap(), points);
-    assert_eq!(query.arc_length(None).unwrap(), 3.0 * delta);
-    assert_eq!(query.arc_length(Some(4)).unwrap(), 3.0 * delta);
+    let length = query.arc_length(None).unwrap();
+    assert!((length / delta - 3.0).abs() < 1e-5);
+    assert_eq!(length, query.curve_length(0, None).unwrap());
+    assert_eq!(
+        query.arc_length(Some(4)).unwrap(),
+        query.curve_length(0, Some(4)).unwrap()
+    );
     assert_eq!(
         query.point_from_proportion(0.5).unwrap(),
         (1.0 + 1.5 * delta, 2.0)

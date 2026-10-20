@@ -1,7 +1,7 @@
 //! Prepared, derived path measure; authored raw points keep semantic precision.
 use super::{
-    collect_curves, cubic_point_f64, curve_controls, curve_point_f64, validate_proportion_f64,
-    Curve, PathProportionError, MANIM_LENGTH_SAMPLE_POINTS,
+    collect_curves, cubic_bezier_point_f64, curve_controls, curve_point_f64,
+    validate_proportion_f64, Curve, PathProportionError, MANIM_LENGTH_SAMPLE_POINTS,
 };
 use noon_core::{SemanticVec3, Vec2, VectorPath};
 
@@ -50,7 +50,7 @@ impl MeasuredCurve {
     fn point(self, parameter: f64) -> SemanticVec3 {
         match self {
             Self::Command(curve) => curve_point_f64(curve, parameter),
-            Self::Raw(_) => cubic_point_f64(self.controls(), parameter),
+            Self::Raw(_) => cubic_bezier_point_f64(self.controls(), parameter),
         }
     }
 }
@@ -106,10 +106,14 @@ impl PathProportionPlan {
         pieces
             .try_reserve(sample_points - 1)
             .map_err(|_| PathProportionError::InvalidSampleCount)?;
-        let denominator = (sample_points - 1) as f64;
+        let step = 1.0 / (sample_points - 1) as f64;
         let mut previous = curve.point(0.0);
         for sample in 1..sample_points {
-            let point = curve.point(sample as f64 / denominator);
+            let point = curve.point(if sample + 1 == sample_points {
+                1.0
+            } else {
+                sample as f64 * step
+            });
             pieces.push(
                 ((point.x - previous.x) * self.scale.0)
                     .hypot((point.y - previous.y) * self.scale.1),
@@ -245,11 +249,15 @@ impl PathProportionPlan {
 }
 
 fn sampled_curve_length(curve: MeasuredCurve, scale: (f64, f64), samples: usize) -> f64 {
-    let denominator = (samples - 1) as f64;
+    let step = 1.0 / (samples - 1) as f64;
     let mut previous = curve.point(0.0);
     let mut length = 0.0;
     for sample in 1..samples {
-        let point = curve.point(sample as f64 / denominator);
+        let point = curve.point(if sample + 1 == samples {
+            1.0
+        } else {
+            sample as f64 * step
+        });
         length += ((point.x - previous.x) * scale.0).hypot((point.y - previous.y) * scale.1);
         previous = point;
     }

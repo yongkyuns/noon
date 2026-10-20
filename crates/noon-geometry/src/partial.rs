@@ -387,7 +387,7 @@ fn curve_point_f64(curve: Curve, t: f64) -> SemanticVec3 {
         CurveKind::Cubic { control1, control2 } => {
             let control1 = SemanticVec3::from_vec2(control1);
             let control2 = SemanticVec3::from_vec2(control2);
-            cubic_point_f64([from, control1, control2, to], t)
+            cubic_bezier_point_f64([from, control1, control2, to], t)
         }
     }
 }
@@ -520,6 +520,24 @@ fn curve_controls(curve: Curve) -> [SemanticVec3; 4] {
         ),
     };
     [from, first, second, to]
+}
+
+/// Evaluate a cubic at semantic precision using ManimCE's polynomial order.
+/// Query functions and prepared path measures share this renderer-independent kernel.
+pub fn cubic_bezier_point_f64(points: [SemanticVec3; 4], t: f64) -> SemanticVec3 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let mt = 1.0 - t;
+    let mt2 = mt * mt;
+    let mt3 = mt2 * mt;
+    let coordinate = |values: [f64; 4]| {
+        mt3 * values[0] + 3.0 * t * mt2 * values[1] + 3.0 * t2 * mt * values[2] + t3 * values[3]
+    };
+    SemanticVec3::new(
+        coordinate(points.map(|p| p.x)),
+        coordinate(points.map(|p| p.y)),
+        coordinate(points.map(|p| p.z)),
+    )
 }
 
 #[cfg(test)]
@@ -777,13 +795,4 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
-}
-
-fn cubic_point_f64([from, control1, control2, to]: [SemanticVec3; 4], t: f64) -> SemanticVec3 {
-    let p01 = lerp_f64(from, control1, t);
-    let p12 = lerp_f64(control1, control2, t);
-    let p23 = lerp_f64(control2, to, t);
-    let p012 = lerp_f64(p01, p12, t);
-    let p123 = lerp_f64(p12, p23, t);
-    lerp_f64(p012, p123, t)
 }
