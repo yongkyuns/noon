@@ -204,6 +204,27 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
     let mut execution = scene.execution_session().unwrap();
     execution.take_frame_changes();
     let before = scene.revision();
+    let publication = execution.publication_context();
+    let states = [
+        root.state().unwrap(),
+        child.state().unwrap(),
+        grandchild.state().unwrap(),
+    ];
+    assert!(scene
+        .live(&mut execution)
+        .shift(&root, f64::NAN, 0.0)
+        .is_err());
+    assert_eq!(
+        [
+            root.state().unwrap(),
+            child.state().unwrap(),
+            grandchild.state().unwrap()
+        ],
+        states
+    );
+    assert_eq!(scene.revision(), before);
+    assert_eq!(execution.publication_context(), publication);
+    assert!(execution.take_frame_changes().object_indices().is_empty());
     let result = scene.live(&mut execution).shift(&root, 2.0, -1.0).unwrap();
     assert_eq!(result.impacts().len(), 3);
     assert_eq!(scene.revision(), before.checked_next().unwrap());

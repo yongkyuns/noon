@@ -2735,6 +2735,14 @@ impl<'a> LiveSession<'a> {
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
+        if !x.is_finite() || !y.is_finite() {
+            // Invalid live property values use the canonical publication validator
+            // and its structured diagnostic, before any root/descendant edit.
+            let mut translation = self.authored(mobject)?.transform.translation;
+            translation.x += x;
+            translation.y += y;
+            return self.set_property(mobject, SemanticObjectProperty::Translation, translation);
+        }
         crate::family_layout::publish_shift_root(
             self.store,
             self.root,
