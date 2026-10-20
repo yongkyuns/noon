@@ -57,10 +57,6 @@ const exactFamilies = new Map([
   ["noon-agent-foundation.yml", "agent-authoring"],
   ["image-raster-qualification.yml", "renderer"],
   ["foreground-matching-qualification.yml", "manim"],
-  // Branch-scoped preparation experiments for #2211, not default viewer modes.
-  ["prepared-prefix-probe.yml", "experimental"],
-  ["prepared-prefix-incremental.yml", "experimental"],
-  ["prepared-prefix-lifecycle.yml", "experimental"],
 ]);
 
 function classifyWorkflow(name) {
