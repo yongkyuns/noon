@@ -76,7 +76,11 @@ fn incremental_reader_pixels_match_first_pass_after_later_batches_and_source_des
         source.advance_to(0.5).unwrap();
         let original = reference.capture(&source.take_renderer_publication());
         assert!(
-            original.as_chunks::<4>().0.iter().any(|pixel| pixel[2] > 32),
+            original
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[2] > 32),
             "nonempty oracle"
         );
         source.advance_to(1.0).unwrap();
