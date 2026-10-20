@@ -263,3 +263,41 @@ fn sampled_curve_length(curve: MeasuredCurve, scale: (f64, f64), samples: usize)
     }
     length
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepared_proportion_plan_reuses_the_sampled_measure() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(3.0, 0.0))
+            .line_to(Vec2::new(3.0, 1.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+
+        assert_eq!(plan.curves.len(), 2);
+        assert_eq!(plan.lengths, vec![3.0, 1.0]);
+        assert_eq!(plan.cumulative_lengths, vec![3.0, 4.0]);
+        assert_eq!(plan.total_length, 4.0);
+        assert_eq!(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
+        assert_eq!(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
+        assert_eq!(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
+    }
+
+    #[test]
+    fn prepared_proportion_plan_preserves_first_curve_at_exact_length_boundary() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(3.0, 0.0))
+            .line_to(Vec2::new(3.0, 1.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+
+        assert_eq!(plan.point(0.75).unwrap(), Vec2::new(3.0, 0.0));
+        assert_eq!(
+            plan.cumulative_lengths
+                .partition_point(|&end_length| end_length < 3.0),
+            0
+        );
+    }
+}

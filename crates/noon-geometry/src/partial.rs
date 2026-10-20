@@ -590,23 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn prepared_proportion_plan_reuses_the_sampled_measure() {
-        let path = VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::new(3.0, 0.0))
-            .line_to(Vec2::new(3.0, 1.0));
-        let plan = PathProportionPlan::new(&path).unwrap();
-
-        assert_eq!(plan.curves.len(), 2);
-        assert_eq!(plan.lengths, vec![3.0, 1.0]);
-        assert_eq!(plan.cumulative_lengths, vec![3.0, 4.0]);
-        assert_eq!(plan.total_length, 4.0);
-        assert_vec2(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
-        assert_vec2(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
-        assert_vec2(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
-    }
-
-    #[test]
     fn curve_length_pieces_match_manim_sample_count_and_scale() {
         let path = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
             Vec2::new(0.0, 1.0),
@@ -653,22 +636,6 @@ mod tests {
         let ordinary = plan.point(0.4).unwrap();
         let precise = plan.point_f64(0.4).unwrap();
         assert_semantic(precise, SemanticVec3::from_vec2(ordinary), 2.0e-7);
-    }
-
-    #[test]
-    fn prepared_proportion_plan_preserves_first_curve_at_exact_length_boundary() {
-        let path = VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::new(3.0, 0.0))
-            .line_to(Vec2::new(3.0, 1.0));
-        let plan = PathProportionPlan::new(&path).unwrap();
-
-        assert_vec2(plan.point(0.75).unwrap(), Vec2::new(3.0, 0.0));
-        assert_eq!(
-            plan.cumulative_lengths
-                .partition_point(|&end_length| end_length < 3.0),
-            0
-        );
     }
 
     #[test]
