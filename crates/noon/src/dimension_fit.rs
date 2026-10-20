@@ -74,7 +74,7 @@ pub(crate) fn world_scale_factors(
 impl LayoutAnchor {
     /// Read the same layout extent used by fitting, including resource objects.
     pub fn dimension_length(&self, dimension: LayoutDimension) -> Result<f64, AuthoringError> {
-        Ok(dimension.length(self.layout()?.bounds()))
+        Ok(dimension.length(self.dimension_bounds()?))
     }
 
     /// Stretch one world dimension around a shared pivot, preserving semantic identity.

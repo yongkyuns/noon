@@ -1,6 +1,7 @@
 """Facade delegation; geometry correctness is tested against shared Rust bounds."""
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import noon
 import _manim_compat
@@ -42,12 +43,43 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         def query(handle):
             calls.append(handle)
             return observed
-        value._scene = SimpleNamespace(_canonical_authoring_context=SimpleNamespace(queryMobjectLayout=query))
+        dimension = Mock(return_value=10.0)
+        value._scene = SimpleNamespace(_canonical_authoring_context=SimpleNamespace(
+            queryMobjectLayout=query, queryMobjectDimension=dimension))
         value._object = object()
         self.assertEqual(shared._get_center(value), (7, -3))
         self.assertEqual(shared._width(value), 10)
         self.assertEqual(shared._get_critical_point(value, noon.UP), (7, 0))
-        self.assertEqual(calls, [value._semantic_handle] * 3)
+        self.assertEqual(calls, [value._semantic_handle] * 2)
+        dimension.assert_called_once_with(value._semantic_handle, 0)
+
+    def test_dimensions_do_not_request_a_rejected_anchor_observation(self):
+        value = self.wrapper(object())
+        context = SimpleNamespace(
+            queryMobjectLayout=Mock(side_effect=ValueError("unpaired anchors")),
+            queryMobjectDimension=Mock(side_effect=lambda handle, dim: (3.0, 7.0)[dim]),
+        )
+        value._scene = SimpleNamespace(_canonical_authoring_context=context)
+        value._object = object()
+        self.assertEqual((shared._width(value), shared._height(value)), (3.0, 7.0))
+        context.queryMobjectLayout.assert_not_called()
+        context.queryMobjectDimension.side_effect = RuntimeError("execution is transferred")
+        with self.assertRaisesRegex(RuntimeError, "transferred"):
+            shared._width(value)
+
+    def test_family_dimensions_use_the_shared_dimension_only_query(self):
+        value = object.__new__(_manim_compat.VGroup)
+        value._semantic_family_handle = object()
+        anchor = SimpleNamespace(dimensionLength=Mock(side_effect=lambda dim: (3.0, 7.0)[dim]))
+        context = SimpleNamespace(queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (6.0, 14.0)[dim]))
+        with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
+            shared, "_group_live_layout_context", return_value=None
+        ), patch.object(shared, "_group_layout_observation", side_effect=ValueError("unpaired anchors")):
+            self.assertEqual((shared._width(value), shared._height(value)), (3.0, 7.0))
+        with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
+            shared, "_group_live_layout_context", return_value=context
+        ):
+            self.assertEqual((shared._width(value), shared._height(value)), (6.0, 14.0))
 
     def test_missing_shared_layout_never_falls_back_to_snapshot_math(self):
         for handle in (None, SimpleNamespace(snapshotJson=lambda: self.fail("raw fallback"))):

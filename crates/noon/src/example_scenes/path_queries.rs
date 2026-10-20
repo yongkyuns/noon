@@ -12,6 +12,13 @@ pub fn session() -> Result<ExecutionSession, String> {
                 Default::default(),
             )?;
             assert_eq!(value.width()?, 0.0);
+            let family = scene.family(&[(&value).into()])?;
+            let anchor = crate::LayoutAnchor::from(&family);
+            assert_eq!(anchor.dimension_length(crate::LayoutDimension::Width)?, 0.0);
+            assert_eq!(
+                anchor.dimension_length(crate::LayoutDimension::Height)?,
+                0.0
+            );
             if count != 1 && !count.is_multiple_of(4) {
                 assert!(value.path_query()?.anchors().is_err());
                 assert!(value.center().is_err());

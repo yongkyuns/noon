@@ -357,6 +357,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         live_layout = context.queryMobjectLayout.return_value
         live_layout.width = 2.5
         live_layout.height = 1.25
+        context.queryMobjectDimension.side_effect = lambda handle, dim: (2.5, 1.25)[dim]
         live_layout.criticalX.return_value = 0.75
         live_layout.criticalY.return_value = -0.5
         self.assertEqual(surface.width, 2.5)

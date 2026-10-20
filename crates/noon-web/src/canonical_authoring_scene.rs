@@ -902,6 +902,21 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_dimension(
+        &mut self,
+        handle: &noon::Mobject,
+        dimension: noon::LayoutDimension,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
+            |player, handle| {
+                player.live_layout_dimension_length(&noon::LayoutAnchor::from(handle), dimension)
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&mut self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
         self.mobject_observation(
             handle,
@@ -7292,6 +7307,20 @@ mod wasm {
             self.inner
                 .begin_underline(handle.semantic_mobject(), buff)
                 .map(crate::WasmManimGeometryOptions::from_options)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectDimension)]
+        pub fn query_mobject_dimension(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dimension: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_dimension(
+                    handle.semantic_mobject(),
+                    dimension.try_into().map_err(typed_js_error)?,
+                )
                 .map_err(typed_js_error)
         }
 
@@ -14201,6 +14230,31 @@ mod tests {
         assert!(context.family_vector_boundary_points(&family).is_err());
         assert!(context.family_vector_boundary_points(&empty).is_err());
         drop(player);
+    }
+
+    #[test]
+    fn incomplete_path_dimensions_validate_the_owner_without_querying_anchors() {
+        use noon::LayoutDimension::{Height, Width};
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context
+            .scene
+            .path(
+                noon_core::VectorPath::from_manim_points_f64(vec![(1.0, -2.0), (4.0, 5.0)]),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.bind_mobject(ObjectId::new(0), &object).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        context.live_player(1.0).unwrap();
+        assert!(context.mobject_layout(&object).is_err());
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
     }
 
     #[test]

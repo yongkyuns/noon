@@ -138,7 +138,56 @@ fn effective_raw_layout_uses_current_precise_resource_and_rejects_unpaired_bound
         .live(&mut execution)
         .effective_layout(&object)
         .is_err());
+    let anchor = noon::LayoutAnchor::from(&object);
+    assert_eq!(
+        anchor
+            .dimension_length(noon::LayoutDimension::Width)
+            .unwrap(),
+        0.0
+    );
+    assert_eq!(
+        scene
+            .live(&mut execution)
+            .dimension_length(&anchor, noon::LayoutDimension::Width)
+            .unwrap(),
+        0.0
+    );
     assert_eq!(object.width().unwrap(), 0.0);
+}
+
+#[test]
+fn dimensions_of_incomplete_paths_and_families_do_not_require_anchors() {
+    use noon::LayoutDimension::{Height, Width};
+
+    let mut scene = Scene::new();
+    let object = scene
+        .path(
+            VectorPath::from_manim_points_f64(vec![(1.0, -2.0), (4.0, 5.0)]),
+            Default::default(),
+        )
+        .unwrap();
+    let family = scene.family(&[(&object).into()]).unwrap();
+    assert!(family.layout().is_err());
+    scene.add(&object).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let revision = scene.revision();
+    for anchor in [
+        noon::LayoutAnchor::from(&object),
+        noon::LayoutAnchor::from(&family),
+    ] {
+        assert!(anchor.layout().is_err());
+        for (dimension, expected) in [(Width, 3.0), (Height, 7.0)] {
+            assert_eq!(anchor.dimension_length(dimension).unwrap(), expected);
+            assert_eq!(
+                scene
+                    .live(&mut execution)
+                    .dimension_length(&anchor, dimension)
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+    assert_eq!(scene.revision(), revision);
 }
 
 #[test]

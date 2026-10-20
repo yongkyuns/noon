@@ -361,8 +361,11 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         layout = SimpleNamespace(centerX=7, centerY=-2, width=99, height=13,
                                  criticalX=Mock(return_value=42),
                                  criticalY=Mock(return_value=-17))
-        context = SimpleNamespace(queryFamilyLayout=Mock(return_value=layout))
-        with patch.object(handles, "_group_live_layout_context", return_value=context):
+        anchor = object()
+        context = SimpleNamespace(queryFamilyLayout=Mock(return_value=layout),
+                                  queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (99, 13)[dim]))
+        with patch.object(handles, "_group_live_layout_context", return_value=context), \
+             patch.object(handles, "_layout_anchor", return_value=anchor):
             self.assertEqual(family.get_center(), compat._base.Vec2(7, -2))
             self.assertEqual((family.width, family.height), (99, 13))
             self.assertEqual(family.get_critical_point(compat._base.RIGHT),
@@ -413,6 +416,9 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                 def targetEditor(self):
                     return self.cloneHandle()
 
+                def layoutAnchor(self, index):
+                    return object()
+
                 def setFillOpacity(self, opacity):
                     fill = self.snapshot[\"style\"][\"fill\"]
                     if fill is not None:
@@ -451,6 +457,13 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
                 def layout(self):
                     return FakeLayoutObservation(self.store)
+
+                def layoutAnchor(self, index):
+                    return self
+
+                def dimensionLength(self, dimension):
+                    self.store.layout_queries += 1
+                    return (8.0, 6.0)[dimension]
 
                 @property
                 def memberCount(self):

@@ -1998,7 +1998,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_layout_dimension_length(
         &mut self,
         source: &noon::LayoutAnchor,

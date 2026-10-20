@@ -2785,10 +2785,12 @@ def _raw_point_layout(api, scene=None):
         value = api.VMobject().set_points([(1.0 + i * delta, i * delta, 0.0) for i in range(count)])
         if scene is not None:
             scene.add(value)
+        family = api.VGroup(value)
         result.append({
             "count": count,
             "width": float(value.width).hex(),
             "height": float(value.height).hex(),
+            "family_dimensions": [float(family.width).hex(), float(family.height).hex()],
             "center": observed(value.get_center, lambda point: [float(p).hex() for p in point[:2]]),
             "critical": observed(lambda: value.get_critical_point((1, 0, 0)), lambda point: [float(p).hex() for p in point[:2]]),
             "anchors": observed(value.get_anchors, lambda points: {"type": type(points).__name__, "points": rows(points)}),

@@ -8,6 +8,8 @@ class OrdinaryPathQueries(Scene):
         for count in range(10):
             value = VMobject().set_points([(precise, 0.0, 0.0)] * count)
             assert value.width == 0.0
+            family = VGroup(value)
+            assert family.width == family.height == 0.0
             if count != 1 and count % 4 != 0:
                 for query in (value.get_anchors, value.get_center):
                     try:
