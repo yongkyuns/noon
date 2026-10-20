@@ -54,6 +54,12 @@ impl crate::Scene {
 
     /// Coordinate phase and the connection's geometric/affine target in one
     /// evaluated track. This reuses exact object snapshots, not a new router.
+    ///
+    /// A patterned target must keep the source's dash length and gap/spacing;
+    /// its gap opacity is interpolated along with geometry and flow phase.
+    /// A target without a pattern inherits the complete source pattern.
+    /// Signed speed, not the target's phase, determines the terminal phase.
+    /// Incompatible pattern shapes fail before any semantic mutation.
     pub fn flow_stroke_to(
         &mut self,
         line: &Mobject,
@@ -91,11 +97,20 @@ impl crate::Scene {
             .stroke_pattern
             .ok_or("flow_stroke requires a declared stroke pattern")?;
         pattern.validate().map_err(|e| e.to_string())?;
+        let target_pattern = target_state.style.stroke_pattern.unwrap_or(pattern);
+        target_pattern.validate().map_err(|e| e.to_string())?;
+        if target_pattern.dash_length() != pattern.dash_length()
+            || target_pattern.gap_length() != pattern.gap_length()
+        {
+            return Err("continuous stroke flow requires matching target pattern dimensions".into());
+        }
         let end = f64::from(pattern.phase()) + f64::from(speed) * duration;
         if !end.is_finite() || !(end as f32).is_finite() {
             return Err("stroke flow terminal phase is not representable".into());
         }
-        let terminal = pattern.with_phase(end as f32).map_err(|e| e.to_string())?;
+        let terminal = target_pattern
+            .with_phase(end as f32)
+            .map_err(|e| e.to_string())?;
         // Endpoint snapshots, track declaration and base state share one atomic
         // transaction. No failed operation can leak copies or a partial track.
         let mut terminal_state = target_state;
@@ -220,6 +235,7 @@ mod tests {
         let mut execution = session(&scene, &flow);
         let row = &execution.seek(1.0).unwrap().objects[0];
         assert_eq!(row.style.stroke_pattern.unwrap().phase(), -0.5);
+        assert_eq!(row.style.stroke_pattern.unwrap().gap_opacity(), 0.2);
         match row.geometry().unwrap() {
             GeometryRef::Line { start, end } => {
                 assert_eq!(*start, Vec2::new(-3.0, 0.0));
@@ -227,6 +243,92 @@ mod tests {
             }
             _ => panic!("expected retained analytic Line"),
         }
+    }
+
+    #[test]
+    fn stroke_flow_target_opacity_and_motion_share_authored_time_and_seek() {
+        for pattern in [
+            StrokePattern::dashed(0.25, 0.25).unwrap(),
+            StrokePattern::dotted(0.5).unwrap(),
+        ] {
+            for speed in [-0.5, 0.5] {
+                for (from_opacity, to_opacity) in [(0.125, 0.875), (0.875, 0.125)] {
+                    let mut scene = crate::Scene::new();
+                    let source_pattern = pattern
+                        .with_phase(0.125)
+                        .unwrap()
+                        .with_gap_opacity(from_opacity)
+                        .unwrap();
+                    let mut line = scene.line((-3.0, 0.0), (3.0, 0.0)).unwrap();
+                    line.set_stroke_pattern(Some(source_pattern)).unwrap();
+                    scene.add(&line).unwrap();
+                    let mut target = scene.line((-2.0, 1.0), (2.0, 1.0)).unwrap();
+                    let target_pattern = pattern
+                        .with_phase(100.0)
+                        .unwrap()
+                        .with_gap_opacity(to_opacity)
+                        .unwrap();
+                    target.set_stroke_pattern(Some(target_pattern)).unwrap();
+                    let target_before = target.state().unwrap();
+                    scene.wait(0.5).unwrap();
+                    let flow = scene.flow_stroke_to(&line, &target, speed, 2.0).unwrap();
+                    scene.wait(2.5).unwrap();
+                    assert_eq!(target.state().unwrap(), target_before);
+                    let terminal = line.stroke_pattern().unwrap().unwrap();
+                    assert_eq!(terminal.phase(), 0.125 + speed * 2.0);
+                    assert_eq!(terminal.gap_opacity(), to_opacity);
+                    let mut execution = session(&scene, &flow);
+                    let identity = execution.frame().objects[0].id;
+                    for time in [0.0_f64, 0.5, 0.75, 1.5, 2.5, 3.0, 1.0, 0.0] {
+                        let frame = execution.seek(time).unwrap();
+                        assert_eq!(frame.objects.len(), 1);
+                        let row = &frame.objects[0];
+                        assert_eq!(row.id, identity);
+                        let elapsed = (time - 0.5).clamp(0.0, 2.0) as f32;
+                        let progress = elapsed * 0.5;
+                        let sampled = row.style.stroke_pattern.unwrap();
+                        assert_eq!(sampled.phase(), 0.125 + speed * elapsed);
+                        let opacity = from_opacity + (to_opacity - from_opacity) * progress;
+                        assert_eq!(sampled.gap_opacity(), opacity);
+                        let GeometryRef::Line { start, end } = row.geometry().unwrap() else {
+                            panic!("flow must retain analytic Line geometry");
+                        };
+                        assert_eq!(*start, Vec2::new(-3.0 + progress, progress));
+                        assert_eq!(*end, Vec2::new(3.0 - progress, progress));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stroke_flow_rejects_target_shape_changes_without_mutation() {
+        let mut scene = crate::Scene::new();
+        let mut line = scene.line((-3.0, 0.0), (3.0, 0.0)).unwrap();
+        line.set_stroke_pattern(Some(StrokePattern::dashed(0.25, 0.25).unwrap()))
+            .unwrap();
+        scene.add(&line).unwrap();
+        for pattern in [
+            StrokePattern::dotted(0.5).unwrap(),
+            StrokePattern::dashed(0.5, 0.25).unwrap(),
+            StrokePattern::dashed(0.25, 0.5).unwrap(),
+            StrokePattern::dashed(0.125, 0.375).unwrap(),
+        ] {
+            let mut target = scene.line((-2.0, 1.0), (2.0, 1.0)).unwrap();
+            target.set_stroke_pattern(Some(pattern)).unwrap();
+            let source_before = line.state().unwrap();
+            let target_before = target.state().unwrap();
+            let revision = scene.revision();
+            assert!(scene.flow_stroke_to(&line, &target, 0.5, 2.0).is_err());
+            assert_eq!(scene.revision(), revision);
+            assert_eq!(line.state().unwrap(), source_before);
+            assert_eq!(target.state().unwrap(), target_before);
+        }
+        let flow = scene.flow_stroke(&line, 0.5, 2.0).unwrap();
+        scene.wait(2.0).unwrap();
+        let mut execution = session(&scene, &flow);
+        let row = &execution.seek(1.0).unwrap().objects[0];
+        assert_eq!(row.style.stroke_pattern.unwrap().phase(), 0.5);
     }
 
     #[test]
