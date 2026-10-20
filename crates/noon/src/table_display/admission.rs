@@ -917,42 +917,36 @@ fn selected_cell_bounds(
     publisher: &TablePublisher<'_, '_>,
     family: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
 ) -> Result<Bounds2D64, TableAuthoringError> {
+    family.validate()?;
     let store = family.integration_store();
-    let grid = store
-        .borrow()
-        .semantic_table_layout(family.node_id())
-        .map_err(AuthoringError::from)?
-        .and_then(|layout| layout.shared_structure())
-        .ok_or(TableAuthoringError::InvalidStructure)?;
-    let row_nodes = super::queries::displayed_row(&grid, row)?;
-    let column_nodes = super::queries::displayed_column(&grid, column)?;
-    let bounds = |nodes: Vec<_>| -> Result<Option<Bounds2D64>, TableAuthoringError> {
-        let mut result: Option<Bounds2D64> = None;
-        for node in nodes {
-            let handle = CompositeEntryHandle::from_node(Rc::clone(store), node)?;
-            // Each entry is an observation. Repeated roots and overlapping
-            // families must not be rejected by the admission overlap check.
-            for entry in publisher.composite_entries(&[handle.as_target()])? {
-                if let Some(next) = entry.boundary_bounds()? {
-                    if let Some(bounds) = &mut result {
-                        bounds.include(next.min_x, next.min_y);
-                        bounds.include(next.max_x, next.max_y);
-                    } else {
-                        result = Some(next);
+    let bounds =
+        |nodes: &[noon_core::SemanticNodeId]| -> Result<Option<Bounds2D64>, TableAuthoringError> {
+            let mut result: Option<Bounds2D64> = None;
+            for &node in nodes {
+                let handle = CompositeEntryHandle::from_node(Rc::clone(store), node)?;
+                // Each entry is an observation. Repeated roots and overlapping
+                // families must not be rejected by the admission overlap check.
+                for entry in publisher.composite_entries(&[handle.as_target()])? {
+                    if let Some(next) = entry.boundary_bounds()? {
+                        if let Some(bounds) = &mut result {
+                            bounds.include(next.min_x, next.min_y);
+                            bounds.include(next.max_x, next.max_y);
+                        } else {
+                            result = Some(next);
+                        }
                     }
                 }
             }
-        }
-        Ok(result)
-    };
+            Ok(result)
+        };
     // Manim's empty VMobject corner contributes no points to critical bounds.
-    let (min_x, max_x) = bounds(column_nodes)?
+    let (min_x, max_x) = bounds(column)?
         .map(|b| (b.min_x, b.max_x))
         .unwrap_or((0.0, 0.0));
-    let (min_y, max_y) = bounds(row_nodes)?
+    let (min_y, max_y) = bounds(row)?
         .map(|b| (b.min_y, b.max_y))
         .unwrap_or((0.0, 0.0));
     Ok(Bounds2D64 {
@@ -965,8 +959,8 @@ fn selected_cell_bounds(
 pub(super) fn cell(
     family: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
 ) -> Result<Mobject, TableAuthoringError> {
     cell_in_publisher(
         TablePublisher::Store(Rc::clone(family.integration_store())),
@@ -980,8 +974,8 @@ pub(super) fn cell_in_publisher(
     publisher: TablePublisher<'_, '_>,
     family: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
 ) -> Result<Mobject, TableAuthoringError> {
     let bounds = selected_cell_bounds(&publisher, family, options, row, column)?;
     let store = publisher.store();
@@ -1005,8 +999,8 @@ pub(super) fn highlight(
     family: &MobjectFamily,
     highlights: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {
@@ -1025,8 +1019,8 @@ pub(super) fn highlight(
 pub(super) fn highlighted_cell(
     family: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {
@@ -1045,8 +1039,8 @@ pub(super) fn highlighted_cell_in_publisher(
     publisher: TablePublisher<'_, '_>,
     family: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {
@@ -1061,8 +1055,8 @@ pub(super) fn highlight_in_publisher(
     family: &MobjectFamily,
     highlights: &MobjectFamily,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {
@@ -1084,8 +1078,8 @@ fn highlight_with_membership(
     family: &MobjectFamily,
     highlights: Option<&MobjectFamily>,
     options: TableOptions,
-    row: usize,
-    column: usize,
+    row: &[noon_core::SemanticNodeId],
+    column: &[noon_core::SemanticNodeId],
     color: Color,
     opacity: f64,
 ) -> Result<Mobject, TableAuthoringError> {

@@ -1,5 +1,6 @@
 //! Logical table observations share the retained semantic declaration.
 use super::*;
+use crate::{integer_index::normalize_index, IntegerIndex};
 use noon_core::{SemanticNodeId, SemanticTableLayout, SemanticTableStructure};
 use std::collections::HashSet;
 
@@ -103,54 +104,41 @@ impl Table {
                 .collect(),
         ))
     }
-    /// Zero-based positions use Manim's flat-index selection, including negatives.
+    /// Capture the displayed entry-indexing rule without enumerating its members.
+    pub fn entries_indexing(&self) -> Result<TableEntrySelection, TableAuthoringError> {
+        let grid = self.query_grid()?;
+        Ok(TableEntrySelection {
+            owner: self.family.clone(),
+            family: self.painted_entries.clone(),
+            stride: displayed_shape(&grid).1,
+            missing: usize::from(grid.corner_placeholder().is_some()),
+        })
+    }
+    pub fn body_entries_indexing(&self) -> Result<TableEntrySelection, TableAuthoringError> {
+        Ok(TableEntrySelection {
+            owner: self.family.clone(),
+            family: self.body_entries.clone(),
+            stride: self.query_grid()?.body_rows()[0].len(),
+            missing: 0,
+        })
+    }
+    /// Zero-based positions use Manim's exact flat-index arithmetic.
     pub fn entry_at_position(
         &self,
-        row: i128,
-        column: i128,
+        row: impl Into<IntegerIndex>,
+        column: impl Into<IntegerIndex>,
     ) -> Result<TableEntry, TableAuthoringError> {
-        let grid = self.query_grid()?;
-        let width = grid.body_rows()[0].len() + usize::from(grid.row_labels().is_some());
-        let missing = i128::from(grid.corner_placeholder().is_some());
-        self.entry_in_family(&self.painted_entries, row, column, width, missing)
+        self.entries_indexing()?.at_position(row, column)
     }
     pub fn body_entry_at_position(
         &self,
-        row: i128,
-        column: i128,
+        row: impl Into<IntegerIndex>,
+        column: impl Into<IntegerIndex>,
     ) -> Result<TableEntry, TableAuthoringError> {
-        let width = self.query_grid()?.body_rows()[0].len();
-        self.entry_in_family(&self.body_entries, row, column, width, 0)
-    }
-    fn entry_in_family(
-        &self,
-        family: &MobjectFamily,
-        row: i128,
-        column: i128,
-        width: usize,
-        missing: i128,
-    ) -> Result<TableEntry, TableAuthoringError> {
-        family.validate()?;
-        let node = {
-            let store = family.integration_store().borrow();
-            let length = store
-                .node(family.node_id())
-                .ok_or(TableAuthoringError::InvalidStructure)?
-                .members()
-                .len();
-            let index = position_index(row, column, width, missing, length)?;
-            store
-                .semantic_family_member_at_checked(family.node_id(), index)
-                .map_err(AuthoringError::from)?
-                .ok_or(TableAuthoringError::InvalidStructure)?
-        };
-        Ok(CompositeEntryHandle::from_node(
-            Rc::clone(family.integration_store()),
-            node,
-        )?)
+        self.body_entries_indexing()?.at_position(row, column)
     }
     pub fn get_entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
-        self.entry_at_position(row as i128, column as i128)
+        self.entry_at_position(row, column)
     }
     pub fn entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
         self.get_entry(row, column)
@@ -169,6 +157,68 @@ impl Table {
     }
 }
 
+/// A request-local query rule over the existing canonical entry family.
+///
+/// Capturing the rule before evaluating a host argument preserves sequential
+/// Python operator callbacks. Selection still reads one current Rust member;
+/// this value owns neither a second membership list nor scene state.
+#[derive(Clone, Debug)]
+pub struct TableEntrySelection {
+    owner: MobjectFamily,
+    family: MobjectFamily,
+    stride: usize,
+    missing: usize,
+}
+impl TableEntrySelection {
+    pub fn row_stride(&self) -> usize {
+        self.stride
+    }
+    /// Subtraction applied to a one-based column in the host expression.
+    pub fn column_offset(&self) -> usize {
+        self.missing + 1
+    }
+    pub fn len(&self) -> Result<usize, TableAuthoringError> {
+        self.owner.validate()?;
+        self.family.validate()?;
+        Ok(self
+            .family
+            .integration_store()
+            .borrow()
+            .node(self.family.node_id())
+            .ok_or(TableAuthoringError::InvalidStructure)?
+            .members()
+            .len())
+    }
+    pub fn is_empty(&self) -> Result<bool, TableAuthoringError> {
+        Ok(self.len()? == 0)
+    }
+    pub fn at_position(
+        &self,
+        row: impl Into<IntegerIndex>,
+        column: impl Into<IntegerIndex>,
+    ) -> Result<TableEntry, TableAuthoringError> {
+        self.select_index(row.into() * self.stride + column.into() - self.missing)
+    }
+    pub fn select_index(
+        &self,
+        index: impl Into<IntegerIndex>,
+    ) -> Result<TableEntry, TableAuthoringError> {
+        let index = normalize_index(index.into(), self.len()?)
+            .ok_or(TableAuthoringError::InvalidEntryIndex)?;
+        let node = self
+            .family
+            .integration_store()
+            .borrow()
+            .semantic_family_member_at_checked(self.family.node_id(), index)
+            .map_err(AuthoringError::from)?
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        Ok(CompositeEntryHandle::from_node(
+            Rc::clone(self.family.integration_store()),
+            node,
+        )?)
+    }
+}
+
 pub(super) fn unique_last<N: Copy + std::hash::Hash + Eq>(nodes: Vec<N>) -> Vec<N> {
     let mut seen = HashSet::new();
     let mut result: Vec<_> = nodes
@@ -179,32 +229,6 @@ pub(super) fn unique_last<N: Copy + std::hash::Hash + Eq>(nodes: Vec<N>) -> Vec<
     result.reverse();
     result
 }
-fn position_index(
-    row: i128,
-    column: i128,
-    width: usize,
-    missing: i128,
-    length: usize,
-) -> Result<usize, TableAuthoringError> {
-    let index = row
-        .checked_mul(width as i128)
-        .and_then(|index| index.checked_add(column))
-        .and_then(|index| index.checked_sub(missing))
-        .ok_or(TableAuthoringError::InvalidEntryIndex)?;
-    let length = length as i128;
-    let index = if index < 0 {
-        index
-            .checked_add(length)
-            .ok_or(TableAuthoringError::InvalidEntryIndex)?
-    } else {
-        index
-    };
-    if !(0..length).contains(&index) {
-        return Err(TableAuthoringError::InvalidEntryIndex);
-    }
-    Ok(index as usize)
-}
-
 /// Read one logical row or column without traversing the full table family.
 pub(super) fn displayed_shape<N: Copy>(grid: &SemanticTableStructure<N>) -> (usize, usize) {
     (

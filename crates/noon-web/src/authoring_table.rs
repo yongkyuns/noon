@@ -2,8 +2,106 @@
 
 use crate::authoring_composite::entry_handle;
 
-use crate::{authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle};
+use crate::{
+    authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmAuthoringStore,
+};
 use wasm_bindgen::prelude::*;
+
+pub(crate) struct CompositeTableLabels<'a> {
+    pub rows: Option<Vec<noon::MobjectTarget<'a>>>,
+    pub columns: Option<Vec<noon::MobjectTarget<'a>>>,
+    pub corner: Option<noon::MobjectTarget<'a>>,
+}
+impl<'a> CompositeTableLabels<'a> {
+    pub fn read(
+        rows: &'a crate::WasmCompositeRows,
+        columns: &'a crate::WasmCompositeRows,
+        corner: &'a crate::WasmCompositeRows,
+        kind: &str,
+    ) -> Result<Self, JsValue> {
+        let rows = rows.optional_single_row_targets()?;
+        let columns = columns.optional_single_row_targets()?;
+        let mut corner = corner.single_row_targets()?;
+        let corner = match corner.len() {
+            0 => None,
+            1 => Some(corner.remove(0)),
+            _ => {
+                return Err(js_error(format!(
+                    "{kind} top_left_entry must be one shared object or family"
+                )))
+            }
+        };
+        Ok(Self {
+            rows,
+            columns,
+            corner,
+        })
+    }
+}
+
+#[wasm_bindgen]
+impl WasmAuthoringStore {
+    #[wasm_bindgen(js_name = createTable)]
+    pub fn create_table(
+        &self,
+        rows: js_sys::Array,
+        options: WasmTableOptions,
+    ) -> Result<WasmTableHandle, JsValue> {
+        noon::Table::from_rows_in_store(
+            std::rc::Rc::clone(&self.semantics),
+            crate::authoring_composite::text_rows(rows, "Table")?,
+            options.options,
+        )
+        .map(WasmTableHandle::new)
+        .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = createTableWithLabels)]
+    pub fn create_table_with_labels(
+        &self,
+        rows: js_sys::Array,
+        row_labels: &crate::WasmCompositeRows,
+        column_labels: &crate::WasmCompositeRows,
+        top_left_entry: &crate::WasmCompositeRows,
+        options: WasmTableOptions,
+    ) -> Result<WasmTableHandle, JsValue> {
+        let rows = crate::authoring_composite::text_rows(rows, "Table")?;
+        let labels =
+            CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "Table")?;
+        noon::Table::from_rows_with_composite_labels_in_store(
+            std::rc::Rc::clone(&self.semantics),
+            rows,
+            labels.rows,
+            labels.columns,
+            labels.corner,
+            options.options,
+        )
+        .map(WasmTableHandle::new)
+        .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = createMobjectTableWithLabels)]
+    pub fn create_mobject_table_with_labels(
+        &self,
+        rows: &crate::WasmCompositeRows,
+        row_labels: &crate::WasmCompositeRows,
+        column_labels: &crate::WasmCompositeRows,
+        top_left_entry: &crate::WasmCompositeRows,
+        options: WasmTableOptions,
+    ) -> Result<WasmTableHandle, JsValue> {
+        let labels =
+            CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "MobjectTable")?;
+        noon::MobjectTable::from_target_rows_with_optional_composite_labels_in_store(
+            std::rc::Rc::clone(&self.semantics),
+            rows.targets(),
+            labels.rows,
+            labels.columns,
+            labels.corner,
+            options.options,
+        )
+        .map(|table| WasmTableHandle::new(table.into_table()))
+        .map_err(js_error)
+    }
+}
 
 #[wasm_bindgen]
 pub struct WasmTableOptions {
@@ -96,9 +194,6 @@ pub struct WasmTableHandle {
 impl WasmTableHandle {
     pub(crate) fn new(table: noon::Table) -> Self {
         Self { table }
-    }
-    pub(crate) fn table(&self) -> &noon::Table {
-        &self.table
     }
 }
 
@@ -204,18 +299,37 @@ impl WasmTableHandle {
         Ok(result)
     }
     #[wasm_bindgen(js_name = entryAtPosition)]
-    pub fn entry_at_position(&self, row: i32, column: i32) -> Result<JsValue, JsValue> {
+    pub fn entry_at_position(&self, row: &str, column: &str) -> Result<JsValue, JsValue> {
         self.table
-            .entry_at_position(i128::from(row), i128::from(column))
+            .entry_at_position(integer_index(row)?, integer_index(column)?)
             .map(entry_handle)
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = bodyEntryAtPosition)]
-    pub fn body_entry_at_position(&self, row: i32, column: i32) -> Result<JsValue, JsValue> {
+    pub fn body_entry_at_position(&self, row: &str, column: &str) -> Result<JsValue, JsValue> {
         self.table
-            .body_entry_at_position(i128::from(row), i128::from(column))
+            .body_entry_at_position(integer_index(row)?, integer_index(column)?)
             .map(entry_handle)
             .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = entrySelection)]
+    pub fn entry_selection(
+        &self,
+        without_labels: bool,
+    ) -> Result<WasmTableEntrySelection, JsValue> {
+        let selection = if without_labels {
+            self.table.body_entries_indexing()
+        } else {
+            self.table.entries_indexing()
+        }
+        .map_err(js_error)?;
+        Ok(WasmTableEntrySelection { selection })
+    }
+    #[wasm_bindgen(js_name = cellRows)]
+    pub fn cell_rows(&self) -> Result<WasmTableCellRows, JsValue> {
+        Ok(WasmTableCellRows {
+            rows: self.table.cell_rows().map_err(js_error)?,
+        })
     }
     #[wasm_bindgen(js_name = rows)]
     pub fn rows(&self) -> Result<js_sys::Array, JsValue> {
@@ -294,13 +408,111 @@ impl WasmTableHandle {
         Ok(result)
     }
     #[wasm_bindgen(js_name = getCell)]
-    pub fn get_cell(
-        &self,
-        row: usize,
-        column: usize,
-    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+    pub fn get_cell(&self, row: &str, column: &str) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.table
-            .get_cell(row, column)
+            .get_cell(integer_index(row)?, integer_index(column)?)
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+    }
+}
+
+/// Decimal integer text is only an explicit language-boundary coercion. The
+/// native engine receives typed arbitrary precision integers, never a wire scene.
+pub(crate) fn integer_index(value: &str) -> Result<noon::IntegerIndex, JsValue> {
+    value
+        .parse()
+        .map_err(|_| js_error(noon::TableAuthoringError::InvalidEntryIndex))
+}
+
+#[wasm_bindgen]
+pub struct WasmTableEntrySelection {
+    selection: noon::TableEntrySelection,
+}
+#[wasm_bindgen]
+impl WasmTableEntrySelection {
+    #[wasm_bindgen(js_name = rowStride)]
+    pub fn row_stride(&self) -> usize {
+        self.selection.row_stride()
+    }
+    #[wasm_bindgen(js_name = columnOffset)]
+    pub fn column_offset(&self) -> usize {
+        self.selection.column_offset()
+    }
+    pub fn length(&self) -> Result<usize, JsValue> {
+        self.selection.len().map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = selectIndex)]
+    pub fn select_index(&self, index: &str) -> Result<JsValue, JsValue> {
+        self.selection
+            .select_index(integer_index(index)?)
+            .map(entry_handle)
+            .map_err(js_error)
+    }
+}
+#[wasm_bindgen]
+pub struct WasmTableCellRows {
+    rows: noon::TableCellRows,
+}
+#[wasm_bindgen]
+impl WasmTableCellRows {
+    pub fn length(&self) -> usize {
+        self.rows.len()
+    }
+    #[wasm_bindgen(js_name = selectRow)]
+    pub fn select_row(&self, row: &str) -> Result<WasmTableCellColumns, JsValue> {
+        Ok(WasmTableCellColumns {
+            selection: self
+                .rows
+                .select_row(integer_index(row)?)
+                .map_err(js_error)?,
+        })
+    }
+}
+#[wasm_bindgen]
+pub struct WasmTableCellColumns {
+    pub(crate) selection: noon::TableCellColumns,
+}
+#[wasm_bindgen]
+impl WasmTableCellColumns {
+    pub fn length(&self) -> usize {
+        self.selection.len()
+    }
+    #[wasm_bindgen(js_name = getCell)]
+    pub fn get_cell(&self, column: &str) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        self.selection
+            .get_cell(integer_index(column)?)
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = getHighlightedCell)]
+    pub fn get_highlighted_cell(
+        &self,
+        column: &str,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: f64,
+    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.selection
+            .get_highlighted_cell(integer_index(column)?, color, opacity)
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = highlightCell)]
+    pub fn highlight_cell(
+        &self,
+        column: &str,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: f64,
+    ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.selection
+            .highlight_cell(integer_index(column)?, color, opacity)
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
             .map_err(js_error)
     }

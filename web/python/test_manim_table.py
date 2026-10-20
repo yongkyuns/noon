@@ -16,10 +16,51 @@ class _Family:
     pass
 
 
+class _EntrySelection:
+    def __init__(self, table_handle):
+        self.table = table_handle
+
+    def rowStride(self):
+        return 2
+
+    def columnOffset(self):
+        return 1
+
+    def length(self):
+        return 4
+
+    def selectIndex(self, index):
+        return (self.table.a, self.table.b, self.table.c, self.table.d)[int(index)]
+
+
+class _CellColumns:
+    def __init__(self, row):
+        self.row = int(row)
+
+    def length(self):
+        return 2
+
+
+class _CellRows:
+    def length(self):
+        return 2
+
+    def selectRow(self, row):
+        return _CellColumns(row)
+
+
 class _TableHandle:
     def __init__(self):
         self.a, self.b, self.c, self.d = (_Handle(index) for index in range(4))
         self._family = _Family()
+        self.selection = _EntrySelection(self)
+        self.body_selection = _EntrySelection(self)
+
+    def entrySelection(self, without_labels):
+        return self.body_selection if without_labels else self.selection
+
+    def cellRows(self):
+        return _CellRows()
 
     def family(self):
         return self._family
@@ -156,16 +197,53 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(cell._semantic_handle.semanticSlot, 9)
         detached = value.get_highlighted_cell((1, 1))
         self.assertEqual(detached._semantic_handle.semanticSlot, 11)
-        self.assertEqual(table._get_highlighted_table.call_args.args[4:], (1.0, 1.0, 0.0, 1.0, 0.75))
+        self.assertEqual(table._get_highlighted_table.call_args.args[3:], (1.0, 1.0, 0.0, 1.0, 0.75))
         table._highlight_table.assert_not_called()
         highlights = types.SimpleNamespace(_semantic_member_wrappers={})
         with patch.object(table.Table, "submobjects", new_callable=PropertyMock,
                           return_value=[highlights, None, None]):
             self.assertIs(value.add_highlighted_cell((2, 2)), value)
         self.assertEqual(highlights._semantic_member_wrappers["10:1"]._semantic_handle.semanticSlot, 10)
-        for invalid in ((0, 1), (1.5, 1), (1, "2"), (1, 2, 3)):
-            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "one-based"):
+        for accepted in ((0, 1), (-1, -1), (1, 2, 3)):
+            value.get_cell(accepted)
+        for invalid, error in (((1.5, 1), TypeError), ((1, "2"), TypeError),
+                               ((1,), IndexError), ((10**100, 1), IndexError)):
+            with self.subTest(invalid=invalid), self.assertRaises(error):
                 value.get_cell(invalid)
+
+    def test_positions_use_subscripts_without_unpacking_or_reading_extra_items(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        class Position:
+            def __init__(self, row):
+                self.row = row
+                self.reads = []
+            def __iter__(self):
+                raise AssertionError("position was unpacked")
+            def __getitem__(self, index):
+                self.reads.append(index)
+                if index == 0:
+                    return self.row
+                if index == 1:
+                    return 1
+                raise AssertionError("read an unused position item")
+        for method in (value.get_cell, value.get_entries, value.get_entries_without_labels):
+            position = Position(1)
+            method(position)
+            self.assertEqual(position.reads, [0, 1])
+        position = Position(99)
+        with self.assertRaisesRegex(IndexError, "range object index out of range"):
+            value.get_cell(position)
+        self.assertEqual(position.reads, [0])
+
+    def test_entry_coordinates_cancel_before_any_integer_narrowing(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        for huge in (10**100, 10**5000):
+            for method in (value.get_entries, value.get_entries_without_labels):
+                selected = method((huge + 1, 1 - 2 * huge))
+                self.assertIs(selected._semantic_handle, self.handle.a)
+        value.get_cell()
+        self.assertEqual(table._table_cell.call_args.args[1].row, 0)
+        self.assertEqual(table._table_cell.call_args.args[2], "0")
 
     def test_single_entry_does_not_enumerate_other_rows_or_all_entries(self):
         value = table.Table([["a", "b"], ["c", "d"]])
@@ -177,7 +255,7 @@ class TableFacadeTests(unittest.TestCase):
         value._entry_family = lambda: types.SimpleNamespace(
             submobjects=[UnrelatedRow(), types.SimpleNamespace(submobjects=[leaf])])
         value._table_query_wrappers["2:1"] = leaf
-        with patch.object(self.handle, "entryAtPosition", return_value=self.handle.c), \
+        with patch.object(self.handle.selection, "selectIndex", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
 
@@ -275,16 +353,16 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(self.handle, "columns", return_value=[[self.handle.b], [self.handle.a, self.handle.d]]), \
                 patch.object(self.handle, "entries", return_value=[self.handle.c, self.handle.a]), \
                 patch.object(self.handle, "bodyEntries", return_value=[self.handle.b]), \
-                patch.object(self.handle, "entryAtPosition", return_value=self.handle.d) as select, \
-                patch.object(self.handle, "bodyEntryAtPosition", return_value=self.handle.b) as select_body:
+                patch.object(self.handle.selection, "selectIndex", return_value=self.handle.d) as select, \
+                patch.object(self.handle.body_selection, "selectIndex", return_value=self.handle.b) as select_body:
             self.assertEqual([row.submobjects for row in value.get_rows().submobjects], [[wrappers[3], wrappers[0]], [wrappers[2]]])
             self.assertEqual([column.submobjects for column in value.get_columns().submobjects], [[wrappers[1]], [wrappers[0], wrappers[3]]])
             self.assertEqual(value.get_entries().submobjects, [wrappers[2], wrappers[0]])
             self.assertEqual(value.get_entries_without_labels().submobjects, [wrappers[1]])
             self.assertIs(value.get_entries((0, -1)), wrappers[3])
-            select.assert_called_once_with(-1, -2)
+            select.assert_called_once_with("0")
             self.assertIs(value.get_entries_without_labels((2, 1)), wrappers[1])
-            select_body.assert_called_once_with(1, 0)
+            select_body.assert_called_once_with("2")
 
     def test_missing_corner_query_creates_one_stable_vmobject_wrapper(self):
         value = table.Table([["a"]])

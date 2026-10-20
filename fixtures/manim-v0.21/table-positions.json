@@ -1,0 +1,3510 @@
+{
+  "schemaVersion": 1,
+  "manimVersion": "0.21.0",
+  "generatorSha256": "42fe0135b1c45dc073e93cfbaa22645d3091a5b0610e9a16c07b691573479989",
+  "methodSourceSha256": {
+    "get_cell": "3f7faaf067f6f5f2603bd0c55e22ee4c42a91ba3a1c57d281f6425ab58b8ed35",
+    "get_highlighted_cell": "0d11d264a3c2fe0536e48f31299d14f757948bd7a09e41c634bd2305db0d8428",
+    "get_entries": "f83e56cbc308ef37d31f56082ad76c78af0faa4de74e2a590869cee1045960e3",
+    "get_entries_without_labels": "32dd62ca4a22b49d8f4d61579ac82178a49d4b1b03b3a31b767d6355c555ca0b"
+  },
+  "scope": "Integer/sequence/operator/error/default position observations; geometric comparisons use a 1e-6 budget. Cell styling, wrapper types and full class compatibility remain separate requirements.",
+  "cases": [
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          -0.6499999999999999
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          -0.6499999999999999
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          -0.6499999999999999
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.925,
+          0.7875000000000001
+        ],
+        "width": 2.0500000000000003,
+        "height": 1.375
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": false,
+      "expression": null,
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          -0.6499999999999999
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          -0.6499999999999999
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.0,
+          -0.6499999999999999
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          0.95,
+          0.75
+        ],
+        "width": 2.0000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.925,
+          0.7875000000000001
+        ],
+        "width": 2.0500000000000003,
+        "height": 1.375
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": false,
+      "expression": null,
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.0,
+          0.75
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.2999999999999998
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": "cell11",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": "cell10",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'str'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "rmul",
+          2
+        ],
+        [
+          "add",
+          2
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "radd",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'IndexOnly'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1 * 10**100 + 1, 1 - 2 * 1 * 10**100)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-19999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(-1 * 10**100 + 1, 1 - 2 * -1 * 10**100)",
+      "integer_position": [
+        "-9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(1 * 10**5000 + 1, 1 - 2 * 1 * 10**5000)",
+      "integer_position": [
+        "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-199999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": false,
+      "expression": "(-1 * 10**5000 + 1, 1 - 2 * -1 * 10**5000)",
+      "integer_position": [
+        "-99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": "cell11",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": "cell10",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'str'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "rmul",
+          2
+        ],
+        [
+          "add",
+          2
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "radd",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'IndexOnly'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1 * 10**100 + 1, 1 - 2 * 1 * 10**100)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-19999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(-1 * 10**100 + 1, 1 - 2 * -1 * 10**100)",
+      "integer_position": [
+        "-9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(1 * 10**5000 + 1, 1 - 2 * 1 * 10**5000)",
+      "integer_position": [
+        "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-199999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": false,
+      "expression": "(-1 * 10**5000 + 1, 1 - 2 * -1 * 10**5000)",
+      "integer_position": [
+        "-99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": {
+        "center": [
+          1.9000000000000001,
+          -1.1999999999999997
+        ],
+        "width": 2.0,
+        "height": 1.5000000000000002
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999993,
+          0.20000000000000018
+        ],
+        "width": 1.9,
+        "height": 1.3000000000000003
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999993,
+          -1.1999999999999997
+        ],
+        "width": 1.9,
+        "height": 1.5000000000000002
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.95,
+          -1.1999999999999997
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.5000000000000002
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999993,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.04999999999999993,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.04999999999999993,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_cell",
+      "labels": true,
+      "expression": null,
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.95,
+          1.4
+        ],
+        "width": 1.9000000000000006,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "Polygon"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": {
+        "center": [
+          1.9000000000000004,
+          -1.1999999999999997
+        ],
+        "width": 2.0,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999982,
+          0.2000000000000002
+        ],
+        "width": 1.9,
+        "height": 1.3000000000000003
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999982,
+          -1.1999999999999997
+        ],
+        "width": 1.9,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          -1.1999999999999997
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.5
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": {
+        "center": [
+          -0.04999999999999982,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.04999999999999982,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -0.04999999999999982,
+          1.4
+        ],
+        "width": 1.9,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_highlighted_cell",
+      "labels": true,
+      "expression": null,
+      "integer_position": null,
+      "result": {
+        "center": [
+          -1.9500000000000002,
+          1.4
+        ],
+        "width": 1.9000000000000004,
+        "height": 1.1
+      },
+      "events": [],
+      "python_type": "BackgroundRectangle"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell11",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": "row1",
+      "events": [],
+      "python_type": "Circle"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell11",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'str'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": "col0",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": "cell11",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": "col0",
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "rmul",
+          3
+        ],
+        [
+          "add",
+          2
+        ],
+        [
+          "sub",
+          2
+        ],
+        [
+          "index",
+          0
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": "col0",
+      "events": [
+        [
+          "radd",
+          0
+        ],
+        [
+          "sub",
+          2
+        ],
+        [
+          "index",
+          0
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'IndexOnly'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": "cell11",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1 * 10**100 + 1, 2 - 3 * 1 * 10**100)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-29999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999998"
+      ],
+      "result": "col0",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(-1 * 10**100 + 1, 2 - 3 * -1 * 10**100)",
+      "integer_position": [
+        "-9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "30000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002"
+      ],
+      "result": "col0",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(1 * 10**5000 + 1, 2 - 3 * 1 * 10**5000)",
+      "integer_position": [
+        "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-299999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999998"
+      ],
+      "result": "col0",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries",
+      "labels": true,
+      "expression": "(-1 * 10**5000 + 1, 2 - 3 * -1 * 10**5000)",
+      "integer_position": [
+        "-99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002"
+      ],
+      "result": "col0",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1, 1)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(0, 0)",
+      "integer_position": [
+        "0",
+        "0"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(-1, -1)",
+      "integer_position": [
+        "-1",
+        "-1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(0, 2)",
+      "integer_position": [
+        "0",
+        "2"
+      ],
+      "result": "cell11",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(-2, 1)",
+      "integer_position": [
+        "-2",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(4, 1)",
+      "integer_position": [
+        "4",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1, 1, 7)",
+      "integer_position": [
+        "1",
+        "1"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "()",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(False, True)",
+      "integer_position": [
+        "0",
+        "1"
+      ],
+      "result": "cell10",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1.0, 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "range indices must be integers or slices, not float"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "('1', 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'str' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1, '1')",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'str'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(value for value in (1, 1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "'generator' object is not subscriptable"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(10**100, 1)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "1"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "[1, 2, 3]",
+      "integer_position": [
+        "1",
+        "2"
+      ],
+      "result": "cell01",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "[1]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "[]",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(99,)",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "tuple index out of range"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "Position([1, 1])",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "Position([99])",
+      "integer_position": null,
+      "result": {
+        "exception": "IndexError",
+        "message": "list index out of range"
+      },
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(Operand(1), Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "sub",
+          1
+        ],
+        [
+          "rmul",
+          2
+        ],
+        [
+          "add",
+          2
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1, Operand(2))",
+      "integer_position": null,
+      "result": "cell01",
+      "events": [
+        [
+          "radd",
+          0
+        ],
+        [
+          "sub",
+          1
+        ],
+        [
+          "index",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(IndexOnly(1), 1)",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for -: 'IndexOnly' and 'int'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1, IndexOnly(1))",
+      "integer_position": null,
+      "result": {
+        "exception": "TypeError",
+        "message": "unsupported operand type(s) for +: 'int' and 'IndexOnly'"
+      },
+      "events": [],
+      "python_type": null
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "ShiftPosition()",
+      "integer_position": null,
+      "result": "cell00",
+      "events": [
+        [
+          "getitem",
+          0
+        ],
+        [
+          "getitem",
+          1
+        ]
+      ],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1 * 10**100 + 1, 1 - 2 * 1 * 10**100)",
+      "integer_position": [
+        "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-19999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(-1 * 10**100 + 1, 1 - 2 * -1 * 10**100)",
+      "integer_position": [
+        "-9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(1 * 10**5000 + 1, 1 - 2 * 1 * 10**5000)",
+      "integer_position": [
+        "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "-199999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    },
+    {
+      "method": "get_entries_without_labels",
+      "labels": true,
+      "expression": "(-1 * 10**5000 + 1, 1 - 2 * -1 * 10**5000)",
+      "integer_position": [
+        "-99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+        "200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "result": "cell00",
+      "events": [],
+      "python_type": "Square"
+    }
+  ]
+}

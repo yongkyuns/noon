@@ -373,11 +373,14 @@ async function initializePyodide() {
     context == null ? authoringStore.createCode(source, options)
       : context.liveCreateCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
-  self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
-    context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
-  self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
-    context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
-  self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
+  self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
+    context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
+      : context.liveHighlightTableCell(selection, column, red, green, blue, alpha, opacity);
+  self.noonGetHighlightedTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
+    context == null ? selection.getHighlightedCell(column, red, green, blue, alpha, opacity)
+      : context.liveGetHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
+  self.noonTableCell = (context, selection, column) => context == null
+    ? selection.getCell(column) : context.liveTableCell(selection, column);
   const tableOptions = (v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY) => {
     const options = new WasmTableOptions(v, h, outer);
     options.setIncludeInnerLines(inner);
@@ -390,15 +393,18 @@ async function initializePyodide() {
     return options;
   };
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY));
+    const args = [Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createTable(...args) : context.liveCreateTable(...args);
   };
   self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    return context.liveCreateTableWithLabels(
+    const args = [
       Array.from(rows, row => Array.from(row)),
       compositeRows(rowLabels == null ? [] : [rowLabels]),
       compositeRows(columnLabels == null ? [] : [columnLabels]),
       compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
-      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY));
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createTableWithLabels(...args)
+      : context.liveCreateTableWithLabels(...args);
   };
   self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
@@ -420,9 +426,11 @@ async function initializePyodide() {
     const rowLabelEntries = compositeRows(rowLabels == null ? [] : [rowLabels]);
     const columnLabelEntries = compositeRows(columnLabels == null ? [] : [columnLabels]);
     const topLeftEntryRows = compositeRows(topLeftEntry.length ? [topLeftEntry] : []);
-    return context.liveCreateMobjectTableWithLabels(
+    const args = [
       entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,
-      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY));
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createMobjectTableWithLabels(...args)
+      : context.liveCreateMobjectTableWithLabels(...args);
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");

@@ -7,7 +7,10 @@
 mod admission;
 #[cfg(all(test, feature = "diagnostics"))]
 mod alias_tests;
+mod cells;
 mod queries;
+pub use cells::{TableCellColumns, TableCellRows};
+pub use queries::TableEntrySelection;
 
 use crate::{
     AuthoringError, Color, CompositeEntryHandle, Mobject, MobjectFamily, MobjectTarget, Scene,
@@ -379,6 +382,33 @@ impl Table {
             options,
         )
     }
+    /// Detached admission in the caller's existing arena; no Scene root is created.
+    #[cfg(feature = "native-text")]
+    pub fn from_rows_with_composite_labels_in_store<'a, I, J, S>(
+        store: Rc<RefCell<noon_core::SemanticStore>>,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let rows = collect_text_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_native_text_table_with_composite_labels(
+            TablePublisher::Store(store),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
+    }
     #[cfg(feature = "native-text")]
     pub fn from_rows_in_store<I, J, S>(
         store: Rc<RefCell<noon_core::SemanticStore>>,
@@ -515,88 +545,6 @@ impl Table {
     pub fn shape(&self) -> Result<(usize, usize), TableAuthoringError> {
         let grid = self.query_grid()?;
         Ok((grid.body_rows().len(), grid.body_rows()[0].len()))
-    }
-    pub fn get_cell(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
-        admission::cell(&self.family, self.options()?, row, column)
-    }
-    pub fn get_cell_in_live_session(
-        &self,
-        live: &mut crate::LiveSession<'_>,
-        row: usize,
-        column: usize,
-    ) -> Result<Mobject, TableAuthoringError> {
-        admission::cell_in_publisher(
-            TablePublisher::Live(live),
-            &self.family,
-            self.options()?,
-            row,
-            column,
-        )
-    }
-    pub fn highlight_cell(
-        &self,
-        row: usize,
-        column: usize,
-        color: Color,
-        opacity: f64,
-    ) -> Result<Mobject, TableAuthoringError> {
-        admission::highlight(
-            &self.family,
-            &self.highlight_family,
-            self.options()?,
-            row,
-            column,
-            color,
-            opacity,
-        )
-    }
-    /// Return a detached colored cell rectangle. Use [`Self::highlight_cell`]
-    /// when the rectangle should become a retained table highlight.
-    pub fn get_highlighted_cell(
-        &self,
-        row: usize,
-        column: usize,
-        color: Color,
-        opacity: f64,
-    ) -> Result<Mobject, TableAuthoringError> {
-        admission::highlighted_cell(&self.family, self.options()?, row, column, color, opacity)
-    }
-    pub fn get_highlighted_cell_in_live_session(
-        &self,
-        live: &mut crate::LiveSession<'_>,
-        row: usize,
-        column: usize,
-        color: Color,
-        opacity: f64,
-    ) -> Result<Mobject, TableAuthoringError> {
-        admission::highlighted_cell_in_publisher(
-            TablePublisher::Live(live),
-            &self.family,
-            self.options()?,
-            row,
-            column,
-            color,
-            opacity,
-        )
-    }
-    pub fn highlight_cell_in_live_session(
-        &self,
-        live: &mut crate::LiveSession<'_>,
-        row: usize,
-        column: usize,
-        color: Color,
-        opacity: f64,
-    ) -> Result<Mobject, TableAuthoringError> {
-        admission::highlight_in_publisher(
-            TablePublisher::Live(live),
-            &self.family,
-            &self.highlight_family,
-            self.options()?,
-            row,
-            column,
-            color,
-            opacity,
-        )
     }
 }
 
@@ -1002,6 +950,32 @@ impl MobjectTable {
         let shape = table_shape(&rows)?;
         publish_target_table_with_composite_labels_and_top_left_entry(
             TablePublisher::Scene(scene),
+            rows.into_iter().flatten().collect(),
+            shape,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
+        .map(Self)
+    }
+    /// Detached counterpart using the same capture, placement and transaction.
+    pub fn from_target_rows_with_optional_composite_labels_in_store<'a, I, J>(
+        store: Rc<RefCell<noon_core::SemanticStore>>,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        let rows = collect_target_rows(rows);
+        let shape = table_shape(&rows)?;
+        publish_target_table_with_composite_labels_and_top_left_entry(
+            TablePublisher::Store(store),
             rows.into_iter().flatten().collect(),
             shape,
             row_labels,

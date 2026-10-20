@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { qualifyPairedAuthoring, qualifyPythonPlayback } from "./paired-authoring-qualification.mjs";
+import { qualifyTablePositionProtocols } from "./table-position-checks.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_TABLE_ARTIFACTS ?? "table-artifacts",
@@ -118,6 +119,9 @@ class TableLifecycle(Scene):
     assert.equal(result.objectCount, 35);
     assert.ok(Math.abs(result.authoredDuration - 0.1875) < 1e-6,
       `expected 0.1875 authored seconds, received ${result.authoredDuration}`);
-    return result;
+    const positions = await qualifyTablePositionProtocols(context, baseUrl, expectedBackend);
+    assert.equal(positions.sceneCaseCount, 228);
+    assert.equal(positions.moduleCaseCount, 8);
+    return { ...result, positions };
   },
 });

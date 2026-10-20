@@ -1955,6 +1955,7 @@ dependencies = [
  "noon-runtime",
  "noon-text",
  "noon-typst",
+ "num-bigint",
  "pollster",
  "serde_json",
  "swash",

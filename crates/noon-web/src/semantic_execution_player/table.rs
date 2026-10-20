@@ -5,36 +5,33 @@ use crate::authoring_error::AuthoringFailure;
 impl SemanticExecutionPlayer {
     pub(crate) fn live_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| Ok(table.get_cell_in_live_session(live, row, column)))?
+        self.with_live_session(|live| Ok(selection.get_cell_in_live_session(live, column)))?
             .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_highlight_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(table.highlight_cell_in_live_session(live, row, column, color, opacity))
+            Ok(selection.highlight_cell_in_live_session(live, column, color, opacity))
         })?
         .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_get_highlighted_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(table.get_highlighted_cell_in_live_session(live, row, column, color, opacity))
+            Ok(selection.get_highlighted_cell_in_live_session(live, column, color, opacity))
         })?
         .map_err(AuthoringFailure::from)
     }

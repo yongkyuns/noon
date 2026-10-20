@@ -204,7 +204,7 @@ fn geometric_table_queries_match_all_pinned_alias_and_label_cases() {
         }
         for (pos, wanted) in expected["cells"].as_object().unwrap() {
             let (r, c) = position(pos);
-            let result = table.get_cell(r as usize, c as usize);
+            let result = table.get_cell(r, c);
             if wanted.get("exception").is_some() {
                 assert_eq!(
                     result.expect_err("invalid cell selection").to_string(),
@@ -242,4 +242,239 @@ fn geometric_table_queries_match_all_pinned_alias_and_label_cases() {
             table.get_rows().unwrap().len()
         );
     }
+}
+
+fn position_table(labeled: bool) -> (Scene, Table, Vec<Mobject>, HashMap<SemanticNodeId, String>) {
+    let mut scene = Scene::new();
+    let mut ids = HashMap::new();
+    let cells: Vec<_> = (0..4)
+        .map(|index| {
+            let object = scene.square(0.4 + 0.1 * index as f64).unwrap();
+            ids.insert(object.node_id(), format!("cell{}{}", index / 2, index % 2));
+            object
+        })
+        .collect();
+    let rows: Vec<_> = (0..2)
+        .map(|index| {
+            let object = scene.circle(0.2 + 0.1 * index as f64).unwrap();
+            ids.insert(object.node_id(), format!("row{index}"));
+            object
+        })
+        .collect();
+    let columns: Vec<_> = (0..2)
+        .map(|index| {
+            let object = scene.square(0.2 + 0.1 * index as f64).unwrap();
+            ids.insert(object.node_id(), format!("col{index}"));
+            object
+        })
+        .collect();
+    let table = MobjectTable::from_target_rows_with_optional_composite_labels(
+        &mut scene,
+        cells
+            .chunks(2)
+            .map(|row| row.iter().map(MobjectTarget::from).collect::<Vec<_>>()),
+        labeled.then(|| rows.iter().map(MobjectTarget::from).collect()),
+        labeled.then(|| columns.iter().map(MobjectTarget::from).collect()),
+        None,
+        TableOptions::default(),
+    )
+    .unwrap()
+    .into_table();
+    (scene, table, cells, ids)
+}
+fn position_fixture() -> Value {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/manim-v0.21/table-positions.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["manimVersion"], "0.21.0");
+    fixture
+}
+fn cell_observation(cell: Mobject, wanted: &Value) {
+    let bounds = cell.layout_bounds().unwrap().unwrap();
+    near(
+        (bounds.min_x + bounds.max_x) * 0.5,
+        &wanted["center"][0],
+        "cell x",
+    );
+    near(
+        (bounds.min_y + bounds.max_y) * 0.5,
+        &wanted["center"][1],
+        "cell y",
+    );
+    near(bounds.width(), &wanted["width"], "cell width");
+    near(bounds.height(), &wanted["height"], "cell height");
+}
+
+#[test]
+fn integer_table_positions_match_pinned_signed_and_arbitrary_precision_queries() {
+    let fixture = position_fixture();
+    let mut observed = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let Some(position) = case["integer_position"].as_array() else {
+            continue;
+        };
+        let (_scene, table, _, ids) = position_table(case["labels"].as_bool().unwrap());
+        let row = position[0]
+            .as_str()
+            .unwrap()
+            .parse::<crate::IntegerIndex>()
+            .unwrap()
+            - 1;
+        let column = position[1]
+            .as_str()
+            .unwrap()
+            .parse::<crate::IntegerIndex>()
+            .unwrap()
+            - 1;
+        let result = match case["method"].as_str().unwrap() {
+            "get_entries" => table.entry_at_position(row, column),
+            "get_entries_without_labels" => table.body_entry_at_position(row, column),
+            "get_cell" => table.get_cell(row, column).map(TableEntry::Mobject),
+            "get_highlighted_cell" => table
+                .get_highlighted_cell(row, column, Color::YELLOW, 0.75)
+                .map(TableEntry::Mobject),
+            _ => unreachable!(),
+        };
+        let wanted = &case["result"];
+        if wanted.get("exception").is_some() {
+            let error = result.expect_err("pinned integer position rejects selection");
+            assert!(matches!(error, TableAuthoringError::InvalidEntryIndex));
+            assert_eq!(error.to_string(), wanted["message"].as_str().unwrap());
+        } else {
+            let entry = result.unwrap();
+            if case["method"].as_str().unwrap().contains("cell") {
+                let TableEntry::Mobject(cell) = entry else {
+                    panic!("cell is an object");
+                };
+                cell_observation(cell, wanted);
+            } else {
+                assert_eq!(key(&entry, &ids), *wanted, "{case}");
+            }
+        }
+        observed += 1;
+    }
+    assert!(
+        observed >= 80,
+        "every integer case must execute: {observed}"
+    );
+}
+
+#[test]
+fn cell_argument_phases_observe_effective_geometry_after_both_callbacks() {
+    let fixture = position_fixture();
+    let cases = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["expression"] == "ShiftPosition()" && case["method"] == "get_cell");
+    for case in cases {
+        let (_scene, table, mut cells, _) = position_table(case["labels"].as_bool().unwrap());
+        let rows = table.cell_rows().unwrap();
+        cells[0].shift(0.25, 0.0).unwrap();
+        let columns = rows.select_row(0).unwrap();
+        cells[0].shift(0.0, 0.125).unwrap();
+        cell_observation(columns.get_cell(0).unwrap(), &case["result"]);
+    }
+}
+
+#[test]
+fn retained_query_requests_reject_a_retired_table_owner() {
+    let (scene, table, _, _) = position_table(false);
+    let entries = table.entries_indexing().unwrap();
+    let rows = table.cell_rows().unwrap();
+    let columns = rows.select_row(0).unwrap();
+    let mut tx = noon_core::SemanticMutationTransaction::new();
+    tx.remove_node(table.family().node_id());
+    tx.apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    assert!(entries.select_index(0).is_err());
+    assert!(rows.select_row(0).is_err());
+    assert!(columns.get_cell(0).is_err());
+}
+
+fn optional_label_targets(present: bool, values: &[TableEntry]) -> Option<Vec<MobjectTarget<'_>>> {
+    present.then(|| values.iter().map(TableEntry::as_target).collect())
+}
+
+#[test]
+fn detached_labeled_admission_uses_the_existing_arena_without_an_extra_scene_root() {
+    for labeled in [false, true] {
+        let (mut scene, table, cells, _) = position_table(labeled);
+        let store = Rc::clone(scene.integration_store());
+        let row_labels = table.get_row_labels().unwrap();
+        let column_labels = table.get_col_labels().unwrap();
+        let rows = || {
+            cells
+                .chunks(2)
+                .map(|row| row.iter().map(MobjectTarget::from).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        let before = store.borrow().len();
+        let authored = MobjectTable::from_target_rows_with_optional_composite_labels(
+            &mut scene,
+            rows(),
+            optional_label_targets(labeled, &row_labels),
+            optional_label_targets(labeled, &column_labels),
+            None,
+            TableOptions::default(),
+        )
+        .unwrap();
+        let scene_delta = store.borrow().len() - before;
+        let before = store.borrow().len();
+        let detached = MobjectTable::from_target_rows_with_optional_composite_labels_in_store(
+            Rc::clone(&store),
+            rows(),
+            optional_label_targets(labeled, &row_labels),
+            optional_label_targets(labeled, &column_labels),
+            None,
+            TableOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(store.borrow().len() - before, scene_delta);
+        assert_eq!(
+            detached.get_entries().unwrap().len(),
+            authored.get_entries().unwrap().len()
+        );
+        assert_eq!(
+            detached.get_rows().unwrap().len(),
+            authored.get_rows().unwrap().len()
+        );
+    }
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+fn detached_text_labels_share_the_native_publication_path() {
+    let (mut scene, table, _, _) = position_table(true);
+    let store = Rc::clone(scene.integration_store());
+    let row_labels = table.get_row_labels().unwrap();
+    let column_labels = table.get_col_labels().unwrap();
+    let before = store.borrow().len();
+    let authored = Table::from_rows_with_composite_labels(
+        &mut scene,
+        [["a", "b"], ["c", "d"]],
+        optional_label_targets(true, &row_labels),
+        optional_label_targets(true, &column_labels),
+        None,
+        TableOptions::default(),
+    )
+    .unwrap();
+    let scene_delta = store.borrow().len() - before;
+    let before = store.borrow().len();
+    let detached = Table::from_rows_with_composite_labels_in_store(
+        Rc::clone(&store),
+        [["a", "b"], ["c", "d"]],
+        optional_label_targets(true, &row_labels),
+        optional_label_targets(true, &column_labels),
+        None,
+        TableOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(store.borrow().len() - before, scene_delta);
+    assert_eq!(
+        detached.get_entries().unwrap().len(),
+        authored.get_entries().unwrap().len()
+    );
+    assert!(detached.get_cell(-1, -1).is_ok());
 }

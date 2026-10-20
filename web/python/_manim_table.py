@@ -205,15 +205,14 @@ def _label_handle(value, kind="Table"):
     return handle
 
 
-def _cell_position(pos):
-    try:
-        row, column = pos
-        row, column = _index(row), _index(column)
-    except (IndexError, TypeError, ValueError) as error:
-        raise ValueError("Table positions must be one-based (row, column) pairs") from error
-    if row < 1 or column < 1:
-        raise ValueError("Table positions must be one-based (row, column) pairs")
-    return row - 1, column - 1
+def _cell_position(handle, pos):
+    # Rust snapshots each axis before Python evaluates that sequence operand.
+    # range applies CPython's integer/index protocol; it owns no table members.
+    rows = engine_call(handle.cellRows)
+    row = range(int(engine_call(rows.length)))[pos[0] - 1]
+    columns = engine_call(rows.selectRow, str(row))
+    column = range(int(engine_call(columns.length)))[pos[1] - 1]
+    return columns, str(column)
 
 
 class Table(_compat.VGroup):
@@ -335,27 +334,26 @@ class Table(_compat.VGroup):
             for handle in engine_call(getattr(self._table_handle, method))
         ])
 
-    @staticmethod
-    def _entry_position(pos):
-        row, column = pos
-        row, column = _index(row) - 1, _index(column) - 1
-        if not (-2**31 <= row < 2**31 and -2**31 <= column < 2**31):
-            raise IndexError("range object index out of range")
-        return row, column
+    def _positioned_entry(self, pos, without_labels):
+        selection = engine_call(self._table_handle.entrySelection, without_labels)
+        stride = int(engine_call(selection.rowStride))
+        offset = int(engine_call(selection.columnOffset))
+        # The captured rule and identity selection are Rust-owned. Python must
+        # execute its operand/index protocols (including arbitrary user hooks)
+        # rather than coerce each coordinate before evaluating the expression.
+        index = stride * (pos[0] - 1) + pos[1] - offset
+        index = range(int(engine_call(selection.length)))[index]
+        return self._query_entry_wrapper(engine_call(selection.selectIndex, str(index)))
 
     def get_entries_without_labels(self, pos=None):
         if pos is None:
             return self._query_entries("bodyEntries")
-        return self._query_entry_wrapper(engine_call(
-            self._table_handle.bodyEntryAtPosition, *self._entry_position(pos)
-        ))
+        return self._positioned_entry(pos, True)
 
     def get_entries(self, pos=None):
         if pos is None:
             return self._query_entries("entries")
-        return self._query_entry_wrapper(engine_call(
-            self._table_handle.entryAtPosition, *self._entry_position(pos)
-        ))
+        return self._positioned_entry(pos, False)
 
     def _entry_family(self):
         return self._query_entry_wrapper(engine_call(self._table_handle.entryFamily))
@@ -411,16 +409,16 @@ class Table(_compat.VGroup):
             wrapper._canonical_live_target_context = context
         return wrapper
 
-    def get_cell(self, pos, **kwargs):
+    def get_cell(self, pos=(1, 1), **kwargs):
         if kwargs:
             raise NotImplementedError("cell styling is owned by the Rust table API")
         if _table_cell is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("Table.get_cell", allow_unstarted=True)
-        row, column = _cell_position(pos)
-        return self._rectangle_wrapper(engine_call(_table_cell, context, self._table_handle, row, column))
+        selection, column = _cell_position(self._table_handle, pos)
+        return self._rectangle_wrapper(engine_call(_table_cell, context, selection, column))
 
-    def get_highlighted_cell(self, pos, color=_base.PURE_YELLOW, **kwargs):
+    def get_highlighted_cell(self, pos=(1, 1), color=_base.PURE_YELLOW, **kwargs):
         opacity = float(kwargs.pop("fill_opacity", 0.75))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
@@ -428,15 +426,15 @@ class Table(_compat.VGroup):
         if _get_highlighted_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("Table.get_highlighted_cell", allow_unstarted=True)
-        row, column = _cell_position(pos)
+        selection, column = _cell_position(self._table_handle, pos)
         return self._rectangle_wrapper(engine_call(
             _get_highlighted_table,
             context,
-            self._table_handle,
-            row, column, color.red, color.green, color.blue, color.alpha, opacity,
+            selection,
+            column, color.red, color.green, color.blue, color.alpha, opacity,
         ))
 
-    def add_highlighted_cell(self, pos, color=_base.PURE_YELLOW, **kwargs):
+    def add_highlighted_cell(self, pos=(1, 1), color=_base.PURE_YELLOW, **kwargs):
         opacity = float(kwargs.pop("fill_opacity", 0.75))
         if kwargs:
             raise NotImplementedError("unsupported highlighted-cell option(s): " + ", ".join(sorted(kwargs)))
@@ -444,12 +442,12 @@ class Table(_compat.VGroup):
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         color = _compat._as_color("color", color)
         context = _live_constructor_context("Table.add_highlighted_cell", allow_unstarted=True)
-        row, column = _cell_position(pos)
+        selection, column = _cell_position(self._table_handle, pos)
         handle = engine_call(
             _highlight_table,
             context,
-            self._table_handle,
-            row, column, color.red, color.green, color.blue, color.alpha, opacity,
+            selection,
+            column, color.red, color.green, color.blue, color.alpha, opacity,
         )
         highlight = self._rectangle_wrapper(handle)
         self.submobjects[0]._semantic_member_wrappers[_family_wrapper_key(highlight)] = highlight

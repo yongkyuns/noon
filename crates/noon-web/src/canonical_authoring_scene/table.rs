@@ -1,5 +1,6 @@
 use super::wasm::CanonicalAuthoringSceneContext;
 use crate::authoring_composite::{number_rows, text_rows};
+use crate::authoring_table::{integer_index, CompositeTableLabels, WasmTableCellColumns};
 use crate::{
     authoring_error::js_error, WasmCompositeRows, WasmLatexCompiler, WasmTableHandle,
     WasmTableOptions,
@@ -11,21 +12,21 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveTableCell)]
     pub fn live_table_cell(
         &mut self,
-        table: &WasmTableHandle,
-        row: usize,
-        column: usize,
+        selection: &WasmTableCellColumns,
+        column: &str,
     ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+        let column = integer_index(column)?;
         if self.inner.player_ownership.is_unstarted() {
-            table
-                .table()
-                .get_cell(row, column)
+            selection
+                .selection
+                .get_cell(column)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_table_cell(table.table(), row, column)
+                .live_table_cell(&selection.selection, column)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -33,9 +34,8 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveHighlightTableCell)]
     pub fn live_highlight_table_cell(
         &mut self,
-        table: &WasmTableHandle,
-        row: usize,
-        column: usize,
+        selection: &WasmTableCellColumns,
+        column: &str,
         red: f64,
         green: f64,
         blue: f64,
@@ -43,17 +43,18 @@ impl CanonicalAuthoringSceneContext {
         opacity: f64,
     ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
         let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        let column = integer_index(column)?;
         if self.inner.player_ownership.is_unstarted() {
-            table
-                .table()
-                .highlight_cell(row, column, color, opacity)
+            selection
+                .selection
+                .highlight_cell(column, color, opacity)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_highlight_table_cell(table.table(), row, column, color, opacity)
+                .live_highlight_table_cell(&selection.selection, column, color, opacity)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -61,9 +62,8 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = liveGetHighlightedTableCell)]
     pub fn live_get_highlighted_table_cell(
         &mut self,
-        table: &WasmTableHandle,
-        row: usize,
-        column: usize,
+        selection: &WasmTableCellColumns,
+        column: &str,
         red: f64,
         green: f64,
         blue: f64,
@@ -71,17 +71,18 @@ impl CanonicalAuthoringSceneContext {
         opacity: f64,
     ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
         let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        let column = integer_index(column)?;
         if self.inner.player_ownership.is_unstarted() {
-            table
-                .table()
-                .get_highlighted_cell(row, column, color, opacity)
+            selection
+                .selection
+                .get_highlighted_cell(column, color, opacity)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_get_highlighted_table_cell(table.table(), row, column, color, opacity)
+                .live_get_highlighted_table_cell(&selection.selection, column, color, opacity)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -116,18 +117,11 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows, "Table")?;
-        let row_labels = row_labels.optional_single_row_targets()?;
-        let column_labels = column_labels.optional_single_row_targets()?;
-        let mut top_left_entries = top_left_entry.single_row_targets()?;
-        let top_left_entry = match top_left_entries.len() {
-            0 => None,
-            1 => Some(top_left_entries.remove(0)),
-            _ => {
-                return Err(js_error(
-                    "Table top_left_entry must be one shared object or family",
-                ))
-            }
-        };
+        let CompositeTableLabels {
+            rows: row_labels,
+            columns: column_labels,
+            corner: top_left_entry,
+        } = CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "Table")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::Table::from_rows_with_composite_labels(
                 &mut self.inner.scene,
@@ -279,18 +273,11 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
-        let row_labels = row_labels.optional_single_row_targets()?;
-        let column_labels = column_labels.optional_single_row_targets()?;
-        let mut top_left_entries = top_left_entry.single_row_targets()?;
-        let top_left_entry = match top_left_entries.len() {
-            0 => None,
-            1 => Some(top_left_entries.remove(0)),
-            _ => {
-                return Err(js_error(
-                    "MobjectTable top_left_entry must be one shared object or family",
-                ))
-            }
-        };
+        let CompositeTableLabels {
+            rows: row_labels,
+            columns: column_labels,
+            corner: top_left_entry,
+        } = CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "MobjectTable")?;
         if self.inner.player_ownership.is_unstarted() {
             noon::MobjectTable::from_target_rows_with_optional_composite_labels(
                 &mut self.inner.scene,
