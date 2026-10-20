@@ -39,7 +39,9 @@ try {
     noonAuthoringVectorPath: () => new wasm.WasmAuthoringVectorPath(),
     noonCreateAuthoringGeometryHandle: options => authoringStore.createManimGeometry(options),
     noonAuthoringMembershipBatch: kind => new wasm.WasmSceneMembershipBatch(kind),
-    noonCreateAuthoringFamilyHandle: (batch, zIndex) => authoringStore.createFamily(batch, zIndex),
+    noonCreateAuthoringFamilyHandle: (batch, zIndex, drawEnabled, ...color) => color.length
+      ? authoringStore.createFamilyWithColor(batch, zIndex, ...color, drawEnabled)
+      : authoringStore.createFamily(batch, zIndex, drawEnabled),
     noonNativeFontFace: (...args) => new wasm.WasmNativeFontFace(...args),
     noonBundledNativeFontFace: family => wasm.WasmNativeFontFace.bundled(family),
     noonTextColorBatch: () => new wasm.WasmTextColorBatch(),

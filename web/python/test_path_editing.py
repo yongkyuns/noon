@@ -14,6 +14,35 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathEditingTests(unittest.TestCase):
+    def test_family_raw_points_and_reset_dispatch_only_the_root_handle(self):
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = lambda values: values
+        for cls in (compat.Group, compat.VGroup):
+            for live in (False, True):
+                with self.subTest(cls=cls, live=live):
+                    family = identity_only_wrapper(cls)
+                    handle = Mock()
+                    family._semantic_family_handle = handle
+                    context = Mock() if live else None
+                    with patch.dict(sys.modules, {"pyodide.ffi": ffi}), \
+                         patch.object(editing, "_handle_for") as leaf, \
+                         patch.object(editing, "_live_mutation_context", return_value=context), \
+                         patch.object(editing, "_live_constructor_context", return_value=None), \
+                         patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
+                        if cls is compat.Group:
+                            with self.assertWarns(DeprecationWarning):
+                                self.assertIs(family.set_points(value=[(0, 0), (1, 2)]), family)
+                        else:
+                            self.assertIs(family.set_points(points=[(0, 0), (1, 2)]), family)
+                        self.assertIs(family.reset_points(), family)
+                        leaf.assert_not_called()
+                    if live:
+                        context.liveSetFamilyPoints.assert_called_once_with(handle, [0, 0, 1, 2])
+                        context.liveClearFamilyPoints.assert_called_once_with(handle)
+                    else:
+                        handle.setPoints.assert_called_once_with([0, 0, 1, 2])
+                        handle.clearPoints.assert_called_once_with()
+
     def test_repeat_points_dispatches_family_and_leaf_operations(self):
         family = identity_only_wrapper(compat.Group)
         family_handle = Mock()

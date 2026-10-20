@@ -13,6 +13,10 @@ const familyClassQueriesSource = await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_family_class_queries.py"),
   "utf8",
 );
+const familyRootPointsSource = await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_family_root_points.py"),
+  "utf8",
+);
 const uncreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
   "utf8",
@@ -1017,17 +1021,18 @@ result = Scene()
       mixedFamilyOrdinarySource,
       mixedFamilyOrdinaryEditedSource,
       familyClassQueriesSource,
+      familyRootPointsSource,
     ],
   );
   assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4],
+    [2, 2, 1, 1.5, 0.4, 0.75],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2],
+    [2, 0, 2, 3, 2, 4],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

@@ -3061,17 +3061,20 @@ def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, colo
     z_index = _ir._finite_number("z_index", z_index)
     parsed = _base.BLACK if color is None else _compat._as_color("color", color)
     arguments = () if parsed == _base.WHITE else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    draw_enabled = isinstance(self, _compat.VMobject)
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     family = (
         engine_call(context.liveCreateFamilyWithColor if arguments else context.liveCreateFamily,
-                    batch, z_index, *arguments)
+                    batch, z_index, *arguments, draw_enabled)
         if context is not None
-        else engine_call(_create_family_handle, batch, z_index, *arguments)
+        else engine_call(_create_family_handle, batch, z_index, draw_enabled, *arguments)
     )
     self._semantic_family_handle = family
     self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:

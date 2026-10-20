@@ -1323,6 +1323,17 @@ def _with_family_methods(cls):
 class Group(Mobject):
     """Manim base-Mobject family with shared Rust membership."""
 
+    def set_points(self, value):
+        import warnings
+        warnings.warn(
+            "This method is not guaranteed to stay around. Please prefer "
+            "setting the attribute normally or with Mobject.set().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from _manim_path_editing import set_points
+        return set_points(self, value)
+
 
 @_with_family_methods
 class VGroup(VMobject):

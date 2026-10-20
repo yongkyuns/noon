@@ -681,9 +681,15 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     if array:
         from pyodide.ffi import to_js
         values = [to_js(values)]
-    handle = _handle_for(value)
+    from _manim_compat import _is_shared_family
+    shared_family = _is_shared_family(value)
+    handle = value._semantic_family_handle if shared_family else _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
+    if shared_family:
+        if method not in ("setPoints", "clearPoints"):
+            raise NotImplementedError("this family root path edit requires shared Rust support")
+        live_method = "liveSetFamilyPoints" if method == "setPoints" else "liveClearFamilyPoints"
     context = _live_mutation_context(value) or _live_constructor_context("path")
     if context is None:
         engine_call(

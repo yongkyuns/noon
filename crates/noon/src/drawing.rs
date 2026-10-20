@@ -72,16 +72,12 @@ impl Scene {
         if !Rc::ptr_eq(self.integration_store(), family.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
-        family.validate()?;
-        let path = crate::path_editing::raw_points_path(points)?;
-        self.with_semantic_publication(|store, publish| {
-            crate::family_points::publish_initial_family_path(
-                store,
-                family.node_id(),
-                path,
-                |store, transaction| publish(store, transaction).map(|_| ()),
-            )
-        })
+        if self.running_execution().is_some() {
+            return self.with_running_execution(|store, root, execution| {
+                crate::family_points::publish_family_points(store, root, execution, family, points)
+            });
+        }
+        family.set_points_f64(points)
     }
 }
 
