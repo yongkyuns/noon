@@ -46,6 +46,7 @@ jobs:
       - name: Runtime lifecycle and prefix regressions
         run: |
           set -euo pipefail
+          cargo test -p noon-compile --features prepared-prefix --lib replay_revision::prefix::resources::tests -- --nocapture 2>&1 | tee prefix-lifecycle-artifacts/geometry-version-admission.log
           cargo test -p noon-runtime --features prepared-prefix --test prefix_lifecycle --test prefix_transfer --test prefix_reactive_admission --test finite_replay_locality --test reconciled_replay -- --nocapture 2>&1 | tee prefix-lifecycle-artifacts/runtime.log
       - name: Public source and resource version tests
         run: |

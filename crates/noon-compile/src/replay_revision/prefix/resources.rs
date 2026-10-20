@@ -69,16 +69,31 @@ impl CompiledScene {
                         delta.images.insert(handle, resource);
                     }
                     ObjectContentRef::Geometry(GeometryRef::External(id)) => {
-                        if known.geometry_handles.contains_key(id)
-                            || delta.geometry_handles.contains_key(id)
-                        {
-                            continue;
-                        }
                         let handle = *self
                             .resources
                             .geometry_handles
                             .get(id)
                             .ok_or(CompiledResourceError::ConflictingGeometryId(*id))?;
+                        if let Some(existing) = known
+                            .geometry_handles
+                            .get(id)
+                            .or_else(|| delta.geometry_handles.get(id))
+                        {
+                            // A bare External(id) row cannot select different
+                            // resource versions by authored time. Never reuse an
+                            // older reader mapping after the source retargets it.
+                            if *existing != handle {
+                                return Err(CompiledResourceError::ConflictingGeometryId(*id));
+                            }
+                            continue;
+                        }
+                        // An unseen noninitial version may have earlier versions
+                        // within this suffix; the row has no versioned handle.
+                        // Reject rather than silently paint earlier frames with
+                        // the producer's latest external geometry.
+                        if handle.version != 0 {
+                            return Err(CompiledResourceError::ConflictingGeometryId(*id));
+                        }
                         let resource = self
                             .resources
                             .geometries
@@ -116,5 +131,101 @@ impl CompiledResources {
     /// Record delivered handles using the existing resource projection type.
     pub fn extend_prefix_knowledge(&mut self, delta: &Self) {
         self.merge(delta.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::replay_revision::SavedRow;
+    use crate::CompiledObject;
+    use noon_core::{
+        GeometryId, GeometryRef, GeometryResource, GeometryResourceArena, ObjectId, Style,
+        Transform2D, Vec2, VectorPath,
+    };
+    use std::sync::Arc;
+
+    fn path(width: f32) -> VectorPath {
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(width, 0.0))
+    }
+
+    fn revision(id: GeometryId) -> CompiledReplayRevision {
+        CompiledReplayRevision {
+            rows: vec![SavedRow {
+                index: 0,
+                object: Some(CompiledObject::new(
+                    ObjectId::new(0),
+                    GeometryRef::External(id),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )),
+                order: None,
+            }],
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            camera_motion_payloads: 0,
+            path_motion_commands: 0,
+        }
+    }
+
+    #[test]
+    fn external_geometry_versions_fail_closed_without_historical_handle_provenance() {
+        let mut arena = GeometryResourceArena::new();
+        let original = arena.insert_path(path(1.0));
+        let mut known = CompiledResources::default();
+        known.capture_geometry_from_arena(&arena, original).unwrap();
+        let replacement = arena
+            .replace(
+                original.id,
+                GeometryResource::VectorPath(Arc::new(path(2.0))),
+            )
+            .unwrap();
+        assert_ne!(replacement, original);
+
+        let mut scene = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                ObjectId::new(0),
+                GeometryRef::circle(0.5),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[],
+        )
+        .unwrap();
+        scene
+            .resources
+            .capture_geometry_from_arena(&arena, replacement)
+            .unwrap();
+
+        // Known ID, newer source version: never keep the reader's stale bytes.
+        assert_eq!(
+            scene.prefix_resource_delta(&[revision(original.id)], &known),
+            Err(CompiledResourceError::ConflictingGeometryId(original.id))
+        );
+        // Unknown ID at a later version: no evidence of which version belongs
+        // to each prior timestamp, even if the latest version is available.
+        assert_eq!(
+            scene.prefix_resource_delta(
+                &[revision(original.id)],
+                &CompiledResources::default()
+            ),
+            Err(CompiledResourceError::ConflictingGeometryId(original.id))
+        );
+
+        // Unrelated fresh version-zero resources still deliver only the delta.
+        let fresh = arena.insert_path(path(3.0));
+        scene
+            .resources
+            .capture_geometry_from_arena(&arena, fresh)
+            .unwrap();
+        assert_eq!(
+            scene
+                .prefix_resource_delta(&[revision(fresh.id)], &known)
+                .unwrap()
+                .prefix_payload_count(),
+            1
+        );
     }
 }
