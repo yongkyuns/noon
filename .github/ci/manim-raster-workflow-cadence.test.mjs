@@ -16,6 +16,23 @@ const triggers = workflow.split("on:\n")[1]?.split("\npermissions:")[0];
 const preflight = workflow.split("\n  preflight:\n")[1]?.split("\n  raster:\n")[0];
 const oracle = workflow.split("\n  raster:\n")[1];
 
+test("native Manim comparisons install the repository toolchain in job-private storage", async () => {
+  const source = await readFile(new URL("../workflows/manim-differential.yml", import.meta.url), "utf8");
+  const job = source.split("\n  semantics:\n")[1];
+  assert.ok(job, "missing native semantic comparisons");
+  assert.match(job.split("\n    steps:\n")[0], /RUSTUP_HOME: \$\{\{ runner\.temp \}\}\/noon-rustup/,
+    "all Rust subprocesses must use storage isolated from preinstalled toolchains");
+  const setup = job.split("      - name: Install pinned Rust toolchain\n")[1]?.split("      - name:")[0];
+  assert.ok(setup, "install before the comparison scripts invoke Cargo");
+  assert.match(setup, /^          rustup install$/m, "select rust-toolchain.toml, including its components and targets");
+  assert.match(setup, /^          rustup show active-toolchain$/m);
+  assert.match(setup, /^          rustc --version --verbose$/m);
+  assert.ok(job.indexOf("Install pinned Rust toolchain") < job.indexOf("Compare native geometry"));
+  for (const probe of ["dot-ellipse", "sector", "elbow", "frame-sampling"]) {
+    assert.ok(job.includes(`python scripts/manim-${probe}-differential.py`), `missing original ${probe} comparison`);
+  }
+});
+
 test("native functional gates supersede PR revisions while master runs stay independent", async () => {
   for (const name of ["native-host-smoke.yml", "native-export-output.yml"]) {
     const source = await readFile(new URL("../workflows/" + name, import.meta.url), "utf8");

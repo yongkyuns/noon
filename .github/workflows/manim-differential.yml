@@ -19,9 +19,17 @@ jobs:
   semantics:
     name: ManimCE 0.21.0 semantics
     runs-on: ubuntu-latest
+    env:
+      # Runner images can contain partial toolchains with conflicting component files.
+      RUSTUP_HOME: ${{ runner.temp }}/noon-rustup
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
