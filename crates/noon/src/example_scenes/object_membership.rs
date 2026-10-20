@@ -1,7 +1,7 @@
 //! Low-level semantic membership foundation on native and direct Rust/WASM.
 //! Authored and coherent live copies retain own content and ordered descendants.
 //! Broader affine/state semantics and Python membership exposure follow separately.
-use crate::{ExecutionSession, Scene};
+use crate::{ExecutionSession, MobjectTarget, Scene};
 use noon_core::SemanticMutationTransaction;
 
 pub fn session() -> Result<ExecutionSession, String> {
@@ -48,6 +48,27 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
     session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), replace)?;
     let parent = copied_parent;
     let child = copied_child;
+    let target = MobjectTarget::from(&parent);
+    let own_points = parent.path_query()?.points()?;
+    let child_points = child.path_query()?.points()?;
+    let expected_points = own_points
+        .iter()
+        .chain(&child_points)
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(target.all_points()?, expected_points);
+    let tree = target.point_reduction_tree()?;
+    assert_eq!(tree.points, own_points);
+    assert_eq!(tree.children.len(), 1);
+    assert_eq!(tree.children[0].points, child_points);
+    assert_eq!(tree.flattened_points(), expected_points);
+    let expected_anchors = parent
+        .path_query()?
+        .anchors()
+        .into_iter()
+        .chain(child.path_query()?.anchors())
+        .collect::<Vec<_>>();
+    assert_eq!(target.vector_boundary_points()?, expected_anchors);
     assert_eq!(
         session
             .painter_order()

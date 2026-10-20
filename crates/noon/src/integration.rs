@@ -73,6 +73,7 @@ pub use crate::path_queries::{
     effective_extremum_along_dim, effective_length_over_dim,
     effective_path_boundary_extremum_along_dim, effective_path_boundary_point,
     effective_path_boundary_points, effective_path_query, effective_point_reduction_tree,
+    effective_vector_boundary_points,
 };
 pub use crate::point_matching::publish_match_points;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};

@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import noon
@@ -10,6 +11,57 @@ from _manim_path_queries import (
 
 
 class ManimReduceAcrossDimensionTests(unittest.TestCase):
+    def test_ordinary_object_requests_recursive_snapshots_from_rust(self):
+        calls = []
+
+        class Handle:
+            def allPoints(self):
+                calls.append("points")
+                return (1.0, 2.0, 4.0, 5.0, 7.0, 8.0)
+
+            def pointReductionTree(self):
+                calls.append("tree")
+                return ((1.0, 2.0), (((4.0, 5.0), ()), ((7.0, 8.0), ())))
+
+        value = object.__new__(noon.Mobject)
+        value._scene = None
+        value._object = None
+        value._semantic_handle = Handle()
+        value._semantic_handle_fresh = True
+        value.get_family = lambda: self.fail("wrapper traversal must not own point queries")
+        points = merged_array(value, "points")
+        self.assertEqual(
+            [[float(component) for component in point] for point in points],
+            [[1.0, 2.0], [4.0, 5.0], [7.0, 8.0]],
+        )
+        reductions = []
+
+        def reduce_func(values):
+            observed = [float(component) for component in values]
+            reductions.append(observed)
+            return sum(observed)
+
+        self.assertEqual(reduce_across_dimension(value, reduce_func, 0), 12.0)
+        self.assertEqual(reductions, [[1.0], [4.0], [4.0, 1.0], [7.0], [7.0, 5.0]])
+        self.assertEqual(calls, ["points", "tree"])
+
+    def test_bound_object_tree_comes_from_its_coherent_context(self):
+        handle = object()
+        calls = []
+
+        class Context:
+            def queryMobjectPointReductionTree(self, source):
+                calls.append(source)
+                return ((1.0, 2.0), (((4.0, 5.0), ()),))
+
+        value = object.__new__(noon.Mobject)
+        value._scene = SimpleNamespace(_canonical_authoring_context=Context())
+        value._object = object()
+        value._semantic_handle = handle
+        value._semantic_handle_fresh = True
+        self.assertEqual(reduce_across_dimension(value, sum, 0), 5.0)
+        self.assertEqual(calls, [handle])
+
     def test_reduces_owned_points_then_combines_children_in_order(self):
         first = ((-2.0, 1.0, -1.0, 3.0), ())
         second = ((4.0, -2.0, 5.0, 2.0), ())

@@ -2681,6 +2681,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = pointReductionTree)]
+        pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .point_reduction_tree()
+                .map(super::point_reduction_tree_to_js)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle

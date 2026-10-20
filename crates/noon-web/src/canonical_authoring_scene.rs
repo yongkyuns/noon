@@ -926,6 +926,20 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn mobject_point_reduction_tree(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).point_reduction_tree(),
+            |player, handle| {
+                player.live_effective_point_reduction_tree(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_points(
         &mut self,
         handle: &noon::Mobject,
@@ -7777,6 +7791,17 @@ mod wasm {
             self.inner
                 .mobject_all_points(handle.semantic_mobject())
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPointReductionTree)]
+        pub fn query_mobject_point_reduction_tree(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<js_sys::Array, JsValue> {
+            self.inner
+                .mobject_point_reduction_tree(handle.semantic_mobject())
+                .map(crate::authoring_mobject::point_reduction_tree_to_js)
                 .map_err(typed_js_error)
         }
 

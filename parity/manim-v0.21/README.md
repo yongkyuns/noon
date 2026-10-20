@@ -381,6 +381,13 @@ live copies of an object's own content and ordered descendants. Object and famil
 copies use one Rust planner and one atomic transaction, preserve aliases and
 metadata, and discover graph dependencies across all explicitly addressed roots
 and detached references. Copy-result maps provide derived wrapper identity only.
+Shared point observations include an ordinary root's own array and its children.
+Merged arrays and reduction snapshots preserve recursive alias occurrences;
+vector-boundary observations use unique family-ordered anchors. Authored and
+effective queries use the same Rust traversal, while Python invokes caller-owned
+reducers over the returned tree and adapts arrays. Class identity, family-own-point
+capabilities, custom overrides and mixed-content qualification remain separate
+requirements in owner #2011.
 This does not qualify Python `Mobject.add`, `insert`, `add_to_back`, `remove`,
 `push_self_into_submobjects` or `add_n_more_submobjects`. Shared high-level
 affine, path, style, target-animation and saved-state behavior over point-owning
