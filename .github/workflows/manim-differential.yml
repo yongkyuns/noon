@@ -23,14 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Install pinned Rust toolchain
-        env:
-          # Runner images can contain partial toolchains with conflicting component files.
-          RUSTUP_HOME: ${{ runner.temp }}/noon-rustup
         run: |
-          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
-          rustup install
-          rustup show active-toolchain
-          rustc --version --verbose
+          python3 scripts/test_ci_setup_rust.py
+          source scripts/ci-setup-rust.sh
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
