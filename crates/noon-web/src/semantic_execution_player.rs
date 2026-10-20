@@ -776,7 +776,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_points(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RawPoints {
             object: source,
@@ -788,7 +788,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_append_points(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendRawPoints {
             object: source,

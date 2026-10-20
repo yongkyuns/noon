@@ -20,11 +20,11 @@ pub enum BorrowedPathEdit<'a> {
     },
     RawPoints {
         object: &'a Mobject,
-        points: &'a [Vec2],
+        points: &'a [(f64, f64)],
     },
     AppendRawPoints {
         object: &'a Mobject,
-        points: &'a [Vec2],
+        points: &'a [(f64, f64)],
     },
     SmoothCorners {
         object: &'a Mobject,

@@ -8,6 +8,16 @@ pub fn session() -> Result<ExecutionSession, String> {
         rectangle.set_scale(2., 1.)?;
         rectangle.rotate(0.25)?;
         rectangle.shift(-2.5, 0.)?;
+        let mut precise_points = rectangle.path_query()?.points()?;
+        precise_points[0].0 += 2.0_f64.powi(-40);
+        rectangle.set_points_f64(&precise_points)?;
+        assert_eq!(rectangle.path_query()?.points()?, precise_points);
+        assert_eq!(rectangle.path_query()?.start()?, precise_points[0]);
+        assert_eq!(
+            rectangle.path_query()?.point_from_proportion(0.0)?,
+            precise_points[0]
+        );
+
         rectangle.disable_fill()?;
         rectangle.set_stroke_color(1., 1., 1., 1.)?;
         let mut ellipse = scene.circle(0.8)?;

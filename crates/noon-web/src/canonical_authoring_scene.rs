@@ -8414,7 +8414,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8428,7 +8428,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?

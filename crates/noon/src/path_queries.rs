@@ -24,8 +24,8 @@ pub struct PathQuery {
     /// an unfinished subpath and the next MoveTo.
     manim_points: Vec<(f64, f64)>,
     transform: SemanticTransform2_5D,
-    endpoints: Option<(noon_core::Vec2, noon_core::Vec2)>,
-    unfinished_anchor: Option<noon_core::Vec2>,
+    endpoints: Option<((f64, f64), (f64, f64))>,
+    unfinished_anchor: Option<(f64, f64)>,
 }
 
 /// A recursive snapshot of owned planar points in Manim family order.
@@ -71,23 +71,27 @@ impl PathQuery {
             };
         let raw_points = path.manim_points();
         let manim_points = match raw_points {
-            Some(points) => points
-                .iter()
-                .map(|point| (f64::from(point.x), f64::from(point.y)))
-                .collect(),
+            Some(points) => points.to_vec(),
             None => manim_points(path, plan.as_ref())?,
         };
         let endpoints = raw_points
             .and_then(|points| points.first().zip(points.last()))
             .map(|(first, last)| (*first, *last))
-            .or_else(|| path.endpoints());
+            .or_else(|| {
+                path.endpoints()
+                    .map(|(a, b)| ((a.x as f64, a.y as f64), (b.x as f64, b.y as f64)))
+            });
         Ok(Self {
             manim_points,
             plan,
             transform,
             endpoints,
             unfinished_anchor: match path.commands().last() {
-                Some(noon_core::PathCommand::MoveTo { to }) => Some(*to),
+                Some(noon_core::PathCommand::MoveTo { to }) => Some(
+                    raw_points
+                        .and_then(|points| points.get(points.len() / 4 * 4).copied())
+                        .unwrap_or((to.x as f64, to.y as f64)),
+                ),
                 _ => None,
             },
         })
@@ -270,7 +274,7 @@ impl PathQuery {
             .collect::<Vec<_>>();
         if column == 0 {
             if let Some(point) = self.unfinished_anchor {
-                points.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
+                points.push(self.transform_point(point.0, point.1));
             }
         }
         points
@@ -352,7 +356,7 @@ impl PathQuery {
             anchors.extend([points[0], points[3]]);
         }
         if let Some(point) = self.unfinished_anchor {
-            anchors.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
+            anchors.push(self.transform_point(point.0, point.1));
         }
         anchors
     }
@@ -409,7 +413,7 @@ impl PathQuery {
             run.extend(points);
         }
         if let Some(point) = self.unfinished_anchor {
-            let point = self.transform_point(f64::from(point.x), f64::from(point.y));
+            let point = self.transform_point(point.0, point.1);
             if run.last().is_some_and(|last| points_coincide(*last, point)) {
                 run.push(point);
             }
@@ -502,7 +506,7 @@ impl PathQuery {
             .endpoints
             .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
         let point = if end { last } else { first };
-        Ok(self.transform_point(f64::from(point.x), f64::from(point.y)))
+        Ok(self.transform_point(point.0, point.1))
     }
 
     /// Ten samples per curve by default, matching Manim's path query measure.

@@ -878,12 +878,7 @@ impl Mobject {
             let store = self.store.borrow();
             let points = |state: &SemanticObjectState| {
                 let path = crate::path_editing::world_path(&store, state)?;
-                crate::path_editing::manim_points_for_path(&path).map(|points| {
-                    points
-                        .into_iter()
-                        .map(|point| (f64::from(point.x), f64::from(point.y)))
-                        .collect::<Vec<_>>()
-                })
+                crate::path_editing::manim_points_f64_for_path(&path)
             };
             (points(&start_state)?, points(&end_state)?)
         };
@@ -1645,14 +1640,14 @@ pub(crate) fn interpolate_manim_point_arrays(
         .iter()
         .zip(end)
         .map(|(&(start_x, start_y), &(end_x, end_y))| {
-            let x = interpolate_manim_scalar(start_x, end_x, alpha)? as f32;
-            let y = interpolate_manim_scalar(start_y, end_y, alpha)? as f32;
-            (x.is_finite() && y.is_finite())
-                .then_some(Vec2::new(x, y))
+            let x = interpolate_manim_scalar(start_x, end_x, alpha)?;
+            let y = interpolate_manim_scalar(start_y, end_y, alpha)?;
+            (x.is_finite() && y.is_finite() && (x as f32).is_finite() && (y as f32).is_finite())
+                .then_some((x, y))
                 .ok_or(AuthoringError::NonFiniteGeometry)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(VectorPath::from_manim_points(points))
+    Ok(VectorPath::from_manim_points_f64(points))
 }
 
 fn interpolate_manim_paint(

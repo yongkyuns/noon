@@ -1,5 +1,7 @@
 mod alignment;
+mod proportion;
 pub use alignment::align_paths;
+pub use proportion::PathProportionPlan;
 
 use noon_core::{PathCommand, SemanticVec3, Vec2, VectorPath};
 
@@ -103,194 +105,6 @@ fn validate_proportion_f64(alpha: f64) -> Result<(), PathProportionError> {
         return Err(PathProportionError::InvalidProportion(alpha as f32));
     }
     Ok(())
-}
-
-/// Reusable ManimCE v0.21 path-proportion measure for repeated point queries.
-///
-/// Construction collects drawable curves and performs Manim's ten-sample Bezier
-/// length approximation exactly once. [`Self::point`] then reuses those immutable
-/// sampled lengths, avoiding repeated curve collection, allocation, and length
-/// sampling during animation playback. Finite paths additionally keep cumulative
-/// curve lengths so each point query selects its curve in logarithmic time.
-#[derive(Clone, Debug)]
-pub struct PathProportionPlan {
-    curves: Vec<Curve>,
-    lengths: Vec<f64>,
-    cumulative_lengths: Vec<f64>,
-    total_length: f64,
-    scale: (f64, f64),
-}
-
-impl PathProportionPlan {
-    /// Logical heap held by this prepared measure, excluding allocator bookkeeping.
-    pub fn retained_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + std::mem::size_of_val(self.curves.as_slice())
-            + std::mem::size_of_val(self.lengths.as_slice())
-            + std::mem::size_of_val(self.cumulative_lengths.as_slice())
-    }
-
-    pub fn curve_count(&self) -> usize {
-        self.curves.len()
-    }
-
-    /// Sample one curve into the straight-line length pieces used by ManimCE.
-    /// `sample_points` is the number of Bezier evaluations, so the result has
-    /// `sample_points - 1` entries when there are at least two samples.
-    pub fn curve_length_pieces(
-        &self,
-        index: usize,
-        sample_points: usize,
-    ) -> Result<Vec<f64>, PathProportionError> {
-        let curve =
-            self.curves
-                .get(index)
-                .copied()
-                .ok_or(PathProportionError::InvalidCurveIndex {
-                    index,
-                    count: self.curves.len(),
-                })?;
-        let mut pieces = Vec::new();
-        if sample_points < 2 {
-            return Ok(pieces);
-        }
-        pieces
-            .try_reserve(sample_points - 1)
-            .map_err(|_| PathProportionError::InvalidSampleCount)?;
-        let denominator = (sample_points - 1) as f64;
-        let mut previous = curve_point_f64(curve, 0.0);
-        for sample in 1..sample_points {
-            let point = curve_point_f64(curve, sample as f64 / denominator);
-            pieces.push(
-                ((point.x - previous.x) * self.scale.0)
-                    .hypot((point.y - previous.y) * self.scale.1),
-            );
-            previous = point;
-        }
-        Ok(pieces)
-    }
-
-    /// Cubic controls for one retained curve, promoting lines and quadratics
-    /// exactly. Points remain in local content space regardless of query metric.
-    pub fn curve_points(&self, index: usize) -> Result<[SemanticVec3; 4], PathProportionError> {
-        let curve = self
-            .curves
-            .get(index)
-            .ok_or(PathProportionError::InvalidCurveIndex {
-                index,
-                count: self.curves.len(),
-            })?;
-        Ok(curve_controls(*curve))
-    }
-
-    /// Evaluate one retained curve at each supplied parameter. Parameters are
-    /// intentionally not clamped: Manim's Bezier functions extrapolate for
-    /// values outside the unit interval.
-    pub fn curve_points_at(
-        &self,
-        index: usize,
-        parameters: &[f64],
-    ) -> Result<Vec<SemanticVec3>, PathProportionError> {
-        let curve =
-            self.curves
-                .get(index)
-                .copied()
-                .ok_or(PathProportionError::InvalidCurveIndex {
-                    index,
-                    count: self.curves.len(),
-                })?;
-        Ok(parameters
-            .iter()
-            .map(|&parameter| curve_point_f64(curve, parameter))
-            .collect())
-    }
-
-    /// Prepare the reusable local-space proportion measure for `path`.
-    pub fn new(path: &VectorPath) -> Result<Self, PathProportionError> {
-        Self::with_scale(path, (1.0, 1.0))
-    }
-
-    /// Prepare a measure in the metric induced by a planar scale.
-    /// Rotation and translation preserve lengths; nonuniform scale changes
-    /// which curve contains a given proportion. Points remain in local space.
-    pub fn with_scale(path: &VectorPath, scale: (f64, f64)) -> Result<Self, PathProportionError> {
-        if !scale.0.is_finite() || !scale.1.is_finite() {
-            return Err(PathProportionError::InvalidMetric);
-        }
-        let curves = collect_curves(path);
-        if curves.is_empty() {
-            return Err(PathProportionError::EmptyPath);
-        }
-        let lengths: Vec<_> = curves
-            .iter()
-            .map(|&curve| sampled_curve_length(curve, scale, MANIM_LENGTH_SAMPLE_POINTS))
-            .collect();
-        let mut cumulative_lengths = Vec::with_capacity(lengths.len());
-        let mut total_length = 0.0;
-        for &length in &lengths {
-            total_length += length;
-            cumulative_lengths.push(total_length);
-        }
-        if !total_length.is_finite() {
-            return Err(PathProportionError::InvalidMetric);
-        }
-        Ok(Self {
-            curves,
-            lengths,
-            cumulative_lengths,
-            total_length,
-            scale,
-        })
-    }
-
-    /// Return a local point using this plan's metric and renderer precision.
-    pub fn point(&self, alpha: f32) -> Result<Vec2, PathProportionError> {
-        let point = self.point_f64(f64::from(alpha))?;
-        Ok(Vec2::new(point.x as f32, point.y as f32))
-    }
-
-    /// Return a local point without quantizing proportion or interpolation.
-    pub fn point_f64(&self, alpha: f64) -> Result<SemanticVec3, PathProportionError> {
-        validate_proportion_f64(alpha)?;
-        if alpha == 1.0 {
-            return Ok(SemanticVec3::from_vec2(self.curves.last().unwrap().to));
-        }
-        let target = alpha * self.total_length;
-        let index = self
-            .cumulative_lengths
-            .partition_point(|&end| end < target)
-            .min(self.curves.len() - 1);
-        let previous = index
-            .checked_sub(1)
-            .map_or(0.0, |i| self.cumulative_lengths[i]);
-        let residue = if self.lengths[index] > 0.0 {
-            ((target - previous) / self.lengths[index]).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        Ok(curve_point_f64(self.curves[index], residue))
-    }
-
-    /// Approximate arc length in this plan's metric. The default ten-sample
-    /// measure is retained; an explicit sample count only visits this path.
-    pub fn arc_length(&self, sample_points: Option<usize>) -> Result<f64, PathProportionError> {
-        let samples = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
-        if samples < 2 {
-            return Ok(0.0);
-        }
-        if samples == MANIM_LENGTH_SAMPLE_POINTS {
-            return Ok(self.total_length);
-        }
-        let length: f64 = self
-            .curves
-            .iter()
-            .map(|&curve| sampled_curve_length(curve, self.scale, samples))
-            .sum();
-        if !length.is_finite() {
-            return Err(PathProportionError::InvalidMetric);
-        }
-        Ok(length)
-    }
 }
 
 /// Return the first and last drawable anchors using the same curve traversal as
@@ -540,18 +354,6 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
     curves
 }
 
-fn sampled_curve_length(curve: Curve, scale: (f64, f64), samples: usize) -> f64 {
-    let denominator = (samples - 1) as f64;
-    let mut previous = curve_point_f64(curve, 0.0);
-    let mut length = 0.0;
-    for sample in 1..samples {
-        let point = curve_point_f64(curve, sample as f64 / denominator);
-        length += ((point.x - previous.x) * scale.0).hypot((point.y - previous.y) * scale.1);
-        previous = point;
-    }
-    length
-}
-
 fn curve_point(curve: Curve, t: f32) -> Vec2 {
     match curve.kind {
         CurveKind::Line | CurveKind::Close => lerp(curve.from, curve.to, t),
@@ -585,12 +387,7 @@ fn curve_point_f64(curve: Curve, t: f64) -> SemanticVec3 {
         CurveKind::Cubic { control1, control2 } => {
             let control1 = SemanticVec3::from_vec2(control1);
             let control2 = SemanticVec3::from_vec2(control2);
-            let p01 = lerp_f64(from, control1, t);
-            let p12 = lerp_f64(control1, control2, t);
-            let p23 = lerp_f64(control2, to, t);
-            let p012 = lerp_f64(p01, p12, t);
-            let p123 = lerp_f64(p12, p23, t);
-            lerp_f64(p012, p123, t)
+            cubic_point_f64([from, control1, control2, to], t)
         }
     }
 }
@@ -980,4 +777,13 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
+}
+
+fn cubic_point_f64([from, control1, control2, to]: [SemanticVec3; 4], t: f64) -> SemanticVec3 {
+    let p01 = lerp_f64(from, control1, t);
+    let p12 = lerp_f64(control1, control2, t);
+    let p23 = lerp_f64(control2, to, t);
+    let p012 = lerp_f64(p01, p12, t);
+    let p123 = lerp_f64(p12, p23, t);
+    lerp_f64(p012, p123, t)
 }

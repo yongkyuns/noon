@@ -5,6 +5,14 @@ class OrdinaryPathQueries(Scene):
     def construct(self):
         rectangle = Rectangle(width=2, height=1, color=WHITE)
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
+        precise_points = [[float(p[0]), float(p[1]), 0.0]
+                          for p in rectangle.get_all_points()]
+        precise_points[0][0] += 2.0 ** -40
+        rectangle.set_points(precise_points)
+        assert [[float(p[0]), float(p[1])] for p in rectangle.get_all_points()] == [p[:2] for p in precise_points]
+        assert float(rectangle.get_start()[0]) == precise_points[0][0]
+        assert float(rectangle.point_from_proportion(0.0)[0]) == precise_points[0][0]
+
         ellipse = Circle(radius=0.8, color=WHITE)
         ellipse.stretch_to_fit_width(2.4).shift(RIGHT * 2.5)
         family = VGroup(VGroup(rectangle, ellipse), rectangle)
