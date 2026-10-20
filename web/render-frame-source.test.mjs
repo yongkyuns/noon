@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 import { createDocumentFrameSource, createWorkerFrameSource } from "./render-frame-source.js";
 
 const message = (type, frameId) => ({ channel: "noon.render", protocolVersion: 1, type, frameId });
@@ -171,4 +173,60 @@ test("a failed transport send rolls back the pending callback reservation", () =
   worker.receive(message("animation_frame", handle));
   assert.deepEqual(observed, [3]);
   worker.close();
+});
+
+// Exercise the actual worker entry point as well as the transport helpers.
+// Only the renderer factory is replaced, so this does not require a GPU.
+const workerEntry = (await readFile(new URL("./authoring-render-worker.js", import.meta.url), "utf8"))
+  .replace(/^import .*;\n/gm, "");
+
+function entryFixture(nativeFrames = true) {
+  let listener, host;
+  const sent = [], dispatched = [];
+  const native = () => 77;
+  const self = {
+    addEventListener(type, callback) { assert.equal(type, "message"); listener = callback; },
+    postMessage(message) { sent.push(message); },
+    close() { self.closed = true; },
+    ...(nativeFrames ? { requestAnimationFrame: native, cancelAnimationFrame() {} } : {}),
+  };
+  vm.runInNewContext(workerEntry, {
+    self, performance: { now: () => 29 }, createWorkerFrameSource,
+    createAuthoringRenderController(value) {
+      host = value;
+      return { dispatch(message) { dispatched.push(message); } };
+    },
+  });
+  return { sent, dispatched, get host() { return host; }, self,
+    message(data) { listener({ data }); } };
+}
+
+test("render worker binds the negotiated document provider before dispatching prepare", () => {
+  const f = entryFixture(), seen = [];
+  assert.equal(f.host, undefined);
+  f.message({ type: "prepare", documentAnimationFrames: true });
+  assert.equal(f.host.animationFrameSource, "document");
+  assert.equal(f.dispatched.length, 1);
+  const id = f.host.requestAnimationFrame(time => seen.push(time));
+  assert.deepEqual(f.sent, [message("animation_frame_request", id)]);
+  f.message(message("animation_frame", id));
+  assert.deepEqual(seen, [29]);
+  assert.equal(f.dispatched.length, 1, "frame pulse must not enter renderer command dispatch");
+  f.host.requestAnimationFrame(() => assert.fail("closed provider callback"));
+  f.host.close();
+  assert.equal(f.self.closed, true);
+  assert.equal(f.sent.at(-1).type, "animation_frame_cancel");
+});
+
+test("standalone worker hosts keep their native RAF or timer capability", () => {
+  for (const available of [true, false]) {
+    const f = entryFixture(available);
+    f.message({ type: "prepare" });
+    assert.equal(f.host.animationFrameSource, available ? "worker" : "timer");
+    if (available) assert.equal(f.host.requestAnimationFrame(() => {}), 77);
+    else assert.equal(f.host.requestAnimationFrame, null);
+    assert.equal(f.sent.length, 0);
+    f.host.close();
+    assert.equal(f.self.closed, true);
+  }
 });
