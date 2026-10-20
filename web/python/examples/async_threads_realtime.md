@@ -536,43 +536,78 @@ detail.
 
 ## Layout with existing Manim-style operations
 
-The scene now expresses repeated layouts through native `VGroup` families and
-relative placement. The Python file still composes ordinary Noon objects; it
-does not add a public row, panel, connector, or layout API. The shared Rust
-engine owns family bounds, placement, targets, and animation.
+The scene expresses component relationships through native `VGroup` families,
+measured bounds, and relative placement. The Python file still composes ordinary
+Noon objects; it does not add a public row, panel, connector, or layout API. The
+shared Rust engine owns family bounds, placement, targets, and animation. The
+first pass left page anchors and memory handoffs manual; this pass also moves
+those relationships into the native layout.
+
+The page starts with a native frame and unpainted header, stage, and caption
+regions. These regions and the footer are arranged together; each chapter
+places its composition within `self.stage`. The remaining stage height comes
+from the frame height, the other regions, and their gaps. Program, memory, and
+architecture column widths come from the available stage width and the chosen
+number of columns. The scene helpers no longer take positional `x` and `y`
+arguments, and chapters no longer repeat independent page coordinates.
 
 The recurring program panels retain named handles to their body, text rows,
-execution pointer, work marks, and status slot. Those handles give each cue a
-semantic target: “the third operation in C” or “the SPI panel” replaces a second
-copy of that target's center, width, and height.
+execution pointer, work marks, and status slot. Equal panel heights reserve the
+tallest measured listing, and the status slot reserves the measured width of
+`PREEMPTED`. Each station also has a native content slot below its title; jobs,
+queues, and progress tracks use that slot. Those handles give each cue a
+semantic target: “the third operation in C” or “the SPI content region.”
 
 | Scene element | Existing operation | What an edit now changes together |
 | --- | --- | --- |
+| Page regions | `VGroup(...).arrange(DOWN).move_to(self.canvas)` | Header, stage, captions, and footer share the frame's available space. |
 | Pseudocode listing | `VGroup(*rows).arrange(DOWN, aligned_edge=LEFT)` | Row spacing and the positions used by the execution pointer. |
 | Three program panels | `arrange(RIGHT)` | Panel placement, contents, and the CPU strip positioned below them. |
 | Status and CPU labels | `move_to(reserved_slot)` | Replacement text stays in its intended region without moving the panel. |
-| Execution pointer | `pointer.animate.next_to(row, LEFT)` | The destination follows the selected row's measured position. |
+| Station contents | `next_to(title, DOWN)`, `move_to(content_slot)` | Jobs and device progress use the space below the station heading. |
+| Memory handoffs | `arrange`, `copy().match_x(storage_slot)`, `animate.move_to(target)` | Storage bays, CPU regions, and orthogonal turns share native anchors. |
+| Execution pointer and strip | `pointer.animate.next_to(row, LEFT)`, `highlight.animate.match_y(row)` | Both destinations use the selected row's measured position. |
 | Attention outline | `SurroundingRectangle(target)` | The cue uses the actual text or panel bounds. |
-| Deadline trace | `NumberLine.n2p(microseconds)` | Ticks, bars, cursor, and deadline marker use one native numerical mapping. |
+| Deadline trace | `NumberLine.n2p(microseconds)`, `stretch_to_fit_width(..., about_edge=LEFT)` | One numerical mapping places the ticks and cursor and determines each bar's width. |
+| DMA progress | `track.point_from_proportion(fraction)` | The progress signal follows the placed track's native path. |
 | Architecture and metric panels | `arrange_in_grid` | Rows and columns share deliberate gap settings. |
 | Devices, queues, labels, and messages | `next_to`, `move_to`, `match_x`, `match_y` | Related elements are placed from their native anchors. |
 
-For example, the program listing and execution cue follow this pattern:
+For example, `at_line` selects an existing text row and moves both execution
+indicators in the same native play call:
 
 ```python
-rows = [words(line, size=13, width=listing_width) for line in program]
-listing = VGroup(*rows).arrange(DOWN, buff=0.10, aligned_edge=LEFT)
-listing.next_to(repeat, DOWN, buff=0.12, aligned_edge=LEFT)
-
-row = rows[index]
-await self.play_for(pointer.animate.next_to(row, LEFT, buff=0.18))
-await self.focus_on(row, color=CONTROL)
+item = board[role]
+row = item["rows"][index]
+await self.play_for(item["pointer"].animate.next_to(row, LEFT, buff=0.18),
+                    item["highlight"].animate.match_y(row),
+                    *[mark.animate.set_fill(EDGE, opacity=1) for mark in item["marks"]],
+                    seconds=seconds)
 ```
 
 `focus_on` is a small scene helper that creates a native
 `SurroundingRectangle`. It controls the tutorial's attention choreography; it
 does not calculate a separate layout. The full-width execution strip and the
 tighter attention outline remain distinct visual signals.
+
+Chapter 2 now arranges the thread and async columns from their headings,
+storage bands, and CPU stations. Equal storage bands align the CPUs while the
+schematic stack and state boxes retain their intentionally different heights.
+The transfer turns are native copies of the CPU content slot aligned to the
+appropriate storage bay. The source expresses a handoff as:
+
+```python
+thread_run = thread["cpu"][2]
+thread_c_turn = thread_run.copy().match_x(thread["slots"]["C"])
+await self.move_job(tc, thread_c_turn, thread["slots"]["C"], seconds=1.0)
+```
+
+`move_job` issues ordinary `token.animate.move_to(target)` calls. Moving or
+resizing a column before these anchors are created updates both legs of the
+handoff without reauthoring stack centers or numeric waypoints. The deadline
+bar similarly uses `stretch_to_fit_width(..., about_edge=LEFT)` to preserve its
+height and starting edge while revealing the interval; its cursor and work
+marks animate concurrently.
 
 The final architecture first arranges six named node families in a two-by-three
 grid. Only then does it read the body edges and construct the sample, command,
@@ -590,18 +625,16 @@ This scene therefore lays out components before wiring and creates attention
 cues after the relevant placement. The text helper fits measured text within
 its stated width by scaling; it does not promise automatic wrapping.
 
-Some numbers remain intentionally: font sizes, card dimensions, padding, gaps,
-port clearance, a few overall scene anchors, and the hypothetical microsecond
-budgets. These express presentation or domain choices. The refactor removes
-duplicated coordinates for related objects rather than replacing every number.
-The existing `card`, `station`, and `job` helpers also arrange their own native
-labels and work marks relative to their body.
-
-Chapter 2 retains its authored memory-transfer choreography: stack and saved-
-state centers are still repeated in the `move_job` waypoints. That is the main
-remaining manual spatial relationship. The scene is longer after this refactor
-because it names component handles explicitly; the maintenance improvement is
-fewer duplicated spatial relationships, not a reduction in total source lines.
+Some numbers remain intentionally: font sizes, panel heights, padding, gaps,
+port clearance, marker dimensions, and the trace bar's small positive starting
+width. These specify presentation choices and animation geometry. Width
+formulas allocate the measured stage or body space among columns and contents.
+Microsecond budgets and durations describe the hypothetical execution model or
+the lecture's pacing. These have different roles from absolute object
+coordinates. Explicit diagram waypoints are derived from already placed node
+edges where the topology needs a port or turn. Named handles expose the
+relationships that dependent objects use when the scene is authored, reducing
+the separate centers and offsets that an edit must keep in sync.
 
 There is a current Noon qualification limit: leaf `align_to` rejects the live
 scene context used here. The scene uses the already available
@@ -630,39 +663,49 @@ Progressive connectors, transport circles, focus highlights, written labels,
 and program markers express the lesson's transitions. The shared engine owns
 animation and rendering; presentation holds use authored scene time.
 
-### Current layout refactor
+### Current layout refactor, second pass
 
-The four focused domain checks passed after the layout refactor, as did Python
-syntax compilation and `git diff --check`. The checks cover response intervals,
+The four focused domain checks passed again after the second layout pass, as
+did Python syntax compilation and `git diff --check`. The checks cover response intervals,
 the exact-deadline boundary, unchanged execution and dispatch budgets, and the
 complete 13-chapter, 522-second cue sheet. Native `NumberLine` geometry is no
 longer reimplemented in the domain test.
 
-Eight focused text and coordinate-placement tests also passed. The new text
-regression first reproduced the wrapper rejection, then verified that cold and
-live aligned/masked requests reach the existing shared-handle operations.
-These dispatch checks do not substitute for rendered inspection.
+An AST comparison against the first pass also confirmed unchanged narration
+and reading holds. None of the seven component helpers still accepts `x` or
+`y`, and no placement call supplies a literal coordinate tuple. Native axis
+queries and port/turn calculations remain where the illustration needs
+quantitative geometry.
+
+Eight focused text and coordinate-placement tests passed in the first pass for
+the unchanged text forwarding correction. That regression first reproduced the
+wrapper rejection, then verified that cold and live aligned/masked requests
+reach the existing shared-handle operations. These dispatch checks do not
+substitute for rendered inspection.
 
 `bash scripts/check.sh fast` was attempted and stopped at its architecture gate
 because Cargo is unavailable. Qualified preview setup also failed because the
 host has no Docker executable.
 
-A fresh development capture of the current source presented **72 native
+A fresh development capture of the current source presented **83 native
 1600×900 WebGL2 images**, sampled forward from 0 through 522 seconds. Every
 requested time exactly matched its published time. All image hashes and
 dimensions were verified, and the final status reports source completion and
 an authored duration of exactly 522 seconds. There were no renderer, browser,
 or cleanup errors and no blocked HTTP(S) requests.
 
-The authoring team visually inspected **21 selected images spanning all 13
-chapters**, including the program board, I/O and readiness changes, the three
-deadline results, saved preemption progress, runtime boundaries, performance
-grid, resource and cancellation diagrams, assurance rows, and final
-architecture. Settled views and selected transition interiors were checked;
-these samples do not establish continuous-animation smoothness.
+The authoring team visually inspected **24 selected images spanning all 13
+chapters**, including the shared page frame, program board, memory handoffs
+and resume, I/O and readiness changes, the three deadline results, saved
+preemption progress, runtime boundaries, performance grid, resource and
+cancellation diagrams, assurance rows, and final architecture. Settled views
+and selected transition interiors were checked; these samples do not establish
+continuous-animation smoothness. Full execution also traversed the blank-detail
+cancellation caption without a layout or lifecycle error; that specific caption
+instant was not separately visually sampled.
 
 The captured scene SHA-256 is
-`9a45832944b35f962f30eef7276a731fd4db43dad9ebdc7ac0fae0e0953f0eb0`.
+`7968f3242e8270677e66be67a8685c17c094c070c90954e267cce56be18283a7`.
 The unchanged WASM and glue come from engine base commit
 `b11f450551ef2db4daf99f873b16cab974e4c887`; the regenerated Python worker bundle
 includes the text placement forwarding correction. The development build ID is
