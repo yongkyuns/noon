@@ -406,3 +406,6 @@ pub mod prelude {
 }
 
 pub use family_gradient::color_gradient;
+
+#[cfg(feature = "prepared-prefix")]
+pub use noon_runtime::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};

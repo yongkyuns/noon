@@ -282,3 +282,6 @@ fn path_motion_command_count(values: &noon_core::TrackValues) -> usize {
         _ => 0,
     }
 }
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;

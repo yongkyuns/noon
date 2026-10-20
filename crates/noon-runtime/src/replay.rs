@@ -59,6 +59,8 @@ struct Revision {
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayHistory {
     start: f64,
+    #[cfg(feature = "prepared-prefix")]
+    scope: std::sync::Arc<()>,
     end: Option<f64>,
     limits: ReplayLimits,
     failure: Option<ReplayError>,
@@ -80,6 +82,8 @@ impl SceneInstance {
         // initial projection and use the ordinary scheduler during replay.
         self.replay_history = Some(ReplayHistory {
             start: self.frame.time,
+            #[cfg(feature = "prepared-prefix")]
+            scope: std::sync::Arc::new(()),
             end: None,
             limits,
             failure: unsupported.then_some(ReplayError::UnsupportedDomain),
@@ -395,3 +399,8 @@ mod input_tests;
 
 #[cfg(test)]
 mod family_tests;
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;
+#[cfg(feature = "prepared-prefix")]
+pub use prefix::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};

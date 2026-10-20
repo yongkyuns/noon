@@ -6,6 +6,9 @@ use noon_runtime::{
     apply_execution_slot_membership_changes, ReplayError, ReplayLimits, ReplayStats,
 };
 
+#[cfg(test)]
+mod prefix_probe;
+
 impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
@@ -29,6 +32,14 @@ impl ExecutionSession {
     /// Admit backward playback only after all retained revisions and completion
     /// barriers are coherent. Failure never changes the current authored scene.
     pub fn seal_replay(&mut self) -> Result<(), ReplayError> {
+        self.ensure_replay_completion()?;
+        self.runtime.seal_replay()
+    }
+
+    // Inspect the original session before any ownership/snapshot operation:
+    // cloning intentionally retires pending continuation tokens. Runtime history
+    // validity and its budget are still checked by runtime.seal_replay().
+    fn ensure_replay_completion(&self) -> Result<(), ReplayError> {
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()
             || self.translation_drag_active()
@@ -41,7 +52,7 @@ impl ExecutionSession {
         {
             return Err(ReplayError::UnsupportedDomain);
         }
-        self.runtime.seal_replay()
+        Ok(())
     }
     pub fn replay_scope_active(&self) -> bool {
         self.runtime.replay_scope_active()
@@ -109,3 +120,6 @@ impl ExecutionSession {
         }
     }
 }
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;
