@@ -16,20 +16,16 @@ const triggers = workflow.split("on:\n")[1]?.split("\npermissions:")[0];
 const preflight = workflow.split("\n  preflight:\n")[1]?.split("\n  raster:\n")[0];
 const oracle = workflow.split("\n  raster:\n")[1];
 
-test("native Manim comparisons install the repository toolchain in job-private storage", async () => {
+test("native Manim comparisons reuse the tested isolated Rust setup", async () => {
   const source = await readFile(new URL("../workflows/manim-differential.yml", import.meta.url), "utf8");
   const job = source.split("\n  semantics:\n")[1];
   assert.ok(job, "missing native semantic comparisons");
   const setup = job.split("      - name: Install pinned Rust toolchain\n")[1]?.split("      - name:")[0];
   assert.ok(setup, "install before the comparison scripts invoke Cargo");
-  assert.doesNotMatch(job.split("\n    steps:\n")[0], /RUSTUP_HOME/,
-    "the runner context is available in step env, not job env");
-  assert.match(setup, /RUSTUP_HOME: \$\{\{ runner\.temp \}\}\/noon-rustup/);
-  assert.ok(setup.includes('echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"'),
-    "later comparison subprocesses must use the same isolated installation");
-  assert.match(setup, /^          rustup install$/m, "select rust-toolchain.toml, including its components and targets");
-  assert.match(setup, /^          rustup show active-toolchain$/m);
-  assert.match(setup, /^          rustc --version --verbose$/m);
+  assert.match(setup, /^          python3 scripts\/test_ci_setup_rust\.py$/m);
+  assert.match(setup, /^          source scripts\/ci-setup-rust\.sh$/m,
+    "source the shared helper so the current shell and future steps use its isolated repository-pinned toolchain");
+  assert.doesNotMatch(setup, /RUSTUP_HOME|rustup install/, "do not duplicate the shared setup");
   assert.ok(job.indexOf("Install pinned Rust toolchain") < job.indexOf("Compare native geometry"));
   for (const probe of ["dot-ellipse", "sector", "elbow", "frame-sampling"]) {
     assert.ok(job.includes(`python scripts/manim-${probe}-differential.py`), `missing original ${probe} comparison`);
