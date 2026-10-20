@@ -79,13 +79,16 @@ impl From<noon::TableAuthoringError> for AuthoringFailure {
     fn from(error: noon::TableAuthoringError) -> Self {
         use noon::TableAuthoringError::*;
         match error {
-            EmptyTable => Self::new("input", "table.empty", error),
-            RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
-            DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
-            InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
-            TopLeftRequiresLabels => Self::new("input", "table.top_left_requires_labels", error),
-            InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
+            EmptyTable => Self::new("invalid_input", "table.empty", error),
+            RaggedRows { .. } => Self::new("invalid_input", "table.ragged_rows", error),
+            DuplicateEntry => Self::new("invalid_input", "table.duplicate_entry", error),
+            InvalidLabels { .. } => Self::new("invalid_input", "table.invalid_labels", error),
+            TopLeftRequiresLabels => {
+                Self::new("invalid_input", "table.top_left_requires_labels", error)
+            }
+            InvalidOption { .. } => Self::new("invalid_input", "table.invalid_option", error),
             InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
+            InvalidEntryIndex => Self::new("index_error", "table.entry_index", error),
             Text(error) => error.into(),
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),

@@ -167,6 +167,16 @@ impl WasmAuthoringFamilyHandle {
     }
 }
 
+fn entries_array(
+    entries: Result<Vec<noon::TableEntry>, noon::TableAuthoringError>,
+) -> Result<js_sys::Array, JsValue> {
+    let result = js_sys::Array::new();
+    for entry in entries.map_err(js_error)? {
+        result.push(&entry_handle(entry));
+    }
+    Ok(result)
+}
+
 #[wasm_bindgen]
 impl WasmTableHandle {
     #[wasm_bindgen(js_name = family)]
@@ -185,12 +195,51 @@ impl WasmTableHandle {
         }
         Ok(result)
     }
-    #[wasm_bindgen(js_name = entryAt)]
-    pub fn entry_at(&self, row: usize, column: usize) -> Result<JsValue, JsValue> {
+    #[wasm_bindgen(js_name = bodyEntries)]
+    pub fn body_entries(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for entry in self.table.get_entries_without_labels().map_err(js_error)? {
+            result.push(&entry_handle(entry));
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = entryAtPosition)]
+    pub fn entry_at_position(&self, row: i32, column: i32) -> Result<JsValue, JsValue> {
         self.table
-            .entry(row, column)
+            .entry_at_position(i128::from(row), i128::from(column))
             .map(entry_handle)
             .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = bodyEntryAtPosition)]
+    pub fn body_entry_at_position(&self, row: i32, column: i32) -> Result<JsValue, JsValue> {
+        self.table
+            .body_entry_at_position(i128::from(row), i128::from(column))
+            .map(entry_handle)
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = rows)]
+    pub fn rows(&self) -> Result<js_sys::Array, JsValue> {
+        let result = js_sys::Array::new();
+        for row in self.table.get_rows().map_err(js_error)? {
+            let values = js_sys::Array::new();
+            for entry in row {
+                values.push(&entry_handle(entry));
+            }
+            result.push(&values);
+        }
+        Ok(result)
+    }
+    #[wasm_bindgen(js_name = rowLabels)]
+    pub fn row_labels(&self) -> Result<js_sys::Array, JsValue> {
+        entries_array(self.table.get_row_labels())
+    }
+    #[wasm_bindgen(js_name = columnLabels)]
+    pub fn column_labels(&self) -> Result<js_sys::Array, JsValue> {
+        entries_array(self.table.get_col_labels())
+    }
+    #[wasm_bindgen(js_name = labels)]
+    pub fn labels(&self) -> Result<js_sys::Array, JsValue> {
+        entries_array(self.table.get_labels())
     }
     #[wasm_bindgen(js_name = columns)]
     pub fn columns(&self) -> Result<js_sys::Array, JsValue> {

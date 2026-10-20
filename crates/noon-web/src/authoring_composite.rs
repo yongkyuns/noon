@@ -59,6 +59,14 @@ impl WasmCompositeRows {
             .collect()
     }
 
+    /// No row means absent; an empty row preserves an explicitly empty list.
+    pub(crate) fn optional_single_row_targets(
+        &self,
+    ) -> Result<Option<Vec<noon::MobjectTarget<'_>>>, JsValue> {
+        self.single_row_targets()
+            .map(|targets| (!self.rows.is_empty()).then_some(targets))
+    }
+
     pub(crate) fn single_row_targets(&self) -> Result<Vec<noon::MobjectTarget<'_>>, JsValue> {
         if self.rows.len() > 1 {
             return Err(js_error("Composite labels require one row of roots"));

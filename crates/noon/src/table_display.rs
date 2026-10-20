@@ -5,6 +5,7 @@
 //! admission, layout and topology convention.
 
 mod admission;
+mod queries;
 
 use crate::{
     AuthoringError, Color, CompositeEntryHandle, Mobject, MobjectFamily, MobjectTarget, Scene,
@@ -149,6 +150,7 @@ pub enum TableAuthoringError {
         value: f64,
     },
     InvalidStructure,
+    InvalidEntryIndex,
     Text(TextAuthoringError),
     #[cfg(feature = "latex")]
     Numeric(NumericAuthoringError),
@@ -170,6 +172,7 @@ impl std::fmt::Display for TableAuthoringError {
                 f.write_str("top_left_entry requires both row_labels and column_labels")
             }
             Self::InvalidOption { name, value } => write!(f, "invalid table {name}: {value}"),
+            Self::InvalidEntryIndex => f.write_str("range object index out of range"),
             Self::InvalidStructure => f.write_str("semantic family is not a valid Table"),
             Self::Text(error) => error.fmt(f),
             #[cfg(feature = "latex")]
@@ -235,26 +238,41 @@ impl Table {
         let [highlights, entries, lines, labels @ ..] = members.as_slice() else {
             return Err(TableAuthoringError::InvalidStructure);
         };
-        if labels.len() > 3 {
+        let layout = store
+            .borrow()
+            .semantic_table_layout(family.node_id())
+            .map_err(AuthoringError::from)?
+            .ok_or(TableAuthoringError::InvalidStructure)?;
+        let roles = [
+            layout.has_row_labels(),
+            layout.has_column_labels(),
+            layout.has_top_left_entry(),
+        ];
+        if labels.len() != roles.iter().filter(|present| **present).count() {
             return Err(TableAuthoringError::InvalidStructure);
         }
+        let mut labels = labels.iter();
+        let mut next_role = |present: bool| -> Result<Option<MobjectFamily>, TableAuthoringError> {
+            if !present {
+                return Ok(None);
+            }
+            let node = labels
+                .next()
+                .copied()
+                .ok_or(TableAuthoringError::InvalidStructure)?;
+            Ok(Some(MobjectFamily::from_node(Rc::clone(&store), node)?))
+        };
+        let row_label_family = next_role(roles[0])?;
+        let column_label_family = next_role(roles[1])?;
+        let top_left_entry_family = next_role(roles[2])?;
         let entry_family = MobjectFamily::from_node(Rc::clone(&store), *entries)?;
         let table = Self {
             family,
             line_family: MobjectFamily::from_node(Rc::clone(&store), *lines)?,
             highlight_family: MobjectFamily::from_node(Rc::clone(&store), *highlights)?,
-            row_label_family: labels
-                .first()
-                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
-                .transpose()?,
-            column_label_family: labels
-                .get(1)
-                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
-                .transpose()?,
-            top_left_entry_family: labels
-                .get(2)
-                .map(|node| MobjectFamily::from_node(Rc::clone(&store), *node))
-                .transpose()?,
+            row_label_family,
+            column_label_family,
+            top_left_entry_family,
             entry_family,
         };
         table.options()?;
@@ -448,7 +466,8 @@ impl Table {
         Ok(lines.into_iter().skip(horizontal_count).collect())
     }
     fn horizontal_line_count(&self) -> Result<usize, TableAuthoringError> {
-        let (rows, _) = self.shape()?;
+        let grid = self.query_grid()?;
+        let (rows, _) = queries::displayed_shape(&grid);
         let options = self.options()?;
         Ok(usize::from(options.include_outer_lines) * 2
             + if options.include_inner_lines {
@@ -482,51 +501,11 @@ impl Table {
         self.top_left_entry_family.as_ref()
     }
     pub fn shape(&self) -> Result<(usize, usize), TableAuthoringError> {
-        admission::shape_from_family(&self.entry_family)
-    }
-    pub fn get_entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        admission::entries(&self.entry_family)
-    }
-    pub fn entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        self.get_entries()
-    }
-    pub fn rows(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
-        admission::rows(&self.entry_family)
-    }
-    pub fn get_rows(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
-        self.rows()
-    }
-    pub fn columns(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
-        admission::columns(&self.entry_family)
-    }
-    pub fn get_columns(&self) -> Result<Vec<Vec<TableEntry>>, TableAuthoringError> {
-        self.columns()
-    }
-    pub fn get_entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
-        let store = self.entry_family.integration_store();
-        let row = store
-            .borrow()
-            .semantic_family_member_at_checked(self.entry_family.node_id(), row)
-            .map_err(AuthoringError::from)?
-            .ok_or(TableAuthoringError::InvalidStructure)?;
-        let entry = store
-            .borrow()
-            .semantic_family_member_at_checked(row, column)
-            .map_err(AuthoringError::from)?
-            .ok_or(TableAuthoringError::InvalidStructure)?;
-        CompositeEntryHandle::from_node(Rc::clone(store), entry).map_err(Into::into)
-    }
-    pub fn entry(&self, row: usize, column: usize) -> Result<TableEntry, TableAuthoringError> {
-        self.get_entry(row, column)
-    }
-    pub fn row_families(&self) -> Result<Vec<MobjectFamily>, TableAuthoringError> {
-        admission::row_families(&self.entry_family)
-    }
-    pub fn column_families(&self) -> Result<Vec<MobjectFamily>, TableAuthoringError> {
-        admission::column_families(&self.entry_family)
+        let grid = self.query_grid()?;
+        Ok((grid.body_rows().len(), grid.body_rows()[0].len()))
     }
     pub fn get_cell(&self, row: usize, column: usize) -> Result<Mobject, TableAuthoringError> {
-        admission::cell(&self.entry_family, self.options()?, row, column)
+        admission::cell(&self.family, self.options()?, row, column)
     }
     pub fn get_cell_in_live_session(
         &self,
@@ -536,7 +515,7 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         admission::cell_in_publisher(
             TablePublisher::Live(live),
-            &self.entry_family,
+            &self.family,
             self.options()?,
             row,
             column,
@@ -550,7 +529,7 @@ impl Table {
         opacity: f64,
     ) -> Result<Mobject, TableAuthoringError> {
         admission::highlight(
-            &self.entry_family,
+            &self.family,
             &self.highlight_family,
             self.options()?,
             row,
@@ -568,14 +547,7 @@ impl Table {
         color: Color,
         opacity: f64,
     ) -> Result<Mobject, TableAuthoringError> {
-        admission::highlighted_cell(
-            &self.entry_family,
-            self.options()?,
-            row,
-            column,
-            color,
-            opacity,
-        )
+        admission::highlighted_cell(&self.family, self.options()?, row, column, color, opacity)
     }
     pub fn get_highlighted_cell_in_live_session(
         &self,
@@ -587,7 +559,7 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         admission::highlighted_cell_in_publisher(
             TablePublisher::Live(live),
-            &self.entry_family,
+            &self.family,
             self.options()?,
             row,
             column,
@@ -605,7 +577,7 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         admission::highlight_in_publisher(
             TablePublisher::Live(live),
-            &self.entry_family,
+            &self.family,
             &self.highlight_family,
             self.options()?,
             row,
@@ -952,8 +924,7 @@ impl MobjectTable {
         )
         .map(Self)
     }
-    /// Construct a retained MobjectTable with row/column labels and a corner
-    /// entry. The top-left entry requires both label sets, matching ManimCE.
+    /// Construct a retained MobjectTable with both label sets and a corner entry.
     pub fn from_target_rows_with_labels_and_top_left_entry<'a, I, J>(
         scene: &mut Scene,
         rows: I,
@@ -987,6 +958,28 @@ impl MobjectTable {
         row_labels: Vec<MobjectTarget<'a>>,
         column_labels: Vec<MobjectTarget<'a>>,
         top_left_entry: MobjectTarget<'a>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        Self::from_target_rows_with_optional_composite_labels(
+            scene,
+            rows,
+            Some(row_labels),
+            Some(column_labels),
+            Some(top_left_entry),
+            options,
+        )
+    }
+    /// Construct using optional label lists, preserving absent versus empty input.
+    pub fn from_target_rows_with_optional_composite_labels<'a, I, J>(
+        scene: &mut Scene,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError>
     where
@@ -1089,6 +1082,28 @@ impl MobjectTable {
         row_labels: Vec<MobjectTarget<'a>>,
         column_labels: Vec<MobjectTarget<'a>>,
         top_left_entry: MobjectTarget<'a>,
+        options: TableOptions,
+    ) -> Result<Self, TableAuthoringError>
+    where
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = MobjectTarget<'a>>,
+    {
+        Self::from_target_rows_with_optional_composite_labels_in_live_session(
+            live,
+            rows,
+            Some(row_labels),
+            Some(column_labels),
+            Some(top_left_entry),
+            options,
+        )
+    }
+    /// Construct using optional label lists, preserving absent versus empty input.
+    pub fn from_target_rows_with_optional_composite_labels_in_live_session<'a, I, J>(
+        live: &mut crate::LiveSession<'_>,
+        rows: I,
+        row_labels: Option<Vec<MobjectTarget<'a>>>,
+        column_labels: Option<Vec<MobjectTarget<'a>>>,
+        top_left_entry: Option<MobjectTarget<'a>>,
         options: TableOptions,
     ) -> Result<Self, TableAuthoringError>
     where
@@ -1662,6 +1677,228 @@ mod tests {
     }
 
     #[test]
+    fn labeled_queries_include_supplied_corner_and_keep_entry_roots() {
+        fn key(entry: &CompositeEntryHandle) -> (bool, noon_core::SemanticNodeId) {
+            match entry {
+                CompositeEntryHandle::Mobject(object) => (false, object.node_id()),
+                CompositeEntryHandle::Family(family) => (true, family.node_id()),
+            }
+        }
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let row = circle(&store, 0.2);
+        let column = circle(&store, 0.15);
+        let corner = circle(&store, 0.35);
+        let table = MobjectTable::from_target_rows_with_labels_and_top_left_entry(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            vec![row.clone()],
+            vec![column.clone()],
+            corner.clone(),
+            TableOptions::default(),
+        )
+        .unwrap()
+        .into_table();
+
+        let roots = [corner, column, row, entry].map(|object| (false, object.node_id()));
+        assert_eq!(
+            table
+                .get_rows()
+                .unwrap()
+                .iter()
+                .map(|row| row.iter().map(key).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            vec![
+                vec![roots[0].clone(), roots[1].clone()],
+                vec![roots[2].clone(), roots[3].clone()],
+            ]
+        );
+        assert_eq!(
+            table
+                .get_columns()
+                .unwrap()
+                .iter()
+                .map(|column| column.iter().map(key).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            vec![
+                vec![roots[0].clone(), roots[2].clone()],
+                vec![roots[1].clone(), roots[3].clone()],
+            ]
+        );
+        assert_eq!(
+            table
+                .get_entries()
+                .unwrap()
+                .iter()
+                .map(key)
+                .collect::<Vec<_>>(),
+            roots
+        );
+    }
+
+    #[test]
+    fn labeled_missing_corner_is_stable_copied_and_ignored_by_cell_bounds() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let row = circle(&store, 0.2);
+        let column = circle(&store, 0.15);
+        let table = MobjectTable::from_target_rows_with_labels(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            Some(vec![row.clone()]),
+            Some(vec![column.clone()]),
+            TableOptions::default(),
+        )
+        .unwrap()
+        .into_table();
+        let placeholder = match &table.get_rows().unwrap()[0][0] {
+            TableEntry::Mobject(object) => object.clone(),
+            _ => panic!("the missing corner is a VMobject"),
+        };
+        assert!(placeholder.layout_bounds().unwrap().is_none());
+        assert_eq!(
+            table.get_rows().unwrap()[0][0].as_target().node_id(),
+            placeholder.node_id()
+        );
+        assert_eq!(table.get_entries().unwrap().len(), 3);
+        assert_eq!(
+            table.entry_at_position(0, 0).unwrap().as_target().node_id(),
+            entry.node_id()
+        );
+        assert_eq!(
+            table.entry_at_position(1, 1).unwrap().as_target().node_id(),
+            entry.node_id()
+        );
+        let cell = table
+            .get_cell(0, 0)
+            .unwrap()
+            .layout_bounds()
+            .unwrap()
+            .unwrap();
+        let row_bounds = column.layout_bounds().unwrap().unwrap();
+        let column_bounds = row.layout_bounds().unwrap().unwrap();
+        let options = table.options().unwrap();
+        assert!((cell.min_x - (column_bounds.min_x - options.h_buff * 0.5)).abs() < 1e-6);
+        assert!((cell.max_y - (row_bounds.max_y + options.v_buff * 0.5)).abs() < 1e-6);
+        let copied = table.family().copy_family().unwrap();
+        let copied = Table::from_family(copied.root().clone()).unwrap();
+        let copied_corner = copied.get_rows().unwrap()[0][0].as_target().node_id();
+        assert_ne!(copied_corner, placeholder.node_id());
+        assert_eq!(
+            copied.get_rows().unwrap()[0][0].as_target().node_id(),
+            copied_corner
+        );
+        assert_eq!(copied.get_entries().unwrap().len(), 3);
+        assert_eq!(
+            copied.get_cell(0, 0).unwrap().layout_bounds().unwrap(),
+            Some(cell)
+        );
+    }
+
+    #[test]
+    fn labeled_ignored_corner_survives_copy_without_becoming_painted() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let corner = circle(&store, 0.2);
+        let initial = corner.state().unwrap();
+        let table = MobjectTable::from_target_rows_with_optional_composite_labels(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            None::<Vec<MobjectTarget<'_>>>,
+            None::<Vec<MobjectTarget<'_>>>,
+            Some(MobjectTarget::from(&corner)),
+            TableOptions::default(),
+        )
+        .unwrap()
+        .into_table();
+        assert!(table.top_left_entry_family().is_none());
+        assert_eq!(corner.state().unwrap(), initial);
+        assert_eq!(
+            table.get_labels().unwrap()[0].as_target().node_id(),
+            corner.node_id()
+        );
+        assert_eq!(table.get_entries().unwrap().len(), 1);
+        let copied = table.family().copy_family().unwrap();
+        let copied = Table::from_family(copied.root().clone()).unwrap();
+        let labels = copied.get_labels().unwrap();
+        assert_ne!(labels[0].as_target().node_id(), corner.node_id());
+        assert_eq!(copied.get_entries().unwrap().len(), 1);
+        assert!(copied.top_left_entry_family().is_none());
+        assert!(!store
+            .borrow()
+            .ordered_leaf_nodes(copied.family().node_id())
+            .unwrap()
+            .contains(&labels[0].as_target().node_id()));
+    }
+
+    #[test]
+    fn labeled_column_headers_are_counted_as_horizontal_grid_lines() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let first = circle(&store, 0.5);
+        let second = circle(&store, 0.4);
+        let third = circle(&store, 0.3);
+        let fourth = circle(&store, 0.2);
+        let table = MobjectTable::from_target_rows_with_labels(
+            &mut scene,
+            vec![
+                vec![(&first).into(), (&second).into()],
+                vec![(&third).into(), (&fourth).into()],
+            ],
+            None,
+            Some(vec![circle(&store, 0.15), circle(&store, 0.1)]),
+            TableOptions::default(),
+        )
+        .unwrap()
+        .into_table();
+        let horizontal = table.get_horizontal_lines().unwrap();
+        let vertical = table.get_vertical_lines().unwrap();
+        assert_eq!((horizontal.len(), vertical.len()), (2, 1));
+        for line in horizontal {
+            let bounds = line.layout_bounds().unwrap().unwrap();
+            assert!(bounds.width() > 0.0);
+            assert_eq!(bounds.height(), 0.0);
+        }
+        for line in vertical {
+            let bounds = line.layout_bounds().unwrap().unwrap();
+            assert_eq!(bounds.width(), 0.0);
+            assert!(bounds.height() > 0.0);
+        }
+    }
+
+    #[test]
+    fn labeled_column_only_roles_survive_rehydration_and_copy() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let entry = circle(&store, 0.5);
+        let column = circle(&store, 0.15);
+        let table = MobjectTable::from_target_rows_with_labels(
+            &mut scene,
+            vec![vec![MobjectTarget::from(&entry)]],
+            None,
+            Some(vec![column]),
+            TableOptions::default(),
+        )
+        .unwrap()
+        .into_table();
+        assert!(table.row_label_family().is_none());
+        assert!(table.column_label_family().is_some());
+        let restored = Table::from_family(table.family().clone()).unwrap();
+        assert!(restored.row_label_family().is_none());
+        assert_eq!(
+            restored.column_label_family().unwrap().node_id(),
+            table.column_label_family().unwrap().node_id()
+        );
+        let copied = table.family().copy_family().unwrap();
+        let copied = Table::from_family(copied.root().clone()).unwrap();
+        assert!(copied.row_label_family().is_none());
+        assert!(copied.column_label_family().is_some());
+    }
+
+    #[test]
     fn mobject_table_top_left_entry_uses_corner_cell_and_keeps_identity() {
         let mut scene = Scene::new();
         let store = Rc::clone(scene.integration_store());
@@ -2112,7 +2349,8 @@ mod tests {
         let entries = table.rows().unwrap();
         let entry_bounds = entries
             .iter()
-            .map(|row| match &row[0] {
+            .skip(1)
+            .map(|row| match &row[1] {
                 TableEntry::Mobject(object) => object.layout_bounds().unwrap().unwrap(),
                 TableEntry::Family(family) => family.layout_bounds().unwrap().unwrap(),
             })

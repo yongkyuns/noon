@@ -27,8 +27,26 @@ class _TableHandle:
     def entries(self):
         return [self.a, self.b, self.c, self.d]
 
-    def entryAt(self, row, column):
+    def entryAtPosition(self, row, column):
         return self.entries()[row * 2 + column]
+
+    def bodyEntries(self):
+        return [self.a, self.b, self.c, self.d]
+
+    def bodyEntryAtPosition(self, row, column):
+        return self.bodyEntries()[row * 2 + column]
+
+    def rows(self):
+        return [[self.a, self.b], [self.c, self.d]]
+
+    def rowLabels(self):
+        return []
+
+    def columnLabels(self):
+        return []
+
+    def labels(self):
+        return []
 
     def columns(self):
         return [[self.a, self.c], [self.b, self.d]]
@@ -95,6 +113,7 @@ class TableFacadeTests(unittest.TestCase):
         self.context = _Context(self.handle)
 
         def attach_family(wrapper, _handle, context):
+            wrapper._semantic_member_wrappers = {}
             wrapper._semantic_family_handle = _handle
             wrapper._canonical_live_target_context = context
             return wrapper
@@ -157,7 +176,8 @@ class TableFacadeTests(unittest.TestCase):
                 raise AssertionError("a local entry lookup traversed an unrelated row")
         value._entry_family = lambda: types.SimpleNamespace(
             submobjects=[UnrelatedRow(), types.SimpleNamespace(submobjects=[leaf])])
-        with patch.object(self.handle, "entryAt", return_value=self.handle.c), \
+        value._table_query_wrappers["2:1"] = leaf
+        with patch.object(self.handle, "entryAtPosition", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
 
@@ -175,18 +195,25 @@ class TableFacadeTests(unittest.TestCase):
         self.assertEqual(horizontal.submobjects, lines[:2])
         self.assertEqual(vertical.submobjects, lines[2:])
 
-    def test_label_queries_keep_manims_group_order_and_original_wrappers(self):
+    def test_label_queries_keep_rust_group_order_and_original_wrappers(self):
         value = table.Table([["a"]])
-        row = object()
-        column = object()
-        corner = object()
-        value.row_labels = [row]
-        value.col_labels = [column]
-        value.top_left_entry = corner
+        row, column, corner = (_FakeMobject(index) for index in (5, 6, 7))
+        with patch.object(table._base, "Mobject", _FakeMobject):
+            value._remember_query_wrappers([row, column, corner])
+        with patch.object(self.handle, "rowLabels", return_value=[row._semantic_handle]), \
+                patch.object(self.handle, "columnLabels", return_value=[column._semantic_handle]), \
+                patch.object(self.handle, "labels", return_value=[corner._semantic_handle, column._semantic_handle, row._semantic_handle]):
+            self.assertEqual(value.get_row_labels().submobjects, [row])
+            self.assertEqual(value.get_col_labels().submobjects, [column])
+            self.assertEqual(value.get_labels().submobjects, [corner, column, row])
 
-        self.assertEqual(value.get_row_labels().submobjects, [row])
-        self.assertEqual(value.get_col_labels().submobjects, [column])
-        self.assertEqual(value.get_labels().submobjects, [corner, column, row])
+    def test_constructor_distinguishes_absent_and_empty_labels_at_bridge(self):
+        with patch.object(table.Table, "_initialize_table"), \
+                patch.object(table.Table, "submobjects", new_callable=PropertyMock, return_value=[None, None, None, types.SimpleNamespace()]):
+            table.Table([["a"]], row_labels=[])
+        args = self.context.calls[-1][1]
+        self.assertEqual(args[1], [])
+        self.assertIsNone(args[2])
 
     def test_absent_label_queries_return_empty_groups(self):
         value = table.Table([["a"]])
@@ -225,89 +252,35 @@ class TableFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 0 and 12"):
             table._decimal_format({"num_decimal_places": 13})
 
-    def test_entry_queries_match_manims_display_grid_and_body_only_access(self):
+    def test_grid_queries_wrap_rust_membership_without_reading_python_labels(self):
         value = table.Table([["a", "b"], ["c", "d"]])
-        wrappers = [
-            types.SimpleNamespace(_semantic_handle=handle)
-            for handle in self.handle.entries()
-        ]
-        value._entry_family = lambda: types.SimpleNamespace(submobjects=[
-            types.SimpleNamespace(submobjects=wrappers[:2]),
-            types.SimpleNamespace(submobjects=wrappers[2:]),
-        ])
-        row_labels = [object(), object()]
-        column_labels = [object(), object()]
-        corner = object()
-        value.row_labels = row_labels
-        value.col_labels = column_labels
-        value.top_left_entry = corner
+        wrappers = [types.SimpleNamespace(_semantic_handle=raw) for raw in self.handle.entries()]
+        value._table_query_wrappers = {f"{index}:1": wrapper for index, wrapper in enumerate(wrappers)}
+        # The host attributes are deliberately unrelated to Rust's observations.
+        value.row_labels, value.col_labels, value.top_left_entry = [object()], [object()], object()
+        with patch.object(self.handle, "rows", return_value=[[self.handle.d, self.handle.a], [self.handle.c]]), \
+                patch.object(self.handle, "columns", return_value=[[self.handle.b], [self.handle.a, self.handle.d]]), \
+                patch.object(self.handle, "entries", return_value=[self.handle.c, self.handle.a]), \
+                patch.object(self.handle, "bodyEntries", return_value=[self.handle.b]), \
+                patch.object(self.handle, "entryAtPosition", return_value=self.handle.d) as select, \
+                patch.object(self.handle, "bodyEntryAtPosition", return_value=self.handle.b) as select_body:
+            self.assertEqual([row.submobjects for row in value.get_rows().submobjects], [[wrappers[3], wrappers[0]], [wrappers[2]]])
+            self.assertEqual([column.submobjects for column in value.get_columns().submobjects], [[wrappers[1]], [wrappers[0], wrappers[3]]])
+            self.assertEqual(value.get_entries().submobjects, [wrappers[2], wrappers[0]])
+            self.assertEqual(value.get_entries_without_labels().submobjects, [wrappers[1]])
+            self.assertIs(value.get_entries((0, -1)), wrappers[3])
+            select.assert_called_once_with(-1, -2)
+            self.assertIs(value.get_entries_without_labels((2, 1)), wrappers[1])
+            select_body.assert_called_once_with(1, 0)
 
-        entries = value.get_entries().submobjects
-        self.assertEqual(
-            entries,
-            [corner, *column_labels, row_labels[0], *wrappers[:2], row_labels[1], *wrappers[2:]],
-        )
-        self.assertIs(value.get_entries((1, 1)), corner)
-        self.assertIs(value.get_entries((2, 2)), wrappers[0])
-        self.assertEqual(value.get_entries_without_labels().submobjects, wrappers)
-        self.assertIs(value.get_entries_without_labels((1, 1)), wrappers[0])
-        self.assertEqual(
-            [row.submobjects for row in value.get_rows().submobjects],
-            [[corner, *column_labels], [row_labels[0], *wrappers[:2]], [row_labels[1], *wrappers[2:]]],
-        )
-        self.assertEqual(
-            [column.submobjects for column in value.get_columns().submobjects],
-            [[corner, *row_labels], [column_labels[0], wrappers[0], wrappers[2]],
-             [column_labels[1], wrappers[1], wrappers[3]]],
-        )
-
-    def test_missing_top_left_placeholder_matches_manims_flat_entry_indexing(self):
-        value = table.Table([["a", "b"], ["c", "d"]])
-        wrappers = [types.SimpleNamespace(_semantic_handle=handle) for handle in self.handle.entries()]
-        value._entry_family = lambda: types.SimpleNamespace(submobjects=[
-            types.SimpleNamespace(submobjects=wrappers[:2]),
-            types.SimpleNamespace(submobjects=wrappers[2:]),
-        ])
-        value.row_labels = [object(), object()]
-        value.col_labels = [object(), object()]
-        value.top_left_entry = None
-
-        self.assertEqual(len(value.get_entries().submobjects), 8)
-        self.assertIsInstance(value.get_rows().submobjects[0].submobjects[0], types.SimpleNamespace)
-        self.assertIs(value.get_entries((1, 1)), wrappers[-1])
-
-    def test_single_axis_labels_expand_only_the_matching_display_dimension(self):
-        wrappers = [types.SimpleNamespace(_semantic_handle=handle) for handle in self.handle.entries()]
-        body_rows = [
-            types.SimpleNamespace(submobjects=wrappers[:2]),
-            types.SimpleNamespace(submobjects=wrappers[2:]),
-        ]
-        row_labels = [object(), object()]
-        row_labeled = table.Table([["a", "b"], ["c", "d"]])
-        row_labeled._entry_family = lambda: types.SimpleNamespace(submobjects=body_rows)
-        row_labeled.row_labels = row_labels
-        rows = row_labeled.get_rows().submobjects
-        columns = row_labeled.get_columns().submobjects
-        self.assertEqual([row.submobjects for row in rows], [
-            [row_labels[0], *wrappers[:2]], [row_labels[1], *wrappers[2:]],
-        ])
-        self.assertEqual([column.submobjects for column in columns], [
-            row_labels, [wrappers[0], wrappers[2]], [wrappers[1], wrappers[3]],
-        ])
-
-        column_labels = [object(), object()]
-        column_labeled = table.Table([["a", "b"], ["c", "d"]])
-        column_labeled._entry_family = lambda: types.SimpleNamespace(submobjects=body_rows)
-        column_labeled.col_labels = column_labels
-        rows = column_labeled.get_rows().submobjects
-        columns = column_labeled.get_columns().submobjects
-        self.assertEqual([row.submobjects for row in rows], [
-            column_labels, wrappers[:2], wrappers[2:],
-        ])
-        self.assertEqual([column.submobjects for column in columns], [
-            [column_labels[0], wrappers[0], wrappers[2]],
-            [column_labels[1], wrappers[1], wrappers[3]],
-        ])
+    def test_missing_corner_query_creates_one_stable_vmobject_wrapper(self):
+        value = table.Table([["a"]])
+        placeholder = _Handle(8)
+        with patch.object(self.handle, "rows", return_value=[[placeholder, self.handle.a]]):
+            first = value.get_rows().submobjects[0].submobjects[0]
+            self.assertIsInstance(first, table._compat.VMobject)
+            self.assertIs(value.get_rows().submobjects[0].submobjects[0], first)
+            self.assertIs(first._semantic_handle, placeholder)
 
     def test_mobject_table_row_and_column_labels_preserve_wrappers(self):
         entry = _FakeMobject(1)
@@ -335,6 +308,7 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(table, "_create_mobject_table", side_effect=create), \
                 patch.object(table, "_live_constructor_context", return_value=context), \
                 patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_semantic_member_wrappers", {}),
                     setattr(wrapper, "_test_submobjects", family.submobjects),
                     setattr(wrapper, "_canonical_live_target_context", context),
                 )), \
@@ -380,6 +354,7 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(table, "_create_mobject_table", side_effect=create), \
                 patch.object(table, "_live_constructor_context", return_value=context), \
                 patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_semantic_member_wrappers", {}),
                     setattr(wrapper, "_test_submobjects", family.submobjects),
                     setattr(wrapper, "_canonical_live_target_context", context),
                 )), \
@@ -459,13 +434,16 @@ class TableFacadeTests(unittest.TestCase):
             self.assertIs(kwargs["element_to_mobject"], converter)
             self.assertEqual(kwargs["element_to_mobject_config"]["marker"], constructor.__name__)
 
-    def test_mobject_table_top_left_entry_requires_both_label_sets(self):
-        entry = _FakeMobject(1)
-        top_left_entry = _FakeMobject(2)
+    def test_mobject_table_forwards_ignored_corner_identity_to_rust(self):
+        entry, corner = _FakeMobject(1), _FakeMobject(2)
+        handle = _MobjectTableHandle([], [], [entry])
         with patch.object(table._base, "Mobject", _FakeMobject), \
-                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
-            with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
-                table.MobjectTable([[entry]], top_left_entry=top_left_entry)
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle), \
+                patch.object(table, "_create_mobject_table", return_value=handle) as create, \
+                patch.object(table.MobjectTable, "submobjects", new_callable=PropertyMock, return_value=handle._family.submobjects):
+            value = table.MobjectTable([[entry]], top_left_entry=corner)
+        self.assertEqual(create.call_args.args[3], [corner._semantic_handle])
+        self.assertIs(value.top_left_entry, corner)
 
     def test_table_row_column_and_corner_labels_retain_shared_wrappers(self):
         row_label = _FakeMobject(1)
@@ -499,6 +477,7 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(table, "_create_table_with_labels", side_effect=create), \
                 patch.object(table, "_live_constructor_context", return_value=context), \
                 patch.object(table, "_attach_shared_family", side_effect=lambda wrapper, family, _context: (
+                    setattr(wrapper, "_semantic_member_wrappers", {}),
                     setattr(wrapper, "_test_submobjects", family.submobjects),
                     setattr(wrapper, "_canonical_live_target_context", context),
                 )), \
@@ -523,9 +502,13 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(value._test_submobjects[4]._semantic_member_wrappers["2:1"], column_label)
         self.assertIs(value._test_submobjects[5]._semantic_member_wrappers["3:1"], top_left_entry)
 
-    def test_table_top_left_entry_requires_both_label_sets(self):
-        with self.assertRaisesRegex(ValueError, "requires both row_labels and col_labels"):
-            table.Table([["a"]], top_left_entry=_FakeMobject(1))
+    def test_table_forwards_ignored_corner_identity_to_rust(self):
+        corner = _FakeMobject(1)
+        with patch.object(table._base, "Mobject", _FakeMobject), \
+                patch.object(table, "_handle_for", side_effect=lambda value: value._semantic_handle):
+            value = table.Table([["a"]], top_left_entry=corner)
+        self.assertEqual(self.context.calls[0][1][3], [corner._semantic_handle])
+        self.assertIs(value.top_left_entry, corner)
 
     def test_mobject_table_accepts_family_labels_and_rejects_unshared_labels(self):
         with patch.object(table._base, "Mobject", _FakeMobject), \

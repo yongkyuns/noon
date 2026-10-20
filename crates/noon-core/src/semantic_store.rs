@@ -1183,7 +1183,7 @@ impl SemanticStore {
         if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(scope));
         }
-        Ok(self.table_layouts.get(&scope).copied())
+        Ok(self.table_layouts.get(&scope).cloned())
     }
     pub(crate) fn replace_semantic_table_layout(
         &mut self,
@@ -1196,7 +1196,9 @@ impl SemanticStore {
         if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(scope));
         }
+        self.unregister_semantic_references_for_owner(scope);
         self.table_layouts.insert(scope, layout);
+        self.register_semantic_references_for_owner(scope);
         Ok(())
     }
 

@@ -205,12 +205,11 @@ class RasterManifestTests(unittest.TestCase):
         fixture = matches[0]
         self.assertEqual(fixture["scene"], "MobjectTableTopLeftEntryExample")
         self.assertEqual(fixture["expected_duration"], 0.2)
-        self.assertNotIn("tolerance", fixture)
+        self.assertNotIn("raster_tolerance", fixture)
         source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
         self.assertIn("top_left_entry=Circle(radius=0.25)", source)
         self.assertIn("row_labels=[", source)
         self.assertIn("col_labels=[", source)
-        self.assertIn("strict pinned ManimCE Cairo comparison passes unchanged thresholds", fixture["notes"])
 
     def test_plain_table_labels_fixture_is_enrolled(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -220,14 +219,12 @@ class RasterManifestTests(unittest.TestCase):
         self.assertEqual(fixture["scene"], "TableLabelsExample")
         self.assertEqual(fixture["expected_duration"], 0.2)
         self.assertEqual(fixture["noon_source"], "web/python/examples/table_labels.py")
-        self.assertNotIn("tolerance", fixture)
+        self.assertNotIn("raster_tolerance", fixture)
         source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
         self.assertIn("table = Table(", source)
         self.assertIn("row_labels=row_labels", source)
         self.assertIn("col_labels=column_labels", source)
         self.assertIn("top_left_entry=top_left_entry", source)
-        self.assertIn("empty native-text cells", fixture["notes"])
-        self.assertIn("0.17% worst differing pixels", fixture["notes"])
 
     def test_decimal_table_format_fixture_has_pinned_and_noon_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

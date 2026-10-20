@@ -395,8 +395,8 @@ async function initializePyodide() {
   self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     return context.liveCreateTableWithLabels(
       Array.from(rows, row => Array.from(row)),
-      compositeRows(rowLabels.length ? [rowLabels] : []),
-      compositeRows(columnLabels.length ? [columnLabels] : []),
+      compositeRows(rowLabels == null ? [] : [rowLabels]),
+      compositeRows(columnLabels == null ? [] : [columnLabels]),
       compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
       tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY));
   };
@@ -417,8 +417,8 @@ async function initializePyodide() {
   };
   self.noonCreateAuthoringMobjectTableHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const entries = compositeRows(rows);
-    const rowLabelEntries = compositeRows(rowLabels.length ? [rowLabels] : []);
-    const columnLabelEntries = compositeRows(columnLabels.length ? [columnLabels] : []);
+    const rowLabelEntries = compositeRows(rowLabels == null ? [] : [rowLabels]);
+    const columnLabelEntries = compositeRows(columnLabels == null ? [] : [columnLabels]);
     const topLeftEntryRows = compositeRows(topLeftEntry.length ? [topLeftEntry] : []);
     return context.liveCreateMobjectTableWithLabels(
       entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,

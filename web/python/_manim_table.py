@@ -228,10 +228,6 @@ class Table(_compat.VGroup):
             row_label_mobjects = list(row_label_mobjects)
         if column_label_mobjects is not None:
             column_label_mobjects = list(column_label_mobjects)
-        if top_left_entry is not None and (
-            row_label_mobjects is None or column_label_mobjects is None
-        ):
-            raise ValueError("top_left_entry requires both row_labels and col_labels")
         if _create_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         context = _live_constructor_context("Table", allow_unstarted=True)
@@ -241,8 +237,8 @@ class Table(_compat.VGroup):
             handle = engine_call(
                 _create_table_with_labels,
                 _rows(table, str),
-                [_label_handle(value) for value in row_label_mobjects or []],
-                [_label_handle(value) for value in column_label_mobjects or []],
+                None if row_label_mobjects is None else [_label_handle(value) for value in row_label_mobjects],
+                None if column_label_mobjects is None else [_label_handle(value) for value in column_label_mobjects],
                 [_label_handle(top_left_entry)] if top_left_entry is not None else [],
                 *_options(kwargs),
                 context,
@@ -261,11 +257,12 @@ class Table(_compat.VGroup):
                     _family_wrapper_key(value): value for value in labels
                 }
                 family_index += 1
-        if top_left_entry is not None:
+        if top_left_entry is not None and row_label_mobjects and column_label_mobjects:
             top_left_family = self.submobjects[family_index]
             top_left_family._semantic_member_wrappers = {
                 _family_wrapper_key(top_left_entry): top_left_entry
             }
+        self._remember_query_wrappers([*(row_label_mobjects or []), *(column_label_mobjects or []), top_left_entry])
 
     @staticmethod
     def _label_handle(value):
@@ -273,6 +270,7 @@ class Table(_compat.VGroup):
 
     def _initialize_table(self, handle, context):
         self._table_handle = handle
+        self._table_query_wrappers = {}
         self._horizontal_lines_cache = None
         self._vertical_lines_cache = None
         if not hasattr(self, "row_labels"):
@@ -282,6 +280,8 @@ class Table(_compat.VGroup):
         if not hasattr(self, "top_left_entry"):
             self.top_left_entry = None
         _attach_shared_family(self, engine_call(handle.family), context)
+        self._remember_query_wrappers(self._semantic_member_wrappers.values())
+        self._remember_query_wrappers([*(self.row_labels or []), *(self.col_labels or []), self.top_left_entry])
 
     def _rehydrate_semantic_family_handle(self):
         if _table_from_family is None:
@@ -291,59 +291,63 @@ class Table(_compat.VGroup):
             getattr(self, "_canonical_live_target_context", None),
         )
 
-    def _get_entries_without_labels(self, pos=None):
-        if pos is not None:
-            row, column = _cell_position(pos)
-            handle = engine_call(self._table_handle.entryAt, row, column)
-            # Observe only the addressed row's identity registry. Asking for one
-            # entry must not enumerate every entry in the table.
-            known = {
-                _family_wrapper_key(item): item
-                for item in self._entry_family().submobjects[row].submobjects
-            }
-            return known[_handle_key(handle)]
-        entries = list(engine_call(self._table_handle.entries))
-        known = {
-            _family_wrapper_key(item): item
-            for row in self._entry_family().submobjects
-            for item in row.submobjects
-        }
-        return _compat.VGroup(*[known[_handle_key(item)] for item in entries])
+    def _remember_query_wrappers(self, values):
+        # This registry preserves language wrapper identity; Rust supplies every
+        # membership, order, position and layout observation.
+        stack = list(values)
+        seen = set()
+        while stack:
+            value = stack.pop()
+            if not isinstance(value, _base.Mobject) or id(value) in seen:
+                continue
+            seen.add(id(value))
+            self._table_query_wrappers[_family_wrapper_key(value)] = value
+            stack.extend(getattr(value, "_semantic_member_wrappers", {}).values())
 
-    def _rows_with_labels(self):
-        rows = [list(row.submobjects) for row in self._entry_family().submobjects]
-        if self.row_labels:
-            rows = [[label, *row] for label, row in zip(self.row_labels, rows)]
-        if self.col_labels:
-            if self.row_labels:
-                corner = self.top_left_entry
-                if corner is None:
-                    corner = _compat.VGroup()
-                rows.insert(0, [corner, *self.col_labels])
-            else:
-                rows.insert(0, list(self.col_labels))
-        return rows
+    def _query_entry_wrapper(self, handle):
+        key = _handle_key(handle)
+        wrapper = self._table_query_wrappers.get(key)
+        if wrapper is not None:
+            return wrapper
+        context = getattr(self, "_canonical_live_target_context", None)
+        if hasattr(handle, "memberKeys"):
+            wrapper = object.__new__(_compat.VGroup)
+            _attach_shared_family(wrapper, handle, context)
+        else:
+            wrapper = object.__new__(_compat.VMobject)
+            _attach_shared_handle(wrapper, handle)
+            if context is not None:
+                wrapper._canonical_live_target_context = context
+        self._remember_query_wrappers([wrapper])
+        return wrapper
+
+    def _query_entries(self, method):
+        return _compat.VGroup(*[
+            self._query_entry_wrapper(handle)
+            for handle in engine_call(getattr(self._table_handle, method))
+        ])
+
+    @staticmethod
+    def _entry_position(pos):
+        row, column = pos
+        row, column = _index(row) - 1, _index(column) - 1
+        if not (-2**31 <= row < 2**31 and -2**31 <= column < 2**31):
+            raise IndexError("range object index out of range")
+        return row, column
 
     def get_entries_without_labels(self, pos=None):
-        """Return body entries without any row, column, or corner labels."""
-        return self._get_entries_without_labels(pos)
+        if pos is None:
+            return self._query_entries("bodyEntries")
+        return self._query_entry_wrapper(engine_call(
+            self._table_handle.bodyEntryAtPosition, *self._entry_position(pos)
+        ))
 
     def get_entries(self, pos=None):
-        """Return entries in ManimCE's displayed grid, including supplied labels."""
-        if not (self.row_labels or self.col_labels):
-            return self._get_entries_without_labels(pos)
-
-        rows = self._rows_with_labels()
-        entries = [item for row in rows for item in row]
-        missing_corner = bool(self.row_labels and self.col_labels) and self.top_left_entry is None
-        if missing_corner:
-            # ManimCE drops its empty grid placeholder from ``elements``.
-            entries.pop(0)
-        if pos is not None:
-            row, column = _cell_position(pos)
-            index = len(rows[0]) * row + column - int(missing_corner)
-            return entries[index]
-        return _compat.VGroup(*entries)
+        if pos is None:
+            return self._query_entries("entries")
+        return self._query_entry_wrapper(engine_call(
+            self._table_handle.entryAtPosition, *self._entry_position(pos)
+        ))
 
     def _entry_family(self):
         return self.submobjects[1]
@@ -370,50 +374,26 @@ class Table(_compat.VGroup):
     def get_vertical_lines(self):
         return self._line_group("getVerticalLines", "_vertical_lines_cache")
 
-    def get_rows(self):
+    def _query_grid(self, method):
         return _compat.VGroup(*[
-            _compat.VGroup(*row)
-            for row in self._rows_with_labels()
+            _compat.VGroup(*[self._query_entry_wrapper(handle) for handle in row])
+            for row in engine_call(getattr(self._table_handle, method))
         ])
 
+    def get_rows(self):
+        return self._query_grid("rows")
+
     def get_columns(self):
-        known = {
-            _family_wrapper_key(item): item
-            for row in self._entry_family().submobjects
-            for item in row.submobjects
-        }
-        columns = [
-            [known[_handle_key(item)] for item in column]
-            for column in engine_call(self._table_handle.columns)
-        ]
-        if self.col_labels:
-            columns = [
-                [label, *column]
-                for label, column in zip(self.col_labels, columns)
-            ]
-        if self.row_labels:
-            label_column = list(self.row_labels)
-            if self.col_labels:
-                corner = self.top_left_entry
-                if corner is None:
-                    corner = _compat.VGroup()
-                label_column.insert(0, corner)
-            columns.insert(0, label_column)
-        return _compat.VGroup(*[_compat.VGroup(*column) for column in columns])
+        return self._query_grid("columns")
 
     def get_row_labels(self):
-        return _compat.VGroup(*(self.row_labels or []))
+        return self._query_entries("rowLabels")
 
     def get_col_labels(self):
-        return _compat.VGroup(*(self.col_labels or []))
+        return self._query_entries("columnLabels")
 
     def get_labels(self):
-        labels = []
-        if self.top_left_entry is not None:
-            labels.append(self.top_left_entry)
-        labels.extend(self.col_labels or [])
-        labels.extend(self.row_labels or [])
-        return _compat.VGroup(*labels)
+        return self._query_entries("labels")
 
     def _rectangle_wrapper(self, handle):
         wrapper = object.__new__(_compat.Rectangle)
@@ -519,11 +499,13 @@ class MobjectTable(Table):
             raise TypeError("MobjectTable element_to_mobject must be callable")
         if not isinstance(element_to_mobject_config, dict):
             raise TypeError("element_to_mobject_config must be a dict")
-        row_label_mobjects = list(kwargs.pop("row_labels", None) or [])
-        column_label_mobjects = list(kwargs.pop("col_labels", None) or [])
+        row_label_mobjects = kwargs.pop("row_labels", None)
+        column_label_mobjects = kwargs.pop("col_labels", None)
+        if row_label_mobjects is not None:
+            row_label_mobjects = list(row_label_mobjects)
+        if column_label_mobjects is not None:
+            column_label_mobjects = list(column_label_mobjects)
         top_left_entry = kwargs.pop("top_left_entry", None)
-        if top_left_entry is not None and (not row_label_mobjects or not column_label_mobjects):
-            raise ValueError("top_left_entry requires both row_labels and col_labels")
         if _create_mobject_table is None:
             raise RuntimeError("MobjectTable requires Noon’s shared Rust authoring runtime")
         source_rows = [
@@ -540,8 +522,8 @@ class MobjectTable(Table):
             if semantic is None:
                 raise TypeError("MobjectTable entries require current shared semantic identities")
             return semantic
-        row_labels = [self._label_handle(value) for value in row_label_mobjects]
-        column_labels = [self._label_handle(value) for value in column_label_mobjects]
+        row_labels = None if row_label_mobjects is None else [self._label_handle(value) for value in row_label_mobjects]
+        column_labels = None if column_label_mobjects is None else [self._label_handle(value) for value in column_label_mobjects]
         top_left_entry_handle = (
             self._label_handle(top_left_entry) if top_left_entry is not None else None
         )
@@ -558,13 +540,14 @@ class MobjectTable(Table):
             ),
             context,
         )
-        self.row_labels = row_label_mobjects or None
-        self.col_labels = column_label_mobjects or None
+        self.row_labels = row_label_mobjects
+        self.col_labels = column_label_mobjects
         self.top_left_entry = top_left_entry
         for row_group, row in zip(self._entry_family().submobjects, source_rows):
             row_group._semantic_member_wrappers = {
                 _family_wrapper_key(value): value for value in row
             }
+        self._remember_query_wrappers(value for row in source_rows for value in row)
         family_index = 3
         for labels in (row_label_mobjects, column_label_mobjects):
             if labels:
@@ -573,11 +556,12 @@ class MobjectTable(Table):
                     _family_wrapper_key(value): value for value in labels
                 }
                 family_index += 1
-        if top_left_entry is not None:
+        if top_left_entry is not None and row_label_mobjects and column_label_mobjects:
             top_left_family = self.submobjects[family_index]
             top_left_family._semantic_member_wrappers = {
                 _family_wrapper_key(top_left_entry): top_left_entry
             }
+        self._remember_query_wrappers([*(row_label_mobjects or []), *(column_label_mobjects or []), top_left_entry])
 
     @staticmethod
     def _label_handle(value):

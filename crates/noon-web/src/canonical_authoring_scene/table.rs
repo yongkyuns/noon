@@ -116,10 +116,8 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows, "Table")?;
-        let row_labels = row_labels.single_row_targets()?;
-        let column_labels = column_labels.single_row_targets()?;
-        let row_labels = (!row_labels.is_empty()).then_some(row_labels);
-        let column_labels = (!column_labels.is_empty()).then_some(column_labels);
+        let row_labels = row_labels.optional_single_row_targets()?;
+        let column_labels = column_labels.optional_single_row_targets()?;
         let mut top_left_entries = top_left_entry.single_row_targets()?;
         let top_left_entry = match top_left_entries.len() {
             0 => None,
@@ -130,11 +128,6 @@ impl CanonicalAuthoringSceneContext {
                 ))
             }
         };
-        if top_left_entry.is_some() && (row_labels.is_none() || column_labels.is_none()) {
-            return Err(js_error(
-                "top_left_entry requires both row_labels and col_labels",
-            ));
-        }
         if self.inner.player_ownership.is_unstarted() {
             noon::Table::from_rows_with_composite_labels(
                 &mut self.inner.scene,
@@ -286,10 +279,8 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
-        let row_labels = row_labels.single_row_targets()?;
-        let column_labels = column_labels.single_row_targets()?;
-        let row_labels = (!row_labels.is_empty()).then_some(row_labels);
-        let column_labels = (!column_labels.is_empty()).then_some(column_labels);
+        let row_labels = row_labels.optional_single_row_targets()?;
+        let column_labels = column_labels.optional_single_row_targets()?;
         let mut top_left_entries = top_left_entry.single_row_targets()?;
         let top_left_entry = match top_left_entries.len() {
             0 => None,
@@ -300,44 +291,13 @@ impl CanonicalAuthoringSceneContext {
                 ))
             }
         };
-        if let Some(top_left_entry) = top_left_entry {
-            let row_labels = row_labels.ok_or_else(|| {
-                js_error("top_left_entry requires both row_labels and col_labels")
-            })?;
-            let column_labels = column_labels.ok_or_else(|| {
-                js_error("top_left_entry requires both row_labels and col_labels")
-            })?;
-            if self.inner.player_ownership.is_unstarted() {
-                noon::MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry(
-                    &mut self.inner.scene,
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options.options,
-                )
-                .map(|value| WasmTableHandle::new(value.into_table()))
-                .map_err(js_error)
-            } else {
-                self.inner
-                    .active_live_player()
-                    .map_err(js_error)?
-                    .live_create_mobject_table_with_labels_and_top_left_entry(
-                        rows,
-                        row_labels,
-                        column_labels,
-                        top_left_entry,
-                        options.options,
-                    )
-                    .map(|value| WasmTableHandle::new(value.into_table()))
-                    .map_err(js_error)
-            }
-        } else if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectTable::from_target_rows_with_composite_labels(
+        if self.inner.player_ownership.is_unstarted() {
+            noon::MobjectTable::from_target_rows_with_optional_composite_labels(
                 &mut self.inner.scene,
                 rows,
                 row_labels,
                 column_labels,
+                top_left_entry,
                 options.options,
             )
             .map(|value| WasmTableHandle::new(value.into_table()))
@@ -346,10 +306,11 @@ impl CanonicalAuthoringSceneContext {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_create_mobject_table_with_labels(
+                .live_create_mobject_table_with_labels_and_top_left_entry(
                     rows,
                     row_labels,
                     column_labels,
+                    top_left_entry,
                     options.options,
                 )
                 .map(|value| WasmTableHandle::new(value.into_table()))

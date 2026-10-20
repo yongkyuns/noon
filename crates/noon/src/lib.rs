@@ -341,7 +341,7 @@ pub use svg_default_style::SvgDefaultStyle;
 pub use table_display::{DecimalTable, IntegerTable, MathTable};
 #[cfg(any(feature = "native-text", feature = "latex"))]
 pub use table_display::{
-    MobjectTable, Table, TableAuthoringError, TableOptions, DEFAULT_TABLE_H_BUFF,
+    MobjectTable, Table, TableAuthoringError, TableEntry, TableOptions, DEFAULT_TABLE_H_BUFF,
     DEFAULT_TABLE_LABEL_BUFF, DEFAULT_TABLE_V_BUFF,
 };
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]

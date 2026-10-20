@@ -1738,6 +1738,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
                 SemanticMutation::SetTableLayout { scope, layout } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
+                    let layout = layout.resolve(|node| resolve_node_ref(node, &committed_nodes));
                     store
                         .replace_semantic_table_layout(scope, layout)
                         .expect("preflighted table layout scope remains a family");
