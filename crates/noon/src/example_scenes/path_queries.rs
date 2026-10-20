@@ -5,7 +5,7 @@ pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let precise = 1.0 + 2.0_f64.powi(-40);
-        for count in 0..10 {
+        for count in 0_usize..10 {
             let points = vec![(precise, 0.0); count];
             let value = scene.path(
                 crate::VectorPath::from_manim_points_f64(points),

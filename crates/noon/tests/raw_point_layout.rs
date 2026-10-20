@@ -44,7 +44,7 @@ fn raw_layout_preserves_semantic_coordinates_and_handle_extrema() {
 #[test]
 fn raw_anchor_selection_and_all_columns_match_every_incomplete_prefix() {
     let mut scene = Scene::new();
-    for count in 0..10 {
+    for count in 0_usize..10 {
         let points = (0..count)
             .map(|i| (i as f64, (i * 2) as f64))
             .collect::<Vec<_>>();
