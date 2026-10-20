@@ -5,10 +5,14 @@ getters and continuation. These tests isolate Python identity/atomicity rules.
 """
 import ast
 import __future__
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+
+from _noon_errors import NoonPendingError, raise_engine_error
 
 
 @dataclass
@@ -125,6 +129,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_membership_wrapper_leaves', '_membership_leaf_bindings',
             '_reconcile_completed_family_bindings', '_canonical_scene_mobjects',
             '_play_canonical_composition', '_canonical_indicate_animation',
+            '_build_canonical_composition_candidate',
         }
         tree = ast.parse(Path(__file__).with_name('_manim_scene.py').read_text())
         selected = [node for node in tree.body if getattr(node, 'name', None) in names]
@@ -140,6 +145,8 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_animate': SimpleNamespace(Indicate=Indicate),
             '_ir': SimpleNamespace(Object=ExportObject, _authoring_key=lambda label, key, default: default if key is None else key),
             'engine_call': lambda method, *args, operation=None: method(*args),
+            'raise_engine_error': raise_engine_error,
+            '_canonical_play_options': lambda options: None,
             '_start_default_synchronous_continuation': lambda scene: None,
             '_semantic_continuation_active': lambda scene: scene.mode != 'endpoint',
             '_require_semantic_continuation_active': lambda scene: None,
@@ -212,6 +219,49 @@ class MatchingCompletionBindingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.play()
         self.assertEqual(self.snapshot(), before)
+
+    def test_play_errors_reach_shared_projection_before_any_binding_commit(self):
+        for mode in ('endpoint', 'async'):
+            for marked in (False, True):
+                with self.subTest(mode=mode, marked=marked):
+                    self.setUp()
+                    self.scene.mode = mode
+                    observed = []
+                    original = RuntimeError('original JS boundary failure')
+                    original.js_error = SimpleNamespace(
+                        noonErrorVersion=1, category='pending_work',
+                        code='publication.segment_pending', message='pending segment',
+                    ) if marked else object()
+
+                    def fail(candidate):
+                        raise original
+
+                    self.context.beginOrdinaryComposition = fail
+                    self.context.ordinaryPlayComposition = fail
+                    self.context.beginOrdinaryCompositionBuilder = lambda *args: SimpleNamespace(
+                        setCompositionRateFunction=lambda rate: None,
+                    )
+                    self.context.ordinaryCanPlayComposition = fail
+                    before = self.snapshot()
+                    host = SimpleNamespace(noonReportEngineTrap=observed.append)
+                    with patch.dict(sys.modules, {'js': host, '_manim_rotate': SimpleNamespace()}):
+                        for boundary in ('validation', 'activation'):
+                            with self.subTest(boundary=boundary):
+                                with self.assertRaises(NoonPendingError if marked else RuntimeError) as caught:
+                                    if boundary == 'validation':
+                                        self.ns['_build_canonical_composition_candidate'](
+                                            self.scene, 'parallel', (), None, {},
+                                        )
+                                    else:
+                                        self.play()
+                                if marked:
+                                    self.assertIs(caught.exception.__cause__, original)
+                                    self.assertEqual(caught.exception.operation, 'Scene.play')
+                                else:
+                                    self.assertIs(caught.exception, original)
+                    self.assertEqual(observed, [original.js_error, original.js_error])
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertFalse(self.context.pending)
 
     def test_rejected_binding_batch_does_not_commit_a_target_prefix(self):
         self.context.reject_association = True
