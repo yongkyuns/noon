@@ -179,3 +179,63 @@ fn family_metadata_and_point_properties_have_one_prepared_state() {
     prepared.commit();
     assert_eq!(store.semantic_object_state_checked(root).unwrap(), &state);
 }
+
+#[test]
+fn owned_family_creation_preserves_full_state_and_predicted_insertion_order() {
+    let mut store = SemanticStore::new();
+    let mut state = SemanticObjectState::new(content());
+    state.transform.translation = crate::SemanticVec3::new(2., 3., 0.);
+    state.style = SemanticStyle::manim_family_root(Color::BLUE);
+    state.set_z_index(7.0);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        content(),
+    )));
+    let root = tx.create_node(SemanticNodeCreation::family_with_content(state.clone()));
+    tx.create_node(SemanticNodeCreation::family());
+    let final_object = tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        content(),
+    )));
+    let prepared = tx.prepare(&mut store).unwrap();
+    let proposed = prepared.proposed_object_state(root).unwrap();
+    assert_eq!(proposed.insertion_order(), 1);
+    assert_eq!(
+        prepared
+            .proposed_object_state(final_object)
+            .unwrap()
+            .insertion_order(),
+        2
+    );
+    assert_eq!(prepared.z_index(root).unwrap(), 7.0);
+    assert_eq!(proposed.style, state.style);
+    assert_eq!(proposed.transform, state.transform);
+    let root = prepared.commit().resolve(root).unwrap();
+    assert!(store.semantic_family_checked(root).is_ok());
+    assert_eq!(
+        store.semantic_object_state_checked(root).unwrap(),
+        &proposed
+    );
+}
+
+#[test]
+fn owned_family_creation_reserves_capacity_and_invalid_content_is_atomic() {
+    let mut store = SemanticStore::new();
+    store.set_next_insertion_order_for_test(u64::MAX);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.create_node(SemanticNodeCreation::family_with_content(
+        SemanticObjectState::new(content()),
+    ));
+    assert!(matches!(
+        tx.prepare(&mut store),
+        Err(SemanticMutationTransactionError::InsertionOrderExhausted)
+    ));
+    assert_eq!(store.len(), 0);
+
+    let mut store = SemanticStore::new();
+    let mut state = SemanticObjectState::new(content());
+    state.style.stroke_width = f64::NAN;
+    let mut tx = SemanticMutationTransaction::new();
+    tx.create_node(SemanticNodeCreation::family_with_content(state));
+    assert!(tx.apply(&mut store).is_err());
+    assert_eq!(store.len(), 0);
+}

@@ -707,10 +707,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .semantic_object_state_checked(object)
                 .map_err(SemanticTransactionReadError::Existing),
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
-                Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
+                Some(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Ok(state),
                 Some(
                     SemanticNodeCreation::PendingPathObject { .. }
-                    | SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Family { state: None, .. }
                     | SemanticNodeCreation::Effect { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotObject(object)),
@@ -934,7 +939,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Pending(token)
                 if matches!(
                     self.pending_creation(token),
-                    Some(SemanticNodeCreation::Family { .. })
+                    Some(SemanticNodeCreation::Family { state: None, .. })
                 ) =>
             {
                 return Ok(0.0);
@@ -964,7 +969,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         };
         if matches!(
             self.pending_creation(token),
-            Some(SemanticNodeCreation::Family { .. })
+            Some(SemanticNodeCreation::Family { state: None, .. })
         ) {
             return Ok(state);
         }
@@ -973,7 +978,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             let SemanticMutation::AddNode {
                 token: candidate,
                 creation:
-                    SemanticNodeCreation::Object { .. } | SemanticNodeCreation::PendingPathObject { .. },
+                    SemanticNodeCreation::Object { .. }
+                    | SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Family { state: Some(_), .. },
             } = mutation
             else {
                 continue;

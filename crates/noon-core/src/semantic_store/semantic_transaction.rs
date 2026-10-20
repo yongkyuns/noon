@@ -2200,6 +2200,7 @@ impl SemanticMutationTransaction {
                         creation,
                         SemanticNodeCreation::Object { .. }
                             | SemanticNodeCreation::PendingPathObject { .. }
+                            | SemanticNodeCreation::Family { state: Some(_), .. }
                     )
             })
             .count();
@@ -3466,7 +3467,10 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     match creation {
-                        SemanticNodeCreation::Object { state, .. } => {
+                        SemanticNodeCreation::Object { state, .. }
+                        | SemanticNodeCreation::Family {
+                            state: Some(state), ..
+                        } => {
                             staged_objects
                                 .entry((*token).into())
                                 .or_insert_with(|| (**state).clone());
@@ -3495,7 +3499,7 @@ impl SemanticMutationTransaction {
                                 .entry(*token)
                                 .or_insert_with(|| state.clone());
                         }
-                        SemanticNodeCreation::Family { .. }
+                        SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Signal { .. }
                         | SemanticNodeCreation::Effect { .. } => {}
                     }

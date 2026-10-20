@@ -241,16 +241,27 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         }
         queue.extend(members.iter().rev().copied());
         edges.push((id, members));
-        let creation = if is_family {
-            SemanticNodeCreation::family()
-        } else {
+        let has_content = !is_family
+            || store
+                .borrow()
+                .node(id)
+                .is_some_and(|node| node.semantic_object_state().is_some());
+        let state = if has_content {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
             let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
             }
-            SemanticNodeCreation::object(state)
+            Some(state)
+        } else {
+            None
+        };
+        let creation = match (is_family, state) {
+            (true, Some(state)) => SemanticNodeCreation::family_with_content(state),
+            (true, None) => SemanticNodeCreation::family(),
+            (false, Some(state)) => SemanticNodeCreation::object(state),
+            (false, None) => unreachable!("validated object owns a payload"),
         };
         let pending = transaction.create_node(creation);
         if updating_suspended {

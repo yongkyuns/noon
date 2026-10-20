@@ -308,7 +308,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                 }
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => {
+                    Some(state.as_ref().map_or(0.0, |state| state.z_index()))
+                }
                 _ => None,
             },
         }
@@ -321,9 +323,12 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .node(node)
                 .and_then(crate::SemanticNode::family_color),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::Color::WHITE)
-                }
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => Some(
+                    state
+                        .as_ref()
+                        .and_then(|state| state.style.family_color())
+                        .unwrap_or(crate::Color::WHITE),
+                ),
                 _ => None,
             },
         }
@@ -340,8 +345,11 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .and_then(crate::SemanticNode::family_style)
                 .cloned(),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => {
+                    Some(state.as_ref().map_or_else(
+                        || crate::SemanticStyle::manim_family_root(crate::Color::WHITE),
+                        |state| state.style.clone(),
+                    ))
                 }
                 _ => None,
             },
@@ -358,15 +366,18 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .node(node)
                 .and_then(crate::SemanticNode::sheen_direction),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Object { state, .. }) => {
-                    Some(state.sheen_direction)
-                }
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Some(state.sheen_direction),
                 PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject {
                     ..
                 })
-                | PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::SemanticSheenDirection::DEFAULT)
-                }
+                | PendingSemanticNode::Creation(SemanticNodeCreation::Family {
+                    state: None, ..
+                }) => Some(crate::SemanticSheenDirection::DEFAULT),
                 _ => None,
             },
         }
@@ -512,6 +523,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                     self.pending[&token],
                     PendingSemanticNode::Creation(
                         SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::Family { state: Some(_), .. }
                             | SemanticNodeCreation::PendingPathObject { .. }
                     )
                 ) {
@@ -695,9 +707,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                 self.store.node(node)?.initial_family_object_state(content)
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending.get(&token)? {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::SemanticFamilyPresentation::default().with_content(content))
-                }
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family {
+                    state: None, ..
+                }) => Some(crate::SemanticFamilyPresentation::default().with_content(content)),
                 _ => None,
             },
         }
@@ -718,12 +730,15 @@ impl<'a> TransactionNodeCatalog<'a> {
                     .map_err(|error| SemanticMutationTransactionError::Object { index, error })?
                     .clone(),
                 SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Object {
-                        state, ..
-                    }) => (**state).clone(),
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { state, .. }
+                        | SemanticNodeCreation::Family {
+                            state: Some(state), ..
+                        },
+                    ) => (**state).clone(),
                     PendingSemanticNode::Creation(
                         SemanticNodeCreation::PendingPathObject { .. }
-                        | SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Effect { .. }
                         | SemanticNodeCreation::Signal { .. },
                     )

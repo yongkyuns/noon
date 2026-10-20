@@ -1135,6 +1135,16 @@ impl SemanticStore {
         self.insert_kind(SemanticNodeKind::Family(SemanticFamilyState::default()))
     }
 
+    /// Allocate one content-owning family through the same object resource and
+    /// insertion-order machinery, without allocating a separate geometry child.
+    pub fn insert_family_with_content(&mut self, state: SemanticObjectState) -> SemanticNodeId {
+        let fallback_color = state.style.family_color().unwrap_or(crate::Color::WHITE);
+        let id = self.insert_semantic_object(state);
+        self.node_mut(id).expect("new family node exists").kind =
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color });
+        id
+    }
+
     pub(crate) fn insert_semantic_signal_state(
         &mut self,
         state: SemanticSignalState,

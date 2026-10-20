@@ -110,6 +110,7 @@ mod family_grid;
 mod family_layout;
 #[cfg(test)]
 mod family_layout_migration_tests;
+mod family_points;
 mod family_queries;
 mod family_style;
 #[cfg(test)]
