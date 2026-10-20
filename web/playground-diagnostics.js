@@ -19,6 +19,17 @@ export function fallbackFailureMessage(error) {
   return [...firstLine].slice(0, 400).join("");
 }
 
+export function failureTechnicalDetails(error) {
+  try {
+    const stack = String(error?.stack ?? error);
+    const message = typeof error?.message === "string" ? error.message : "";
+    // Safari stacks can omit the message, which contains the Python traceback.
+    return message && !stack.includes(message) ? `${message}\n\n${stack}` : stack;
+  } catch {
+    return "Technical details are unavailable for this failure.";
+  }
+}
+
 /** Presentation only. Does not restart workers, decide recovery, or mutate a scene. */
 export function createPlaygroundDiagnostics({ editor, details, traceback }) {
   const document = editor.ownerDocument;
@@ -129,11 +140,7 @@ export function createPlaygroundDiagnostics({ editor, details, traceback }) {
         const sourceLine = executedSource.split(/\r\n|\r|\n/)[line - 1];
         excerpt.textContent = `${line}  ${sourceLine.length > 512 ? sourceLine.slice(0, 512) + "…" : sourceLine}`;
       }
-      try {
-        traceback.textContent = String(error?.stack ?? error);
-      } catch {
-        traceback.textContent = "Technical details are unavailable for this failure.";
-      }
+      traceback.textContent = failureTechnicalDetails(error);
       details.hidden = false;
       details.open = false;
       panel.hidden = false;
