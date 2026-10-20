@@ -264,7 +264,7 @@ fn empty_family_point_observations_validate_the_execution_publication() {
     }
     assert_eq!(execution.publication_context(), publication);
 
-    let mut other = Scene::new();
+    let other = Scene::new();
     let foreign_execution = other.execution_session().unwrap();
     for result in snapshots(&scene, &foreign_execution, &empty) {
         assert!(matches!(
