@@ -82,7 +82,7 @@ class AsyncThreadsNumericalClaims(unittest.TestCase):
         scene = next(node for node in TREE.body if isinstance(node, ast.ClassDef))
         methods = {node.name for node in scene.body if isinstance(node, ast.AsyncFunctionDef)}
         self.assertEqual(len(chapters), 13)
-        self.assertEqual(sum(duration for _, duration, _ in chapters), 408)
+        self.assertEqual(sum(duration for _, duration, _ in chapters), 522)
         self.assertTrue(all(duration > 0 and method in methods for _, duration, method in chapters))
 
 

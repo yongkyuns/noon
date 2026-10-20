@@ -2,8 +2,11 @@
 
 A visual tutorial about **how computation runs, waits, and resumes** under
 threaded and async execution. The editable Noon scene is
-[async_threads_realtime.py](async_threads_realtime.py). Its current cue sheet
-contains thirteen chapters and 6 minutes 48 seconds of authored time.
+[async_threads_realtime.py](async_threads_realtime.py). This revision connects
+three recurring, language-neutral run loops with the runtime that selects their
+work. Explanations introduce each event before it moves; deliberate holds give
+the resulting state time to be inspected. The authored cue sheet schedules
+thirteen chapters over **8 minutes 42 seconds** at `SPEED=1`.
 
 The central comparison has two independent questions: **where is unfinished
 work saved, and when may another computation take the CPU?** Async can reduce
@@ -16,31 +19,100 @@ discussing particular frameworks.
 ## Read the visual language
 
 The same three roles recur throughout the lesson: **C / control** in cyan,
-**E / estimation** in amber, and **L / logging** in violet. Letters and state
-labels carry the meaning independently of color.
+**E / estimation** in amber, and **L / logging** in violet. Each has a recurring
+pseudocode panel and a visible execution marker. Letters, operation names, and
+state labels carry the meaning independently of color.
 
 | Visual | Meaning | How to interpret its movement |
 | --- | --- | --- |
-| Large tile marked C, E, or L | One computation and its saved execution position | Moving between stations means a state or scheduling transition. It does not imply copying all task memory. |
-| Four small marks inside a task tile | Qualitative completed work | Lit marks travel with the task. They stop changing while the task is outside the CPU. They are not percentages, equal instruction counts, or a time scale. |
-| `READY` station | Eligible work that has not yet been selected | A wakeup can move a task here without giving it the CPU immediately. |
-| `WAITING` station | Work that cannot continue until an event or resource becomes available | The saved computation remains intact while other work runs. |
-| `PAUSED` or `PREEMPTED` station | A ready computation displaced by higher-priority execution | This is a visual annotation for preemption, not a claim that the task is blocked on I/O. |
-| CPU station | The selected computation | Only the task executing here accumulates CPU work. |
-| Small traveling square | Data or an event | A sample, queued packet, completion notification, or command can travel independently of a task tile. |
+| Stationary program card marked C, E, or L | The recurring program performed by that role | Its position stays stable while selection, state, and execution change. |
+| Tiny glowing pointer beside an operation | The program's current illustrated position | Only the CPU-selected loop can advance. Ready, waiting, and preempted loops preserve their position. |
+| Small work marks on a task | Qualitative completed work | They can advance within one selected operation while its pointer stays on that line. They are not percentages, equal instruction counts, or a time scale. |
+| `READY` label inside a program card | Eligible work that has not yet been selected | A wakeup changes readiness; the saved pointer waits for CPU selection. |
+| `WAITING` label inside a program card | Work that cannot continue until an event or resource becomes available | The card and saved pointer stay in place while another program runs. |
+| `PREEMPTED` label inside a program card | A ready computation displaced by higher-priority execution | Its operation and partial progress are preserved. This does not mean it is blocked on I/O. |
+| CPU selection indicator | The selected computation | Only the selected task accumulates CPU work. Its pointer moves when the illustrated operation advances. |
+| Larger task token marked C, E, or L | The compact computation view used in the memory and final-architecture chapters | Saved work persists across context changes; a token inside a functional block does not give that block its own CPU. |
+| Small glowing transport circle | Data or an event | A sample, queued packet, completion notification, or command can travel independently of a task. The circle's motion is not CPU execution. |
+| Brief focus outline | The subject named by the current explanation | The outline directs attention to an operation, queue, resource, or route. It is separate from the glowing transport circles and execution pointers. |
 | Peripheral progress track | Device work, such as DMA | Its progress can overlap CPU work without introducing a second CPU. |
-| Growing timeline and cursor | The hypothetical execution intervals in chapters 5–7 | Read the microsecond axis for timing; the four task marks remain schematic. |
+| Growing timeline and cursor | The hypothetical execution intervals in chapters 5–7 | Read the microsecond axis for timing; task-work marks and pseudocode positions remain schematic. |
 
 Connectors are drawn progressively along explicit horizontal and vertical
-routes. Labels are revealed as each relationship is introduced. A marked
-junction is a deliberate scheduling merge, not an accidental crossing or an
-additional processor.
+routes. A traveling circle follows an already-introduced route. Focus makes the
+current cause or consequence stand out while the rest of the architecture
+remains available for context. In the execution chapters, the program cards
+stay in place: CPU selection and state labels change around the saved programs.
+
+Each teaching beat has three stages:
+
+1. **EXPLAIN.** Read what is about to happen and identify the highlighted
+   operation or runtime region.
+2. **WATCH.** Follow one cause and its consequence: a task is
+   selected, a computation progresses, data arrives, or an operation blocks.
+3. **NOTICE.** Use the hold to compare the resulting CPU owner, task state,
+   execution marker, and resource state before the next event begins.
 
 There is **one core per illustrated design**. Chapter 2 places two alternative
 memory organizations side by side; they are separate examples, not a dual-core
-machine. The final architecture shows functional blocks, so a task tile in a
+machine. The final architecture shows functional blocks, so a task token in a
 block identifies that block's currently illustrated computation. It does not
 mean every block has its own CPU.
+
+## The three recurring run loops
+
+The panels use pseudocode to show purpose and program position. They are not
+Rust listings or complete driver implementations. The same operations recur
+when the lesson changes the surrounding runtime.
+
+The three stationary cards are introduced in chapter 1 and recur in chapters
+3–8, chapter 10, and the first part of chapter 11. The memory and final
+architecture chapters use compact task tokens. Each example may begin partway
+through a loop; its pointer identifies the current operation at that point.
+
+### C — control
+
+```text
+repeat
+  wait for release
+  acquire sample
+  read state snapshot
+  compute command
+  send command
+```
+
+### E — estimation
+
+```text
+repeat
+  wait for measurement
+  update estimate
+  publish snapshot
+```
+
+### L — logging
+
+```text
+repeat
+  receive packet
+  encode + buffer
+  if due: flush output
+```
+
+“Flush if due” makes it possible for L to receive and encode several available
+packets before it needs to wait. The resource chapter expands that output step
+to show shared SPI ownership. C's acquire step similarly expands into request,
+wait, and completion in the I/O chapter.
+
+**Only the CPU-selected loop advances its execution marker.** If C blocks in
+acquire, its marker stays there while L computes. A completion event may make C
+ready, but the marker still waits for C to be selected. If L is preempted during
+encoding, its marker preserves that operation and resumes there later.
+
+A pseudocode line can represent a long computation or a multi-stage driver
+operation. It is not an atomic instruction or a fixed amount of time.
+Preemption can stop a task partway through the highlighted line; a saved marker
+and the work indicator together make that partial progress visible.
 
 ## Run the scene
 
@@ -72,30 +144,33 @@ response times.
 
 ## Chapter guide
 
-These times follow the source cue sheet at `SPEED=1` and the thirteen chapter
-markers in the verified 408-second development export.
+These timestamps match the verified revision 3 development export at
+`SPEED=1`: 522 seconds, 15,660 frames at 30 fps, and 13 chapter markers.
+The authoring and verification notes below describe the captured evidence and
+its scope.
 
 | Time | Chapter | What to watch |
 | --- | --- | --- |
-| 0:00–0:16 | State and scheduling are separate choices | A two-by-two matrix separates thread/async state representation from cooperative/preemptive scheduling. |
-| 0:16–0:42 | Paused work keeps its place | Task tiles leave the CPU, preserve their work marks, and resume from saved stacks or continuation state. |
-| 0:42–1:24 | Both runtimes can release the CPU for I/O | The same transfer runs first with a blocking thread, then with an async task; L computes while C waits and DMA progresses. |
-| 1:24–1:56 | Available work can keep the CPU busy | Packets arrive from a queue; L keeps computing until an unavailable operation makes it suspend. |
-| 1:56–2:30 | Selection priority cannot interrupt a poll | C remains ready while a long uninterrupted L computation grows past C's deadline. |
-| 2:30–2:58 | Bounded cooperative work can succeed | L returns control earlier; selecting C next produces a different response bound. |
-| 2:58–3:36 | Preempt, preserve, resume | L stops with its marks intact, C executes, and the original L computation resumes. |
-| 3:36–4:12 | Three architectures, still one CPU | One executor, separate preemptive priorities, and an RTOS/async hybrid select work through the same CPU boundary. |
-| 4:12–4:36 | Which performance metric improves? | Compare RAM, coordination, computation, and deadline response separately. |
-| 4:36–5:18 | The highest priority can still be blocked | The SPI owner and running computation diverge; a resource protocol lets the owner make the progress C needs. |
-| 5:18–5:48 | Timeout and cancellation need contracts | A timer becomes ready during busy computation; a later cancellation leaves an already-issued external command to be handled. |
-| 5:48–6:12 | Safety needs explicit guarantees | Memory, resources, timing, and correct physical response require different evidence. |
-| 6:12–6:48 | Follow the sample all the way to actuation | Sample, snapshot, command, log, and monitor pulses follow a six-block architecture with separate routes. |
+| 0:00–0:32 | 1. State and scheduling are separate choices | Three recurring programs and two choice cards separate state representation from scheduling. |
+| 0:32–1:06 | 2. Paused work keeps its place | Task tokens preserve completed work as contexts are saved and resumed. |
+| 1:06–1:58 | 3. Both runtimes can release the CPU for I/O | C's acquire pointer stays still while L computes and device completion changes C's readiness. |
+| 1:58–2:38 | 4. Available work can keep the CPU busy | L's marker cycles through available receives and encoding while C's ready pointer stays still. |
+| 2:38–3:18 | 5. Selection priority cannot interrupt a poll | The focus stays on L's uninterrupted computation as its timeline grows past C's deadline. |
+| 3:18–3:52 | 6. Bounded cooperative work can succeed | L returns control earlier; selecting C next produces a smaller response bound. |
+| 3:52–4:36 | 7. Preempt, preserve, resume | C finishes at 95 µs; L then resumes with qualitative work and its saved operation intact. |
+| 4:36–5:18 | 8. Three architectures, still one CPU | One executor, separate preemptive priorities, and an RTOS/async hybrid select the same recurring programs. |
+| 5:18–5:48 | 9. Which performance metric improves? | A focused comparison separates RAM, coordination, computation, and deadline response. |
+| 5:48–6:34 | 10. The highest priority can still be blocked | SPI ownership, C's blocked operation, and the CPU-selected loop are different facts. |
+| 6:34–7:16 | 11. Timeout and cancellation need contracts | A timer becomes ready during busy computation; an issued command remains an external effect after cancellation. |
+| 7:16–7:48 | 12. Safety needs explicit guarantees | A stale-snapshot example precedes the memory, resource, timing, and system guarantee layers. |
+| 7:48–8:42 | 13. Follow the sample all the way to actuation | E, C, then L compute sequentially as transport follows separate routes; the final architecture holds for inspection. |
 
 ## 1. Separate saved state from CPU scheduling
 
-The opening matrix prevents a common mismatch: comparing a cooperative async
-executor with a preemptive RTOS and attributing every difference to async versus
-threads. A conventional thread has a saved execution context and stack. A
+The opening introduces C, E, and L as three programs, then shows two distinct
+choices: state representation and scheduling. This separates a cooperative
+executor's scheduling behavior from the async representation of its tasks.
+A conventional thread has a saved execution context and stack. A
 stackless async task saves a continuation and the data required to resume. The
 choice of scheduler determines when one execution context can displace another.
 Concrete systems provide combinations of these properties: Zephyr documents
@@ -104,10 +179,12 @@ executors that can run async tasks at different hardware priorities. See
 [Zephyr thread priorities](https://docs.zephyrproject.org/latest/kernel/services/threads/index.html#thread-priorities)
 and [Embassy InterruptExecutor 0.10.0](https://docs.rs/embassy-executor/0.10.0/embassy_executor/struct.InterruptExecutor.html).
 
-In chapter 2, watch the completed mark on C before it leaves the CPU. It remains
-lit while L runs, and C continues from that position when selected again. Both
-models preserve unfinished computation. The memory difference concerns how
-much storage is reserved and what must remain live during suspension.
+Chapter 2 switches to compact task tokens to make the memory organization
+visible. Watch C's completed work before its context is saved. That work remains
+intact while L computes, and C continues from the saved position when selected
+again. Both models preserve unfinished computation. The memory difference
+concerns how much storage is reserved and what must remain live during
+suspension.
 
 For the stackless async design shown, many waiting tasks can share an active
 execution stack instead of each reserving a conventional thread stack. Each
@@ -135,17 +212,21 @@ Chapter 3 deliberately performs the **same sequence twice**. First C is a
 blocking thread; then it is an async task. The data source, CPU, and logger do
 not change between passes.
 
-1. **Run and request.** C enters the CPU, completes some work, and starts the
-   sensor transfer. A small square follows the device-request route.
-2. **Wait.** C leaves the CPU with its completed mark intact. The blocking thread
-   retains its call stack; the async task retains its continuation state.
-3. **Overlap useful work.** L enters the CPU and its marks advance. The DMA
-   indicator moves on a separate track. C's marks remain frozen.
-4. **Become ready.** Device completion makes C eligible to continue. Its tile
-   travels to READY and pauses there. Readiness has changed; CPU ownership has
-   not yet changed.
-5. **Resume when selected.** L leaves the CPU and C returns, continuing from its
-   saved position.
+1. **Run and request.** The explanation identifies C's acquire operation before
+   C starts the sensor transfer. A glowing circle follows the device-request
+   route.
+2. **Wait.** C's card changes to WAITING while its acquire pointer and completed
+   work stay in place. The blocking thread retains its call stack; the async
+   task retains its continuation state.
+3. **Overlap useful work.** L is selected at `encode + buffer`. Its work marks
+   advance while its pointer can remain on that operation. The DMA indicator
+   moves separately, and C's pointer remains at acquire.
+4. **Become ready.** Device completion changes C's label to READY. Its card and
+   pointer stay in place. Readiness has changed; CPU ownership has not yet
+   changed.
+5. **Resume when selected.** CPU selection passes from L to C. C can continue
+   its saved operation and advance when that operation completes. The resulting
+   state holds so C's pointer and the completed transfer can be compared.
 
 The insight is that waiting for I/O need not occupy the CPU in either model.
 The threaded example uses a blocking wait that deschedules its caller, not a
@@ -159,10 +240,12 @@ and the async
 
 ## 3. An async operation need not hand over the CPU
 
-In chapter 4, L consumes several already-available packets while C stays in
+In chapter 4, L consumes several already-available packets while C remains
 READY. Each packet is small, but the sequence remains one uninterrupted period
-of CPU occupation. Only after the queue is empty does L leave for WAITING and
-allow another task to execute.
+of CPU occupation. Watch L's execution marker return to receive and continue
+through encoding as the transport circles arrive. C's ready marker remains
+still. Only after an operation cannot complete immediately does L become
+WAITING and allow another task to execute.
 
 The visual mechanism is independent of source syntax: **an operation that can
 complete immediately may let its caller continue immediately**. In the
@@ -196,6 +279,10 @@ core so that a single scheduling dependency is easy to see.
 | Controller I/O suspension or additional resource waits | None |
 | Shared timeline extent | 0–650 µs after release |
 
+The run loops show each role's overall purpose. This numerical trace isolates
+one controller job under the assumptions above. The I/O and resource chapters
+show separate cases in which waiting must also enter the response argument.
+
 Within this restricted model:
 
 **Response = applicable blocking + dispatch + control execution.**
@@ -210,9 +297,10 @@ Within this restricted model:
 
 L is doing synchronous computation, such as encoding. It occupies the CPU for
 500 µs after C's release. C is ready throughout, but the executor cannot choose
-it while that poll is still running. The growing violet interval passes the
-250 µs deadline before C begins. Dispatch takes the stated 5 µs, then C performs
-the same 80 µs of work used in every case.
+it while that poll is still running. L's active operation and growing violet
+interval are highlighted while C's program position remains fixed. The
+interval passes the 250 µs deadline before C begins. Dispatch takes the stated
+5 µs, then C performs the same 80 µs of work used in every case.
 
 The delay is not a DMA transfer that has correctly suspended its caller. That
 case was shown separately in chapter 3.
@@ -233,15 +321,18 @@ the CPU while adding coordination work. Both effects belong in the design.
 
 Keep L's long computation, but permit a higher-priority execution boundary to
 preempt it. In the drawn trace, L first executes a 10 µs nonpreemptible segment.
-Its tile then moves to the preempted station without finishing. C runs after
-the 5 µs dispatch interval and completes at 95 µs. L subsequently returns with
-the same marks and continues its remaining computation.
+Its card then changes to PREEMPTED without finishing the highlighted operation.
+Inspect the saved pointer and work indicator during the hold. C runs after the
+5 µs dispatch interval and completes at 95 µs. The numerical response-time
+timeline stops there. L is subsequently selected again and resumes at the same
+operation with its completed work preserved.
 
 Using 10 µs as the blocking term assumes that **all applicable lower-priority
 blocking is covered by that bound**. Additional locks or masked interrupts
 would require evidence and could change it. The later L continuation is a
-visual demonstration of preservation and resumption; only the first C job's
-response is analyzed. Equal 5 µs dispatch costs deliberately isolate the
+qualitative demonstration of preservation and resumption. It supplies no second
+numerical completion time or bound for L's remaining work; only the first C
+job's response is analyzed. Equal 5 µs dispatch costs deliberately isolate the
 scheduling effect and claim no measured advantage for either runtime.
 
 Preemption can remove a lower-priority task's entire uninterrupted computation
@@ -261,8 +352,9 @@ and the [self-suspension analysis review](https://link.springer.com/article/10.1
 
 ## 5. Put priorities at an execution boundary
 
-Chapter 8 retains one CPU while changing the containers around C, E, and L.
-The marked scheduling junction selects one computation at a time.
+Chapter 8 retains the same three program cards while changing the scheduling
+architecture around them. CPU selection identifies one computation at a time;
+the programs' purposes and saved positions remain visible.
 
 | Architecture | Where another computation can take over | Consequence for C |
 | --- | --- | --- |
@@ -303,12 +395,14 @@ the animation supplies no platform benchmark.
 
 ## 7. Trace the resource dependency, not just the priority label
 
-Chapter 10 gives SPI a separate **OWNER: L** label. Resource ownership and CPU
-ownership are different facts.
+Chapter 10 gives SPI a separate **OWNER: L** label. The resource label, current
+CPU owner, and three saved program positions are different facts. Focus first
+identifies the dependency, then follows the loop that can resolve it.
 
 1. C executes but cannot obtain the SPI resource already owned by L.
-2. C waits. Medium-priority E runs, while the lower-priority owner L makes no
-   progress toward releasing the resource.
+2. C waits at its acquire operation. Medium-priority E computes at
+   `update estimate`, while the lower-priority owner L remains at its output
+   operation and makes no progress toward releasing the resource.
 3. A generic priority-inheritance protocol raises L's effective priority so it
    can finish the protected work that is holding C up.
 4. L releases SPI; C becomes ready, is selected, and obtains the resource.
@@ -328,8 +422,9 @@ the desired bound.
 
 ## 8. Separate timer readiness, enforcement, and cancellation
 
-The first half of chapter 11 shows a timeout event becoming ready while the
-wrapped computation is still busy. The event does not become another task that
+The first half of chapter 11 identifies the wrapped operation before showing
+the timer event become ready. Inspect the execution marker: the wrapped
+computation is still busy. The event does not become another task that
 magically steals the CPU. A cooperative wrapper cannot check its timer while
 an inner synchronous call has not returned. A separate monitor needs an
 independently schedulable enforcement boundary, and that boundary still has
@@ -352,7 +447,13 @@ and the [RP DMA driver implementation](https://docs.rs/embassy-rp/latest/src/emb
 
 ## 9. Define the property meant by “safe by construction”
 
-Chapter 12 turns the phrase into four separate claims. The table is a set of
+Chapter 12 first makes the distinction concrete with an **illustrative stale
+snapshot**: its age is 12 ms, while the allowed age in this example is 5 ms.
+Its storage and lifetime can be valid, and a controller can still finish its
+calculation on time, while that input violates the stated freshness rule. These
+numbers are teaching inputs, not limits prescribed for a particular vehicle.
+
+The example clears before four guarantee layers appear. The table is a set of
 questions for the proposed design, not a claim that either runtime supplies
 every guarantee.
 
@@ -373,10 +474,14 @@ examples appear in the optional implementation notes below.
 
 ## 10. Follow the sample all the way to actuation
 
-The last chapter arranges six blocks in two rows. The short upper routes carry
-the sensor sample and actuator command. The estimator's snapshot travels up a
-separate route. Logging and monitoring have their own paths so their roles can
-be followed without crossing unrelated arrows.
+The last chapter arranges six blocks in two rows. An explanation and focus
+highlight identify each source and destination before a glowing circle travels
+between them. The short upper routes carry the sensor sample and actuator
+command. The estimator's snapshot travels up a separate route. Logging and
+monitoring have their own paths so their roles can be followed without crossing
+unrelated arrows. Compact task tokens now stand for the programs introduced in
+the earlier run-loop panels. Their work advances sequentially—E, then C, then
+L—so the functional blocks do not appear to compute in parallel on the one core.
 
 1. **Capture a sample.** The sample pulse enters the control path. Its timestamp
    matters as well as its arrival.
@@ -387,11 +492,17 @@ be followed without crossing unrelated arrows.
    boundary must support the control response bound.
 4. **Apply the command.** The command reaches the actuator. End-to-end latency
    includes this path; finishing the control calculation alone is insufficient.
-5. **Queue background work.** A log pulse enters a bounded queue. The design
-   needs an explicit overflow and backpressure policy at the control boundary.
+5. **Queue and service background work.** A log pulse enters a bounded queue.
+   L performs the illustrated log service later than C's control computation.
+   The design needs an explicit overflow and backpressure policy at this
+   boundary.
 6. **Detect and contain faults.** The monitor has a distinct fault path and
    stated budget. Its ability to act requires the platform and independence
    assumptions represented by that boundary.
+
+The 54-second chapter ends with approximately six seconds of quiet inspection
+time. Follow the final sample, snapshot, command, log, and monitor routes and
+check the separate timing or resource contract named at each boundary.
 
 This is a reasoning template for deciding where threads, async tasks, or a
 hybrid belong. It asks for end-to-end timing, input age, resource access,
@@ -425,61 +536,75 @@ detail.
 
 ## Authoring and verification notes
 
-The source uses ordinary Noon `Scene`, native `Text`, `VGroup` task tiles,
-rectangles, lines, and path objects. Progressive path and arrow reveals,
-written labels, fades, and native transforms express the visual transitions.
-Python tuples collect authored objects for convenient calls; they do not
-replace native family semantics. There are no per-frame callbacks, artificial
-frame renderers, live input dependencies, or external artwork. `Scene.time`
-supplies the logical clock for chapter-end holds.
+The scene is authored with ordinary Noon objects and native animations.
+Progressive connectors, transport circles, focus highlights, written labels,
+and program markers express the lesson's transitions. The shared engine owns
+animation and rendering; presentation holds use authored scene time.
 
-**Revised development export verified.** The exact-source movie contains
-12,240 frames at 30 fps, 1600×900, with thirteen chapter markers and a duration
-of 408 seconds. The source reaches its completed state at exactly 408 seconds.
-All 12,651 native observations—including pre-roll and separate range
-endpoints—matched their requested sample times. No browser or renderer errors
-were reported. Every duration-bearing frame index from 0 through 12,239 occurs
-exactly once, in order.
+**The revision 3 development export is verified.** The assembled movie contains
+15,660 frames at 30 fps, 1600×900 resolution, a duration of 522 seconds, and
+13 chapter markers. Every absolute movie-frame index from 0 through 15,659
+occurs exactly once, in order, with the expected presentation timestamp. The
+complete movie decoded without errors. The final uninterrupted capture
+reached source completion at exactly 522 seconds.
 
-The independently rendered ranges join at 136 and 272 seconds with exact
-decoded RGBA equality. The assembled MP4 passed a complete decode with no error
-output. The 29 retained chapter images match their recorded native PNG hashes.
-Chapter layouts, caption transitions, task preservation/resumption, and
-representative exact-source frames were visually inspected, including the final
-architecture at 407 seconds. A same-source 21-second execution excerpt also
-passed complete decode and motion inspection at 30 fps.
+The export's `video_verification.json` records 18,660 actual observations:
+15,671 native PNG observations and 2,989 metadata-only forward observations,
+including preroll and separate range endpoints. Every requested time matches
+its published time. All 10 joins have exact native PNG hash equality; seven
+also have direct decoded RGBA comparisons. For the other three, the original
+PNG bytes were not retained, so equality is established against the original
+recorded native PNG hash. These evidence types remain distinguished in the
+verification record.
 
-The scene source SHA-256 is
-`eba9cda2e64f212d414386f0bb22be7978607982ec8b4239b589812139321f6f`.
-The actual Noon WebGL2 engine build matches repository base commit
-`b11f450551ef2db4daf99f873b16cab974e4c887`, with build ID
+Runtime interruptions required recovery of completed work. The final movie
+uses 7,750 original encoded frames with unchanged AVC payloads, 4,660 frames
+encoded from preserved native PNGs, and 3,250 frames from completed fresh
+captures. Raw interrupted reports remain unchanged and explicitly interrupted;
+recovery does not relabel them as successful complete captures. The evidence
+archive retains their identities, ordered-frame checks, and join provenance.
+
+The authoring team individually inspected 37 selected native chapter images,
+including the three run-loop overview at 31 seconds and the final architecture
+at 520 seconds. Selections use settled captions and complete route labels;
+where an earlier overlapping capture was inspected, its PNG hash matches the
+image selected for packaging.
+
+The captured scene source SHA-256 is
+`ec435450e9c3abef4ae83da4d9fa8245134e3c623099808c957c0f736207e79f`.
+Rendering used actual Noon WebGL2 through the unchanged
+`SemanticPreviewSession` host, with engine base commit
+`b11f450551ef2db4daf99f873b16cab974e4c887` and build ID
 `d6cd1c9a0dc2bbc16657db8003ebea4971c5b89ebb122b2089e2579ad69b19ab`.
-The image archive includes capture provenance and movie verification metadata.
 
-The four focused tests for domain arithmetic, the exact-deadline boundary,
-the proportional axis, and the complete cue sheet passed separately from the
-renderer:
+The focused checks for domain arithmetic, the exact-deadline boundary, the
+proportional axis, and the cue sheet are separate from rendered verification:
 
 ```bash
 python3 -m unittest web/python/test_async_threads_realtime.py
 ```
 
-The repository entry point `bash scripts/check.sh fast` was attempted but
-stopped at its architecture gate because Cargo is unavailable in this local
-environment. The focused tests and development export do not replace that gate.
+All four focused checks passed for the captured source, as did Python syntax
+compilation. The repository validation entry point, `bash scripts/check.sh fast`, was
+attempted but stopped at its architecture gate because Cargo was unavailable
+locally. Focused domain checks and a development export do not
+replace that gate. Hardened Docker preview and ordinary Run/replay/seek
+qualification have not been performed.
 
 For the hardened supported preview workflow, follow
 [`skills/noon-authoring/references/verification.md`](../../../skills/noon-authoring/references/verification.md)
-using a current browser build and the pinned Docker runtime. With that setup,
-the preview entry point accepts this source and the current authored duration:
+using a current browser build and the pinned Docker runtime. The following
+invocation uses the current revision 3 cue map and samples near each chapter's
+end. It is a preview recipe, not a report that this command has been run:
 
 ```bash
 NOON_PREVIEW_RUNTIME_CONFIG=/absolute/path/to/runtime.json \
   node tools/noon-mcp/bin/noon-preview.mjs \
   --source /absolute/path/to/async_threads_realtime.py \
   --output /absolute/path/to/review-output \
-  --loop-duration 408 --time 15 --time 83 --time 115 \
-  --time 149 --time 177 --time 215 --time 317 --time 407
+  --loop-duration 522 --time 31 --time 65 --time 117 --time 157 \
+  --time 197 --time 231 --time 275 --time 317 --time 347 \
+  --time 393 --time 435 --time 467 --time 521
 ```
 
 A development capture is a separate category of evidence. Actual Noon canvas
