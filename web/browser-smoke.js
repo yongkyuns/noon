@@ -1,3 +1,4 @@
+import { executionDeltaMetadata } from "./execution-transport.js";
 import init, {
   createDirectRecoverySmokeRenderer,
   createDirectTransformMatchingShapesBreadthSmokeRenderer,
@@ -504,7 +505,7 @@ async function start() {
     const initialDelta = player.initialDeltaJson();
     const retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
     retained.resize(retainedCanvas.width, retainedCanvas.height);
-    if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+    if (!retained.applyDeltaJson(initialDelta, JSON.stringify(executionDeltaMetadata(initialDelta))) || !retained.render()) {
       retained.free();
       player.free();
       context.free();
@@ -539,7 +540,7 @@ async function start() {
       restore: () => extension.restoreContext(),
       applyPendingDelta(time) {
         const delta = player.seekDeltaJson(time);
-        return delta === undefined ? false : retained.applyDeltaJson(delta);
+        return delta === undefined ? false : retained.applyDeltaJson(delta, JSON.stringify(executionDeltaMetadata(delta)));
       },
       metrics() {
         return {
@@ -606,7 +607,7 @@ async function start() {
       const initialDelta = player.initialDeltaJson();
       retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
       retained.resize(canvas.width, canvas.height);
-      if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+      if (!retained.applyDeltaJson(initialDelta, JSON.stringify(executionDeltaMetadata(initialDelta))) || !retained.render()) {
         throw new Error("retained disposal fixture did not publish its initial scene");
       }
       const control = {

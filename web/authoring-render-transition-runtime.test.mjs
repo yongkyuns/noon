@@ -1078,9 +1078,9 @@ test("first presentation timestamp latches only after renderer reports a success
   assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), null);
 
   harness.context.advanceClock = () => { now += 5; };
-  vm.runInContext("renderer.applyDeltaJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaJson = () => { advanceClock(); return true; }; applyRendererDelta('{}', { session: 1, sequence: 0, snapshot: true })", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5);
-  vm.runInContext("renderer.applyDeltaJson = () => false; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaJson = () => false; applyRendererDelta('{}', { session: 1, sequence: 0, snapshot: true })", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5,
     "a stale delta cannot replace the last successfully applied interval");
 
@@ -1515,4 +1515,21 @@ test("WebGL recovery waits for later restoration listeners, beyond a microtask c
   await flushTasks();
   assert.equal(recoveries, 1);
   assert.equal(vm.runInContext('webglContextLost', harness.context), false);
+});
+
+
+test("Rust receives the exact routed metadata for bootstrap and incremental admission", async () => {
+  const initial = { session: 11, sequence: 0, snapshot: true,
+    pointerView: { revision: 4, width: 640, height: 360 } };
+  const harness = createWorkerHarness([true, true], initial);
+  const applied = [];
+  harness.createdRenderer.applyDeltaJson = (json, metadataJson) => {
+    applied.push([json, JSON.parse(metadataJson)]);
+    return true;
+  };
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  assert.deepEqual(applied, [["initial", initial]]);
+  vm.runInContext('consumeDelta("next", { session: 11, sequence: 1, snapshot: false });', harness.context);
+  assert.deepEqual(applied[1], ["next", { session: 11, sequence: 1, snapshot: false }]);
 });

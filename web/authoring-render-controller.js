@@ -595,7 +595,7 @@ export function createAuthoringRenderController(host) {
     const stageSample = publicationStageProfiling && publication !== null
       ? { session: publication.session, sequence: publication.sequence, receivedAtMs: performance.now() }
       : null;
-    const applied = applyRendererDelta(json);
+    const applied = applyRendererDelta(json, publication);
     if (!applied) {
       acknowledgeAlreadyPresented(publication);
       return true;
@@ -659,7 +659,7 @@ export function createAuthoringRenderController(host) {
       lastDeltaApplyMs = null;
       lastRendererCallMs = null;
       resourceBytes = null;
-      const applied = applyRendererDelta(initial);
+      const applied = applyRendererDelta(initial, publication);
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
@@ -818,9 +818,9 @@ export function createAuthoringRenderController(host) {
     return drainGpuDiagnostics();
   }
 
-  function applyRendererDelta(json) {
+  function applyRendererDelta(json, publication) {
     const startedAtMs = performance.now();
-    const applied = renderer.applyDeltaJson(json);
+    const applied = renderer.applyDeltaJson(json, JSON.stringify(publication));
     if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
     return applied;
   }
@@ -883,7 +883,7 @@ export function createAuthoringRenderController(host) {
     }
     while (!needsPresent && bootstrapQueue.length > 0) {
       const { json, publication } = bootstrapQueue.shift();
-      const applied = applyRendererDelta(json);
+      const applied = applyRendererDelta(json, publication);
       if (!applied) {
         acknowledgeAlreadyPresented(publication);
         continue;

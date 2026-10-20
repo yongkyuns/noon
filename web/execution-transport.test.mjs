@@ -29,6 +29,11 @@ function delta(sequence, { session = 1, snapshot = sequence === 0, channel = RET
   });
 }
 
+function packet(body) {
+  const { channel, session, sequence, snapshot, pointer_view } = JSON.parse(body);
+  return `${JSON.stringify({ channel, session, sequence, snapshot, pointer_view })}\n${body}`;
+}
+
 function turn() {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -158,7 +163,7 @@ test("transferable transport preserves a large delta after buffer ownership move
 });
 
 test("transferable envelope metadata must match encoded payload", () => {
-  const payload = new TextEncoder().encode(delta(0));
+  const payload = new TextEncoder().encode(packet(delta(0)));
   const validBuffer = payload.buffer.slice(
     payload.byteOffset,
     payload.byteOffset + payload.byteLength,
@@ -174,7 +179,7 @@ test("transferable envelope metadata must match encoded payload", () => {
   );
 
   const retainedPayload = new TextEncoder().encode(
-    delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL }),
+    packet(delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL })),
   );
   const retainedBuffer = retainedPayload.buffer.slice(
     retainedPayload.byteOffset,
@@ -190,7 +195,7 @@ test("transferable envelope metadata must match encoded payload", () => {
     { session: 1, sequence: 0, snapshot: true },
   );
 
-  const mismatchPayload = new TextEncoder().encode(delta(0));
+  const mismatchPayload = new TextEncoder().encode(packet(delta(0)));
   const mismatchBuffer = mismatchPayload.buffer.slice(
     mismatchPayload.byteOffset,
     mismatchPayload.byteOffset + mismatchPayload.byteLength,
@@ -288,13 +293,13 @@ test("delta send reuses only metadata validated for the identical JSON payload",
 });
 
 
-test("canonical worker header avoids a full producer parse while receivers validate the unchanged body", async () => {
+test("canonical worker header avoids full producer and receiver parses of the unchanged body", async () => {
   const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1,
     sequence: 0, snapshot: true, pointer_view: { revision: 8, width: 640, height: 360 } };
   const json = JSON.stringify({ ...header, time: 0,
     objects: Array.from({ length: 600 }, (_, id) => ({ id, geometry: "●\n".repeat(256) })) });
   const packet = `${JSON.stringify(header)}\n${json}`;
-  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length);
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(packet).length);
   const shared = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const { port1, port2 } = new MessageChannel();
@@ -330,7 +335,7 @@ test("canonical worker header avoids a full producer parse while receivers valid
   } finally { port1.close(); port2.close(); }
 });
 
-test("worker carrier validates bounded metadata and never relaxes generic JSON or receiver validation", () => {
+test("worker carrier validates bounded metadata and leaves body admission to Rust", () => {
   const header = JSON.parse(delta(0));
   const packet = value => `${JSON.stringify(value)}\n${delta(0)}`;
   assert.throws(() => prepareExecutionDeltaTransportForSend(null), /header\/body string/);
@@ -344,13 +349,47 @@ test("worker carrier validates bounded metadata and never relaxes generic JSON o
   ]) assert.throws(() => prepareExecutionDeltaTransportForSend(packet({ ...header, [field]: value })), error);
   assert.throws(() => prepareExecutionDeltaMetadataForSend("not JSON"), /invalid JSON/);
   assert.throws(() => decodeTransferableExecutionDelta({ type: "execution_delta", session: 1,
-    sequence: 99, buffer: new TextEncoder().encode(delta(0)).buffer }), /does not match/);
+    sequence: 99, buffer: new TextEncoder().encode(`${JSON.stringify(header)}\n${delta(0)}`).buffer }), /does not match/);
   const mailbox = createSharedExecutionMailbox(4096);
   const writer = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const malformed = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\nnot JSON`);
   assert.equal(writer.send(malformed.json, malformed.metadata), true);
   let applied = false;
-  assert.throws(() => reader.drain(() => { applied = true; }), /invalid JSON/);
-  assert.equal(applied, false, "an invalid body must not reach the consumer");
+  assert.equal(reader.drain(body => {
+    assert.equal(body, "not JSON");
+    applied = true;
+  }), 1);
+  assert.equal(applied, true, "body syntax and identity must pass Rust admission before state changes");
+});
+
+
+test("worker receivers parse only the bounded header of a 600-object delta", async () => {
+  const json = JSON.stringify({ ...JSON.parse(delta(0)), objects: Array.from({ length: 600 }, (_, id) => ({ id,
+    points: Array.from({ length: 12 }, (_, i) => [i / 10, id / 600]) })) });
+  assert.equal(JSON.parse(json).objects.length, 600);
+  assert.ok(json.length > 100_000);
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length + 512);
+  const writer = new SharedExecutionDeltaWriter(mailbox);
+  const reader = new SharedExecutionDeltaReader(mailbox);
+  const { port1, port2 } = new MessageChannel();
+  try {
+    const sender = new TransferableExecutionDeltaSender(port1);
+    const incoming = new Promise(resolve => port2.once("message", resolve));
+    assert.equal(writer.send(json), true);
+    assert.equal(sender.send(json), true);
+    const message = await incoming;
+    const parsed = [];
+    const originalParse = JSON.parse;
+    JSON.parse = function (text, ...args) {
+      parsed.push(text.length);
+      assert.ok(text.length <= 512, "full body parsing belongs to Rust admission");
+      return originalParse.call(this, text, ...args);
+    };
+    try {
+      assert.equal(reader.drain(body => assert.equal(body, json)), 1);
+      assert.equal(decodeTransferableExecutionDelta(message).json, json);
+    } finally { JSON.parse = originalParse; }
+    assert.equal(parsed.length, 2);
+  } finally { port1.close(); port2.close(); }
 });

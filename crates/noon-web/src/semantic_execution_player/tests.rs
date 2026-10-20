@@ -3875,3 +3875,101 @@ mod callback_mixed_provisional_membership_regression {
             .is_err());
     }
 }
+
+#[test]
+fn renderer_delta_admission_checks_every_routed_metadata_field_before_commit() {
+    let (mut worker, _) = translation_drag_player();
+    worker
+        .set_browser_pointer_view_json(r#"{"revision":12,"width":640,"height":360}"#)
+        .unwrap();
+    let body = worker.drain_delta_json().unwrap().unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let metadata = serde_json::json!({ "session": raw["session"], "sequence": raw["sequence"], "snapshot": true,
+        "pointerView": { "revision": 12, "width": 640, "height": 360 } });
+    let decode = |value: &serde_json::Value| {
+        crate::retained_execution_canvas::decode_renderer_delta(
+            &body,
+            &serde_json::to_string(value).unwrap(),
+        )
+    };
+    assert!(decode(&metadata).is_ok());
+    for (field, value) in [
+        (
+            "session",
+            serde_json::json!(raw["session"].as_u64().unwrap() + 1),
+        ),
+        ("sequence", serde_json::json!(1)),
+        ("snapshot", serde_json::json!(false)),
+        ("pointerView", serde_json::Value::Null),
+    ] {
+        let mut changed = metadata.clone();
+        changed[field] = value;
+        assert!(
+            decode(&changed).unwrap_err().contains("does not match"),
+            "{field}"
+        );
+    }
+    for (field, value) in [("revision", 13), ("width", 800), ("height", 450)] {
+        let mut changed = metadata.clone();
+        changed["pointerView"][field] = value.into();
+        assert!(
+            decode(&changed).unwrap_err().contains("does not match"),
+            "{field}"
+        );
+    }
+    for (field, value) in [
+        ("sequence", serde_json::json!(1_u64 << 53)),
+        ("unexpected", serde_json::json!(true)),
+        ("session", serde_json::json!(-1)),
+    ] {
+        let mut invalid = metadata.clone();
+        invalid[field] = value;
+        assert!(decode(&invalid).is_err(), "{field}");
+    }
+    let mut wrong_channel: serde_json::Value = serde_json::from_str(&body).unwrap();
+    wrong_channel["channel"] = "other".into();
+    assert!(crate::retained_execution_canvas::decode_renderer_delta(
+        &wrong_channel.to_string(),
+        &metadata.to_string()
+    )
+    .unwrap_err()
+    .contains("does not match"));
+    assert!(crate::retained_execution_canvas::decode_renderer_delta(
+        "not JSON",
+        &metadata.to_string()
+    )
+    .is_err());
+    let mut oversized = metadata.to_string();
+    oversized.push_str(&" ".repeat(513));
+    assert!(
+        crate::retained_execution_canvas::decode_renderer_delta(&body, &oversized)
+            .unwrap_err()
+            .contains("bounded header")
+    );
+}
+
+#[test]
+fn renderer_delta_admission_preserves_snapshots_and_incremental_view_changes() {
+    let (mut worker, _) = translation_drag_player();
+    for snapshot in [true, false] {
+        if !snapshot {
+            worker
+                .set_browser_pointer_view_json(r#"{"revision":1,"width":640,"height":360}"#)
+                .unwrap();
+        }
+        let packet = worker.drain_delta_transport_json().unwrap().unwrap();
+        let (header, body) = packet.split_once('\n').unwrap();
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let mut metadata = serde_json::json!({ "session": header["session"],
+            "sequence": header["sequence"], "snapshot": snapshot });
+        if let Some(view) = header.get("pointer_view") {
+            metadata["pointerView"] = view.clone();
+        }
+        let decoded =
+            crate::retained_execution_canvas::decode_renderer_delta(body, &metadata.to_string())
+                .unwrap();
+        let expected: crate::RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(body).unwrap();
+        assert_eq!(decoded, expected);
+    }
+}

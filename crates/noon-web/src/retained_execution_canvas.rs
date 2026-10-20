@@ -1,3 +1,44 @@
+/// Decode the body once at the genuine render-worker boundary. Host metadata
+/// may route a packet, but cannot authorize a different retained publication.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn decode_renderer_delta(
+    json: &str,
+    metadata_json: &str,
+) -> Result<crate::RetainedFamilyExecutionDeltaEnvelope, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Metadata {
+        session: u32,
+        sequence: u64,
+        snapshot: bool,
+        pointer_view: Option<crate::PointerPresentationView>,
+    }
+    if metadata_json.len() > 512 {
+        return Err("renderer delta metadata exceeds its bounded header".into());
+    }
+    let metadata: Metadata = serde_json::from_str(metadata_json).map_err(|e| e.to_string())?;
+    if metadata.sequence > (1_u64 << 53) - 1 {
+        return Err("renderer delta metadata has an invalid sequence".into());
+    }
+    if let Some(view) = metadata.pointer_view {
+        view.validate()?;
+        if !view.drawable() {
+            return Err("renderer delta metadata has an unavailable pointer view".into());
+        }
+    }
+    let delta: crate::RetainedFamilyExecutionDeltaEnvelope =
+        serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if delta.retained.channel != crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL
+        || delta.retained.session != metadata.session
+        || delta.retained.sequence != metadata.sequence
+        || delta.retained.snapshot != metadata.snapshot
+        || delta.pointer_view != metadata.pointer_view
+    {
+        return Err("renderer delta metadata does not match its body".into());
+    }
+    Ok(delta)
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) struct FamilyAdmission<T, E> {
     pub(crate) outcome: crate::RetainedTransportApplyOutcome,
@@ -172,7 +213,7 @@ mod wasm {
             ensure_webgl_context_available, webgl_context_is_lost, WebGlContextLifecycle,
         },
         InstalledRetainedExecutionMirror, RendererObservationOutcome, RendererObservationRequest,
-        RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
+        RetainedTransportApplyOutcome,
     };
 
     const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -430,7 +471,11 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = applyDeltaJson)]
-        pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
+        pub fn apply_delta_json(
+            &mut self,
+            json: &str,
+            metadata_json: &str,
+        ) -> Result<bool, JsValue> {
             if self.pending_frame {
                 return Err(js_message(
                     "render worker must present the retained execution delta before accepting another",
@@ -440,8 +485,7 @@ mod wasm {
             // The mirror remains authoritative through context loss. Resource
             // uploads are deferred until recovery, but the exact delta is still
             // admitted so its frame can be rebuilt without a transport retry.
-            let delta: RetainedFamilyExecutionDeltaEnvelope =
-                serde_json::from_str(json).map_err(js_error)?;
+            let delta = super::decode_renderer_delta(json, metadata_json).map_err(js_error)?;
             let gpu_available = !self.webgl_context_lifecycle.is_lost()
                 && !self.webgl_context_lifecycle.recovery_pending();
             let stale = self.mirror.transport_mirror().session() == Some(delta.retained.session)
