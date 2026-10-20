@@ -64,12 +64,8 @@ pub(crate) fn compile_transform_geometry_values(
                 let Some(target) = source.morph_target() else {
                     return Err(TransformCompileFailure::UnsupportedGeometry);
                 };
-                noon_geometry::plan_morph_preserving_order(
-                    source,
-                    target,
-                    noon_geometry::MorphOptions::DEFAULT,
-                )
-                .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+                noon_geometry::PreparedPathInterpolation::new(source, target)
+                    .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
                 // Filled-path support is style-dependent and was validated before
                 // PreparedMorph construction. This second pass has no style context, so
                 // it deliberately revalidates only renderer-independent correspondence.
@@ -382,24 +378,10 @@ fn screen_line_width_only_change(from: Style, to: Style) -> bool {
 }
 
 fn filled_morph_is_supported(source: &VectorPath, target: &VectorPath) -> bool {
-    // Prefer exact ordered affine reflection when winding changes. The general
-    // planner remains the fallback for the established non-inverting class.
-    noon_geometry::plan_filled_affine_winding_flip_preserving_order(
-        source,
-        target,
-        noon_geometry::MorphOptions::DEFAULT,
-    )
-    .is_ok()
-        || noon_geometry::plan_filled_morph_preserving_order(
-            source,
-            target,
-            noon_geometry::MorphOptions::DEFAULT,
-        )
-        .is_ok()
-        // Complex/concave and changing-contour fills have no valid retained fan.
-        // They retain the SAME ordered endpoint resource and progress channel;
-        // the renderer samples/tessellates only that affected path locally.
-        || noon_geometry::PreparedPathInterpolation::new(source, target).is_ok()
+    // Every supported fill needs finite ordered cubic correspondence. The renderer
+    // chooses a retained fan or sampled tessellation from these same endpoints;
+    // constructing and discarding either fan here adds no admission constraint.
+    noon_geometry::PreparedPathInterpolation::new(source, target).is_ok()
 }
 
 // Independent drivers can take over a fixed frame only if its conversion back
@@ -451,6 +433,79 @@ fn fixed_frame_inverse_is_finite(
 mod tests {
     use super::*;
     use noon_core::{Color, PathCommand, Vec2};
+
+    #[test]
+    fn filled_morph_preparation_preserves_endpoints_with_changing_contours() {
+        let source = noon_geometry::canonical_outline_path(&GeometryRef::circle(1.0)).unwrap();
+        let target = VectorPath::new()
+            .move_to(Vec2::new(-2.0, -2.0))
+            .line_to(Vec2::new(2.0, -2.0))
+            .line_to(Vec2::new(0.0, 2.0))
+            .close()
+            .move_to(Vec2::new(-0.25, 0.0))
+            .line_to(Vec2::new(0.0, 0.25))
+            .line_to(Vec2::new(0.25, 0.0))
+            .close();
+        for mode in [
+            StrokeWidthMode::ScaleWithObject,
+            StrokeWidthMode::ScreenSpace,
+        ] {
+            let style = Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                stroke_width_mode: mode,
+                ..Style::default()
+            };
+            let (geometry, render_frame) = compile_content_morph(
+                &GeometryRef::path(source.clone()),
+                &GeometryRef::path(target.clone()),
+                style,
+                style,
+                Transform2D::IDENTITY,
+                Transform2D::IDENTITY,
+            )
+            .expect("changing contours use renderer-local sampled fill tessellation");
+            assert_eq!(
+                geometry,
+                GeometryRef::path(source.clone().with_morph_target(target.clone()))
+            );
+            let values = TrackValues::PreparedMorph {
+                from: 0.0,
+                to: 1.0,
+                geometry: geometry.clone(),
+                render_frame,
+                source_transform: Transform2D::IDENTITY,
+            };
+            let Some(TransformGeometryPlan::PathPair {
+                geometry: prepared, ..
+            }) = compile_transform_geometry_values(Property::Morph, &values).unwrap()
+            else {
+                panic!("prepared morph must retain its path pair")
+            };
+            assert_eq!(*prepared, geometry);
+        }
+    }
+
+    #[test]
+    fn filled_morph_admission_rejects_non_finite_endpoints() {
+        let valid = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
+        for coordinate in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let invalid = VectorPath::new().move_to(Vec2::new(coordinate, 0.0));
+            for (source, target) in [(&invalid, &valid), (&valid, &invalid)] {
+                assert_eq!(
+                    compile_path_pair(
+                        Style::default(),
+                        Style::default(),
+                        Transform2D::IDENTITY,
+                        Transform2D::IDENTITY,
+                        source.clone(),
+                        target.clone()
+                    ),
+                    Err(TransformCompileFailure::UnsafeFilledPath)
+                );
+            }
+        }
+    }
 
     #[test]
     fn identity_free_value_plan_matches_stable_track_plan() {

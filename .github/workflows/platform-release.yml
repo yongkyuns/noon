@@ -141,8 +141,8 @@ jobs:
         uses: ./.github/actions/install-wasm-opt
       - name: Test optimized replay build contract
         run: node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs
-      - name: Resolve one dependency lock for both packages
-        run: cargo generate-lockfile
+      - name: Validate the reviewed dependency lock for both packages
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - name: Build and validate optimized browser package
         run: |
           node .github/ci/optimized-replay-artifact.mjs prepare production .
