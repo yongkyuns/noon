@@ -813,6 +813,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
     };
 
     Ok(SemanticStyle {
+        stroke_pattern: None,
         fill,
         fill_opacity,
         stroke,

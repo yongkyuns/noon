@@ -271,12 +271,15 @@ pub struct SemanticStyle {
     pub stroke_join: StrokeJoin,
     #[serde(default)]
     pub stroke_cap: StrokeCap,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_pattern: Option<crate::StrokePattern>,
     pub object_opacity: f64,
 }
 
 impl Default for SemanticStyle {
     fn default() -> Self {
         Self {
+            stroke_pattern: None,
             fill: Some(SemanticPaint::Solid(Color::WHITE)),
             fill_opacity: 1.0,
             stroke: None,
@@ -314,12 +317,14 @@ impl SemanticStyle {
             && self.background_stroke_opacity.is_finite()
             && self.background_stroke_width.is_finite()
             && self.object_opacity.is_finite()
+            && self.stroke_pattern.is_none_or(|p| p.validate().is_ok())
     }
 
     /// Compatibility adapter. Legacy `Style::opacity` becomes overall object
     /// opacity; existing color alpha remains part of each solid paint.
     pub fn from_compact(style: Style) -> Self {
         Self {
+            stroke_pattern: style.stroke_pattern,
             fill: style.fill.map(SemanticPaint::Solid),
             fill_opacity: 1.0,
             stroke: style.stroke.map(SemanticPaint::Solid),
@@ -343,6 +348,7 @@ impl SemanticStyle {
     /// the compatibility layer maps Manim's four-pixel default to `0.04`.
     pub fn manim_family_root(color: crate::Color) -> Self {
         Self {
+            stroke_pattern: None,
             fill: Some(SemanticPaint::Solid(color)),
             fill_opacity: 0.0,
             stroke: Some(SemanticPaint::Solid(color)),

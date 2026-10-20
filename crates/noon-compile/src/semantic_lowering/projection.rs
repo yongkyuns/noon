@@ -477,6 +477,9 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
+    UnsupportedStrokePattern {
+        node: SemanticNodeId,
+    },
     UnsupportedGlowProfile {
         owner: SemanticNodeId,
     },
@@ -541,6 +544,7 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedStrokePattern { node } => write!(formatter, "stroke pattern on {node:?} requires a finite planar analytic Line"),
             Self::UnsupportedGlowProfile { owner } => write!(
                 formatter,
                 "glow on {}:{} requires one attachment on ordinary planar 2D content",
@@ -1048,6 +1052,7 @@ pub(super) fn lower_semantic_transform(
 /// Value-lowering failure before a transaction-local node has a permanent semantic ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticExecutionValueError {
+    UnsupportedStrokePattern,
     NonFiniteValue {
         field: SemanticExecutionField,
     },
@@ -1064,6 +1069,9 @@ pub enum SemanticExecutionValueError {
 impl std::fmt::Display for SemanticExecutionValueError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedStrokePattern => {
+                formatter.write_str("stroke pattern requires a finite planar analytic Line")
+            }
             Self::NonFiniteValue { field } => write!(formatter, "non-finite {field} state"),
             Self::ValueOutOfRange { field } => {
                 write!(
@@ -1086,6 +1094,9 @@ impl std::error::Error for SemanticExecutionValueError {}
 impl SemanticExecutionValueError {
     pub(super) fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
         match self {
+            Self::UnsupportedStrokePattern => {
+                SemanticLoweringError::UnsupportedStrokePattern { node }
+            }
             Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
             Self::ValueOutOfRange { field } => {
                 SemanticLoweringError::ValueOutOfRange { node, field }
@@ -1170,6 +1181,20 @@ pub(super) fn lower_semantic_style(
 pub(crate) fn lower_semantic_style_value(
     state: &SemanticObjectState,
 ) -> Result<Style, SemanticExecutionValueError> {
+    if let Some(pattern) = state.style.stroke_pattern {
+        if pattern.validate().is_err()
+            || state.style.stroke.is_none()
+            || state.style.stroke_width <= 0.0
+            || state.transform.planar_rotation().is_none()
+            || state.transform.translation.z != 0.0
+            || !matches!(
+                state.content,
+                SemanticObjectContent::Geometry(noon_core::StoredGeometry::Line { .. })
+            )
+        {
+            return Err(SemanticExecutionValueError::UnsupportedStrokePattern);
+        }
+    }
     let fill = lower_paint(
         SemanticExecutionField::FillPaint,
         SemanticExecutionField::FillOpacity,
@@ -1198,6 +1223,7 @@ pub(crate) fn lower_semantic_style_value(
     )?;
 
     Ok(Style {
+        stroke_pattern: state.style.stroke_pattern,
         fill,
         stroke,
         stroke_width,

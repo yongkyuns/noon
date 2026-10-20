@@ -3904,6 +3904,7 @@ mod tests {
         assert_eq!(
             target_state.style,
             SemanticStyle {
+                stroke_pattern: style.stroke_pattern,
                 fill: style.fill.map(SemanticPaint::Solid),
                 fill_opacity: 1.0,
                 stroke: style.stroke.map(SemanticPaint::Solid),

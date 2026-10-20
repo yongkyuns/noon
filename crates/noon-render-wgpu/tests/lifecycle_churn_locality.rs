@@ -52,6 +52,7 @@ fn shape_style(index: usize) -> Style {
         Color::TEAL
     };
     Style {
+        stroke_pattern: None,
         fill: Some(color),
         stroke: Some(color),
         stroke_width: 0.02,

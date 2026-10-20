@@ -45,6 +45,7 @@ struct VertexOutput {
     @location(5) @interpolate(flat) flags: vec2<f32>,
     @location(6) object_scale: vec2<f32>,
     @location(7) line_stroke_enabled: f32,
+    @location(8) @interpolate(flat) stroke_pattern: vec4<f32>,
 };
 
 struct RectangleVertexOutput {
@@ -150,6 +151,7 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
     output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
     output.object_scale = input.scale;
     output.line_stroke_enabled = 0.0;
+    output.stroke_pattern = vec4<f32>(0.0);
     return output;
 }
 
@@ -269,6 +271,17 @@ fn vs_line(input: LineVertexInput) -> VertexOutput {
     output.metrics = input.metrics;
     output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
     output.line_stroke_enabled = select(0.0, 1.0, stroke_is_enabled(input.flags));
+    output.stroke_pattern = vec4<f32>(0.0);
+    if (input.flags.x & 4u) != 0u {
+        var units = 1.0;
+        if screen_space {
+            let local_length = length(input.end - input.start);
+            let world_start = transform_point(input.start, input.translation, input.scale, input.rotation);
+            let world_end = transform_point(input.end, input.translation, input.scale, input.rotation);
+            units = length(world_end - world_start) / max(local_length, 0.000001);
+        }
+        output.stroke_pattern = vec4<f32>(input.fill.xyz * units, input.fill.w);
+    }
     return output;
 }
 
@@ -523,6 +536,22 @@ fn fs_rectangle(input: RectangleVertexOutput) -> @location(0) vec4<f32> {
     );
 }
 
+// Periodic ink on one retained Line. The shader owns no animation time.
+fn periodic_stroke_mask(pattern: vec4<f32>, local: vec2<f32>, half_length: f32,
+                        radius: f32, footprint: vec2<f32>) -> f32 {
+    let period = max(pattern.x, 0.000001);
+    let centered = local.x + half_length - pattern.z - pattern.y * 0.5;
+    let q = centered - period * floor(centered / period + 0.5);
+    let half_pixel = max(abs(footprint.x) * 0.5, 0.000001);
+    let dash = 1.0 - smoothstep(-half_pixel, half_pixel, abs(q) - pattern.y * 0.5);
+    let delta = vec2<f32>(q, local.y);
+    let distance = length(delta);
+    let circle_pixel = max(dot(abs(delta) / max(distance, 0.000001), abs(footprint)) * 0.5, 0.000001);
+    let dot_mask = 1.0 - smoothstep(-circle_pixel, circle_pixel, distance - radius);
+    let ink = select(dash, dot_mask, pattern.y == 0.0);
+    return pattern.w + (1.0 - pattern.w) * ink;
+}
+
 @fragment
 fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_length = input.geometry.x * 0.5;
@@ -556,5 +585,10 @@ fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     let use_box_coverage = cap_mode == 1u || (cap_mode == 0u && inside_body);
     let coverage = select(sdf_coverage, butt_coverage, use_box_coverage);
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
-    return styled_line_color(input, coverage) * visible;
+    let footprint = fwidth(input.local);
+    var mask = 1.0;
+    if input.stroke_pattern.x > 0.0 {
+        mask = periodic_stroke_mask(input.stroke_pattern, input.local, half_length, radius, footprint);
+    }
+    return styled_line_color(input, coverage * mask) * visible;
 }

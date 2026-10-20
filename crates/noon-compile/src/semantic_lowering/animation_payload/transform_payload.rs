@@ -169,6 +169,7 @@ pub(super) fn validate_transform_payload_shape(
     if source.style.stroke_width_mode != target.style.stroke_width_mode
         || source.style.stroke_join != target.style.stroke_join
         || source.style.stroke_cap != target.style.stroke_cap
+        || source.style.stroke_pattern != target.style.stroke_pattern
     {
         return Err(TransformPayloadValidationIssue::StyleChange);
     }

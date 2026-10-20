@@ -15,6 +15,7 @@ use std::{cell::RefCell, rc::Rc};
 mod bounds;
 mod layout;
 mod manim_geometry;
+mod stroke_pattern;
 mod style;
 use bounds::transform_layout_xy;
 #[cfg(any(feature = "native-text", feature = "latex"))]
@@ -1485,6 +1486,7 @@ fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
 }
 fn manim_style(color: Color) -> SemanticStyle {
     SemanticStyle {
+        stroke_pattern: None,
         fill: Some(SemanticPaint::Solid(color)),
         fill_opacity: 0.0,
         stroke: Some(SemanticPaint::Solid(color)),

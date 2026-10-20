@@ -17,6 +17,7 @@ fn build_scene() -> CompiledScene {
     let mut objects = Vec::new();
     let mut tracks = Vec::new();
     let style_a = Style {
+        stroke_pattern: None,
         fill: Some(Color::rgb(0.2, 0.3, 0.4)),
         stroke: None,
         stroke_width: 1.0,

@@ -21,6 +21,7 @@ fn line_frame(cap: StrokeCap, width_mode: StrokeWidthMode) -> FrameState {
             text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style {
+                stroke_pattern: None,
                 fill: None,
                 stroke: Some(Color::WHITE),
                 stroke_width: 0.04,

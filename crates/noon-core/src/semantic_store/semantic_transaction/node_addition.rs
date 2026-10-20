@@ -126,7 +126,9 @@ pub enum SemanticNodeCreation {
     /// A transaction-only retained-path constructor. Its resource token has no
     /// durable handle and cannot be admitted through ordinary node APIs.
     PendingPathObject {
-        state: SemanticPendingPathObject,
+        // Retained path builders carry a full style and role. Keep creation
+        // transactions compact rather than inflating every enum variant.
+        state: Box<SemanticPendingPathObject>,
         source_identity: Option<SourceIdentity>,
     },
     Family {
@@ -161,7 +163,9 @@ impl SemanticNodeCreation {
         role: SemanticObjectRole,
     ) -> Self {
         Self::PendingPathObject {
-            state: SemanticPendingPathObject::new(resource, transform, style, z_index, role),
+            state: Box::new(SemanticPendingPathObject::new(
+                resource, transform, style, z_index, role,
+            )),
             source_identity: None,
         }
     }

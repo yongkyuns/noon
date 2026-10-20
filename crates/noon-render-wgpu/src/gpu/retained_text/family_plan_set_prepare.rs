@@ -783,6 +783,7 @@ impl RetainedFramePreparer {
                                 let scratch = &mut self.scratch.objects[scratch_slot];
                                 scratch.transform = object.transform;
                                 scratch.style = Style {
+                                    stroke_pattern: None,
                                     fill: Some(
                                         crate::text::resolve_text_paint(
                                             run.fill,

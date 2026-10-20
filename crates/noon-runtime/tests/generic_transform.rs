@@ -8,6 +8,7 @@ use noon_runtime::SceneInstance;
 
 fn stroke_style(color: Color) -> Style {
     Style {
+        stroke_pattern: None,
         fill: None,
         stroke: Some(color),
         stroke_width: 0.1,

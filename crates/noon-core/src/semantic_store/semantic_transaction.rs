@@ -3429,7 +3429,7 @@ impl SemanticMutationTransaction {
                             // materialization set after the pass.
                             staged_pending_paths
                                 .entry(*token)
-                                .or_insert_with(|| state.clone());
+                                .or_insert_with(|| (**state).clone());
                         }
                         SemanticNodeCreation::Family { .. }
                         | SemanticNodeCreation::Signal { .. }
