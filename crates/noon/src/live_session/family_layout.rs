@@ -4,6 +4,16 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
+    /// Observe a fitting extent from this session's coherent layout snapshot.
+    pub fn dimension_length(
+        &self,
+        source: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+    ) -> Result<f64, LiveSessionError> {
+        let (_, bounds) = self.anchor_layout_members(source)?;
+        Ok(dimension.length(bounds))
+    }
+
     /// Place and fit from one effective snapshot, then publish one local edit.
     pub fn next_layout_to_edge_in_frame(
         &mut self,
@@ -37,6 +47,11 @@ impl LiveSession<'_> {
         let (x, y) = match dimension {
             crate::LayoutDimension::Width => (factor, 1.0),
             crate::LayoutDimension::Height => (1.0, factor),
+            crate::LayoutDimension::Depth => {
+                self.anchor_layout_members(source)?;
+                crate::semantic_mobject::authoring_render_f64("stretch factor", factor)?;
+                return Ok(SemanticMutationTransactionResult::default());
+            }
         };
         self.affine_layout(
             source,
@@ -73,17 +88,17 @@ impl LiveSession<'_> {
         pivot: crate::ManimRotationPivot,
     ) -> Result<(), LiveSessionError> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
-        let scale = dimension
+        let Some((x, y)) = dimension
             .scale(bounds, length, stretch)
-            .map_err(LiveSessionError::from)?;
+            .map_err(LiveSessionError::from)?
+        else {
+            return Ok(());
+        };
         for &leaf in &leaves {
             let object =
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
-        let Some((x, y)) = scale else {
-            return Ok(());
-        };
         let table_layout_scope = (!stretch)
             .then(|| source.resolve())
             .transpose()
@@ -138,6 +153,37 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), LiveSessionError> {
+        self.replace_layout_with_circle_buffer(source, target, dimension, stretch, None)
+    }
+
+    /// Publish Circle.surround from coherent live bounds with one revision.
+    /// The source must have resolved affine/content drivers, as with replace.
+    pub fn surround_circle(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), LiveSessionError> {
+        let dimension = crate::dimension_fit::circle_surround_dimension(dimension, stretch)?;
+        self.replace_layout_with_circle_buffer(
+            source,
+            target,
+            dimension,
+            stretch,
+            Some(buffer_factor),
+        )
+    }
+
+    fn replace_layout_with_circle_buffer(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+        circle_buffer_factor: Option<f64>,
+    ) -> Result<(), LiveSessionError> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
         let (target_nodes, target_bounds) = self.anchor_layout_members(target)?;
         if target_bounds.is_none() {
@@ -171,6 +217,7 @@ impl LiveSession<'_> {
             &target_leaves,
             dimension,
             stretch,
+            circle_buffer_factor,
         )
         .map_err(LiveSessionError::from)?;
         self.publish_path_edits(prepared).map(|_| ())
@@ -421,6 +468,25 @@ impl LiveSession<'_> {
             mask,
         )
         .map_err(LiveSessionError::from)
+    }
+
+    /// Align one object to the default frame using its coherent effective bounds.
+    pub fn align_on_frame(
+        &mut self,
+        mobject: &Mobject,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let target = crate::family_layout::frame_alignment_target(direction, buff)?;
+        self.move_to(
+            mobject,
+            LiveLayoutTarget::Point(target.0, target.1),
+            direction,
+            (
+                if direction.0 == 0.0 { 0.0 } else { 1.0 },
+                if direction.1 == 0.0 { 0.0 } else { 1.0 },
+            ),
+        )
     }
 
     pub fn move_family_to(

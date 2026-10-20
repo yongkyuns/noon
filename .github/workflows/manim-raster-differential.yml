@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
+      - "crates/noon/src/code_display/highlight.rs"
+      - "fixtures/code/pygments-2.19.2-code-colors.json"
+      - "scripts/test_code_pygments_parity.py"
       - "crates/noon/src/diagnostics.rs"
       - "crates/noon/src/example_scenes/following_graph_camera.rs"
       - "web/python/examples/manim_example_following_graph_camera.py"
@@ -80,6 +83,7 @@ on:
       - "scripts/semantic-preview-*"
       - "scripts/agent-preview-capture*.mjs"
       - "scripts/manim-differential.py"
+      - "scripts/test_manim_differential.py"
       - "scripts/manim-differential-noon.mjs"
       - "scripts/manim-raster-*.mjs"
       - "scripts/manim-raster-*.py"
@@ -118,6 +122,7 @@ jobs:
           node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/manim-raster-support.test.mjs scripts/shared-playback-raster-config.test.mjs
           python3 -m json.tool parity/manim-v0.21/manifest.json > /dev/null
           python3 -m py_compile scripts/test_manim_raster_manifest.py
+          python3 scripts/test_manim_differential.py
       - name: Validate preview capture and camera negative controls
         run: |
           node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs scripts/agent-preview-capture.test.mjs scripts/semantic-preview-observations.test.mjs scripts/special-camera-qualification.test.mjs
@@ -172,6 +177,8 @@ jobs:
           python -m pip show manimpango
           latex --version
           dvisvgm --version
+      - name: Verify pinned Code token colors used by ManimCE 0.21.0
+        run: python3 scripts/test_code_pygments_parity.py
       - name: Verify relocated manifests use repository-relative sources
         run: python scripts/test_manim_raster_manifest.py
       - name: Use repository-pinned Rust and WASM target

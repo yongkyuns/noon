@@ -7,10 +7,14 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
+import operator
 from functools import partialmethod
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Self
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
+
+if TYPE_CHECKING:
+    from manim.typing import Point3DLike
 
 from _noon_errors import (
     NoonError,
@@ -24,11 +28,17 @@ from _noon_errors import (
     NoonStalePublicationError,
     NoonCallbackError,
     NoonOwnershipError,
+    MultiAnimationOverrideException,
 )
 import _noon_ir as _ir
 
 VectorPath = _ir.VectorPath
 Color = _ir.Color
+
+
+def _default_mobject_path_func():
+    from _manim_user_vectors import straight_path
+    return straight_path()
 
 
 class Vec2(tuple):
@@ -250,8 +260,21 @@ def _callback_operations():
     return _manim_updaters
 
 
+def override_animation(
+    animation_class: type[Any],
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Mark a Mobject method as an override for the supplied animation class."""
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        setattr(func, "_override_animation", animation_class)
+        return func
+
+    return decorator
+
+
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
+
+    animation_overrides: dict[type[Any], Callable[..., Any]] = {}
 
     def __init__(
         self, color: Color = WHITE, name: str | None = None, dim: int = 3,
@@ -269,10 +292,99 @@ class Mobject:
         self.name = self.__class__.__name__ if name is None else name
         self.dim = dim
         self.target = target
+        self.generate_points()
+        self.init_colors()
 
     def get_group_class(self):
         from _manim_compat import Group
         return Group
+
+    def set(self, **kwargs: Any) -> Mobject:
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
+        return self
+
+    def interpolate_color(
+        self, mobject1: Mobject, mobject2: Mobject, alpha: float
+    ) -> Mobject:
+        """Raise the pinned base-class override error for unsupported objects."""
+        raise NotImplementedError("Please override in a child class.")
+
+    def interpolate(
+        self,
+        mobject1: Mobject,
+        mobject2: Mobject,
+        alpha: float,
+        path_func: Callable[..., Any] = _default_mobject_path_func(),
+    ) -> Self:
+        """Interpolate supported VMobject geometry and style through shared Rust."""
+        from _manim_semantic_handles import _interpolate_manim
+        return _interpolate_manim(self, mobject1, mobject2, alpha, path_func)
+
+    def point_from_proportion(self, alpha: float) -> Any:
+        raise NotImplementedError("Please override in a child class.")
+
+    def proportion_from_point(self, point: object) -> float:
+        raise NotImplementedError("Please override in a child class.")
+
+    def get_point_mobject(self, center: object | None = None) -> Mobject:
+        message = f"get_point_mobject not implemented for {self.__class__.__name__}"
+        raise NotImplementedError(message)
+
+    def repeat_submobject(self, submob: Mobject) -> Mobject:
+        """Return an independent shared-semantic copy of ``submob``."""
+        return submob.copy()
+
+    def align_points(self, mobject: Mobject) -> Mobject:
+        count = self.get_num_points()
+        other_count = mobject.get_num_points()
+        if count < other_count:
+            self.align_points_with_larger(mobject)
+        elif other_count < count:
+            mobject.align_points_with_larger(self)
+        return self
+
+    def align_submobjects(self, mobject: Mobject) -> Self:
+        own_members = getattr(self, "submobjects", ())
+        other_members = getattr(mobject, "submobjects", ())
+        own_growth = max(0, len(other_members) - len(own_members))
+        other_growth = max(0, len(own_members) - len(other_members))
+        own_add = getattr(self, "add_n_more_submobjects", None)
+        other_add = getattr(mobject, "add_n_more_submobjects", None)
+        if (own_growth and not callable(own_add)) or (
+            other_growth and not callable(other_add)
+        ):
+            raise NotImplementedError(
+                "align_submobjects requires family-backed growth for both objects"
+            )
+        if callable(own_add):
+            own_add(own_growth)
+        if callable(other_add):
+            other_add(other_growth)
+        return self
+
+    def null_point_align(self, mobject: Mobject) -> Self:
+        if self.has_points() != mobject.has_points():
+            raise NotImplementedError(
+                "null_point_align requires shared point-to-family promotion"
+            )
+        return self
+
+    def align_data(
+        self, mobject: Mobject, skip_point_alignment: bool = False
+    ) -> Self:
+        self.null_point_align(mobject)
+        self.align_submobjects(mobject)
+        if not skip_point_alignment:
+            self.align_points(mobject)
+        own_members = getattr(self, "submobjects", ())
+        other_members = getattr(mobject, "submobjects", ())
+        for own_member, other_member in zip(own_members, other_members, strict=True):
+            own_member.align_data(other_member)
+        return self
+
+    def align_points_with_larger(self, larger_mobject: Mobject) -> Mobject:
+        raise NotImplementedError("Please override in a child class.")
 
     @staticmethod
     def get_mobject_type_class():
@@ -282,7 +394,38 @@ class Mobject:
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        cls.animation_overrides = {}
+        cls._add_intrinsic_animation_overrides()
         cls._original__init__ = cls.__init__
+
+    @classmethod
+    def animation_override_for(cls, animation_class: type[Any]) -> Callable[..., Any] | None:
+        return cls.animation_overrides.get(animation_class)
+
+    @classmethod
+    def add_animation_override(
+        cls,
+        animation_class: type[Any],
+        override_func: Callable[..., Any],
+    ) -> None:
+        if animation_class not in cls.animation_overrides:
+            cls.animation_overrides[animation_class] = override_func
+        else:
+            existing = cls.animation_overrides[animation_class]
+            raise MultiAnimationOverrideException(
+                f"The animation {animation_class.__name__} for "
+                f"{cls.__name__} is overridden by more than one method: "
+                f"{existing.__qualname__} and {override_func.__qualname__}."
+            )
+
+    @classmethod
+    def _add_intrinsic_animation_overrides(cls) -> None:
+        for method_name in dir(cls):
+            if method_name.startswith("__"):
+                continue
+            method = getattr(cls, method_name)
+            if hasattr(method, "_override_animation"):
+                cls.add_animation_override(method._override_animation, method)
 
     @classmethod
     def set_default(cls, **kwargs: Any) -> None:
@@ -346,13 +489,24 @@ class Mobject:
     def get_bottom(self: Mobject) -> Vec2:
         return self.get_critical_point(DOWN)
 
+    def get_zenith(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
+    def get_nadir(self: Mobject) -> Vec2:
+        return self.get_critical_point(ORIGIN)
+
     def get_coord(
         self: Mobject, dim: int, direction: object = ORIGIN
     ) -> float:
-        if dim not in (0, 1):
-            raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
-        point = self.get_critical_point(direction)
-        return float(point[dim])
+        dim = operator.index(dim)
+        normalized_dim = dim if dim >= 0 else 3 + dim
+        if not 0 <= normalized_dim < 3:
+            raise IndexError(f"index {dim} is out of bounds for axis 0 with size 3")
+        if normalized_dim == 2:
+            key = 0
+        else:
+            key = direction[normalized_dim]
+        return self.get_extremum_along_dim(dim=normalized_dim, key=key)
 
     def get_x(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(0, direction)
@@ -360,11 +514,19 @@ class Mobject:
     def get_y(self: Mobject, direction: object = ORIGIN) -> float:
         return self.get_coord(1, direction)
 
+    def get_z(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(2, direction)
+
     def scale_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
 
     def scale_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
+
+    def scale_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
+        if self.depth == 0:
+            return self
+        return self.rescale_to_fit(depth, 2, stretch=False, **kwargs)
 
     def stretch(self, factor: float, dim: int, *, about_point=None, about_edge=None) -> Mobject:
         from _manim_semantic_handles import _stretch
@@ -379,6 +541,11 @@ class Mobject:
     def stretch_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
 
+    def stretch_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
+        if self.depth == 0:
+            return self
+        return self.rescale_to_fit(depth, 2, stretch=True, **kwargs)
+
     def match_width(
         self: Mobject, mobject: Mobject, **kwargs: Any
     ) -> Mobject:
@@ -388,6 +555,14 @@ class Mobject:
         self: Mobject, mobject: Mobject, **kwargs: Any
     ) -> Mobject:
         return self.match_dim_size(mobject, 1, **kwargs)
+
+    def match_depth(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        target_depth = mobject.depth
+        if self.depth == 0:
+            return self
+        return self.rescale_to_fit(target_depth, 2, stretch=False, **kwargs)
 
     def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
         from _manim_semantic_handles import _rescale_to_fit
@@ -418,9 +593,92 @@ class Mobject:
         from _manim_semantic_handles import _get_family
         return _get_family(self)
 
+    def get_family_updaters(self) -> list[Callable[..., Any]]:
+        """Return each member's updaters in shared family order."""
+        return [
+            updater
+            for mobject in self.get_family()
+            for updater in mobject.get_updaters()
+        ]
+
+    def split(self) -> list[Mobject]:
+        """Return this point-owning object, if any, followed by direct children."""
+        result = [self] if self.has_points() else []
+        return result + list(getattr(self, "submobjects", ()))
+
+    def family_members_with_points(self) -> list[Mobject]:
+        """Return point-owning family members in the shared family order."""
+        return [mobject for mobject in self.get_family() if mobject.get_num_points() > 0]
+
+    def reverse_points(self) -> Self:
+        """Reverse point order through the shared path and family operations."""
+        from _manim_path_editing import reverse_points
+        return reverse_points(self)
+
+    def repeat(self, count: int) -> Self:
+        """Repeat supported point arrays through the shared path/family operation."""
+        from _manim_path_editing import repeat_points
+        return repeat_points(self, count)
+
+    def space_out_submobjects(self, factor: float = 1.5, **kwargs: Any) -> Self:
+        """Expand the family, then shrink direct children through shared transforms."""
+        self.scale(factor, **kwargs)
+        for submobject in getattr(self, "submobjects", ()):
+            submobject.scale(1.0 / factor, **kwargs)
+        return self
+
+    def apply_to_family(self, func: Callable[[Mobject], None]) -> Mobject:
+        """Apply ``func`` to every point-owning member in shared family order."""
+        for mobject in self.family_members_with_points():
+            func(mobject)
+        return self
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
+
+    def to_original_color(self) -> Mobject:
+        """Apply this object's current color to its shared family."""
+        color = self.color if hasattr(self, "color") else self.get_color()
+        return self.set_color(color)
+
+    def set_color_by_gradient(self, *colors: object) -> Mobject:
+        return self.set_submobject_colors_by_gradient(*colors)
+
+    def set_submobject_colors_by_gradient(self, *colors: object) -> Mobject:
+        from _manim_compat import _as_color
+        if not colors:
+            raise ValueError("Need at least one color")
+        parsed = [_as_color("gradient color", color) for color in colors]
+        if len(parsed) == 1:
+            return self.set_color(parsed[0])
+        if not self.family_members_with_points():
+            return self
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *parsed)
+
+    def set_colors_by_radial_gradient(
+        self,
+        center: object | None = None,
+        radius: float = 1,
+        inner_color: object = WHITE,
+        outer_color: object = BLACK,
+    ) -> Mobject:
+        from _manim_semantic_handles import _set_color_by_radial_gradient
+        return _set_color_by_radial_gradient(
+            self, center, radius, inner_color, outer_color
+        )
+
+    def set_submobject_colors_by_radial_gradient(
+        self,
+        center: object | None = None,
+        radius: float = 1,
+        inner_color: object = WHITE,
+        outer_color: object = BLACK,
+    ) -> Mobject:
+        return self.set_colors_by_radial_gradient(
+            center, radius, inner_color, outer_color
+        )
 
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
@@ -428,6 +686,214 @@ class Mobject:
 
     def get_center(self) -> Vec2:
         return _callback_operations()._canonical_get_center(self)
+
+    def get_z_index_reference_point(self) -> Vec2:
+        """Return the center of this object's z-index grouping target."""
+        z_index_group = getattr(self, "z_index_group", self)
+        return z_index_group.get_center()
+
+    def get_start(self) -> Any:
+        """Return the first point of this object's path."""
+        self.throw_error_if_no_points()
+        from _manim_path_queries import endpoint
+        return endpoint(self, False)
+
+    def get_end(self) -> Any:
+        """Return the last point of this object's path."""
+        self.throw_error_if_no_points()
+        from _manim_path_queries import endpoint
+        return endpoint(self, True)
+
+    def get_start_and_end(self) -> tuple[Any, Any]:
+        """Return the starting and ending point of this object's path."""
+        return self.get_start(), self.get_end()
+
+    def get_num_points(self) -> int:
+        """Return the number of points in this object's path."""
+        from _manim_path_queries import point_count
+        return point_count(self)
+
+    def invert(self, recursive: bool = False) -> Self:
+        """Reverse child order when this object has a family-aware wrapper."""
+        return self
+
+    def sort(
+        self,
+        point_to_num_func: Callable[[Point3DLike], float] = lambda point: point[0],
+        submob_func: Callable[[Mobject], Any] | None = None,
+    ) -> Self:
+        """Sort family-aware children; a bare point object has no children."""
+        return self
+
+    def sort_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.sort(*args, **kwargs)
+
+    def shuffle(self, recursive: bool = False) -> Self:
+        """Shuffle children when this object has a family-aware wrapper."""
+        return self
+
+    def shuffle_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.shuffle(*args, **kwargs)
+
+    def arrange(
+        self,
+        direction: object = RIGHT,
+        buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+        center: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        """Apply Manim's leaf-object arrangement behavior.
+
+        Family wrappers override this with shared Rust layout. A point-owning
+        leaf has no direct children, so its only arrangement effect is the
+        optional shared move to the origin.
+        """
+        if center:
+            self.center()
+        return self
+
+    def arrange_submobjects(self, *args: Any, **kwargs: Any) -> Self:
+        return self.arrange(*args, **kwargs)
+
+    def has_points(self) -> bool:
+        return self.get_num_points() > 0
+
+    def has_no_points(self) -> bool:
+        return not self.has_points()
+
+    def reset_points(self) -> Mobject:
+        """Clear this object's authored points through the shared path editor."""
+        from _manim_path_editing import clear_points
+        return clear_points(self)
+
+    def init_colors(self, propagate_colors: bool = True) -> Mobject:
+        """Base color hook for concrete compatibility classes to override."""
+        del propagate_colors
+        return self
+
+    def generate_points(self) -> Mobject:
+        """Base point hook for concrete compatibility classes to override."""
+        return self
+
+    def throw_error_if_no_points(self) -> None:
+        if self.has_no_points():
+            import sys
+            caller_name = sys._getframe(1).f_code.co_name
+            raise Exception(
+                f"Cannot call Mobject.{caller_name} for a Mobject with no points"
+            )
+
+    def nonempty_submobjects(self) -> list[Mobject]:
+        return [
+            submobject
+            for submobject in getattr(self, "submobjects", ())
+            if submobject.get_num_points() > 0
+            or bool(getattr(submobject, "submobjects", ()))
+        ]
+
+    def get_all_points(self):
+        """Return this object's and its family's authored point arrays."""
+        from _manim_path_queries import all_points
+        return all_points(self)
+
+    def get_pieces(self, n_pieces: float):
+        """Split a vector leaf into equal curve-parameter pieces.
+
+        Path subdivision is delegated to shared VMobject operations and the
+        result uses Manim's base Group constructor.
+        Shared family roots are not supported by this path-only profile.
+        """
+        from operator import index
+        from _manim_compat import Group, _is_shared_family
+
+        if _is_shared_family(self):
+            raise NotImplementedError(
+                "get_pieces for shared-family roots requires shared path ownership"
+            )
+
+        template = self.copy()
+        template.submobjects = []
+
+        sample_count = index(n_pieces + 1)
+        if sample_count < 0:
+            raise ValueError(
+                f"Number of samples, {sample_count}, must be non-negative."
+            )
+        if sample_count == 0:
+            alphas = []
+        elif sample_count == 1:
+            alphas = [0.0]
+        else:
+            alphas = [i / (sample_count - 1) for i in range(sample_count)]
+
+        return Group(
+            *(
+                template.copy().pointwise_become_partial(self, a1, a2)
+                for a1, a2 in zip(alphas[:-1], alphas[1:], strict=True)
+            )
+        )
+
+    def get_array_attrs(self) -> list[str]:
+        return ["points"]
+
+    def apply_over_attr_arrays(self, func: Callable[[Any], Any]) -> Self:
+        """Map this object's supported point array and publish it through Rust."""
+        from _manim_path_editing import apply_over_attr_arrays
+        return apply_over_attr_arrays(self, func)
+
+    def apply_points_function_about_point(
+        self,
+        func: Callable[[Any], Any],
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_points_function_about_point
+        return apply_points_function_about_point(
+            self, func, about_point=about_point, about_edge=about_edge
+        )
+
+    def apply_function(
+        self,
+        function: Callable[[Any], Any],
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_function
+        return apply_function(
+            self, function, about_point=about_point, about_edge=about_edge
+        )
+
+    def apply_complex_function(
+        self,
+        function: Callable[[complex], complex],
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_complex_function
+        return apply_complex_function(
+            self, function, about_point=about_point, about_edge=about_edge
+        )
+
+    def apply_matrix(
+        self,
+        matrix: object,
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+    ) -> Self:
+        from _manim_path_editing import apply_matrix
+        return apply_matrix(
+            self, matrix, about_point=about_point, about_edge=about_edge
+        )
+
+    def get_merged_array(self, array_attr: str):
+        from _manim_path_queries import merged_array
+        return merged_array(self, array_attr)
+
+    def get_points_defining_boundary(self):
+        return self.get_all_points()
 
     @property
     def width(self) -> float:
@@ -445,20 +911,75 @@ class Mobject:
     def height(self, value: float) -> None:
         _semantic_operations()._set_height_property(self, value)
 
+    @property
+    def depth(self) -> float:
+        """Return the zero z extent of Noon’s planar geometry profile."""
+        return 0.0
+
+    @depth.setter
+    def depth(self, value: float) -> None:
+        self.scale_to_fit_depth(value)
+
     def shift(self, direction: object) -> Mobject:
         return _callback_operations()._canonical_shift(self, direction)
 
     def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
         return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
 
+    def put_start_and_end_on(self, start: object, end: object) -> Self:
+        from _manim_shared_geometry import _put_start_and_end_on
+        return _put_start_and_end_on(self, start, end)
+
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
+
+    def align_on_border(
+        self,
+        direction: object,
+        buff: float = DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    ) -> Mobject:
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            raise NotImplementedError("frame alignment queries are unavailable during staged callbacks")
+        return self._align_on_frame(_as_vec2(direction), float(buff))
+
+    def apply_function_to_position(
+        self,
+        function: Callable[[Any], Any],
+    ) -> Self:
+        """Map the Rust-backed center and move this object to the result."""
+        center = self.get_center()
+        try:
+            import numpy as np
+        except ModuleNotFoundError as error:
+            if error.name != "numpy":
+                raise
+            point = (center.x, center.y, 0.0)
+        else:
+            point = np.asarray((center.x, center.y, 0.0), dtype=np.float64)
+        self.move_to(function(point))
+        return self
+
+    def apply_function_to_submobject_positions(
+        self,
+        function: Callable[[Any], Any],
+    ) -> Self:
+        """Map each direct child's center using its Rust-backed placement."""
+        for submobject in getattr(self, "submobjects", ()):
+            submobject.apply_function_to_position(function)
+        return self
 
     def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_x(self, x, direction)
 
     def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_y(self, y, direction)
+
+    def set_z(self, z: float, direction: object = ORIGIN) -> Mobject:
+        """Keep planar objects on z=0; spatial z placement is unsupported."""
+        if float(z) != 0.0:
+            raise NotImplementedError("Noon currently supports only planar z=0 placement")
+        return self
 
     def set_coord(self, value: float, dim: int, direction: object = ORIGIN) -> Mobject:
         from _manim_shared_geometry import _set_coord
@@ -474,6 +995,9 @@ class Mobject:
     def match_y(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
         return self.match_coord(mobject, 1, direction)
 
+    def match_z(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 2, direction)
+
     @property
     def z_index(self) -> float:
         return _semantic_operations()._get_z_index(self)
@@ -484,6 +1008,10 @@ class Mobject:
 
     def set_z_index(self, z_index_value: float, family: bool = True) -> Mobject:
         return _semantic_operations()._set_z_index(self, z_index_value, family)
+
+    def set_z_index_by_z_Point3D(self) -> Mobject:
+        # Noon geometry is planar, so its pinned 3D center z coordinate is zero.
+        return self.set_z_index(0.0)
 
     def flip(self, axis=UP, *, about_point=None, about_edge=None) -> Mobject:
         return _semantic_operations()._flip(self, axis, about_point=about_point, about_edge=about_edge)
@@ -499,8 +1027,18 @@ class Mobject:
     def rotate(self, *args: object, **kwargs: object) -> Mobject:
         return _callback_operations()._canonical_rotate(self, *args, **kwargs)
 
-    def set_color(self, color: Color) -> Mobject:
-        return _callback_operations()._canonical_set_color(self, color)
+    def set_color(
+        self,
+        color: object = Color(1.0, 1.0, 0.0),
+        alpha: Any = None,
+        family: bool = True,
+    ) -> Mobject:
+        # The pinned base method does not consume alpha. This base wrapper has no
+        # child family; Group and VMobject provide their own family paint behavior.
+        del alpha, family
+        from _manim_compat import _as_color
+        parsed = _as_color("color", color)
+        return _callback_operations()._canonical_set_color(self, parsed)
 
     def set_glow(self, *, color=None, radius=None, intensity=None, source=None, scope=None) -> Mobject:
         from _noon_effects import set_glow
@@ -561,6 +1099,31 @@ class Mobject:
     def align_to(self, mobject_or_point: object, direction: object = ORIGIN) -> Mobject:
         return _semantic_operations()._align_to(self, mobject_or_point, direction)
 
+    def shift_onto_screen(self, **kwargs: Any) -> Mobject:
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            raise NotImplementedError("frame-bound queries are unavailable during staged callbacks")
+        for direction in (UP, DOWN, LEFT, RIGHT):
+            horizontal = direction.x != 0.0
+            radius = DEFAULT_FRAME_WIDTH / 2.0 if horizontal else DEFAULT_FRAME_HEIGHT / 2.0
+            max_value = radius - kwargs.get("buff", DEFAULT_MOBJECT_TO_EDGE_BUFFER)
+            edge_center = self.get_edge_center(direction)
+            projection = edge_center.x * direction.x + edge_center.y * direction.y
+            if projection > max_value:
+                self.to_edge(direction, **kwargs)
+        return self
+
+    def is_off_screen(self) -> bool:
+        x_radius = DEFAULT_FRAME_WIDTH / 2.0
+        y_radius = DEFAULT_FRAME_HEIGHT / 2.0
+        if self.get_left().x > x_radius:
+            return True
+        if self.get_right().x < -x_radius:
+            return True
+        if self.get_bottom().y > y_radius:
+            return True
+        return self.get_top().y < -y_radius
+
     def to_edge(
         self,
         edge: Vec2 | tuple[float, float] = LEFT,
@@ -582,6 +1145,12 @@ class Mobject:
     def animate(self):
         from _manim_animate import _AlignedAnimationBuilder
         return _AlignedAnimationBuilder(self)
+
+    @property
+    def always(self):
+        """Build immediate, repeatedly invoked updater calls like ManimCE."""
+        from _manim_updaters import _UpdaterBuilder
+        return _UpdaterBuilder(self)
 
 
     def add_updater(
@@ -623,6 +1192,36 @@ class Mobject:
     def get_updaters(self) -> list[Callable[..., Any]]:
         return _callback_operations().get_updaters(self)
 
+    def get_time_based_updaters(self) -> list[Callable[..., Any]]:
+        return _callback_operations().get_time_based_updaters(self)
+
+    def has_time_based_updater(self) -> bool:
+        return _callback_operations().has_time_based_updater(self)
+
+    def match_updaters(self, mobject: Mobject) -> Mobject:
+        """Clear this family, then copy only the donor root's callbacks."""
+        return _callback_operations().match_updaters(self, mobject)
+
+    @property
+    def updating_suspended(self) -> bool:
+        return _callback_operations().updating_suspended(self)
+
+    @updating_suspended.setter
+    def updating_suspended(self, value: object) -> None:
+        # Manim stores this attribute directly; boolean conversion preserves its
+        # truth-value contract while keeping the shared Rust node strongly typed.
+        _callback_operations().set_updating_suspended(self, bool(value), recursive=False)
+
+    def suspend_updating(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().suspend_updating(self, recursive)
+
+    def resume_updating(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().resume_updating(self, recursive)
+
+    def update(self, dt: float = 0, recursive: bool = True) -> Mobject:
+        """Invoke detached-object updaters; live updates belong to Rust phases."""
+        return _callback_operations().update(self, dt, recursive)
+
     def has_updaters(self) -> bool:
         return _callback_operations().has_updaters(self)
 
@@ -631,6 +1230,29 @@ class Mobject:
 
     def get_critical_point(self, direction: object) -> Vec2:
         return _semantic_operations()._get_critical_point(self, direction)
+
+    def get_extremum_along_dim(self, points=None, dim: int = 0, key: int = 0):
+        from _manim_path_queries import extremum_along_dim
+        return extremum_along_dim(self, points, dim, key)
+
+    def reduce_across_dimension(self, reduce_func: Callable[[Any], Any], dim: int):
+        from _manim_path_queries import reduce_across_dimension
+        return reduce_across_dimension(self, reduce_func, dim)
+
+    def get_center_of_mass(self) -> Vec2:
+        from _manim_path_queries import center_of_mass
+        return center_of_mass(self)
+
+    def length_over_dim(self, dim: int) -> float:
+        from _manim_path_queries import length_over_dim
+        return length_over_dim(self, dim)
+
+    def get_boundary_point(self, direction: object) -> Vec2:
+        from _manim_path_queries import boundary_point
+        return boundary_point(self, direction)
+
+    def get_midpoint(self) -> Vec2:
+        return self.point_from_proportion(0.5)
 
     def become(
         self,
@@ -645,6 +1267,45 @@ class Mobject:
 
     def replace(self, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False) -> Mobject:
         return _semantic_operations()._replace(self, mobject, dim_to_match, stretch)
+
+    def surround(
+        self,
+        mobject: Mobject,
+        dim_to_match: int = 0,
+        stretch: bool = False,
+        buff: float = MED_SMALL_BUFF,
+    ) -> Mobject:
+        self.replace(mobject, dim_to_match, stretch)
+        length = mobject.length_over_dim(dim_to_match)
+        self.scale((length + buff) / length)
+        return self
+
+    def add_background_rectangle(
+        self,
+        color: object | None = None,
+        opacity: float = 0.75,
+        **kwargs: Any,
+    ) -> Mobject:
+        """Prepend a shared BackgroundRectangle to a family-backed object.
+
+        The public base API assumes every Mobject owns a mutable submobject
+        list. Noon currently represents that capability with shared Group and
+        VGroup family handles, so bare geometry objects are rejected before
+        constructing or publishing a rectangle.
+        """
+        add_to_back = getattr(self, "add_to_back", None)
+        if not callable(add_to_back):
+            raise NotImplementedError(
+                "add_background_rectangle requires a shared family object"
+            )
+        from _manim_shared_geometry import BackgroundRectangle
+
+        background_rectangle = BackgroundRectangle(
+            self, color=color, fill_opacity=opacity, **kwargs
+        )
+        self.background_rectangle = background_rectangle
+        add_to_back(background_rectangle)
+        return self
 
     def __deepcopy__(self, memo):
         from _manim_compat import deepcopy_semantic_wrapper
@@ -1094,6 +1755,8 @@ _PUBLIC_EXPORTS = {
     "Write": "_manim_family_creation",
     "Unwrite": "_manim_family_creation",
     "VMobject": "_manim_compat",
+    "VectorizedPoint": "_manim_compat",
+    "CurvesAsSubmobjects": "_manim_compat",
     "SVGMobject": "_manim_svg",
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
@@ -1112,6 +1775,7 @@ _PUBLIC_EXPORTS = {
     "Path": "_manim_compat",
     "Group": "_manim_compat",
     "VGroup": "_manim_compat",
+    "VDict": "_manim_compat",
     "MoveToTarget": "_manim_compat",
     "Restore": "_manim_compat",
     "OUT": "_manim_compat",
@@ -1212,6 +1876,8 @@ __all__ = [
     "NoonStalePublicationError",
     "NoonCallbackError",
     "NoonOwnershipError",
+    "MultiAnimationOverrideException",
+    "override_animation",
 
     "BLACK",
     "BLUE",

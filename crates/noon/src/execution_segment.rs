@@ -76,6 +76,7 @@ pub(crate) struct PendingSegmentCompletionKind {
     pub lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
     pub family_transform: Option<UnequalFamilyTransformCompletion>,
     pub family_colors: Vec<(SemanticNodeId, noon_core::Color)>,
+    pub family_styles: Vec<(SemanticNodeId, noon_core::SemanticStyle)>,
     pub object_entries: Vec<SegmentCompletionEntry>,
     pub scalar_entries: Vec<ScalarSegmentCompletionEntry>,
 }

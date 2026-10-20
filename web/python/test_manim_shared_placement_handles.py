@@ -46,6 +46,17 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     return self.centerX + (-self.width / 2 if x < 0 else self.width / 2 if x > 0 else 0.0)
                 def criticalY(self, x, y):
                     return self.centerY + (-self.height / 2 if y < 0 else self.height / 2 if y > 0 else 0.0)
+                @property
+                def pointCount(self):
+                    return 4
+                def pathQuery(self):
+                    return types.SimpleNamespace(pointCount=self.pointCount, free=lambda: None)
+                def pathBoundaryExtremumAlongDim(self, dim, key):
+                    if dim == 0:
+                        return self.criticalX(key, 0.0)
+                    if dim == 1:
+                        return self.criticalY(0.0, key)
+                    raise ValueError("invalid point dimension")
                 def setFillOpacity(self, value): pass
                 def setStrokeOpacity(self, value): pass
                 def shift(self, x, y):
@@ -80,6 +91,8 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     self.calls.append("alignToPoint")
                     self.shift(px - self.criticalX(dx, dy) if dx != 0 else 0.0,
                                py - self.criticalY(dx, dy) if dy != 0 else 0.0)
+                def alignOnFrame(self, dx, dy, buff):
+                    self.calls.append("alignOnFrame")
 
             import _typed_geometry_test_support as _geometry_test
 
@@ -116,6 +129,36 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             assert aligned._semantic_handle.calls[-1] == "alignToHandle"
             assert abs(aligned.get_right().x - reference.get_right().x) < 1e-12
             assert abs(aligned.get_center().y + 1.0) < 1e-12
+
+            class FakeLiveContext:
+                def __init__(self):
+                    self.calls = []
+                def liveExecutionOwnership(self): return "returned"
+                def liveMoveToLayout(self, *args): self.calls.append(("layout", args))
+                def liveMoveToPoint(self, *args): self.calls.append(("point", args))
+                def liveAlignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
+
+            live_context = FakeLiveContext()
+            handles._live_mutation_context = lambda value: live_context
+            handles._live_constructor_context = lambda *args: None
+            live_target = Square(2.0)
+            live_receiver = Square(1.0)
+            assert live_receiver.align_to(live_target, RIGHT + UP) is live_receiver
+            assert live_context.calls[-1][0] == "layout"
+            assert live_context.calls[-1][1] == (
+                live_receiver._semantic_handle, live_target._semantic_handle,
+                1.0, 1.0, 1.0, 1.0,
+            )
+            assert live_receiver.align_to((3.0, 4.0, 0.0), UP) is live_receiver
+            assert live_context.calls[-1][0] == "point"
+            assert live_context.calls[-1][1] == (
+                live_receiver._semantic_handle, 3.0, 4.0,
+                0.0, 1.0, 0.0, 1.0,
+            )
+            assert live_receiver.to_edge(LEFT, buff=0.3) is live_receiver
+            assert live_context.calls[-1] == (
+                "frame", (live_receiver._semantic_handle, -1.0, 0.0, 0.3),
+            )
 
             # Invalid identities must reject before any Python-derived edit.
             invalid = Square(1.0)

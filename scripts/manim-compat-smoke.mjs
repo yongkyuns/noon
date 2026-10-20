@@ -328,7 +328,7 @@ class DefaultVmobjectStyle(Scene):
         assert abs(circle.style["stroke_width"] - 0.04) < 1e-9
         assert circle.style["stroke_width_mode"] == "screen_space"
         assert circle.style["stroke_join"] == "miter"
-        assert circle.style["stroke_cap"] == "butt"
+        assert circle.style["stroke_cap"] == "auto"
         assert abs(circle.style["fill"]["red"] - RED.red) < 1e-7
         assert abs(circle.style["stroke"]["red"] - RED.red) < 1e-7
 
@@ -937,7 +937,7 @@ result = Scene()
   assert.ok(Math.abs(defaultStyle.stroke_width - 0.04) < 1e-7);
   assert.equal(defaultStyle.stroke_width_mode, "screen_space");
   assert.equal(defaultStyle.stroke_join, "miter");
-  assert.equal(defaultStyle.stroke_cap, "butt");
+  assert.equal(defaultStyle.stroke_cap, "auto");
 
   const animateParity = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),

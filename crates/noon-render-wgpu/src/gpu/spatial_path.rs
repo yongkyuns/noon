@@ -27,7 +27,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(super) struct SpatialPathVertex {
     pub position: [f32; 2],
-    /// 0 is fill, 1 is stroke, matching `noon_geometry::PathSurface`.
+    /// Packed path surface, matching `noon_geometry::PathSurface`.
     pub surface: u32,
     /// Retained straight centerline tangent and cap/body offsets. Both are zero
     /// for ordinary local tessellation; screen strokes expand after projection.
@@ -55,6 +55,7 @@ type FixedOrientationOrderKey = (u32, u32, usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Specialization {
     pub stroke_width: u32,
+    pub background_stroke_width: u32,
     pub screen_stroke: bool,
     pub stroke_join: noon_core::StrokeJoin,
     pub stroke_cap: noon_core::StrokeCap,
@@ -84,6 +85,7 @@ struct PathInstance {
     fixed_orientation: u32,
     fixed_anchor: [f32; 3],
     screen_stroke_width: f32,
+    background_stroke: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,9 +149,10 @@ struct FixedCameraUniform {
 const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
     0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2, 14 => Float32x3
 ];
-const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
     2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-    6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
+    6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32,
+    15 => Float32x4
 ];
 
 impl PathGpuState {
@@ -669,6 +672,7 @@ impl SpatialPathGpuState {
                     world,
                     fill: color(style.fill),
                     stroke: color(style.stroke),
+                    background_stroke: color(style.background_stroke),
                     opacity: object_alpha,
                     fixed_orientation: u32::from(fixed),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
@@ -682,6 +686,7 @@ impl SpatialPathGpuState {
                     .fill
                     .iter()
                     .chain(instance.stroke.iter())
+                    .chain(instance.background_stroke.iter())
                     .chain(instance.fixed_anchor.iter())
                     .chain([instance.opacity].iter())
                     .any(|value| !value.is_finite())
@@ -1172,6 +1177,11 @@ fn specialization(style: Style) -> Specialization {
         } else {
             0.0_f32.to_bits()
         },
+        background_stroke_width: if style.background_stroke.is_some() {
+            style.background_stroke_width.to_bits()
+        } else {
+            0.0_f32.to_bits()
+        },
         stroke_join: style.stroke_join,
         stroke_cap: style.stroke_cap,
         fill: style.fill.is_some(),
@@ -1219,6 +1229,8 @@ fn collect_text_paths<'a>(
                     ),
                     stroke: None,
                     stroke_width: 0.0,
+                    background_stroke: object_style.background_stroke,
+                    background_stroke_width: object_style.background_stroke_width,
                     stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
@@ -1409,6 +1421,8 @@ fn validate_style(style: Style, object_alpha: f32, domain: Domain) -> Result<(),
         || !(0.0..=1.0).contains(&style.opacity)
         || !style.stroke_width.is_finite()
         || style.stroke_width < 0.0
+        || !style.background_stroke_width.is_finite()
+        || style.background_stroke_width < 0.0
     {
         return Err(SpatialPathError::InvalidStyle);
     }
@@ -1416,6 +1430,18 @@ fn validate_style(style: Style, object_alpha: f32, domain: Domain) -> Result<(),
         .into_iter()
         .flatten()
         .any(|color| {
+            [color.red, color.green, color.blue, color.alpha]
+                .iter()
+                .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
+                || (domain == Domain::World
+                    && color.alpha != 0.0
+                    && color.alpha * object_alpha != 1.0)
+        })
+    {
+        return Err(SpatialPathError::NonOpaqueStyle);
+    }
+    if style.background_stroke_width > 0.0
+        && style.background_stroke.is_some_and(|color| {
             [color.red, color.green, color.blue, color.alpha]
                 .iter()
                 .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
@@ -1434,6 +1460,7 @@ fn validate_style(style: Style, object_alpha: f32, domain: Domain) -> Result<(),
 fn visible_path_style(mut style: Style) -> Style {
     style.fill = style.fill.filter(|color| color.alpha != 0.0);
     style.stroke = style.stroke.filter(|color| color.alpha != 0.0);
+    style.background_stroke = style.background_stroke.filter(|color| color.alpha != 0.0);
     style
 }
 
@@ -1460,7 +1487,7 @@ pub(super) fn tessellate(
     }
     let fill = style.fill.is_some();
     let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
-    let mesh = noon_geometry::tessellate_styled_with_fill(
+    let mesh = noon_geometry::tessellate_styled_with_background_stroke(
         &path,
         if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
             1.0
@@ -1468,6 +1495,11 @@ pub(super) fn tessellate(
             0.0
         } else if stroke {
             style.stroke_width
+        } else {
+            0.0
+        },
+        if style.background_stroke.is_some() {
+            style.background_stroke_width
         } else {
             0.0
         },
@@ -1575,6 +1607,18 @@ pub(super) fn tessellate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_stroke_instance_attributes_match_struct_layout() {
+        assert_eq!(
+            super::PATH_INSTANCE_ATTRIBUTES[6].offset,
+            std::mem::offset_of!(super::PathInstance, opacity) as u64,
+        );
+        assert_eq!(
+            super::PATH_INSTANCE_ATTRIBUTES[10].offset,
+            std::mem::offset_of!(super::PathInstance, background_stroke) as u64,
+        );
+    }
+
     use super::*;
     use noon_core::{
         GeometryResourceArena, Rect, StrokeWidthMode, TextResourceArena, TextSourceKind,
@@ -2060,6 +2104,7 @@ mod tests {
                 source: SourceKey::Inline(index as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    background_stroke_width: 0,
                     screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
@@ -2092,6 +2137,7 @@ mod tests {
                 source: SourceKey::Inline(row as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    background_stroke_width: 0,
                     screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,

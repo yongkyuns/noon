@@ -27,6 +27,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   # in the required web build so contradictory or growing Python semantic debt cannot land.
   python3 scripts/semantic_ownership_check.py
   python3 scripts/test_semantic_ownership_check.py
+  python3 scripts/test_manim_differential.py
 
   # Keep top-level browser modules and tests self-registering with the required web build.
   # This prevents a new JavaScript file or regression test from silently escaping syntax
@@ -138,6 +139,9 @@ case "$wasm_profile" in
     ;;
 esac
 
+# Validate before wasm-pack's own metadata lookup can rewrite a stale lock.
+cargo metadata --locked --format-version 1 > /dev/null
+
 wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg "--$wasm_profile")
 if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
@@ -150,6 +154,10 @@ fi
 if [[ "${NOON_REPLAY_SMOKE:-0}" == "1" ]]; then
   wasm_pack_args+=(--features replay-smoke)
 fi
+
+# CI and production must use the reviewed workspace dependency resolution.
+# A separator here becomes a Cargo argument after any --features option.
+wasm_pack_args+=(--locked)
 
 worker_pid=""
 if (( parallel_worker == 1 )); then

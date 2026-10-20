@@ -109,6 +109,18 @@ pub(crate) fn target_style_from_effective(
         } else {
             (effective.stroke.map(SemanticPaint::Solid), 1.0)
         };
+    let (background_stroke, background_stroke_opacity) = if lowered_solid_color(
+        authored.background_stroke.as_ref(),
+        authored.background_stroke_opacity,
+    ) == effective.background_stroke
+    {
+        (
+            authored.background_stroke.clone(),
+            authored.background_stroke_opacity,
+        )
+    } else {
+        (effective.background_stroke.map(SemanticPaint::Solid), 1.0)
+    };
     Ok(SemanticStyle {
         stroke_pattern: effective.stroke_pattern,
         fill,
@@ -119,6 +131,15 @@ pub(crate) fn target_style_from_effective(
             authored.stroke_width
         } else {
             f64::from(effective.stroke_width)
+        },
+        background_stroke,
+        background_stroke_opacity,
+        background_stroke_width: if authored.background_stroke_width as f32
+            == effective.background_stroke_width
+        {
+            authored.background_stroke_width
+        } else {
+            f64::from(effective.background_stroke_width)
         },
         stroke_width_mode: effective.stroke_width_mode,
         stroke_join: effective.stroke_join,

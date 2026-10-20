@@ -51,11 +51,19 @@ fn invalid_alignment_does_not_publish_or_partially_move_members() {
     let mut foreign_scene = Scene::new();
     let foreign = LayoutAnchor::from(&foreign_scene.square(1.0).unwrap());
     let before = scene.integration_store().borrow().scene_revision();
+    // A point-bearing object includes itself at index zero in Manim's split view.
+    assert_eq!(
+        LayoutAnchor::from(&object)
+            .member(0)
+            .resolve_checked()
+            .unwrap(),
+        object.node_id()
+    );
     for invalid in [
         source.clone().member(-2),
         source.clone().member(1),
         foreign,
-        LayoutAnchor::from(&object).member(0),
+        LayoutAnchor::from(&object).member(1),
     ] {
         assert!(source
             .next_to_aligned(AuthoredTarget::Point(9.0, 0.0), &invalid, args())

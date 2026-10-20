@@ -19,6 +19,7 @@ fn style() -> Style {
         opacity: 0.8,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     }
 }
 

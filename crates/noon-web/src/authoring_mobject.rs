@@ -26,6 +26,21 @@ pub(crate) fn gradient_colors(
 }
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn radial_gradient_colors(
+    values: &[f64],
+) -> Result<(noon::Color, noon::Color), crate::authoring_error::AuthoringFailure> {
+    let colors = gradient_colors(values)?;
+    match colors.as_slice() {
+        [inner, outer] => Ok((*inner, *outer)),
+        _ => Err(crate::authoring_error::AuthoringFailure::new(
+            "invalid_input",
+            "radial_gradient.color_count",
+            "radial gradients require exactly two RGBA colors",
+        )),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn style_update(
     fill_enabled: bool,
@@ -54,7 +69,23 @@ pub(crate) fn style_update(
         )?,
         stroke_width,
         stroke_opacity,
+        ..noon::StyleUpdate::default()
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn style_update_with_background_stroke(
+    mut update: noon::StyleUpdate,
+    enabled: bool,
+    rgba: [f64; 4],
+    width: Option<f64>,
+    opacity: Option<f64>,
+) -> Result<noon::StyleUpdate, String> {
+    let [red, green, blue, alpha] = rgba;
+    update.background_stroke_color = family_color(enabled, red, green, blue, alpha)?;
+    update.background_stroke_width = width;
+    update.background_stroke_opacity = opacity;
+    Ok(update)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -64,6 +95,23 @@ pub use noon::{ManimNextToArgs, Mobject};
 use noon_core::SemanticNodeId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::SemanticStore;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_sys::Array {
+    let result = js_sys::Array::new();
+    let coordinates: Vec<_> = tree.points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+    result.push(&wasm_bindgen::JsValue::from(js_sys::Float64Array::from(
+        coordinates.as_slice(),
+    )));
+    let children = js_sys::Array::new();
+    for child in tree.children {
+        children.push(&wasm_bindgen::JsValue::from(point_reduction_tree_to_js(
+            child,
+        )));
+    }
+    result.push(&wasm_bindgen::JsValue::from(children));
+    result
+}
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn family_color(
@@ -743,6 +791,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = dimensionLength)]
+        pub fn dimension_length(&self, dimension: u32) -> Result<f64, JsValue> {
+            self.anchor
+                .dimension_length(dimension.try_into().map_err(js_error)?)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = rescaleToFit)]
         #[allow(clippy::too_many_arguments)]
         pub fn rescale_to_fit(
@@ -782,6 +837,19 @@ mod wasm {
                     dimension.try_into().map_err(js_error)?,
                     stretch,
                 )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = surroundCircle)]
+        pub fn surround_circle(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+            buffer_factor: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .surround_circle(&target.anchor, dimension, stretch, buffer_factor)
                 .map_err(js_error)
         }
 
@@ -1156,6 +1224,159 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .get_num_points()
+                .map(|count| count as u32)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .length_over_dim(dim as usize)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            self.semantic_family()?;
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = mergedPoints)]
+        pub fn merged_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_reduction_tree()
+                .map(|tree| {
+                    tree.flattened_points()
+                        .into_iter()
+                        .flat_map(|(x, y)| [x, y])
+                        .collect()
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointReductionTree)]
+        pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_reduction_tree()
+                .map(super::point_reduction_tree_to_js)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownSheenDirection)]
+        pub fn own_sheen_direction(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .sheen_direction()
+                .map(|direction| direction.components())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = updatingSuspended)]
+        pub fn updating_suspended(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .updating_suspended()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
+            &self,
+            suspended: bool,
+            recursive: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .set_updating_suspended(suspended, recursive)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setSheenDirection)]
+        pub fn set_sheen_direction(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+            dimensions: u32,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            let direction = noon_core::SemanticSheenDirection::new(
+                noon_core::SemanticVec3::new(x, y, z),
+                dimensions as u8,
+            );
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .set_sheen_direction(direction, family)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = rotateSheenDirection)]
+        pub fn rotate_sheen_direction(
+            &self,
+            angle: f64,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .rotate_sheen_direction(
+                    angle,
+                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    family,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimColor)]
         pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
             self.semantic_family()?
@@ -1211,10 +1432,82 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setRadialColorGradient)]
+        pub fn set_radial_color_gradient(
+            &self,
+            center_x: f64,
+            center_y: f64,
+            center_z: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.semantic_family()?
+                .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(
             &mut self,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = super::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(js_error)?;
+            let update = super::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+            .map_err(js_error)?;
+            self.semantic_family()?.set_style(update).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_style(
+            &self,
             fill_enabled: bool,
             fill_red: f64,
             fill_green: f64,
@@ -1245,7 +1538,68 @@ mod wasm {
                 stroke_opacity,
             )
             .map_err(js_error)?;
-            self.semantic_family()?.set_style(update).map_err(js_error)
+            self.semantic_family()?
+                .set_own_style(update)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnStyleWithBackgroundStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_style_with_background_stroke(
+            &self,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+            background_stroke_color_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = super::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(js_error)?;
+            let background_stroke_color = super::family_color(
+                background_stroke_color_enabled,
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            )
+            .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style_with_background_stroke(
+                    update,
+                    background_stroke_color,
+                    background_stroke_width,
+                    background_stroke_opacity,
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = matchStyle)]
@@ -1287,6 +1641,134 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setOwnFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_fill(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style(noon::StyleUpdate {
+                    fill_color: color,
+                    fill_opacity: opacity,
+                    ..noon::StyleUpdate::default()
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_own_stroke(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_own_style(noon::StyleUpdate {
+                    stroke_color: color,
+                    stroke_width: width,
+                    stroke_opacity: opacity,
+                    ..noon::StyleUpdate::default()
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownFillColor)]
+        pub fn own_fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| {
+                    style.fill.and_then(|paint| match paint {
+                        noon_core::SemanticPaint::Solid(color) => {
+                            Some(WasmManimColor::from_color(color))
+                        }
+                        noon_core::SemanticPaint::Resource(_) => None,
+                    })
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeColor)]
+        pub fn own_stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| {
+                    style.stroke.and_then(|paint| match paint {
+                        noon_core::SemanticPaint::Solid(color) => {
+                            Some(WasmManimColor::from_color(color))
+                        }
+                        noon_core::SemanticPaint::Resource(_) => None,
+                    })
+                })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeWidth)]
+        pub fn own_stroke_width(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.stroke_width)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownBackgroundStrokeOpacity)]
+        pub fn own_background_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_opacity()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownBackgroundStrokeColor)]
+        pub fn own_background_stroke_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownBackgroundStrokeWidth)]
+        pub fn own_background_stroke_width(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_background_stroke_width()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnBackgroundStrokeOpacity)]
+        pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_background_stroke_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeCap)]
+        pub fn own_stroke_cap(&self) -> Result<String, JsValue> {
+            self.semantic_family()?
+                .own_stroke_cap()
+                .map(|cap| cap.as_str().to_owned())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeCap)]
+        pub fn set_stroke_cap(&self, cap: &str) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_stroke_cap(cap)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStroke)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_stroke(
@@ -1314,9 +1796,49 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = interpolateManimStyle)]
+        pub fn interpolate_manim_style(
+            &self,
+            start: &WasmAuthoringFamilyHandle,
+            end: &WasmAuthoringFamilyHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .interpolate_manim_style(&start.semantic_family()?, &end.semantic_family()?, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOwnOpacity)]
+        pub fn set_own_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownFillOpacity)]
+        pub fn own_fill_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.fill_opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ownStrokeOpacity)]
+        pub fn own_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.semantic_family()?
+                .own_style()
+                .map(|style| style.stroke_opacity)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fade)]
         pub fn fade(&self, darkness: f64) -> Result<(), JsValue> {
             self.semantic_family()?.fade(darkness).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = fadeOwn)]
+        pub fn fade_own(&self, darkness: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.fade_own(darkness).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = fadeTo)]
@@ -1536,6 +2058,51 @@ mod wasm {
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = prependMembers)]
+        pub fn prepend_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            self.semantic_family()?
+                .prepend_many(&members)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = insertMember)]
+        pub fn insert_member(
+            &self,
+            index: usize,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            let [member] = members.as_slice() else {
+                return Err(JsValue::from_str(
+                    "family insertion requires exactly one member",
+                ));
+            };
+            self.semantic_family()?
+                .insert_member(index, *member)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = invertMembers)]
+        pub fn invert_members(&self, recursive: bool) -> Result<(), JsValue> {
+            self.semantic_family()?.invert(recursive).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = reversePoints)]
+        pub fn reverse_points(&self) -> Result<(), JsValue> {
+            self.semantic_family()?.reverse_points().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(&self, count: u32) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .repeat_points(count as usize)
+                .map_err(js_error)
+        }
     }
 
     #[wasm_bindgen]
@@ -1553,6 +2120,36 @@ mod wasm {
             .collect()
     }
 
+    fn flat_points(points: Vec<(f64, f64)>) -> Vec<f64> {
+        points.into_iter().flat_map(|(x, y)| [x, y]).collect()
+    }
+
+    fn reduce_point_extremum_from_values(
+        coordinates: Vec<f64>,
+        point_dimensions: u32,
+        dim: u32,
+        key: f64,
+    ) -> Result<f64, JsValue> {
+        noon::reduce_point_extremum(&coordinates, point_dimensions as usize, dim as usize, key)
+            .map_err(js_error)
+    }
+
+    fn reduce_point_boundary_from_values(
+        coordinates: Vec<f64>,
+        point_dimensions: u32,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<Vec<f64>, JsValue> {
+        noon::reduce_point_boundary(
+            &coordinates,
+            point_dimensions as usize,
+            direction_x,
+            direction_y,
+        )
+        .map(|(x, y)| vec![x, y])
+        .map_err(js_error)
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -1565,9 +2162,27 @@ mod wasm {
         pub fn point_count(&self) -> u32 {
             self.value.point_count() as u32
         }
+        pub fn points(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.points().map(flat_points).map_err(js_error)
+        }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32
+        }
+        #[wasm_bindgen(js_name = hasNewPathStarted)]
+        pub fn has_new_path_started(&self, stride: Option<i32>) -> bool {
+            self.value
+                .has_new_path_started_with_stride(stride.unwrap_or(4))
+        }
+        pub fn direction(&self) -> String {
+            self.value.direction().to_owned()
+        }
+        #[wasm_bindgen(js_name = directionWithStride)]
+        pub fn direction_with_stride(&self, stride: i32) -> Result<String, JsValue> {
+            self.value
+                .direction_with_stride(stride)
+                .map(str::to_owned)
+                .ok_or_else(|| JsValue::from_str("slice step cannot be zero"))
         }
         #[wasm_bindgen(js_name = curvePoints)]
         pub fn curve_points(&self, index: u32) -> Result<Vec<f64>, JsValue> {
@@ -1576,9 +2191,82 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = curvePointsAt)]
+        pub fn curve_points_at(
+            &self,
+            index: u32,
+            parameters: Vec<f64>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .curve_points_at(index as usize, &parameters)
+                .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = bezierPointsAtRange)]
+        pub fn bezier_points_at_range(
+            &self,
+            start: u32,
+            stop: u32,
+            parameters: Vec<f64>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_points_at_range(start as usize, stop as usize, &parameters)
+                .map(|points| points.into_iter().flat_map(|(x, y, z)| [x, y, z]).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = bezierParametersForPointRange)]
+        pub fn bezier_parameters_for_point_range(
+            &self,
+            start: u32,
+            stop: u32,
+            point_x: f64,
+            point_y: f64,
+            point_z: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_parameters_for_point_range(
+                    start as usize,
+                    stop as usize,
+                    (point_x, point_y, point_z),
+                )
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = bezierLengthPiecesRange)]
+        pub fn bezier_length_pieces_range(
+            &self,
+            start: u32,
+            stop: u32,
+            sample_points: Option<u32>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .bezier_length_pieces_range(
+                    start as usize,
+                    stop as usize,
+                    sample_points.map(|n| n as usize),
+                )
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = curveLengthPieces)]
+        pub fn curve_length_pieces(
+            &self,
+            index: u32,
+            sample_points: Option<u32>,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .curve_length_pieces(index as usize, sample_points.map(|n| n as usize))
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = curveLength)]
+        pub fn curve_length(&self, index: u32, sample_points: Option<u32>) -> Result<f64, JsValue> {
+            self.value
+                .curve_length(index as usize, sample_points.map(|n| n as usize))
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = isClosed)]
-        pub fn is_closed(&self) -> Result<bool, JsValue> {
-            self.value.is_closed().map_err(js_error)
+        pub fn is_closed(&self, tolerance: f64) -> Result<bool, JsValue> {
+            self.value
+                .is_closed_with_tolerance(tolerance)
+                .map_err(js_error)
         }
         pub fn subpaths(&self) -> js_sys::Array {
             point_groups(self.value.subpaths())
@@ -1632,6 +2320,40 @@ mod wasm {
             self.value
                 .point_from_proportion(alpha)
                 .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = proportionFromPoint)]
+        pub fn proportion_from_point(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+        ) -> Result<Option<f64>, JsValue> {
+            self.value
+                .proportion_from_point((x, y, z))
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = proportionFromPointForRanges)]
+        pub fn proportion_from_point_for_ranges(
+            &self,
+            ranges: Vec<u32>,
+            x: f64,
+            y: f64,
+            z: f64,
+        ) -> Result<Option<f64>, JsValue> {
+            if !ranges.len().is_multiple_of(2) {
+                return Err(typed_js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "path_query.invalid_curve_ranges",
+                    "curve ranges require start/stop index pairs",
+                )));
+            }
+            let ranges = ranges
+                .chunks_exact(2)
+                .map(|pair| (pair[0] as usize, pair[1] as usize))
+                .collect::<Vec<_>>();
+            self.value
+                .proportion_from_point_in_ranges(&ranges, (x, y, z))
                 .map_err(js_error)
         }
         pub fn start(&self) -> Result<Vec<f64>, JsValue> {
@@ -1746,6 +2468,253 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = interpolateManim)]
+        pub fn interpolate_manim(
+            &mut self,
+            start: &WasmAuthoringMobjectHandle,
+            end: &WasmAuthoringMobjectHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .interpolate_manim(start.semantic_mobject(), end.semantic_mobject(), alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = interpolateManimStyle)]
+        pub fn interpolate_manim_style(
+            &mut self,
+            start: &WasmAuthoringMobjectHandle,
+            end: &WasmAuthoringMobjectHandle,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .interpolate_manim_style(start.semantic_mobject(), end.semantic_mobject(), alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = updatingSuspended)]
+        pub fn updating_suspended(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .updating_suspended()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
+            &self,
+            suspended: bool,
+            recursive: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .set_updating_suspended(suspended, recursive)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = cubicBezierPointRanges)]
+        pub fn cubic_bezier_point_ranges(
+            &self,
+            point_count: u32,
+            points_per_curve: f64,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            Ok(
+                noon::manim_cubic_bezier_point_ranges(point_count as usize, points_per_curve)
+                    .into_iter()
+                    .map(|index| index as u32)
+                    .collect(),
+            )
+        }
+
+        #[wasm_bindgen(js_name = subpathSplitIndices)]
+        pub fn subpath_split_indices(
+            &self,
+            points: Vec<f64>,
+            point_count: u32,
+            point_dimensions: u32,
+            compared_dimensions: u32,
+            absolute_tolerance: f64,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            noon::manim_subpath_split_indices(
+                &points,
+                point_count as usize,
+                point_dimensions as usize,
+                compared_dimensions as usize,
+                absolute_tolerance,
+            )
+            .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = subpathRanges)]
+        pub fn subpath_ranges(
+            &self,
+            points: Vec<f64>,
+            point_count: u32,
+            point_dimensions: u32,
+            compared_dimensions: u32,
+            points_per_curve: f64,
+            absolute_tolerance: f64,
+            drop_short_ranges: bool,
+        ) -> Result<Vec<u32>, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            noon::manim_subpath_ranges(
+                &points,
+                point_count as usize,
+                point_dimensions as usize,
+                compared_dimensions as usize,
+                points_per_curve,
+                absolute_tolerance,
+                drop_short_ranges,
+            )
+            .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointsAllClose)]
+        pub fn points_allclose(
+            &self,
+            left: Vec<f64>,
+            right: Vec<f64>,
+            absolute_tolerance: f64,
+        ) -> Result<bool, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            if left.len() != right.len() {
+                return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                    left.len().max(right.len()),
+                )));
+            }
+            Ok(noon::manim_points_allclose(
+                &left,
+                &right,
+                absolute_tolerance,
+            ))
+        }
+
+        #[wasm_bindgen(js_name = points2dClose)]
+        pub fn points_2d_close(
+            &self,
+            left: Vec<f64>,
+            right: Vec<f64>,
+            absolute_tolerance: f64,
+        ) -> Result<bool, JsValue> {
+            self.handle.validate().map_err(js_error)?;
+            if left.len() < 2 || right.len() < 2 {
+                return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                    left.len().min(right.len()),
+                )));
+            }
+            Ok(noon::manim_points_2d_close(
+                [left[0], left[1]],
+                [right[0], right[1]],
+                absolute_tolerance,
+            ))
+        }
+
+        #[wasm_bindgen(js_name = extremumAlongDim)]
+        pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoints)]
+        pub fn path_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryExtremumAlongDim)]
+        pub fn path_boundary_extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = lengthOverDim)]
+        pub fn length_over_dim(&self, dim: u32) -> Result<f64, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .length_over_dim(dim as usize)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = extremumFromPoints)]
+        pub fn extremum_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            dim: u32,
+            key: f64,
+        ) -> Result<f64, JsValue> {
+            reduce_point_extremum_from_values(coordinates, point_dimensions, dim, key)
+        }
+
+        #[wasm_bindgen(js_name = centerOfMass)]
+        pub fn center_of_mass(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .center_of_mass()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPoint)]
+        pub fn boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = boundaryPointFromPoints)]
+        pub fn boundary_point_from_points(
+            &self,
+            coordinates: Vec<f64>,
+            point_dimensions: u32,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            reduce_point_boundary_from_values(
+                coordinates,
+                point_dimensions,
+                direction_x,
+                direction_y,
+            )
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoint)]
+        pub fn path_boundary_point(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_point(direction_x, direction_y)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = allPoints)]
+        pub fn all_points(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointReductionTree)]
+        pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .point_reduction_tree()
+                .map(super::point_reduction_tree_to_js)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
@@ -1762,15 +2731,95 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = backgroundStrokeColor)]
+        pub fn background_stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .background_stroke_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(getter, js_name = strokeWidth)]
         pub fn stroke_width(&self) -> Result<f64, JsValue> {
             self.handle.stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = backgroundStrokeWidth)]
+        pub fn background_stroke_width(&self) -> Result<f64, JsValue> {
+            self.handle.background_stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeCap)]
+        pub fn stroke_cap(&self) -> Result<String, JsValue> {
+            self.handle
+                .stroke_cap()
+                .map(|cap| cap.as_str().to_owned())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = sheenDirection)]
+        pub fn sheen_direction(&self) -> Result<Vec<f64>, JsValue> {
+            self.handle
+                .sheen_direction()
+                .map(|direction| direction.components())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setSheenDirection)]
+        pub fn set_sheen_direction(
+            &self,
+            x: f64,
+            y: f64,
+            z: f64,
+            dimensions: u32,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            let direction = noon_core::SemanticSheenDirection::new(
+                noon_core::SemanticVec3::new(x, y, z),
+                dimensions as u8,
+            );
+            noon::MobjectTarget::from(&self.handle)
+                .set_sheen_direction(direction, family)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = rotateSheenDirection)]
+        pub fn rotate_sheen_direction(
+            &self,
+            angle: f64,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .rotate_sheen_direction(
+                    angle,
+                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    family,
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
             let colors = super::gradient_colors(values).map_err(js_error)?;
             self.handle.set_color_by_gradient(&colors).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setRadialColorGradient)]
+        pub fn set_radial_color_gradient(
+            &mut self,
+            center_x: f64,
+            center_y: f64,
+            center_z: f64,
+            radius: f64,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            self.handle
+                .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStyle)]
@@ -1790,6 +2839,13 @@ mod wasm {
             stroke_alpha: f64,
             stroke_width: Option<f64>,
             stroke_opacity: Option<f64>,
+            background_stroke_enabled: bool,
+            background_stroke_red: f64,
+            background_stroke_green: f64,
+            background_stroke_blue: f64,
+            background_stroke_alpha: f64,
+            background_stroke_width: Option<f64>,
+            background_stroke_opacity: Option<f64>,
         ) -> Result<(), JsValue> {
             let update = super::style_update(
                 fill_enabled,
@@ -1805,6 +2861,19 @@ mod wasm {
                 stroke_alpha,
                 stroke_width,
                 stroke_opacity,
+            )
+            .map_err(js_error)?;
+            let update = super::style_update_with_background_stroke(
+                update,
+                background_stroke_enabled,
+                [
+                    background_stroke_red,
+                    background_stroke_green,
+                    background_stroke_blue,
+                    background_stroke_alpha,
+                ],
+                background_stroke_width,
+                background_stroke_opacity,
             )
             .map_err(js_error)?;
             self.handle.set_style(update).map_err(js_error)
@@ -1884,6 +2953,14 @@ mod wasm {
             self.handle.node_id().generation()
         }
 
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            self.handle
+                .get_num_points()
+                .map(|count| count as u32)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = familyKeys)]
         pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
             family_query_keys(noon::MobjectTarget::from(&self.handle))
@@ -1915,11 +2992,46 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Replace raw world-space points through the shared semantic transaction.
+        #[wasm_bindgen(js_name = setPoints)]
+        pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.set_points(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendPoints)]
+        pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.append_points(&points).map_err(js_error)
+        }
+
         /// Replace world-space corners through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPointsAsCorners)]
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points(&values)?;
             self.handle.set_points_as_corners(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setPointsAsCornersWithSamples)]
+        pub fn set_points_as_corners_with_samples(
+            &mut self,
+            values: Vec<f64>,
+            sample_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
+                JsValue::from(js_sys::TypeError::new(
+                    "set_points_as_corners requires four samples",
+                ))
+            })?;
+            self.handle
+                .set_points_as_corners_with_samples(&points, &sample_values)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(&mut self) -> Result<(), JsValue> {
+            self.handle.clear_points().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = startNewPath)]
@@ -1928,10 +3040,47 @@ mod wasm {
             self.handle.start_new_path(point).map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = addLineTo)]
-        pub fn add_line_to(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
+        #[wasm_bindgen(js_name = startNewPathWithStride)]
+        pub fn start_new_path_with_stride(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+        ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point(point_x, point_y)?;
-            self.handle.add_line_to(point).map_err(js_error)
+            self.handle
+                .start_new_path_with_stride(point, stride)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addLineTo)]
+        pub fn add_line_to(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: Option<i32>,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.handle
+                .add_line_to_with_stride(point, stride.unwrap_or(4))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addLineToWithSamples)]
+        pub fn add_line_to_with_samples(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
+                JsValue::from_str("add_line_to requires four constructor interpolation samples")
+            })?;
+            self.handle
+                .add_line_to_with_stride_and_samples(point, stride, &bezier_t_values)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
@@ -1941,11 +3090,12 @@ mod wasm {
             control_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control = crate::authoring_geometry::point(control_x, control_y)?;
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.handle
-                .add_quadratic_bezier_curve_to(control, anchor)
+                .add_quadratic_bezier_curve_to_with_stride(control, anchor, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 
@@ -1958,12 +3108,123 @@ mod wasm {
             control2_y: f64,
             anchor_x: f64,
             anchor_y: f64,
+            stride: Option<i32>,
         ) -> Result<(), JsValue> {
             let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
             let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
             let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
             self.handle
-                .add_cubic_bezier_curve_to(control1, control2, anchor)
+                .add_cubic_bezier_curve_to_with_stride(
+                    control1,
+                    control2,
+                    anchor,
+                    stride.unwrap_or(4),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addSmoothCurveTo)]
+        pub fn add_smooth_curve_to(
+            &mut self,
+            values: Vec<f64>,
+            stride: Option<i32>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            let (handle2, anchor) = match points.as_slice() {
+                [anchor] => (None, *anchor),
+                [handle2, anchor] => (Some(*handle2), *anchor),
+                _ => {
+                    return Err(JsValue::from_str(
+                        "Only call add_smooth_curve_to with 1 or 2 points",
+                    ));
+                }
+            };
+            self.handle
+                .add_smooth_curve_to_with_stride(handle2, anchor, stride.unwrap_or(4))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleHandleToAnchorDistances)]
+        pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), JsValue> {
+            self.handle
+                .scale_handle_to_anchor_distances(factor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addCubicBezierCurve)]
+        pub fn add_cubic_bezier_curve(
+            &mut self,
+            anchor1_x: f64,
+            anchor1_y: f64,
+            handle1_x: f64,
+            handle1_y: f64,
+            handle2_x: f64,
+            handle2_y: f64,
+            anchor2_x: f64,
+            anchor2_y: f64,
+        ) -> Result<(), JsValue> {
+            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            self.handle
+                .add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addCubicBezierCurves)]
+        pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.handle
+                .add_cubic_bezier_curves(&curves)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setCubicBezierCurves)]
+        pub fn set_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            self.handle
+                .set_cubic_bezier_curves(&curves)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addPointsAsCorners)]
+        pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.add_points_as_corners(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
+        pub fn add_points_as_corners_with_stride(
+            &mut self,
+            values: Vec<f64>,
+            stride: i32,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle
+                .add_points_as_corners_with_stride(&points, stride, &bezier_t_values)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendVectorizedMobject)]
+        pub fn append_vectorized_mobject(
+            &mut self,
+            source: &WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .append_vectorized_mobject(source.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendVectorizedMobjectWithStride)]
+        pub fn append_vectorized_mobject_with_stride(
+            &mut self,
+            source: &WasmAuthoringMobjectHandle,
+            stride: i32,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .append_vectorized_mobject_with_stride(source.semantic_mobject(), stride)
                 .map_err(js_error)
         }
 
@@ -1990,6 +3251,14 @@ mod wasm {
         #[wasm_bindgen(js_name = reverseDirection)]
         pub fn reverse_direction(&mut self) -> Result<(), JsValue> {
             self.handle.reverse_direction().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = reversePoints)]
+        pub fn reverse_points(&mut self) -> Result<(), JsValue> {
+            self.handle.reverse_points().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(&mut self, count: u32) -> Result<(), JsValue> {
+            self.handle.repeat_points(count as usize).map_err(js_error)
         }
         pub fn subcurve(&self, a: f64, b: f64) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.handle
@@ -2018,6 +3287,18 @@ mod wasm {
         #[wasm_bindgen(js_name = closePath)]
         pub fn close_path(&mut self) -> Result<(), JsValue> {
             self.handle.close_path().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = closePathWithStride)]
+        pub fn close_path_with_stride(
+            &mut self,
+            stride: i32,
+            tolerance: f64,
+            bezier_t_values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .close_path_with_stride(stride, tolerance, &bezier_t_values)
+                .map_err(js_error)
         }
 
         /// Share another vector object’s geometry and transform while preserving
@@ -2274,6 +3555,11 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = strokeOpacity)]
         pub fn stroke_opacity(&self) -> Result<f64, JsValue> {
             Ok(self.handle.stroke_opacity().map_err(js_error)?)
+        }
+
+        #[wasm_bindgen(getter, js_name = backgroundStrokeOpacity)]
+        pub fn background_stroke_opacity(&self) -> Result<f64, JsValue> {
+            self.handle.background_stroke_opacity().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setOpacity)]
@@ -2560,7 +3846,7 @@ mod tests {
             StrokeWidthMode::ScreenSpace
         );
         assert_eq!(circle_state.style.stroke_join, StrokeJoin::Miter);
-        assert_eq!(circle_state.style.stroke_cap, StrokeCap::Butt);
+        assert_eq!(circle_state.style.stroke_cap, StrokeCap::Auto);
 
         let line = Mobject::manim_line(std::rc::Rc::clone(&authoring_store), -2.0, 1.0, 3.0, -1.0)
             .unwrap();
@@ -2595,6 +3881,7 @@ mod tests {
         );
         assert_eq!(square_style.stroke_join, StrokeJoin::Bevel);
         assert_eq!(square_style.stroke_cap, StrokeCap::Square);
+        assert_eq!(square.stroke_cap().unwrap(), StrokeCap::Square);
         assert_eq!(square_style.object_opacity, 0.8);
     }
 

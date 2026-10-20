@@ -209,6 +209,8 @@ class ManimArrowFacadeTests(unittest.TestCase):
             # retains that context on the newly wrapped target.
             static_publishes = sum(call[0] == "publish" for call in calls)
             live_context = types.SimpleNamespace(
+                liveExecutionOwnership=lambda: "active",
+                requiresLiveMutationRouting=lambda: True,
                 liveCreateManimArrow=lambda options: (
                     calls.append(("live_publish", options.kind))
                     or FakeCreatedArrow(options.kind == "double")
@@ -290,6 +292,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
             arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: live_context
             static_scales = sum(call[0] == "arrow_scale" for call in calls)
             assert live_arrow.scale(2.0) is live_arrow
+            live_context.liveExecutionOwnership = lambda: "returned"
             assert live_arrow.scale(0.5, scale_tips=True) is live_arrow
             assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 2.0, False) in calls
             assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 0.5, True) in calls

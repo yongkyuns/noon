@@ -2326,6 +2326,7 @@ fn cairo_boundary_test_store(
         stroke_join: noon_core::StrokeJoin::Miter,
         stroke_cap: noon_core::StrokeCap::Butt,
         object_opacity: 1.0,
+        ..SemanticStyle::default()
     };
     if !sloped_unlit {
         surface.set_spatial_material(SemanticSpatialMaterial::CairoSurface);

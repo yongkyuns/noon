@@ -1,6 +1,6 @@
 use noon::{
     LayoutAnchor,
-    LayoutDimension::{Height, Width},
+    LayoutDimension::{Depth, Height, Width},
     Scene,
 };
 
@@ -72,6 +72,14 @@ fn zero_extent_is_a_noop_without_a_revision() {
     LayoutAnchor::from(&empty)
         .rescale_to_fit(4.0, Height, true)
         .unwrap();
+    for length in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        LayoutAnchor::from(&line)
+            .rescale_to_fit(length, Width, false)
+            .unwrap();
+        LayoutAnchor::from(&empty)
+            .rescale_to_fit(length, Height, true)
+            .unwrap();
+    }
     assert_eq!(scene.revision(), revision);
     assert_eq!(line.height().unwrap(), 2.0);
 }
@@ -101,6 +109,12 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
     live.advance_segment_to(segment, 1.0).unwrap();
     let before_source = live.effective(&source).unwrap();
     let before_target = live.effective(&target).unwrap();
+    live.rescale_to_fit(&(&target).into(), f64::NAN, Depth, true)
+        .unwrap();
+    live.match_dim_size(&(&source).into(), &(&target).into(), Depth, false)
+        .unwrap();
+    assert_eq!(live.effective(&source).unwrap(), before_source);
+    assert_eq!(live.effective(&target).unwrap(), before_target);
     assert!(live
         .match_dim_size(&(&source).into(), &(&target).into(), Width, false)
         .is_err());
@@ -115,6 +129,59 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
     live.match_dim_size(&(&source).into(), &(&target).into(), Width, false)
         .unwrap();
     assert_eq!(live.effective_layout(&source).unwrap().width, 3.0);
+}
+
+#[test]
+fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
+    let mut scene = Scene::new();
+    let a = scene.rectangle(2.0, 3.0).unwrap();
+    let b = scene.square(1.0).unwrap();
+    let family = scene
+        .family(&[(&a).into(), (&b).into(), (&a).into()])
+        .unwrap();
+    let source = LayoutAnchor::from(&family);
+    let target = LayoutAnchor::from(&b);
+    let before = [a.state().unwrap(), b.state().unwrap()];
+    let revision = scene.revision();
+    source.rescale_to_fit(f64::NAN, Depth, false).unwrap();
+    source.match_dim_size(&target, Depth, true).unwrap();
+    source
+        .stretch(3.0, Depth, noon::ManimRotationPivot::Center)
+        .unwrap();
+    assert_eq!(scene.revision(), revision);
+    assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
+    assert_eq!(noon::LayoutDimension::try_from(2).unwrap(), Depth);
+    assert!(noon::LayoutDimension::try_from(3).is_err());
+
+    // The family is a query scope over live leaves, without its own scene-root
+    // membership or host wrapper binding.
+    scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
+    let revision = scene.revision();
+    let mut session = scene.execution_session().unwrap();
+    assert_eq!(
+        noon::integration::effective_length_over_dim(
+            scene.integration_store(),
+            &session,
+            noon::MobjectTarget::from(&family),
+            2,
+        )
+        .unwrap(),
+        0.0
+    );
+    {
+        let mut live = scene.live(&mut session);
+        let before_a = live.effective(&a).unwrap();
+        live.rescale_to_fit(&source, f64::INFINITY, Depth, true)
+            .unwrap();
+        live.match_dim_size(&source, &target, Depth, false).unwrap();
+        let result = live
+            .stretch(&source, 2.0, Depth, noon::ManimRotationPivot::Center)
+            .unwrap();
+        assert!(result.impacts().is_empty());
+        assert_eq!(live.effective(&a).unwrap(), before_a);
+    }
+    assert_eq!(scene.revision(), revision);
+    assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
 }
 
 #[test]

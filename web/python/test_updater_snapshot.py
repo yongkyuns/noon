@@ -496,6 +496,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 self.calls.append(handle)
                 return target_handle
 
+            def requiresLiveMutationRouting(self):
+                return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
             def liveExecutionOwnership(self) -> str:
                 return "returned"
 

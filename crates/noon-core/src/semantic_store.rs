@@ -401,6 +401,10 @@ pub struct SemanticNode {
     /// families/Line components. It is Semantic Scene state, not wrapper or
     /// renderer state.
     graph_declaration: Option<SemanticGraphDeclaration>,
+    /// Manim's per-object updater suspension flag. This is semantic authoring
+    /// state because detached `Mobject.update()` and live callback lowering must
+    /// observe the same value through their shared node identity.
+    updating_suspended: bool,
     /// Ordered attachment identities; absent effects allocate no collection.
     /// Boxing the Vec header keeps every effect-free node to one pointer of
     /// overhead rather than three words. The first attachment pays the extra
@@ -461,11 +465,94 @@ impl SemanticNode {
             _ => None,
         }
     }
+    pub fn family_style(&self) -> Option<&SemanticStyle> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(&state.own_style),
+            _ => None,
+        }
+    }
+    pub fn family_background_stroke_opacity(&self) -> Option<f64> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_opacity),
+            _ => None,
+        }
+    }
+    pub fn family_background_stroke_color(&self) -> Option<crate::Color> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_color),
+            _ => None,
+        }
+    }
+    pub fn family_background_stroke_width(&self) -> Option<f64> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_width),
+            _ => None,
+        }
+    }
+    pub fn sheen_direction(&self) -> Option<crate::SemanticSheenDirection> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_sheen_direction),
+            SemanticNodeKind::AuthoringObject => self
+                .semantic_object_state()
+                .map(|state| state.sheen_direction),
+            _ => None,
+        }
+    }
+    pub const fn updating_suspended(&self) -> bool {
+        self.updating_suspended
+    }
+
+    pub(crate) fn set_updating_suspended(&mut self, suspended: bool) {
+        self.updating_suspended = suspended;
+    }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
         let SemanticNodeKind::Family(state) = &mut self.kind else {
             unreachable!("preflighted family color");
         };
         state.own_color = color;
+        state.own_style.set_family_color(color);
+    }
+    pub(crate) fn set_family_style(&mut self, style: SemanticStyle) {
+        let SemanticNodeKind::Family(state) = &mut self.kind else {
+            unreachable!("preflighted family style");
+        };
+        let color = style.family_color();
+        state.own_style = style;
+        if let Some(color) = color {
+            state.own_color = color;
+        }
+    }
+    pub(crate) fn set_family_background_stroke_style(
+        &mut self,
+        color: Option<crate::Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) {
+        let SemanticNodeKind::Family(state) = &mut self.kind else {
+            unreachable!("preflighted family background stroke style");
+        };
+        if let Some(color) = color {
+            state.own_background_stroke_color = color;
+        }
+        if let Some(width) = width {
+            state.own_background_stroke_width = width;
+        }
+        if let Some(opacity) = opacity {
+            state.own_background_stroke_opacity = opacity;
+        }
+    }
+
+    pub(crate) fn set_sheen_direction(&mut self, direction: crate::SemanticSheenDirection) {
+        match &mut self.kind {
+            SemanticNodeKind::Family(state) => state.own_sheen_direction = direction,
+            SemanticNodeKind::AuthoringObject => {
+                self.object_state
+                    .as_mut()
+                    .expect("preflighted authoring object")
+                    .sheen_direction = direction;
+            }
+            _ => unreachable!("preflighted authoring node"),
+        }
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {
@@ -495,6 +582,15 @@ impl SemanticNode {
 
     pub fn parents(&self) -> &[SemanticNodeId] {
         &self.parents
+    }
+
+    /// Whether this node can own ordered Mobject membership edges.
+    /// Point-owning objects retain their own payload alongside their children.
+    pub fn can_own_members(&self) -> bool {
+        matches!(
+            self.kind,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_)
+        )
     }
 
     /// Snapshot direct members in deterministic family order.
@@ -1031,6 +1127,7 @@ impl SemanticStore {
             scoped_signals: BTreeSet::new(),
             foreground_members: Vec::new(),
             graph_declaration: None,
+            updating_suspended: false,
             effects: None,
         });
         self.live_nodes += 1;
@@ -1468,7 +1565,7 @@ impl SemanticStore {
         let family = self
             .node(family_id)
             .ok_or(SemanticStoreError::UnknownNode(family_id))?;
-        if !matches!(family.kind(), SemanticNodeKind::Family(_)) {
+        if !family.can_own_members() {
             return Err(SemanticStoreError::NotFamily(family_id));
         }
         if self.node(member).is_none() {
@@ -1486,10 +1583,7 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<(), SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -1546,10 +1640,7 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<bool, SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -1589,10 +1680,7 @@ impl SemanticStore {
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
     ) -> Result<bool, SemanticStoreError> {
-        if !matches!(
-            self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family(_))
-        ) {
+        if !self.node(family).is_some_and(SemanticNode::can_own_members) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {

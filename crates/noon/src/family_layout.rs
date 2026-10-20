@@ -48,8 +48,10 @@ pub enum LiveLayoutTarget<'a> {
 }
 
 /// A layout reference into the existing semantic store, optionally selecting a
-/// direct family member. It owns no bounds or membership snapshot. Negative
-/// indices count from the end; selection is resolved when placement is requested.
+/// member of Manim's split view. Point-bearing geometry includes itself before
+/// its direct children; families and empty geometry start with their children.
+/// Negative indices count from the end. Selection is resolved on each request,
+/// without retaining a bounds or membership snapshot.
 #[derive(Clone, Debug)]
 pub struct LayoutAnchor {
     store: Rc<RefCell<SemanticStore>>,
@@ -112,7 +114,7 @@ impl LayoutAnchor {
         self.resolve()
     }
 
-    /// Select a direct semantic family member, without traversing wrapper trees.
+    /// Select an entry in the shared split view, without traversing wrapper trees.
     pub fn member(mut self, index: isize) -> Self {
         self.index = Some(index);
         self
@@ -141,50 +143,50 @@ impl LayoutAnchor {
         let Some(index) = self.index else {
             return Ok(self.node);
         };
-        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)) {
-            return Err(
-                noon_core::SemanticSceneOperationError::NotSemanticFamily(self.node).into(),
-            );
-        }
+        let includes_self = match node.kind() {
+            noon_core::SemanticNodeKind::Family(_) => false,
+            noon_core::SemanticNodeKind::AuthoringObject => {
+                let state = store.semantic_object_state_checked(self.node)?;
+                let path = crate::path_queries::content_path(&store, state.content)?;
+                crate::path_queries::PathQuery::prepare(
+                    &path,
+                    noon_core::SemanticTransform2_5D::default(),
+                )?
+                .point_count()
+                    > 0
+            }
+            _ => {
+                return Err(
+                    noon_core::SemanticSceneOperationError::NotSemanticFamily(self.node).into(),
+                )
+            }
+        };
         let members = node.members();
+        let count = members.len() + usize::from(includes_self);
         let requested_index = index;
         let index = if index < 0 {
-            members.len().checked_add_signed(index)
+            count.checked_add_signed(index)
         } else {
             Some(index as usize)
         };
-        index.and_then(|index| members.get(index).copied()).ok_or(
-            AuthoringError::InvalidSubmobjectIndex {
+        index
+            .filter(|&index| index < count)
+            .map(|index| {
+                if includes_self && index == 0 {
+                    self.node
+                } else {
+                    members[index - usize::from(includes_self)]
+                }
+            })
+            .ok_or(AuthoringError::InvalidSubmobjectIndex {
                 family: self.node,
                 index: requested_index,
-            },
-        )
+            })
     }
 
-    /// Observe the selected object/family through the shared authored layout path.
+    /// Observe the selected root's own content and unique ordered descendants.
     pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
-        let node = self.resolve()?;
-        if matches!(
-            self.store.borrow().node(node).map(|n| n.kind()),
-            Some(noon_core::SemanticNodeKind::Family(_))
-        ) {
-            MobjectFamily::from_node(Rc::clone(&self.store), node)?.layout()
-        } else {
-            let object = Mobject::from_node(Rc::clone(&self.store), node)?;
-            let bounds = match object.layout_bounds()? {
-                Some(bounds) => Some(bounds),
-                None => {
-                    let (x, y) = object.center()?;
-                    Some(Bounds2D64::point(x, y))
-                }
-            };
-            Ok(FamilyLayout {
-                store: Rc::clone(&self.store),
-                leaves: vec![node],
-                bounds,
-                boundary: object.boundary_bounds()?.or(bounds),
-            })
-        }
+        authored_layout(&self.store, self.resolve()?)
     }
 
     /// Move this entire source using another object's/family member's bounds.
@@ -206,27 +208,10 @@ impl LayoutAnchor {
 }
 
 impl MobjectFamily {
-    /// Observe only this family's layout and ordered semantic leaves.
+    /// Observe only this family's layout and ordered semantic content.
     pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
         self.validate()?;
-        let leaves = self
-            .integration_store()
-            .borrow()
-            .ordered_leaf_nodes(self.node_id())
-            .map_err(AuthoringError::from)?;
-        let mut bounds = None;
-        let mut boundary = None;
-        for &leaf in &leaves {
-            let object = Mobject::from_node(Rc::clone(self.integration_store()), leaf)?;
-            union_bounds(&mut bounds, object.layout_bounds()?);
-            union_bounds(&mut boundary, object.boundary_bounds()?);
-        }
-        Ok(FamilyLayout {
-            store: Rc::clone(self.integration_store()),
-            leaves,
-            bounds,
-            boundary,
-        })
+        authored_layout(self.integration_store(), self.node_id())
     }
 
     /// Shift each semantic leaf once without querying its geometry.
@@ -235,6 +220,40 @@ impl MobjectFamily {
             FamilyTranslation::begin(&self.integration_store().borrow(), self.node_id(), x, y)?;
         translation.apply(&mut self.integration_store().borrow_mut())
     }
+}
+
+/// One root-scoped collection; per-content reads must not retraverse descendants.
+fn authored_layout(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+) -> Result<FamilyLayout, AuthoringError> {
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(root)
+        .map_err(AuthoringError::from)?;
+    let mut bounds = None;
+    let mut boundary = None;
+    for &leaf in &leaves {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        union_bounds(&mut bounds, object.content_layout_bounds()?);
+        union_bounds(&mut boundary, object.content_boundary_bounds()?);
+    }
+    if bounds.is_none()
+        && store.borrow().node(root).is_some_and(|node| {
+            matches!(node.kind(), noon_core::SemanticNodeKind::AuthoringObject)
+                && node.members_iter().next().is_none()
+        })
+    {
+        let (x, y) = Mobject::from_node(Rc::clone(store), root)?.content_center()?;
+        bounds = Some(Bounds2D64::point(x, y));
+        boundary = boundary.or(bounds);
+    }
+    Ok(FamilyLayout {
+        store: Rc::clone(store),
+        leaves,
+        bounds,
+        boundary,
+    })
 }
 
 impl FamilyLayout {
@@ -538,19 +557,7 @@ pub(crate) fn effective_family_layout_measure(
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let leaves = store
-        .borrow()
-        .ordered_leaf_nodes(family.node_id())
-        .map_err(AuthoringError::from)?;
-    let mut bounds = None;
-    for &leaf in &leaves {
-        let object = Mobject::from_node(Rc::clone(store), leaf)?;
-        union_bounds(
-            &mut bounds,
-            effective_family_member_measure(store, execution, &object, boundary)?,
-        );
-    }
-    Ok((leaves, bounds))
+    effective_root_layout_measure(store, execution, family.node_id(), boundary)
 }
 
 pub(crate) fn effective_family_member_measure(
@@ -565,9 +572,9 @@ pub(crate) fn effective_family_member_measure(
     object.validate()?;
     if !execution.semantic_object_is_reachable(object.node_id()) {
         return if boundary {
-            object.boundary_bounds()
+            object.content_boundary_bounds()
         } else {
-            object.layout_bounds()
+            object.content_layout_bounds()
         };
     }
     let store_ref = store.borrow();
@@ -600,25 +607,40 @@ pub(crate) fn effective_anchor_layout_measure(
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let node = anchor.resolve()?;
-    if matches!(
-        store.borrow().node(node).map(|n| n.kind()),
-        Some(noon_core::SemanticNodeKind::Family(_))
-    ) {
-        let family = MobjectFamily::from_node(Rc::clone(store), node)?;
-        effective_family_layout_measure(store, execution, &family, boundary)
-    } else {
-        let object = Mobject::from_node(Rc::clone(store), node)?;
-        let bounds = effective_family_member_measure(store, execution, &object, boundary)?;
-        let bounds = match bounds {
-            Some(bounds) => Some(bounds),
-            None => {
-                let (x, y) = effective_member_center(store, execution, &object)?;
-                Some(Bounds2D64::point(x, y))
-            }
-        };
-        Ok((vec![node], bounds))
+    effective_root_layout_measure(store, execution, anchor.resolve()?, boundary)
+}
+
+/// Collect own-content measurements once per unique addressed identity. Callers
+/// validate store ownership and the coherent publication before entering here.
+fn effective_root_layout_measure(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    node: SemanticNodeId,
+    boundary: bool,
+) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), AuthoringError> {
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(node)
+        .map_err(AuthoringError::from)?;
+    let mut bounds = None;
+    for &leaf in &leaves {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        union_bounds(
+            &mut bounds,
+            effective_family_member_measure(store, execution, &object, boundary)?,
+        );
     }
+    if bounds.is_none()
+        && store.borrow().node(node).is_some_and(|node| {
+            matches!(node.kind(), noon_core::SemanticNodeKind::AuthoringObject)
+                && node.members_iter().next().is_none()
+        })
+    {
+        let object = Mobject::from_node(Rc::clone(store), node)?;
+        let (x, y) = effective_member_center(store, execution, &object)?;
+        bounds = Some(Bounds2D64::point(x, y));
+    }
+    Ok((leaves, bounds))
 }
 
 /// Validate that persistent composite placement can safely use an entry's state.
@@ -655,7 +677,7 @@ fn effective_member_center(
     object: &Mobject,
 ) -> Result<(f64, f64), AuthoringError> {
     if !execution.semantic_object_is_reachable(object.node_id()) {
-        return object.center();
+        return object.content_center();
     }
     let store_ref = store.borrow();
     let observed = execution
@@ -844,10 +866,8 @@ fn live_target_point(
             Ok((point.x, point.y))
         }
         LiveLayoutTarget::Mobject(object) => {
-            match effective_family_member_measure(store, execution, object, true)? {
-                Some(bounds) => Ok(bounds_critical_point(Some(bounds), x, y)),
-                None => effective_member_center(store, execution, object),
-            }
+            effective_anchor_layout_measure(store, execution, &LayoutAnchor::from(object), true)
+                .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
         }
         LiveLayoutTarget::Anchor(anchor) => {
             effective_anchor_layout_measure(store, execution, anchor, true)
@@ -902,11 +922,23 @@ pub(crate) fn publish_shift_family(
         return Err(AuthoringError::ForeignStore);
     }
     family.validate()?;
+    publish_shift_root(store, root, execution, family.node_id(), x, y)
+}
+
+/// Translate the validated typed root through the existing publication boundary.
+pub(crate) fn publish_shift_root(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: SemanticNodeId,
+    x: f64,
+    y: f64,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let transaction = FamilyTranslation::begin(&store.borrow(), family.node_id(), x, y)?
-        .transaction(&store.borrow())?;
+    let transaction =
+        FamilyTranslation::begin(&store.borrow(), source, x, y)?.transaction(&store.borrow())?;
     crate::Scene::publish_running_transaction(store, root, execution, transaction)
         .map_err(AuthoringError::from)
 }
@@ -981,6 +1013,19 @@ pub(crate) fn publish_move_to(
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
+    let (leaves, root_bounds) =
+        effective_anchor_layout_measure(store, execution, &LayoutAnchor::from(object), true)?;
+    if leaves.len() > 1 {
+        return publish_layout_translation(
+            store,
+            root,
+            execution,
+            leaves,
+            root_bounds,
+            target,
+            RelativePlacement::Move { edge, mask },
+        );
+    }
     let (transform, callback_owned) = placement::transform(store, execution, object, true)?;
     let bounds = object.boundary_bounds_at(transform)?.unwrap_or_else(|| {
         Bounds2D64::point(

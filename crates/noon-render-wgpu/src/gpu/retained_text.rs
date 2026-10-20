@@ -2903,6 +2903,8 @@ impl RetainedFramePreparer {
                     fill: Some(fill),
                     stroke: None,
                     stroke_width: 0.0,
+                    background_stroke: object_style.background_stroke,
+                    background_stroke_width: object_style.background_stroke_width,
                     stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                     stroke_join: StrokeJoin::Round,
                     stroke_cap: StrokeCap::Round,
@@ -2927,6 +2929,8 @@ impl RetainedFramePreparer {
                         fill: Some(color),
                         stroke: None,
                         stroke_width: 0.0,
+                        background_stroke: object_style.background_stroke,
+                        background_stroke_width: object_style.background_stroke_width,
                         stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                         stroke_join: StrokeJoin::Round,
                         stroke_cap: StrokeCap::Round,
@@ -2955,6 +2959,8 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
             .then(|| crate::text::resolve_text_paint(vector.style.stroke, object_style.fill))
             .flatten(),
         stroke_width: vector.style.stroke_width,
+        background_stroke: object_style.background_stroke,
+        background_stroke_width: object_style.background_stroke_width,
         stroke_width_mode: StrokeWidthMode::ScaleWithObject,
         stroke_join: vector.style.stroke_join,
         stroke_cap: vector.style.stroke_cap,
@@ -3327,8 +3333,8 @@ fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
         })
         .miter_limit(stroke.miter_limit)
         .cap(match stroke.cap {
+            StrokeCap::Auto | StrokeCap::Butt => ZenoCap::Butt,
             StrokeCap::Round => ZenoCap::Round,
-            StrokeCap::Butt => ZenoCap::Butt,
             StrokeCap::Square => ZenoCap::Square,
         })
         .dash(stroke.dash_array.as_ref(), stroke.dash_phase);

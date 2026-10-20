@@ -8,6 +8,301 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_group_insert_preserves_the_pinned_public_signature(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.insert)
+        self.assertEqual(tuple(signature.parameters), ("self", "index", "mobject"))
+        self.assertEqual(signature.parameters["index"].annotation, "int")
+        self.assertEqual(signature.parameters["mobject"].annotation, "Mobject")
+        self.assertEqual(signature.return_annotation, "Self")
+
+    def test_group_insert_uses_python_list_index_and_one_shared_family_operation(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        second = identity_only_wrapper(compat.Circle)
+        added = identity_only_wrapper(compat.Square)
+        root._semantic_family_handle = SimpleNamespace(insertMember=Mock())
+        root._semantic_member_wrappers = {}
+        for value, slot in ((first, 1), (second, 2), (added, 3)):
+            value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=4)
+        batch = object()
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first, second]),
+            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
+        ):
+            self.assertIs(handles._group_insert(root, -1, added), root)
+
+        make_batch.assert_called_once_with(None, "add", (added,))
+        root._semantic_family_handle.insertMember.assert_called_once_with(1, batch)
+        self.assertIs(root._semantic_member_wrappers["3:4"], added)
+
+    def test_group_insert_routes_live_index_and_rejects_repeated_identity(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        added = identity_only_wrapper(compat.Circle)
+        root._semantic_family_handle = SimpleNamespace()
+        root._semantic_member_wrappers = {}
+        for value, slot in ((first, 1), (added, 2)):
+            value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=4)
+        batch = object()
+        context = SimpleNamespace(liveInsertFamilyMember=Mock())
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first]),
+            patch.object(handles, "_live_constructor_context", return_value=context),
+            patch.object(handles, "_family_membership_batch", return_value=batch),
+        ):
+            self.assertIs(handles._group_insert(root, 100, added), root)
+        context.liveInsertFamilyMember.assert_called_once_with(
+            root._semantic_family_handle, 1, batch
+        )
+
+        with (
+            patch.object(handles, "_group_members", return_value=[first]),
+            patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before live edit")),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "store each child identity once"):
+                handles._group_insert(root, 0, first)
+
+    def test_group_add_to_back_uses_one_shared_family_order_operation(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        first = identity_only_wrapper(compat.Square)
+        second = identity_only_wrapper(compat.Circle)
+        root._semantic_family_handle = SimpleNamespace(
+            prependMembers=Mock(),
+        )
+        root._semantic_member_wrappers = {}
+        first._semantic_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=2)
+        second._semantic_handle = SimpleNamespace(semanticSlot=3, semanticGeneration=4)
+        batch = object()
+
+        with (
+            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
+        ):
+            self.assertIs(handles._group_add_to_back(root, first, second, first), root)
+
+        make_batch.assert_called_once_with(None, "add", (first, second, first))
+        root._semantic_family_handle.prependMembers.assert_called_once_with(batch)
+        self.assertIs(root._semantic_member_wrappers["1:2"], first)
+        self.assertIs(root._semantic_member_wrappers["3:4"], second)
+
+    def test_group_invert_routes_direct_and_live_family_operations(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(invertMembers=Mock())
+        root._semantic_family_handle = family_handle
+
+        with patch.object(handles, "_live_constructor_context", return_value=None):
+            self.assertIs(handles._group_invert(root, recursive=0), root)
+        family_handle.invertMembers.assert_called_once_with(False)
+
+        live_context = SimpleNamespace(liveInvertFamilyMembers=Mock())
+        with patch.object(handles, "_live_constructor_context", return_value=live_context):
+            self.assertIs(handles._group_invert(root, recursive=1), root)
+        live_context.liveInvertFamilyMembers.assert_called_once_with(family_handle, True)
+
+    def test_group_invert_preserves_pinned_public_signature(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.invert)
+        self.assertEqual(tuple(signature.parameters), ("self", "recursive"))
+        self.assertEqual(signature.parameters["recursive"].default, False)
+        self.assertEqual(signature.parameters["recursive"].annotation, "bool")
+        self.assertEqual(signature.return_annotation, "Self")
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.invert(recursive=True), plain)
+
+    def test_group_sort_routes_stable_key_order_through_shared_reorder(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        first = SimpleNamespace(get_center=lambda: (1, 0))
+        tied_first = SimpleNamespace(get_center=lambda: (0, 0))
+        tied_second = SimpleNamespace(get_center=lambda: (0, 1))
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(prependMembers=Mock())
+        root._semantic_family_handle = family_handle
+        batch = object()
+        with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
+             patch.object(handles, "_live_constructor_context", return_value=None):
+            self.assertIs(handles._group_sort(root), root)
+        make_batch.assert_called_once_with(None, "add", (tied_first, tied_second, first))
+        family_handle.prependMembers.assert_called_once_with(batch)
+
+        live_context = SimpleNamespace(livePrependFamilyMembers=Mock())
+        with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch), \
+             patch.object(handles, "_live_constructor_context", return_value=live_context):
+            self.assertIs(handles._group_sort(root, submob_func=lambda member: -member.get_center()[1]), root)
+        live_context.livePrependFamilyMembers.assert_called_once_with(family_handle, batch)
+
+    def test_group_sort_preserves_pinned_public_signatures_and_base_noop(self):
+        import inspect
+        import _manim_compat as compat
+
+        signature = inspect.signature(compat.Group.sort)
+        self.assertEqual(tuple(signature.parameters), ("self", "point_to_num_func", "submob_func"))
+        self.assertEqual(signature.parameters["point_to_num_func"].annotation, "Callable[[Point3DLike], float]")
+        self.assertEqual(signature.parameters["submob_func"].annotation, "Callable[[Mobject], Any] | None")
+        self.assertEqual(signature.parameters["submob_func"].default, None)
+        self.assertEqual(signature.return_annotation, "Self")
+        alias = inspect.signature(compat.Mobject.sort_submobjects)
+        self.assertEqual(tuple(alias.parameters), ("self", "args", "kwargs"))
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.sort(), plain)
+        self.assertIs(plain.sort_submobjects(), plain)
+
+    def test_group_shuffle_routes_permutation_through_shared_reorder(self):
+        import inspect
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        first, second = object(), object()
+        root = identity_only_wrapper(compat.Group)
+        family_handle = SimpleNamespace(prependMembers=Mock())
+        root._semantic_family_handle = family_handle
+        batch = object()
+        with patch.object(handles, "_group_members", return_value=[first, second]), \
+             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
+             patch.object(handles, "_live_constructor_context", return_value=None), \
+             patch("random.shuffle", side_effect=lambda members: members.reverse()):
+            self.assertIs(handles._group_shuffle(root), root)
+        make_batch.assert_called_once_with(None, "add", (second, first))
+        family_handle.prependMembers.assert_called_once_with(batch)
+
+        signature = inspect.signature(compat.Group.shuffle)
+        self.assertEqual(tuple(signature.parameters), ("self", "recursive"))
+        self.assertEqual(signature.parameters["recursive"].default, False)
+        alias = inspect.signature(compat.Mobject.shuffle_submobjects)
+        self.assertEqual(tuple(alias.parameters), ("self", "args", "kwargs"))
+        plain = object.__new__(compat.Mobject)
+        self.assertIs(plain.shuffle(recursive=True), plain)
+        self.assertIs(plain.shuffle_submobjects(), plain)
+        root = identity_only_wrapper(compat.Group)
+        root._semantic_family_handle = SimpleNamespace(prependMembers=Mock())
+        with patch.object(handles, "_group_members", side_effect=AssertionError("must reject before reading")), \
+             patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before context")):
+            with self.assertRaisesRegex(NotImplementedError, "Rust owns its family traversal"):
+                handles._group_shuffle(root, recursive=True)
+
+    def test_group_arrange_submobjects_forwards_to_dynamic_shared_arrange(self):
+        import inspect
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        arrange = Mock(return_value=root)
+        root.arrange = arrange
+        self.assertIs(compat.Group.arrange_submobjects(root, "up", buff=0.4, center=False), root)
+        arrange.assert_called_once_with("up", buff=0.4, center=False)
+
+        signature = inspect.signature(compat.Mobject.arrange_submobjects)
+        self.assertEqual(tuple(signature.parameters), ("self", "args", "kwargs"))
+        self.assertEqual(signature.return_annotation, "Self")
+        plain = object.__new__(compat.Mobject)
+        with patch.object(compat.Mobject, "center", return_value=plain) as center:
+            self.assertIs(plain.arrange_submobjects(), plain)
+        center.assert_called_once_with()
+
+    def test_space_out_submobjects_scales_root_then_direct_children(self):
+        from unittest.mock import Mock
+        import _manim_compat as compat
+        from types import SimpleNamespace
+
+        root = SimpleNamespace()
+        first = SimpleNamespace()
+        second = SimpleNamespace()
+        root.submobjects = [first, second]
+        root_scale = Mock(return_value=root)
+        first_scale = Mock(return_value=first)
+        second_scale = Mock(return_value=second)
+        root.scale = root_scale
+        first.scale = first_scale
+        second.scale = second_scale
+
+        self.assertIs(compat.Mobject.space_out_submobjects(root, 2.0, about_edge=(1.0, 0.0)), root)
+        root_scale.assert_called_once_with(2.0, about_edge=(1.0, 0.0))
+        first_scale.assert_called_once_with(0.5, about_edge=(1.0, 0.0))
+        second_scale.assert_called_once_with(0.5, about_edge=(1.0, 0.0))
+
+        import inspect
+        signature = inspect.signature(compat.Mobject.space_out_submobjects)
+        self.assertEqual(tuple(signature.parameters), ("self", "factor", "kwargs"))
+        self.assertEqual(signature.parameters["factor"].default, 1.5)
+        plain = SimpleNamespace()
+        plain.scale = Mock(return_value=plain)
+        self.assertIs(compat.Mobject.space_out_submobjects(plain), plain)
+        plain.scale.assert_called_once_with(1.5)
+
+    def test_family_updaters_flatten_member_callbacks_in_shared_order(self):
+        from unittest.mock import Mock, call
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        child = identity_only_wrapper(compat.Circle)
+        root_updaters = [Mock(), Mock()]
+        child_updaters = [Mock()]
+        root.get_family = Mock(return_value=[root, child])
+        root.get_updaters = Mock(return_value=root_updaters)
+        child.get_updaters = Mock(return_value=child_updaters)
+
+        self.assertEqual(root.get_family_updaters(), root_updaters + child_updaters)
+        root.get_family.assert_called_once_with()
+        self.assertEqual(root.get_updaters.call_args_list, [call()])
+        self.assertEqual(child.get_updaters.call_args_list, [call()])
+
+    def test_apply_to_family_invokes_callbacks_in_shared_pointful_order(self):
+        from unittest.mock import Mock, call
+        import _manim_compat as compat
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        root = identity_only_wrapper(compat.Group)
+        members = [object(), object()]
+        root.family_members_with_points = Mock(return_value=members)
+        callback = Mock()
+
+        self.assertIs(root.apply_to_family(callback), root)
+        root.family_members_with_points.assert_called_once_with()
+        self.assertEqual(callback.call_args_list, [call(members[0]), call(members[1])])
+
     def test_family_query_uses_shared_order_and_existing_wrapper_identity(self):
         from unittest.mock import Mock, patch
         import _manim_compat as compat
@@ -46,9 +341,13 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(NotImplementedError, "staged callback membership"):
                 root.get_family()
+            callback = Mock()
+            with self.assertRaisesRegex(NotImplementedError, "staged callback membership"):
+                root.apply_to_family(callback)
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
         root._semantic_family_handle.familyKeys.assert_not_called()
+        callback.assert_not_called()
 
     def test_live_observations_and_coordinates_delegate_without_python_bounds_math(self):
         from types import SimpleNamespace

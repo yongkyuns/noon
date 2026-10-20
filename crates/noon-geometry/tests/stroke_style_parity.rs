@@ -75,6 +75,7 @@ fn open_caps_match_theoretical_extents() {
         .line_to(Vec2::new(1.0, 0.0));
     let half_width = 0.25;
     for (cap, expected_x) in [
+        (StrokeCap::Auto, 1.0),
         (StrokeCap::Butt, 1.0),
         (StrokeCap::Round, 1.0 + half_width),
         (StrokeCap::Square, 1.0 + half_width),

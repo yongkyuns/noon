@@ -61,7 +61,7 @@ impl FamilyEdgePreflight {
         member: SemanticTransactionNodeRef,
         index: usize,
     ) -> Result<bool, SemanticMutationTransactionError> {
-        catalog.ensure_family(family, index)?;
+        catalog.ensure_membership_owner(family, index)?;
         catalog.ensure_authoring_node(member, index)?;
         if self.contains(catalog, family, member) {
             return Ok(false);
@@ -99,7 +99,7 @@ impl FamilyEdgePreflight {
         member: SemanticTransactionNodeRef,
         index: usize,
     ) -> Result<bool, SemanticMutationTransactionError> {
-        catalog.ensure_family(family, index)?;
+        catalog.ensure_membership_owner(family, index)?;
         catalog.ensure_authoring_node(member, index)?;
         let changed = self.contains(catalog, family, member);
         if changed {
@@ -117,7 +117,7 @@ impl FamilyEdgePreflight {
         before: Option<SemanticTransactionNodeRef>,
         index: usize,
     ) -> Result<bool, SemanticMutationTransactionError> {
-        catalog.ensure_family(family, index)?;
+        catalog.ensure_membership_owner(family, index)?;
         catalog.ensure_authoring_node(member, index)?;
         if !self.contains(catalog, family, member) {
             return Err(self.not_member_error(index, family, member));

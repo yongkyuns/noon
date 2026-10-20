@@ -4,11 +4,12 @@ use std::rc::Rc;
 
 use crate::{semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor};
 
-/// The supported planar layout dimensions.
+/// Layout dimensions of planar objects. Their depth extent is always zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutDimension {
     Width,
     Height,
+    Depth,
 }
 
 impl TryFrom<u32> for LayoutDimension {
@@ -18,6 +19,7 @@ impl TryFrom<u32> for LayoutDimension {
         match value {
             0 => Ok(Self::Width),
             1 => Ok(Self::Height),
+            2 => Ok(Self::Depth),
             _ => Err(AuthoringError::InvalidDimension(value)),
         }
     }
@@ -28,6 +30,7 @@ impl LayoutDimension {
         bounds.map_or(0.0, |bounds| match self {
             Self::Width => bounds.width(),
             Self::Height => bounds.height(),
+            Self::Depth => 0.0,
         })
     }
 
@@ -37,16 +40,16 @@ impl LayoutDimension {
         length: f64,
         stretch: bool,
     ) -> Result<Option<(f64, f64)>, AuthoringError> {
-        let length = authoring_render_f64("fit length", length)?;
         let previous = self.length(bounds);
         if previous == 0.0 {
             return Ok(None);
         }
+        let length = authoring_render_f64("fit length", length)?;
         let factor = authoring_render_f64("fit scale", length / previous)?;
         Ok(Some(match (stretch, self) {
-            (false, _) => (factor, factor),
             (true, Self::Width) => (factor, 1.0),
             (true, Self::Height) => (1.0, factor),
+            _ => (factor, factor),
         }))
     }
 }
@@ -69,6 +72,11 @@ pub(crate) fn world_scale_factors(
 }
 
 impl LayoutAnchor {
+    /// Read the same layout extent used by fitting, including resource objects.
+    pub fn dimension_length(&self, dimension: LayoutDimension) -> Result<f64, AuthoringError> {
+        Ok(dimension.length(self.layout()?.bounds()))
+    }
+
     /// Stretch one world dimension around a shared pivot, preserving semantic identity.
     pub fn stretch(
         &self,
@@ -79,6 +87,11 @@ impl LayoutAnchor {
         let (x, y) = match dimension {
             LayoutDimension::Width => (factor, 1.0),
             LayoutDimension::Height => (1.0, factor),
+            LayoutDimension::Depth => {
+                self.layout()?;
+                authoring_render_f64("stretch factor", factor)?;
+                return Ok(());
+            }
         };
         self.apply_affine_without_table_layout(crate::family_affine::FamilyAffine::Scale(
             x, y, pivot,
@@ -173,6 +186,8 @@ impl LayoutAnchor {
 /// Target leaves shared with the source observe the staged scale before the
 /// final center shift, matching ordinary sequential replace semantics without
 /// publishing an intermediate revision.
+/// An optional circle buffer adds the pinned diagonal fit after remeasuring
+/// the replaced target.
 pub(crate) fn replacement_transaction(
     store: &noon_core::SemanticStore,
     leaves: &[crate::SemanticNodeId],
@@ -184,6 +199,7 @@ pub(crate) fn replacement_transaction(
     )],
     dimension: LayoutDimension,
     stretch: bool,
+    circle_buffer_factor: Option<f64>,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
     use crate::semantic_mobject::{scale_state_about_center, stage_state_changes, state_center};
     use std::collections::BTreeSet;
@@ -195,13 +211,16 @@ pub(crate) fn replacement_transaction(
             total
         })
     }
+    if let Some(buffer) = circle_buffer_factor {
+        authoring_render_f64("circle surround buffer factor", buffer)?;
+    }
     let (source_bounds, source_boundary) = source;
     let target_bounds = union(
         target_leaves
             .iter()
             .filter_map(|(_, dimensions, _)| *dimensions),
     );
-    let (x, y) = if stretch {
+    let (mut x, mut y) = if stretch {
         let x = LayoutDimension::Width
             .scale(
                 source_bounds,
@@ -236,6 +255,36 @@ pub(crate) fn replacement_transaction(
         })
     }));
     let destination = crate::family_layout::bounds_critical_point(target_after_scale, 0.0, 0.0);
+    if let Some(buffer) = circle_buffer_factor {
+        // Circle.surround re-reads its target after replace. This matters when
+        // the target contains the source; both its size and center may change.
+        let target_after_replace = union(target_leaves.iter().filter_map(|(leaf, bounds, _)| {
+            bounds.map(|mut bounds| {
+                if sources.contains(leaf) {
+                    bounds.min_x = destination.0 + (bounds.min_x - center.0) * x;
+                    bounds.max_x = destination.0 + (bounds.max_x - center.0) * x;
+                    bounds.min_y = destination.1 + (bounds.min_y - center.1) * y;
+                    bounds.max_y = destination.1 + (bounds.max_y - center.1) * y;
+                }
+                bounds
+            })
+        }));
+        let diagonal = LayoutDimension::Width
+            .length(target_after_replace)
+            .hypot(LayoutDimension::Height.length(target_after_replace));
+        let source_width = LayoutDimension::Width.length(source_bounds) * x;
+        // The width setter is a no-op for a collapsed source, then scale still
+        // applies the buffer. Preserve stretched ellipses rather than forcing
+        // a circle: the pinned implementation keeps their current aspect ratio.
+        let fit = if source_width == 0.0 {
+            1.0
+        } else {
+            authoring_render_f64("circle surround width fit", diagonal / source_width)?
+        };
+        let scale = authoring_render_f64("circle surround scale", fit * buffer)?;
+        x = authoring_render_f64("circle surround x scale", x * scale)?;
+        y = authoring_render_f64("circle surround y scale", y * scale)?;
+    }
     let mut transaction = noon_core::SemanticMutationTransaction::new();
     let mut replacements = Vec::new();
     for &leaf in leaves {
@@ -286,6 +335,32 @@ impl LayoutAnchor {
         dimension: LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
+        self.replace_layout_with_circle_buffer(target, dimension, stretch, None)
+    }
+
+    /// Apply ManimCE Circle.surround sizing through one atomic affine edit.
+    ///
+    /// The planar dimensions are 0 (width), 1 (height), and 2 (zero depth).
+    /// Stretch ignores the dimension and retains the fitted aspect ratio.
+    /// The target is remeasured after replacement, including shared source leaves.
+    pub fn surround_circle(
+        &self,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> Result<(), AuthoringError> {
+        let dimension = circle_surround_dimension(dimension, stretch)?;
+        self.replace_layout_with_circle_buffer(target, dimension, stretch, Some(buffer_factor))
+    }
+
+    fn replace_layout_with_circle_buffer(
+        &self,
+        target: &LayoutAnchor,
+        dimension: LayoutDimension,
+        stretch: bool,
+        circle_buffer_factor: Option<f64>,
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
@@ -299,7 +374,11 @@ impl LayoutAnchor {
             .iter()
             .map(|&node| {
                 let object = crate::Mobject::from_node(Rc::clone(self.integration_store()), node)?;
-                Ok((node, object.layout_bounds()?, object.boundary_bounds()?))
+                Ok((
+                    node,
+                    object.content_layout_bounds()?,
+                    object.content_boundary_bounds()?,
+                ))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
         let prepared = replacement_transaction(
@@ -309,6 +388,7 @@ impl LayoutAnchor {
             &target_leaves,
             dimension,
             stretch,
+            circle_buffer_factor,
         )?;
         prepared.publish(
             &mut self.integration_store().borrow_mut(),
@@ -319,5 +399,16 @@ impl LayoutAnchor {
                     .map_err(AuthoringError::from)
             },
         )
+    }
+}
+
+pub(crate) fn circle_surround_dimension(
+    dimension: u32,
+    stretch: bool,
+) -> Result<LayoutDimension, AuthoringError> {
+    if stretch {
+        Ok(LayoutDimension::Width)
+    } else {
+        dimension.try_into()
     }
 }

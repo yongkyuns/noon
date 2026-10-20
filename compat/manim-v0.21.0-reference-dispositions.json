@@ -1545,8 +1545,8 @@
     },
     {
       "id": "reference-6ccb0a977d1029c0",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks override_animation. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "override_animation is now exported and covered by focused registration/dispatch tests; this tutorial still needs full exact-head scene and raster qualification.",
       "owners": [
         "#80",
         "#81",
@@ -1560,11 +1560,7 @@
         "directive_line": 751,
         "name": "OverrideAnimationExample",
         "source_sha256": "ddd7c9b47e933e6bcf50701f3e33862a3dcb546188dc7bb174108492f2893710"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "override_animation"
-      ]
+      }
     },
     {
       "id": "reference-1eb27c3096f62bf8",
@@ -2942,7 +2938,7 @@
     {
       "id": "reference-79c4a92e35c2b700",
       "status": "unqualified",
-      "reason": "Exact pinned directive needs canonical execution, semantic/effective-state, timing, raster and replay qualification; exported symbols alone are not support evidence.",
+      "reason": "Shared Rust scalar Circle.surround sizing is implemented with authored/live custom fixtures. The original directive body (unchanged SHA256) is enrolled as circle-surround-upstream in the raster manifest. Its current-head effective-state, original-source raster and replay qualification remain unproven; this disposition stays unqualified under #2011/#2012.",
       "owners": [
         "#77",
         "#89",
@@ -6485,8 +6481,8 @@
     },
     {
       "id": "reference-08d0259264276e95",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks CurvesAsSubmobjects. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "CurvesAsSubmobjects is now exported with detached/live construction and proportional-path probes; this tutorial still needs full exact-head scene and raster qualification.",
       "owners": [
         "#85",
         "#89",
@@ -6500,11 +6496,7 @@
         "directive_line": 1835,
         "name": "LineGradientExample",
         "source_sha256": "c74ee7e8d63e1e50a09084d28dd42ae65230a1c591ef071fa64db48d0f3a3b88"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "CurvesAsSubmobjects"
-      ]
+      }
     },
     {
       "id": "reference-b28094b31f513b38",
@@ -8337,8 +8329,8 @@
     },
     {
       "id": "reference-d185c477d601e640",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks VDict. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "deferred",
+      "reason": "VDict now has a public shared-family facade for default show_keys=False mapping and child-order behavior. The pinned ShapesWithVDict tutorial still needs full installed-package, text-label rendering, scene lifecycle, and raster qualification.",
       "owners": [
         "#70",
         "#83",
@@ -8353,16 +8345,12 @@
         "directive_line": 2442,
         "name": "ShapesWithVDict",
         "source_sha256": "80c16e2582bd892d78ad080ba9366612f786e032efd88533f5ab47a518f31462"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "VDict"
-      ]
+      }
     },
     {
       "id": "reference-0afc9d42ba6a4317",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks CurvesAsSubmobjects. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "CurvesAsSubmobjects is now exported with detached/live construction and proportional-path probes; this tutorial still needs full exact-head scene and raster qualification.",
       "owners": [
         "#85",
         "#89",
@@ -8375,11 +8363,7 @@
         "directive_line": 2792,
         "name": "LineGradientExample",
         "source_sha256": "c74ee7e8d63e1e50a09084d28dd42ae65230a1c591ef071fa64db48d0f3a3b88"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "CurvesAsSubmobjects"
-      ]
+      }
     },
     {
       "id": "reference-eacc619c9c9d5c22",

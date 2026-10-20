@@ -187,6 +187,9 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = []
 
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self):
                     return "active"
 

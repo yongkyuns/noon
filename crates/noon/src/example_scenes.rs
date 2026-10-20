@@ -10,6 +10,7 @@ pub mod automatic_wait_text;
 pub mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
+pub mod circle_surround;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
 pub mod continuous_flow;
@@ -41,6 +42,7 @@ pub mod moving_around;
 pub mod moving_zoomed_scene_around;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
+pub mod object_membership;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
@@ -2261,6 +2263,9 @@ pub fn ordinary_moving_camera_center_program(
         stroke: Some(SemanticPaint::Solid(Color::GREEN)),
         stroke_opacity: 1.0,
         stroke_width: 0.04,
+        background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+        background_stroke_opacity: 1.0,
+        background_stroke_width: 0.0,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
         stroke_cap: StrokeCap::Butt,

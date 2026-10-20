@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     Color, GraphEdgeId, ObjectId, SemanticGraphEdgeDependency, SemanticMutationImpact,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
-    SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticPresentation,
-    SemanticSignalBinding, SemanticStore, SemanticStoreError, Style, Transform2D,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectContent, SemanticObjectRole,
+    SemanticObjectState, SemanticPaint, SemanticPresentation, SemanticSignalBinding, SemanticStore,
+    SemanticStoreError, Style, Transform2D,
 };
 
 use crate::CompiledGraphArrowPolicy;
@@ -118,6 +118,8 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::FamilyColor { .. }
+                | SemanticMutationImpact::FamilyStyle { .. }
+                | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
@@ -198,11 +200,7 @@ impl SemanticExecutionIndex {
         };
         let descendants = nodes
             .into_iter()
-            .filter(|node| {
-                store
-                    .node(*node)
-                    .is_some_and(|node| matches!(node.kind(), SemanticNodeKind::Family(_)))
-            })
+            .filter(|node| store.node(*node).is_some_and(|node| node.can_own_members()))
             .collect::<Vec<_>>();
         for descendant in &descendants {
             self.spatial_anchor_family_groups
@@ -253,7 +251,7 @@ impl SemanticExecutionIndex {
         self.lower_roots(store, store.scene_roots())
     }
 
-    /// Lower one semantic family as an isolated initial scene root.
+    /// Lower one semantic object or family as an isolated initial scene root.
     ///
     /// The family may be detached. Membership and ordering are read from the same
     /// store without attaching/detaching roots, cloning the store, or visiting other
@@ -267,7 +265,7 @@ impl SemanticExecutionIndex {
         let node = store
             .node(root)
             .ok_or(SemanticStoreError::UnknownNode(root))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+        if !node.can_own_members() {
             return Err(SemanticStoreError::NotFamily(root).into());
         }
         self.lower_roots(store, std::iter::once(root))
@@ -442,6 +440,9 @@ pub enum SemanticExecutionField {
     StrokePaint,
     StrokeOpacity,
     StrokeWidth,
+    BackgroundStrokePaint,
+    BackgroundStrokeOpacity,
+    BackgroundStrokeWidth,
     ObjectOpacity,
     GraphArrowBuff,
     GraphArrowTipLength,
@@ -461,6 +462,9 @@ impl std::fmt::Display for SemanticExecutionField {
             Self::StrokePaint => "stroke_paint",
             Self::StrokeOpacity => "stroke_opacity",
             Self::StrokeWidth => "stroke_width",
+            Self::BackgroundStrokePaint => "background_stroke_paint",
+            Self::BackgroundStrokeOpacity => "background_stroke_opacity",
+            Self::BackgroundStrokeWidth => "background_stroke_width",
             Self::ObjectOpacity => "object_opacity",
             Self::GraphArrowBuff => "graph_arrow_buff",
             Self::GraphArrowTipLength => "graph_arrow_tip_length",
@@ -703,23 +707,16 @@ fn reachable_graph_roots(
         let node = store
             .node(node_id)
             .ok_or(SemanticStoreError::UnknownNode(node_id))?;
-        let SemanticNodeKind::Family(_) = node.kind() else {
+        if !node.can_own_members() {
             continue;
-        };
+        }
         if !seen_families.insert(node_id) {
             continue;
         }
         if node.graph_declaration().is_some() {
             graph_roots.push(node_id);
         }
-        for member in node.members_iter() {
-            if matches!(
-                store.node(member).map(|node| node.kind()),
-                Some(SemanticNodeKind::Family(_))
-            ) {
-                stack.push(member);
-            }
-        }
+        stack.extend(node.members_iter());
     }
     graph_roots.sort_unstable();
     Ok(graph_roots)
@@ -1210,6 +1207,12 @@ pub(crate) fn lower_semantic_style_value(
         state.style.stroke.as_ref(),
         state.style.stroke_opacity,
     )?;
+    let background_stroke = lower_paint(
+        SemanticExecutionField::BackgroundStrokePaint,
+        SemanticExecutionField::BackgroundStrokeOpacity,
+        state.style.background_stroke.as_ref(),
+        state.style.background_stroke_opacity,
+    )?;
     let stroke_width = lower_scalar_f32(
         SemanticExecutionField::StrokeWidth,
         state.style.stroke_width,
@@ -1224,6 +1227,11 @@ pub(crate) fn lower_semantic_style_value(
         fill,
         stroke,
         stroke_width,
+        background_stroke,
+        background_stroke_width: lower_scalar_f32(
+            SemanticExecutionField::BackgroundStrokeWidth,
+            state.style.background_stroke_width,
+        )?,
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,
@@ -1607,6 +1615,31 @@ mod tests {
         );
         assert_eq!(bindings[1].signal(), translation_signal);
         assert_eq!(bindings[1].property(), SemanticObjectProperty::Translation);
+    }
+
+    #[test]
+    fn isolated_object_root_lowers_own_content_and_aliased_children_without_attachment() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_semantic_object(circle(2.0));
+        let child = store.insert_semantic_object(circle(1.0));
+        let nested = store.insert_family();
+        store.add_member(nested, child).unwrap();
+        store.add_member(root, nested).unwrap();
+        store.add_member(root, child).unwrap();
+        let revision = store.scene_revision();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = index.lower_root(&store, root).unwrap();
+        assert_eq!(
+            lowered
+                .objects()
+                .iter()
+                .map(|row| row.semantic_id)
+                .collect::<Vec<_>>(),
+            [root, child]
+        );
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.scene_roots().count(), 0);
+        assert_eq!(index.len(), 2);
     }
 
     #[test]

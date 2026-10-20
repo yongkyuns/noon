@@ -36,7 +36,7 @@ class FakeExecutionClient {
   terminated = false;
 
   async prepare() {}
-  async startSemanticExecution() {}
+  async startSemanticExecution() { return { render: { time: 0 } }; }
 
   async advanceTo(time) {
     return { time };

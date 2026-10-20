@@ -177,6 +177,9 @@ class ManimSharedUnderlineTests(unittest.TestCase):
             from types import SimpleNamespace
 
             class LiveContext:
+                def requiresLiveMutationRouting(self):
+                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
+
                 def liveExecutionOwnership(self): return "returned"
                 def beginUnderline(self, target, buff):
                     calls.append(("live-begin", target, float(buff)))

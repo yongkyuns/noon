@@ -93,7 +93,7 @@ class SharedAuthoringSmoke(Scene):
         assert abs(center.x - 2.0) < 1e-9
         assert abs(center.y + 1.0) < 1e-9
         assert circle.style["stroke_join"] == "miter"
-        assert circle.style["stroke_cap"] == "butt"
+        assert circle.style["stroke_cap"] == "auto"
 
         # Replay is bounded by completed authored history. Record the interval
         # exercised by the transport pause/seek/resume checks below; a host loop
@@ -840,6 +840,7 @@ try {
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_circle_surround.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_paint_queries_gradients.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -3700,5 +3701,11 @@ class LateFailure(Scene):
   }
   await qualifyPairedAuthoring({ cases,
     artifactDirectory: "browser-smoke-artifacts/shared-math-family",
+    prepareContext: disableAuthoringJspi });
+  await qualifyPairedAuthoring({ cases: [{
+    id: "circle-surround", file: "ordinary_circle_surround.py",
+    factory: "createDirectCircleSurroundSmokeRenderer", objectCount: 4,
+    duration: 0.2, sampleTime: 0.2, playback: "live", boundaries: [0.1],
+  }], artifactDirectory: "browser-smoke-artifacts/circle-surround",
     prepareContext: disableAuthoringJspi });
 }

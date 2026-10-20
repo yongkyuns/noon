@@ -42,6 +42,43 @@ impl SemanticVec3 {
     }
 }
 
+/// A Manim VMobject sheen direction, preserving whether the source supplied a
+/// 2D or 3D vector. The direction is authored metadata even while sheen paint
+/// itself is unavailable to the renderer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticSheenDirection {
+    pub value: SemanticVec3,
+    pub dimensions: u8,
+}
+
+impl SemanticSheenDirection {
+    pub const DEFAULT: Self = Self {
+        value: SemanticVec3::new(-1.0, 1.0, 0.0),
+        dimensions: 3,
+    };
+
+    pub const fn new(value: SemanticVec3, dimensions: u8) -> Self {
+        Self { value, dimensions }
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.value.is_finite()
+            && matches!(self.dimensions, 2 | 3)
+            && (self.dimensions == 3 || self.value.z == 0.0)
+    }
+
+    pub fn components(self) -> Vec<f64> {
+        let components = [self.value.x, self.value.y, self.value.z];
+        components[..self.dimensions as usize].to_vec()
+    }
+}
+
+impl Default for SemanticSheenDirection {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SemanticTransform2_5D {
     pub translation: SemanticVec3,
@@ -222,6 +259,13 @@ pub struct SemanticStyle {
     pub stroke: Option<SemanticPaint>,
     pub stroke_opacity: f64,
     pub stroke_width: f64,
+    /// Solid stroke painted behind fill and foreground stroke.
+    #[serde(default)]
+    pub background_stroke: Option<SemanticPaint>,
+    #[serde(default = "default_semantic_opacity")]
+    pub background_stroke_opacity: f64,
+    #[serde(default)]
+    pub background_stroke_width: f64,
     pub stroke_width_mode: StrokeWidthMode,
     #[serde(default)]
     pub stroke_join: StrokeJoin,
@@ -241,6 +285,9 @@ impl Default for SemanticStyle {
             stroke: None,
             stroke_opacity: 1.0,
             stroke_width: 0.0,
+            background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: 0.0,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
@@ -263,9 +310,12 @@ impl SemanticStyle {
         };
         paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
+            && paint(self.background_stroke.as_ref())
             && self.fill_opacity.is_finite()
             && self.stroke_opacity.is_finite()
             && self.stroke_width.is_finite()
+            && self.background_stroke_opacity.is_finite()
+            && self.background_stroke_width.is_finite()
             && self.object_opacity.is_finite()
             && self.stroke_pattern.is_none_or(|p| p.validate().is_ok())
     }
@@ -280,10 +330,58 @@ impl SemanticStyle {
             stroke: style.stroke.map(SemanticPaint::Solid),
             stroke_opacity: 1.0,
             stroke_width: style.stroke_width as f64,
+            background_stroke: style.background_stroke.map(SemanticPaint::Solid),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: style.background_stroke_width as f64,
             stroke_width_mode: style.stroke_width_mode,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
             object_opacity: style.opacity as f64,
+        }
+    }
+
+    /// Default paint profile owned by a Manim VMobject family root.
+    ///
+    /// The root itself is not a rendered family leaf, but Manim stores a full
+    /// vector style there and exposes it through VMobject getters and
+    /// `family=False` mutations. Stroke widths are stored in scene units, where
+    /// the compatibility layer maps Manim's four-pixel default to `0.04`.
+    pub fn manim_family_root(color: crate::Color) -> Self {
+        Self {
+            fill: Some(SemanticPaint::Solid(color)),
+            fill_opacity: 0.0,
+            stroke: Some(SemanticPaint::Solid(color)),
+            stroke_opacity: 1.0,
+            stroke_width: 0.04,
+            background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+            background_stroke_opacity: 1.0,
+            background_stroke_width: 0.0,
+            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            stroke_join: StrokeJoin::Round,
+            stroke_cap: StrokeCap::Auto,
+            object_opacity: 1.0,
+        }
+    }
+
+    /// Set the authored family color without changing channel enablement or opacity.
+    pub fn set_family_color(&mut self, color: crate::Color) {
+        for paint in [&mut self.fill, &mut self.stroke] {
+            if paint.is_some() {
+                *paint = Some(SemanticPaint::Solid(color));
+            }
+        }
+    }
+
+    /// Return Manim VMobject's root color selection from its fill/stroke profile.
+    pub fn family_color(&self) -> Option<crate::Color> {
+        let paint = if self.fill_opacity == 0.0 {
+            self.stroke.as_ref()
+        } else {
+            self.fill.as_ref()
+        }?;
+        match paint {
+            SemanticPaint::Solid(color) => Some(*color),
+            SemanticPaint::Resource(_) => None,
         }
     }
 
@@ -296,6 +394,10 @@ impl SemanticStyle {
     }
 }
 
+fn default_semantic_opacity() -> f64 {
+    1.0
+}
+
 /// Painter metadata is independent from transform hierarchy and style.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SemanticPresentation {
@@ -305,16 +407,27 @@ pub struct SemanticPresentation {
 }
 
 /// Authored state on a non-rendered family root, independent of its leaves.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticFamilyState {
     pub presentation: SemanticPresentation,
     pub own_color: crate::Color,
+    pub own_style: SemanticStyle,
+    /// Background-stroke paint retained on the non-rendered family root.
+    pub own_background_stroke_color: crate::Color,
+    pub own_background_stroke_width: f64,
+    pub own_background_stroke_opacity: f64,
+    pub own_sheen_direction: SemanticSheenDirection,
 }
 impl Default for SemanticFamilyState {
     fn default() -> Self {
         Self {
             presentation: SemanticPresentation::default(),
             own_color: crate::Color::WHITE,
+            own_style: SemanticStyle::manim_family_root(crate::Color::WHITE),
+            own_background_stroke_color: crate::Color::BLACK,
+            own_background_stroke_width: 0.0,
+            own_background_stroke_opacity: 1.0,
+            own_sheen_direction: SemanticSheenDirection::DEFAULT,
         }
     }
 }

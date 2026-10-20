@@ -286,10 +286,16 @@ event base remains provenance and is never substituted for the actual baseline.
 Comparison retries check out the producer's pinned commits and verify the recorded
 pair alongside package contents, so a moving PR ref cannot change the comparison.
 
-Before the first product build, the producer resolves the baseline Cargo lock once.
-It reuses that lock for checkouts whose tracked Cargo manifests, `.cargo` settings,
-and Rust toolchain pin match; changed dependency inputs are resolved independently
-and logged. Existing tracked `Cargo.lock` files are preserved. Every lock is checked
+The versioned workspace `Cargo.lock` is the shared dependency resolution for local,
+CI, Pages and release builds. The browser build passes `--locked` to Cargo, and
+release preparation validates the lock rather than regenerating it. Dependency
+updates must include the lock change in the reviewed source revision.
+
+For historical baselines without a tracked lock, the product producer resolves
+the baseline Cargo lock once. It reuses that lock for checkouts whose tracked
+Cargo manifests, `.cargo` settings, and Rust toolchain pin match; changed dependency
+inputs are resolved independently and logged. Existing tracked `Cargo.lock` files
+are preserved. Every lock is checked
 with `cargo metadata --locked` over the full dependency graph, so missing entries fail rather
 than being accepted by a manifest-only check or silently regenerated. The
 renderer-smoke fixture and production candidate share the candidate checkout's

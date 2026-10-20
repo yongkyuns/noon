@@ -98,6 +98,91 @@ fn submit_and_read(
 }
 
 #[test]
+fn background_stroke_raster_is_beneath_fill_and_foreground_for_paths_and_primitives() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping background-stroke raster: no GPU adapter is available");
+            return;
+        };
+        eprintln!("background-stroke adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("background stroke raster"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("background stroke readback"),
+            size: u64::from(WIDTH * HEIGHT * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-0.5, -0.5))
+            .line_to(Vec2::new(0.5, -0.5))
+            .line_to(Vec2::new(0.5, 0.5))
+            .line_to(Vec2::new(-0.5, 0.5))
+            .close();
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::ZERO, Vec2::new(4.0, 2.0)).unwrap(),
+        );
+        for geometry in [
+            GeometryRef::path(path),
+            GeometryRef::rectangle(1.0, 1.0),
+            GeometryRef::circle(0.5),
+        ] {
+            let scene = scene_with_geometry(
+                geometry,
+                Style {
+                    fill: Some(Color::rgb(1.0, 0.0, 0.0)),
+                    stroke: Some(Color::rgb(0.0, 1.0, 0.0)),
+                    stroke_width: 0.12,
+                    background_stroke: Some(Color::rgb(0.0, 0.0, 1.0)),
+                    background_stroke_width: 0.5,
+                    ..Style::default()
+                },
+            );
+            let mut preparer = FramePreparer::new();
+            let prepared = preparer.prepare(scene.frame());
+            renderer.upload(&device, &queue, &prepared);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+            let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
+            for (x, channel) in [(64, 0), (80, 1), (84, 2)] {
+                let pixel = rgba(&pixels, x, 32);
+                assert!(
+                    pixel[channel] > 240,
+                    "x={x}, expected channel {channel}: {pixel:?}"
+                );
+                assert!(
+                    pixel
+                        .iter()
+                        .take(3)
+                        .enumerate()
+                        .all(|(i, c)| i == channel || *c < 15),
+                    "x={x}, layers must retain independent paint: {pixel:?}"
+                );
+            }
+            assert_eq!(rgba(&pixels, 91, 32), [0, 0, 0, 255]);
+        }
+    });
+}
+
+#[test]
 fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();

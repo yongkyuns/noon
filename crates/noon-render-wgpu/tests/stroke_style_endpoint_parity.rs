@@ -21,6 +21,7 @@ fn style(join: StrokeJoin, cap: StrokeCap) -> Style {
         stroke_join: join,
         stroke_cap: cap,
         opacity: 1.0,
+        ..Style::default()
     }
 }
 

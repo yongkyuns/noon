@@ -1,5 +1,6 @@
 /target
 Cargo.lock
+!/Cargo.lock
 .DS_Store
 __pycache__/
 *.py[cod]

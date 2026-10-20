@@ -819,6 +819,9 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
         stroke,
         stroke_opacity,
         stroke_width,
+        background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+        background_stroke_opacity: 1.0,
+        background_stroke_width: 0.0,
         // Manim point transforms do not mutate authored stroke width. Keeping
         // stroke width invariant under the common post-import affine preserves
         // that compatibility behavior while the path itself remains retained.
@@ -1238,6 +1241,7 @@ mod tests {
             stroke_color: Some(Color::from_hex(0xCC5500)),
             stroke_width: Some(3.0),
             stroke_opacity: Some(0.75),
+            ..StyleUpdate::default()
         };
 
         let family = scene

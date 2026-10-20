@@ -56,6 +56,8 @@ pub(crate) fn mobject_fields(
         stroke_width: object
             .wire_stroke_width()
             .map_err(|error| error.to_string())? as f32,
+        background_stroke: Some(Color::BLACK),
+        background_stroke_width: 0.0,
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,

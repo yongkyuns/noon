@@ -16,6 +16,7 @@ fn stroke_style(color: Color) -> Style {
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
+        ..Style::default()
     }
 }
 
@@ -47,8 +48,16 @@ fn snapshot(path: VectorPath, transform: Transform2D, style: Style) -> Transform
 
 #[test]
 fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry() {
-    let style_a = stroke_style(Color::WHITE);
-    let style_b = stroke_style(Color::rgb(0.2, 0.6, 0.9));
+    let style_a = Style {
+        background_stroke: Some(Color::rgba(1.0, 0.0, 0.0, 0.2)),
+        background_stroke_width: 0.04,
+        ..stroke_style(Color::WHITE)
+    };
+    let style_b = Style {
+        background_stroke: Some(Color::rgba(0.0, 0.0, 1.0, 0.8)),
+        background_stroke_width: 0.12,
+        ..stroke_style(Color::rgb(0.2, 0.6, 0.9))
+    };
     let transform_a = Transform2D::IDENTITY;
     let transform_b = Transform2D {
         translation: Vec2::new(4.0, -2.0),
@@ -103,6 +112,11 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     assert_eq!(midpoint.objects[0].transform.rotation, 0.4);
     assert_eq!(midpoint.objects[0].transform.scale, Vec2::new(1.25, 0.75));
     assert_eq!(midpoint.objects[0].style.opacity, 1.0);
+    assert_eq!(
+        midpoint.objects[0].style.background_stroke,
+        Some(Color::rgba(0.5, 0.0, 0.5, 0.5))
+    );
+    assert!((midpoint.objects[0].style.background_stroke_width - 0.08).abs() < 1e-6);
     assert_eq!(midpoint.morph(0), 0.5);
 
     let end = instance.seek(2.0).unwrap().clone();
@@ -177,7 +191,11 @@ fn steady_generic_transform_reuses_path_allocations() {
 
 #[test]
 fn direct_seek_and_forward_playback_match_for_generic_transform() {
-    let style = stroke_style(Color::WHITE);
+    let style = Style {
+        background_stroke: Some(Color::rgba(1.0, 0.0, 0.0, 0.25)),
+        background_stroke_width: 0.04,
+        ..stroke_style(Color::WHITE)
+    };
     let from = snapshot(path_a(), Transform2D::IDENTITY, style);
     let to = snapshot(
         path_b(),
@@ -186,7 +204,11 @@ fn direct_seek_and_forward_playback_match_for_generic_transform() {
             rotation: 0.6,
             scale: Vec2::new(1.2, 0.8),
         },
-        stroke_style(Color::rgb(0.8, 0.2, 0.4)),
+        Style {
+            background_stroke: Some(Color::rgba(0.0, 0.0, 1.0, 0.75)),
+            background_stroke_width: 0.12,
+            ..stroke_style(Color::rgb(0.8, 0.2, 0.4))
+        },
     );
     let mut objects = Vec::new();
     let mut tracks = Vec::new();

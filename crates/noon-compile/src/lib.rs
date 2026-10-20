@@ -1756,8 +1756,12 @@ impl CompiledScene {
         object_index: u32,
     ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
         let start = CompiledChannelKey::new(object_index, Property::Presence);
-        let end = CompiledChannelKey::new(object_index, Property::Morph);
-        self.tracks.range(start..=end).map(|(channel, _)| *channel)
+        // Enumerate the object prefix, including properties added after Morph.
+        // Retirement and dynamic flags must include priority/effect channels.
+        self.tracks
+            .range(start..)
+            .take_while(move |(channel, _)| channel.object_index == object_index)
+            .map(|(channel, _)| *channel)
     }
 
     /// Validate a mutation transaction using only stable identity/channel metadata.
@@ -3960,6 +3964,120 @@ mod tests {
         assert_eq!(before, after);
         assert_eq!(stats.unrelated_track_slots_shifted, 0);
         assert_eq!(compiled.track_count(), 10_001);
+    }
+
+    fn object_with_late_channels(id: u64) -> (CompiledObject, Vec<TrackDefinition>) {
+        let object = ObjectId::new(id);
+        let glow = CompiledGlow {
+            attachment: noon_core::SemanticNodeId::new(id as u32, 1),
+            definition: noon_core::Glow::default(),
+        };
+        let mut compiled = CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        compiled.glow = Some(Arc::new(glow));
+        let mut channels = vec![
+            (
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+            ),
+            (Property::ZIndex, TrackValues::ZIndex { from: 0.0, to: 2.0 }),
+        ];
+        channels.extend(
+            glow.parameter_channels(
+                noon_core::GlowUpdate::default()
+                    .color(noon_core::Color::BLUE)
+                    .radius(0.3)
+                    .intensity(0.8),
+            )
+            .unwrap(),
+        );
+        let tracks = channels
+            .into_iter()
+            .enumerate()
+            .map(|(index, (property, values))| TrackDefinition {
+                id: TrackId::new(id * 10 + index as u64),
+                object,
+                property,
+                values,
+                timing: if property == Property::ZIndex {
+                    TrackTiming::instant(0.0)
+                } else {
+                    TrackTiming::new(0.0, 1.0, RateFunction::Linear)
+                },
+                time_map: CompositionTimeMap::identity(),
+            })
+            .collect();
+        (compiled, tracks)
+    }
+
+    #[test]
+    fn removal_retires_late_channels_without_touching_other_objects() {
+        let (first, first_tracks) = object_with_late_channels(0);
+        let (second, second_tracks) = object_with_late_channels(1);
+        let first_id = first.id;
+        let second_id = second.id;
+        let tracks = [first_tracks.clone(), second_tracks.clone()].concat();
+        let mut compiled = CompiledScene::compile_objects(vec![first, second], &tracks).unwrap();
+
+        let stats = compiled
+            .apply_execution_patch_with_stats(&ExecutionPatch::RemoveObject(first_id))
+            .unwrap();
+
+        assert_eq!(stats.track_locators_removed, first_tracks.len());
+        assert_eq!(compiled.tracks().len(), second_tracks.len());
+        for track in first_tracks {
+            assert!(compiled.track(track.id).is_none());
+            assert!(compiled.channel_for_track(track.id).is_none());
+        }
+        assert!(compiled.channels_for_object_index(0).next().is_none());
+        assert_eq!(
+            compiled.object_channels(second_id).len(),
+            second_tracks.len()
+        );
+        for track in second_tracks {
+            assert_eq!(compiled.track(track.id).unwrap().object_index, 1);
+        }
+    }
+
+    #[test]
+    fn incremental_late_channels_keep_dynamic_flags_until_their_last_track_retires() {
+        let (first, tracks) = object_with_late_channels(0);
+        let (second, _) = object_with_late_channels(1);
+        let mut compiled = CompiledScene::compile_objects(vec![first, second], &[]).unwrap();
+        for track in &tracks {
+            compiled
+                .apply_execution_patch(&ExecutionPatch::AddTrack(track.clone()))
+                .unwrap();
+        }
+        assert_eq!(
+            compiled.object_channels(ObjectId::new(0)).len(),
+            tracks.len()
+        );
+        assert!(compiled.objects()[0].dynamic.z_index);
+        assert!(compiled.objects()[0].dynamic.glow);
+        assert!(compiled.objects()[0].dynamic.position);
+        assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());
+
+        compiled
+            .apply_execution_patch(&ExecutionPatch::RemoveTrack(tracks[1].id))
+            .unwrap();
+        assert!(!compiled.objects()[0].dynamic.z_index);
+        for (index, track) in tracks[2..].iter().enumerate() {
+            assert!(compiled.objects()[0].dynamic.glow);
+            compiled
+                .apply_execution_patch(&ExecutionPatch::RemoveTrack(track.id))
+                .unwrap();
+            assert_eq!(compiled.objects()[0].dynamic.glow, index < 2);
+        }
+        assert!(compiled.objects()[0].dynamic.position);
+        assert_eq!(compiled.objects()[1].dynamic, DynamicProperties::default());
     }
 
     #[test]

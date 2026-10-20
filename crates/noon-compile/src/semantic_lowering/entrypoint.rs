@@ -168,13 +168,13 @@ pub fn lower_semantic_execution(
     finish_semantic_execution(store, &roots, index, staged_index, projection, None)
 }
 
-/// Canonical initial lowering scoped to one semantic scene family.
+/// Canonical initial lowering scoped to one semantic object or family.
 ///
 /// Uses the same object/reactive/compute/camera handoff as [`lower_semantic_execution`].
-/// Only the selected family's reachable leaves and their signal dependencies enter
+/// Only the selected root's own content, descendants and signal dependencies enter
 /// execution; other attached or detached scene families remain untouched. This is
 /// initial lowering, not a live membership or runtime publication operation.
-/// `root` must be a live family ID from `store`; language wrappers must additionally
+/// `root` must be a live authoring ID from `store`; language wrappers must additionally
 /// validate store ownership before passing a store-local ID across their boundary.
 pub fn lower_semantic_execution_root(
     store: &SemanticStore,
@@ -609,9 +609,9 @@ mod tests {
     }
 
     #[test]
-    fn scoped_root_validates_family_identity_and_rejects_stale_generation() {
+    fn scoped_root_validates_authoring_identity_and_rejects_stale_generation() {
         let mut store = SemanticStore::new();
-        let object = store.insert_semantic_object(circle(1.0));
+        let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
         let stale = store.insert_family();
         store.remove_node(stale).unwrap();
         let replacement = store.insert_family();
@@ -619,7 +619,7 @@ mod tests {
         assert_ne!(replacement.generation(), stale.generation());
         let mut index = SemanticExecutionIndex::new();
         for (root, expected) in [
-            (object, noon_core::SemanticStoreError::NotFamily(object)),
+            (signal, noon_core::SemanticStoreError::NotFamily(signal)),
             (stale, noon_core::SemanticStoreError::UnknownNode(stale)),
         ] {
             assert_eq!(
