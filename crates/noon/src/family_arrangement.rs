@@ -121,8 +121,8 @@ impl FamilyArrangePlan {
         self.observe_leaf_bounds(|leaf| {
             let object = Mobject::from_node(Rc::clone(store), leaf)?;
             Ok::<_, AuthoringError>(ArrangementBounds {
-                dimensions: object.layout_bounds()?,
-                anchors: object.boundary_bounds()?,
+                dimensions: object.content_layout_bounds()?,
+                anchors: object.content_boundary_bounds()?,
             })
         })?;
         self.transaction(|leaf| {

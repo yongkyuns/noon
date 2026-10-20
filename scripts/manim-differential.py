@@ -1675,6 +1675,43 @@ def _noon_object_point_reduction_live() -> Any:
     )
 
 
+def _object_split_layout_index(provider: Any, scene: Any | None = None) -> Any:
+    source = provider.Square(side_length=0.6).shift(
+        provider.LEFT * 2.0 + provider.DOWN * 0.75
+    )
+    target = provider.Rectangle(width=1.4, height=0.8).shift(
+        provider.RIGHT * 1.25 + provider.UP * 0.5
+    )
+    if scene is not None:
+        scene.add(source, target)
+    result = []
+    for index in (0, -1):
+        returned = source.next_to(
+            target, provider.RIGHT * 2.0, buff=0.3,
+            aligned_edge=provider.UP, index_of_submobject_to_align=index,
+            coor_mask=(1, 0.5, 1),
+        )
+        result.append({
+            "index": index, "source": _object_observation(source),
+            "target": _object_observation(target), "returns_self": returned is source,
+        })
+    return result
+
+
+def _noon_object_split_layout_index() -> Any:
+    return _object_split_layout_index(noon)
+
+
+def _manim_object_split_layout_index() -> Any:
+    return _object_split_layout_index(manim)
+
+
+def _noon_object_split_layout_index_live() -> Any:
+    return _noon_live_scene_probe(
+        lambda scene: _object_split_layout_index(noon, scene)
+    )
+
+
 def _get_merged_points(provider: Any, scene: Any | None = None) -> Any:
     first = provider.Line((-2, -0.5, 0), (-1, 0.5, 0)).shift(provider.UP)
     second = provider.Line((3, -1, 0), (4, 1, 0)).shift(provider.DOWN)
@@ -6045,6 +6082,8 @@ FIXTURES = [
     Fixture("reduce_across_dimension_live", _noon_reduce_across_dimension_live, _manim_reduce_across_dimension),
     Fixture("object_point_reduction", _noon_object_point_reduction, _manim_object_point_reduction),
     Fixture("object_point_reduction_live", _noon_object_point_reduction_live, _manim_object_point_reduction),
+    Fixture("object_split_layout_index", _noon_object_split_layout_index, _manim_object_split_layout_index),
+    Fixture("object_split_layout_index_live", _noon_object_split_layout_index_live, _manim_object_split_layout_index),
     Fixture("get_merged_array_points", _noon_get_merged_points, _manim_get_merged_points),
     Fixture("get_merged_array_points_live", _noon_get_merged_points_live, _manim_get_merged_points),
     Fixture("apply_over_attr_arrays",

@@ -374,7 +374,11 @@ impl LayoutAnchor {
             .iter()
             .map(|&node| {
                 let object = crate::Mobject::from_node(Rc::clone(self.integration_store()), node)?;
-                Ok((node, object.layout_bounds()?, object.boundary_bounds()?))
+                Ok((
+                    node,
+                    object.content_layout_bounds()?,
+                    object.content_boundary_bounds()?,
+                ))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
         let prepared = replacement_transaction(

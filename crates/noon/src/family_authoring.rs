@@ -116,6 +116,7 @@ pub(crate) fn translation_transaction<F, E>(
 ) -> Result<SemanticMutationTransaction, E>
 where
     F: FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
+    E: From<AuthoringError>,
 {
     // Accumulate staged operations before publishing one final property per
     // identity. A single family translation supplies each semantic leaf once.
@@ -130,6 +131,9 @@ where
     }
     let mut transaction = SemanticMutationTransaction::new();
     for (leaf, translation) in translations {
+        // Validate final accumulated positions before any property is published,
+        // including aliases whose individual deltas would each fit in f32.
+        translation.lower_xy_f32().map_err(AuthoringError::from)?;
         transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
     }
     Ok(transaction)

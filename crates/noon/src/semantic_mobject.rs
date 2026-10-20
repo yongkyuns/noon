@@ -926,6 +926,13 @@ impl Mobject {
     }
 
     pub(crate) fn boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.boundary_bounds());
+        }
+        self.content_boundary_bounds()
+    }
+
+    pub(crate) fn content_boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -964,6 +971,13 @@ impl Mobject {
     /// Bounds used for authored dimensions. Paths include their equivalent cubic
     /// handles; centers and critical points use path anchors instead.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.bounds());
+        }
+        self.content_layout_bounds()
+    }
+
+    pub(crate) fn content_layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -999,7 +1013,26 @@ impl Mobject {
         layout_for_content(&store, state.content, semantic_transform)
     }
 
+    pub(crate) fn has_members(&self) -> Result<bool, AuthoringError> {
+        self.validate()?;
+        Ok(self
+            .store
+            .borrow()
+            .node(self.id)
+            .expect("validated object")
+            .members_iter()
+            .next()
+            .is_some())
+    }
+
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.center());
+        }
+        self.content_center()
+    }
+
+    pub(crate) fn content_center(&self) -> Result<(f64, f64), AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -1121,18 +1154,12 @@ impl Mobject {
         ))
     }
 
+    /// Shift own content and every unique descendant in one validated transaction.
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
-        let mut state = self.state()?;
-        let offset = authoring_xy_f64(x, y)?;
-        let translation = SemanticVec3::new(
-            state.transform.translation.x + offset.x,
-            state.transform.translation.y + offset.y,
-            state.transform.translation.z,
-        );
-        translation.lower_xy_f32().map_err(AuthoringError::from)?;
-        state.transform.translation = translation;
-        self.commit_state(state)
+        let translation =
+            crate::family_authoring::FamilyTranslation::begin(&self.store.borrow(), self.id, x, y)?;
+        translation.apply(&mut self.store.borrow_mut())
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {

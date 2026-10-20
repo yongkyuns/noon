@@ -1462,13 +1462,34 @@ impl<'a> LiveSession<'a> {
         })
     }
 
-    /// Read exact layout values from authored content at the current effective
-    /// transform. Work and resource lookup are bounded to this object.
+    /// Read layout from own content and unique descendants at their coherent
+    /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(
         &self,
         mobject: &Mobject,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         self.require_mobject(mobject)?;
+        if mobject.has_members()? {
+            let anchor = crate::LayoutAnchor::from(mobject);
+            let (_, bounds) = crate::family_layout::effective_anchor_layout_measure(
+                self.store,
+                self.session,
+                &anchor,
+                false,
+            )?;
+            let (_, boundary) = crate::family_layout::effective_anchor_layout_measure(
+                self.store,
+                self.session,
+                &anchor,
+                true,
+            )?;
+            return Ok(EffectiveMobjectLayout {
+                center: crate::family_layout::bounds_critical_point(boundary, 0.0, 0.0),
+                width: bounds.map_or(0.0, Bounds2D64::width),
+                height: bounds.map_or(0.0, Bounds2D64::height),
+                publication: self.session.publication_context(),
+            });
+        }
         let store = self.store.borrow();
         let observed = self
             .session
@@ -2713,10 +2734,16 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut translation = self.authored(mobject)?.transform.translation;
-        translation.x += x;
-        translation.y += y;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+        self.require_mobject(mobject)?;
+        crate::family_layout::publish_shift_root(
+            self.store,
+            self.root,
+            self.session,
+            mobject.node_id(),
+            x,
+            y,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Shift every ordinary leaf of one semantic family in a single publication.

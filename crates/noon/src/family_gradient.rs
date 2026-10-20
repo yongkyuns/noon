@@ -197,7 +197,7 @@ impl MobjectFamily {
                 continue;
             }
             let bounds = object
-                .layout_bounds()?
+                .content_layout_bounds()?
                 .ok_or(AuthoringError::NonFiniteObjectState)?;
             let color = radial_gradient_color(
                 radial_distance(bounds_center(bounds), center),

@@ -388,6 +388,18 @@ effective queries use the same Rust traversal, while Python invokes caller-owned
 reducers over the returned tree and adapts arrays. Class identity, family-own-point
 capabilities, custom overrides and mixed-content qualification remain separate
 requirements in owner #2011.
+Root layout, translation and relative placement use the same bounded Rust scope:
+dimensions include own and descendant cubic controls, while centers and edges
+use their anchors. Per-content collectors retain separate measurements so a
+family query does not repeatedly traverse descendants. Authored and live shifts
+prepare one transaction over unique identities and validate all final positions
+before publication. Intrinsic vector-point indexing follows Manim's split view:
+a point-bearing root precedes its children, while an empty own array contributes
+no self entry. Positive and negative self indices are exercised through detached
+and live Python placement probes. Non-vector indexing capabilities, family-owned
+points and broader affine/style/target behavior remain unqualified. The shared
+native/direct-WASM example shifts and restores both authored and resident roots
+without changing its visible baseline.
 This does not qualify Python `Mobject.add`, `insert`, `add_to_back`, `remove`,
 `push_self_into_submobjects` or `add_n_more_submobjects`. Shared high-level
 affine, path, style, target-animation and saved-state behavior over point-owning
