@@ -218,6 +218,24 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(IndexError):
                 value.get_nth_curve_function(-1)
 
+    def test_force_direction_uses_shared_query_and_preserves_manim_errors(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.direction.return_value = "CCW"
+        value.reverse_direction = Mock(return_value=value)
+        with patch.object(queries, '_typed_manim_observation', return_value=query):
+            self.assertEqual(value.get_direction(), "CCW")
+            self.assertIs(value.force_direction("CW"), value)
+            value.reverse_direction.assert_called_once_with()
+            self.assertIs(value.force_direction("CCW"), value)
+            self.assertEqual(query.free.call_count, 3)
+            with self.assertRaisesRegex(
+                ValueError,
+                'Invalid input for force_direction. Use "CW" or "CCW"',
+            ):
+                value.force_direction("cw")
+            self.assertEqual(query.free.call_count, 3)
+
 
 class SubpathQueryTests(unittest.TestCase):
     def test_subpaths_and_closure_free_the_snapshot_on_success_and_error(self):
