@@ -1129,8 +1129,8 @@ class _FamilyMethods:
 
     def __getitem__(self, index: int | slice) -> object:
         if isinstance(index, slice):
-            group_class = VGroup if isinstance(self, VGroup) else Group
-            return group_class(*self.submobjects[index])
+            from _manim_semantic_handles import _group_slice
+            return _group_slice(self, index)
         from _manim_semantic_handles import _group_indexed_member
         return _group_indexed_member(self, index)
 

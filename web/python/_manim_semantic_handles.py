@@ -3014,6 +3014,15 @@ class _FamilyWrapperReferences:
         self.readers = 0
 
 
+def _retain_group_wrapper_references(root):
+    scope = getattr(root, "_semantic_member_reference_scope", None)
+    if scope is None or scope.wrappers is not root._semantic_member_wrappers:
+        scope = _FamilyWrapperReferences(root._semantic_member_wrappers)
+        root._semantic_member_reference_scope = scope
+    scope.readers += 1
+    return scope
+
+
 def _fork_group_wrapper_references(root):
     scope = getattr(root, "_semantic_member_reference_scope", None)
     if scope is not None and scope.wrappers is root._semantic_member_wrappers and scope.readers:
@@ -3063,12 +3072,7 @@ class _SharedFamilyIterator:
         if refresh is not None:
             refresh()
         self._native = engine_call(root._semantic_family_handle.splitIterator, inclusion)
-        scope = getattr(root, "_semantic_member_reference_scope", None)
-        if scope is None or scope.wrappers is not root._semantic_member_wrappers:
-            scope = _FamilyWrapperReferences(root._semantic_member_wrappers)
-            root._semantic_member_reference_scope = scope
-        scope.readers += 1
-        self._references = scope
+        self._references = _retain_group_wrapper_references(root)
 
     def __iter__(self):
         return self
@@ -3150,6 +3154,58 @@ def _group_indexed_member(self: _compat.Group, index: object) -> object:
     if refresh is not None:
         refresh()
     return _group_wrapper_for_key(self, key)
+
+
+def _slice_operand(value):
+    if value is None:
+        return None
+    try:
+        return operator.index(value)
+    except TypeError:
+        # Preserve user protocol errors; match Python's slice diagnostic only
+        # for a value with no index slot, without invoking it a second time.
+        mro = type.__getattribute__(type(value), "__mro__")
+        if not any("__index__" in type.__getattribute__(cls, "__dict__") for cls in mro):
+            raise TypeError("slice indices must be integers or None or have an __index__ method") from None
+        raise
+
+
+def _group_slice(root, value):
+    group_class = root.get_group_class()
+    inclusion = _group_point_inclusion(root, "has_no_points")
+    refresh = getattr(root, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
+    plan = engine_call(root._semantic_family_handle.prepareSlice, inclusion)
+    scope = None
+    try:
+        if bool(plan.includesSelf):
+            normalized = value.indices(len(root))
+        else:
+            scope = _retain_group_wrapper_references(root)
+            # List slicing coerces step/start/stop before adjusting bounds to
+            # the captured list's length, which callbacks may have changed.
+            step = _slice_operand(value.step)
+            if step == 0:
+                raise ValueError("slice step cannot be zero")
+            start, stop = _slice_operand(value.start), _slice_operand(value.stop)
+            normalized = slice(start, stop, step).indices(int(plan.normalizationCount))
+        # Normalized ranks fit WASM's address space. A larger step has the same
+        # selection as this exact JS integer bound; Python coercion stays exact.
+        safe = (1 << 53) - 1
+        operands = [float(max(-safe, min(safe, part))) for part in normalized]
+        keys = engine_call(plan.selectNormalized, *operands)
+        if _is_missing_handle(keys):
+            raise IndexError("list index out of range")
+        if refresh is not None:
+            refresh()
+        references = None if scope is None else scope.wrappers
+        members = [_group_wrapper_for_key(root, str(key), references) for key in keys]
+    finally:
+        if scope is not None:
+            scope.readers -= 1
+        _free_family_query_handle(plan)
+    return group_class(*members)
 
 
 def _get_family(self: _base.Mobject) -> list[_base.Mobject]:

@@ -317,6 +317,9 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.invalid_submobject_index",
                 message,
             ),
+            AuthoringError::ZeroSliceStep => {
+                Self::new("invalid_input", "authoring.zero_slice_step", message)
+            }
             AuthoringError::InvalidGridDimensions { .. } => Self::new(
                 "invalid_input",
                 "authoring.invalid_grid_dimensions",

@@ -1247,6 +1247,60 @@ mod wasm {
         }
     }
 
+    fn family_entry_key(entry: noon::CompositeEntryHandle) -> String {
+        let node = match entry {
+            noon::CompositeEntryHandle::Mobject(value) => value.node_id(),
+            noon::CompositeEntryHandle::Family(value) => value.node_id(),
+        };
+        format!("{}:{}", node.slot(), node.generation())
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmFamilySlicePlan {
+        plan: noon::FamilySlicePlan,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilySlicePlan {
+        #[wasm_bindgen(getter, js_name = includesSelf)]
+        pub fn includes_self(&self) -> bool {
+            self.plan.includes_self()
+        }
+        #[wasm_bindgen(getter, js_name = normalizationCount)]
+        pub fn normalization_count(&self) -> Result<usize, JsValue> {
+            self.plan.normalization_count().map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = selectNormalized)]
+        pub fn select_normalized(
+            &self,
+            start: f64,
+            stop: f64,
+            step: f64,
+        ) -> Result<JsValue, JsValue> {
+            if [start, stop, step]
+                .iter()
+                .any(|value| !value.is_finite() || value.fract() != 0.)
+            {
+                return Err(typed_js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "authoring.invalid_slice_operand",
+                    "slice bounds and step must be finite integers",
+                )));
+            }
+            self.plan
+                .select_normalized(start as i64, stop as i64, step as i64)
+                .map(|entries| match entries {
+                    None => JsValue::NULL,
+                    Some(entries) => js_sys::Array::from_iter(
+                        entries
+                            .into_iter()
+                            .map(|entry| JsValue::from_str(&family_entry_key(entry))),
+                    )
+                    .into(),
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
     #[wasm_bindgen]
     pub struct WasmFamilyIterator {
         iterator: noon::FamilyIterator,
@@ -1292,6 +1346,17 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = prepareSlice)]
+        pub fn prepare_slice(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilySlicePlan, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .slice_plan_with_self(family_point_inclusion(&family, include_self)?)
+                .map(|plan| WasmFamilySlicePlan { plan })
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = splitCount)]
         pub fn split_count(&self, include_self: Option<bool>) -> Result<usize, JsValue> {
             let family = self.semantic_family()?;
@@ -1320,18 +1385,7 @@ mod wasm {
             let family = self.semantic_family()?;
             family
                 .split_members_with_self(family_point_inclusion(&family, include_self)?)
-                .map(|entries| {
-                    entries
-                        .into_iter()
-                        .map(|entry| {
-                            let node = match entry {
-                                noon::CompositeEntryHandle::Mobject(value) => value.node_id(),
-                                noon::CompositeEntryHandle::Family(value) => value.node_id(),
-                            };
-                            format!("{}:{}", node.slot(), node.generation())
-                        })
-                        .collect()
-                })
+                .map(|entries| entries.into_iter().map(family_entry_key).collect())
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = splitIterator)]

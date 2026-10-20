@@ -81,6 +81,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/paired-authoring-qualification.mjs
   node --test scripts/manim-family-points-reference.test.mjs
   node --test scripts/manim-family-iteration-reference.test.mjs
+  node --test scripts/manim-family-slices-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
   node --check scripts/table-group-checks.mjs

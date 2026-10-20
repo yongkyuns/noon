@@ -118,6 +118,20 @@ class _ScriptedFamilyIterator:
         pass
 
 
+class _StaticFamilySlice:
+    """Canned, unedited fixture frame; native tests own capture/edit semantics."""
+    def __init__(self, keys, include):
+        self.keys = keys
+        self.includesSelf = include
+        self.normalizationCount = len(keys)
+
+    def selectNormalized(self, start, stop, step):
+        return [self.keys[index] for index in range(int(start), int(stop), int(step))]
+
+    def free(self):
+        pass
+
+
 def install_split_queries(family_class, members, *, keys=None):
     """Describe fixture results for the typed split contract, without an engine."""
     family_class.splitCount = lambda self, include=None: len(members(self)) + bool(include)
@@ -127,6 +141,8 @@ def install_split_queries(family_class, members, *, keys=None):
     )
     family_class.splitIterator = lambda self, include=None: _ScriptedFamilyIterator(
         ([self] if include else []) + list(members(self)))
+    family_class.prepareSlice = lambda self, include=None: _StaticFamilySlice(
+        ([_key(_identity(self))] if include else []) + list(self.memberKeys()), bool(include))
     if keys is not None:
         family_class.splitKeys = lambda self, include=None: (
             [_key(_identity(self))] if include else []) + list(keys(self))
