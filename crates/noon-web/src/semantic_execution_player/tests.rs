@@ -3876,6 +3876,7 @@ mod callback_mixed_provisional_membership_regression {
     }
 }
 
+#[cfg(feature = "renderer")]
 #[test]
 fn renderer_delta_admission_checks_every_routed_metadata_field_before_commit() {
     let (mut worker, _) = translation_drag_player();
@@ -3948,6 +3949,7 @@ fn renderer_delta_admission_checks_every_routed_metadata_field_before_commit() {
     );
 }
 
+#[cfg(feature = "renderer")]
 #[test]
 fn renderer_delta_admission_preserves_snapshots_and_incremental_view_changes() {
     let (mut worker, _) = translation_drag_player();
