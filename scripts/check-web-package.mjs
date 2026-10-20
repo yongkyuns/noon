@@ -49,6 +49,8 @@ const expectedJavascriptSurface = [
   "setSheenDirection(",
   "export class WasmAuthoringVectorPath",
   "proportionFromPointForRanges(",
+  "queryMobjectPointCount(",
+  "get pointCount()",
   "createManimGeometry(",
   "beginUnderline(",
   "static dot(",
@@ -436,6 +438,7 @@ const expectedTypeSurface = [
   "pathQuery(): WasmPathQuery",
   "localPathQuery(): WasmPathQuery",
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
+  "queryMobjectPointCount(handle: WasmAuthoringMobjectHandle): number",
   "pointFromProportion(alpha: number): Float64Array",
   "proportionFromPointForRanges(ranges: Uint32Array, x: number, y: number, z: number): number | undefined",
   "liveCopyFamily(source: WasmAuthoringFamilyHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
@@ -686,12 +689,16 @@ for (const fragment of expectedJavascriptSurface) {
   }
 }
 
-const geometryOptionsClassStart = declarations.indexOf("export class WasmManimGeometryOptions");
-const nextDeclarationClass = declarations.indexOf("export class ", geometryOptionsClassStart + 1);
-const geometryOptionsDeclaration = declarations.slice(
-  geometryOptionsClassStart,
-  nextDeclarationClass === -1 ? undefined : nextDeclarationClass,
-);
+function classDeclaration(name) {
+  const start = declarations.indexOf(`export class ${name} {`);
+  if (start < 0) throw new Error(`WASM declarations are missing class ${name}`);
+  const next = declarations.indexOf("export class ", start + 1);
+  return declarations.slice(start, next < 0 ? undefined : next);
+}
+const geometryOptionsDeclaration = classDeclaration("WasmManimGeometryOptions");
+if (!classDeclaration("WasmAuthoringMobjectHandle").includes("readonly pointCount: number;")) {
+  throw new Error("WASM Mobject declaration is missing its own-point scalar observation");
+}
 if (!geometryOptionsDeclaration.includes(
   "setSheenDirection(x: number, y: number, z: number, dimensions: number): void;",
 )) {

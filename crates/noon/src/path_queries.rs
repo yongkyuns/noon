@@ -1,4 +1,7 @@
 //! Immutable observations of one retained path in an explicit coordinate space.
+mod point_counts;
+pub use point_counts::effective_mobject_point_count;
+
 use crate::{
     AuthoringError, ExecutionSession, Mobject, MobjectTarget, UnsupportedAuthoringOperation,
 };
@@ -1618,23 +1621,9 @@ fn length_over_xy_points(points: &[(f64, f64)], dim: usize) -> Result<f64, Autho
     Ok(maximum - minimum)
 }
 
-/// Observe one object's exact current path from an existing coherent execution.
-///
-/// This is explicit low-level integration over the existing Semantic Scene and Runtime
-/// authorities. It owns no scene/session state and performs no publication.
-pub fn effective_path_query(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    object: &Mobject,
-) -> Result<PathQuery, AuthoringError> {
-    if !Rc::ptr_eq(store, object.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    object.validate()?;
-    let store = store.borrow();
-    let observed = execution
-        .effective_semantic_object(&store, object.node_id())
-        .map_err(AuthoringError::from)?;
+fn effective_geometry_path(
+    observed: &crate::execution_session::EffectiveSemanticObject<'_>,
+) -> Result<VectorPath, AuthoringError> {
     let unsupported =
         || AuthoringError::Unsupported(UnsupportedAuthoringOperation::EffectivePathRenderOverride);
     let geometry = observed
@@ -1659,6 +1648,27 @@ pub fn effective_path_query(
     } else if observed.reveal != 1.0 {
         path = noon_geometry::authored_partial_path(&path, 0.0, observed.reveal);
     }
+    Ok(path)
+}
+
+/// Observe one object's exact current path from an existing coherent execution.
+///
+/// This is explicit low-level integration over the existing Semantic Scene and Runtime
+/// authorities. It owns no scene/session state and performs no publication.
+pub fn effective_path_query(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+) -> Result<PathQuery, AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    object.validate()?;
+    let store = store.borrow();
+    let observed = execution
+        .effective_semantic_object(&store, object.node_id())
+        .map_err(AuthoringError::from)?;
+    let path = effective_geometry_path(&observed)?;
     let state = store
         .semantic_object_state_checked(object.node_id())
         .map_err(AuthoringError::from)?;

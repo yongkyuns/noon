@@ -281,11 +281,13 @@ def point_count(value):
     family_count = _family_point_count_observation(value)
     if family_count is not None:
         return family_count
-    query = _query(value)
-    try:
-        return int(query.pointCount)
-    finally:
-        query.free()
+    _reject_staged_custom_stride_query(value)
+    count = _typed_manim_observation(
+        value, "pointCount", "queryMobjectPointCount", handle_property=True
+    )
+    if count is None:
+        raise RuntimeError("point counts require the shared Rust authoring host")
+    return int(count)
 
 
 def all_points(value):

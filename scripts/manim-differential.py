@@ -2680,6 +2680,28 @@ def _family_point_count_probe(api, scene=None):
     }
 
 
+def _mobject_own_point_counts(api, scene=None):
+    objects = [
+        ("empty", api.Mobject()),
+        ("rectangle", api.Rectangle(width=2, height=1)),
+        ("circle", api.Circle(radius=0.8)),
+        ("line", api.Line(api.LEFT, api.RIGHT)),
+        ("vgroup", api.VGroup(api.Circle())),
+        ("image", api.ImageMobject([[0]])),
+        ("text", api.Text("A")),
+    ]
+    if scene is not None:
+        scene.add(*(value for _, value in objects))
+    return {
+        name: {
+            "count": value.get_num_points(),
+            "has_points": value.has_points(),
+            "has_no_points": value.has_no_points(),
+        }
+        for name, value in objects
+    }
+
+
 def _cubic_tuple_groups(api):
     path = api.VMobject().add_subpath([
         (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 1, 0),
@@ -6037,6 +6059,11 @@ FIXTURES = [
     Fixture("family_point_counts_live",
             lambda: _noon_live_scene_probe(lambda scene: _family_point_count_probe(noon, scene)),
             lambda: _family_point_count_probe(manim)),
+    Fixture("mobject_own_point_counts", lambda: _mobject_own_point_counts(noon),
+            lambda: _mobject_own_point_counts(manim), 0.0),
+    Fixture("mobject_own_point_counts_live",
+            lambda: _noon_live_scene_probe(lambda scene: _mobject_own_point_counts(noon, scene)),
+            lambda: _mobject_own_point_counts(manim), 0.0),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),

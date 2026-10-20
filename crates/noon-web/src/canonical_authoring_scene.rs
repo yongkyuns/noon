@@ -902,6 +902,15 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_point_count(&mut self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            noon::Mobject::get_num_points,
+            crate::SemanticExecutionPlayer::effective_point_count,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_path_query(
         &mut self,
         handle: &noon::Mobject,
@@ -7772,6 +7781,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectPointCount)]
+        pub fn query_mobject_point_count(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<u32, JsValue> {
+            self.inner
+                .mobject_point_count(handle.semantic_mobject())
+                .map(|count| count as u32)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectPath)]
         pub fn query_mobject_path(
             &mut self,
@@ -14161,9 +14181,11 @@ mod tests {
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
         assert!(context.mobject_path_query(&line).is_err());
+        assert!(context.mobject_point_count(&line).is_err());
         assert!(context.mobject_fill_opacity(&line).is_err());
         assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
+        assert_eq!(context.mobject_point_count(&line).unwrap(), 4);
         let mut target = line.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
         target.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
@@ -14196,6 +14218,10 @@ mod tests {
         let path = context.mobject_path_query(&line).unwrap();
         assert_eq!(path.start().unwrap(), observed.start);
         assert_eq!(path.end().unwrap(), observed.end);
+        assert_eq!(
+            context.mobject_point_count(&line).unwrap(),
+            path.point_count()
+        );
         let color = context.mobject_color(&line).unwrap();
         assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
         assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
@@ -14205,6 +14231,7 @@ mod tests {
 
         let player = context.take_execution_player(2.0, 17).unwrap();
         assert!(context.mobject_path_query(&line).is_err());
+        assert!(context.mobject_point_count(&line).is_err());
         {
             let error = context.mobject_line_endpoints(&line).unwrap_err();
             assert_eq!(

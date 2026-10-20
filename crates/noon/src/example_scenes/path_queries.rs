@@ -15,6 +15,22 @@ pub fn session() -> Result<ExecutionSession, String> {
         ellipse.shift(2.5, 0.)?;
         ellipse.disable_fill()?;
         ellipse.set_stroke_color(1., 1., 1., 1.)?;
+        assert_eq!(rectangle.get_num_points()?, 16);
+        assert_eq!(ellipse.get_num_points()?, 32);
+        let empty = scene.path(crate::VectorPath::new(), Default::default())?;
+        assert_eq!(empty.get_num_points()?, 0);
+        let line = scene.line((-1.0, 0.0), (1.0, 0.0))?;
+        assert_eq!(line.get_num_points()?, 4);
+        let group_child = scene.circle(1.0)?;
+        let group = scene.family(&[(&group_child).into()])?;
+        assert_eq!(crate::MobjectTarget::from(&group).get_num_points()?, 0);
+        let image = scene.image(crate::ImageMobjectOptions::rgba8(1, 1, vec![0, 0, 0, 255])?)?;
+        assert_eq!(image.get_num_points()?, 4);
+        #[cfg(feature = "native-text")]
+        {
+            let text = scene.text(crate::Text::new("A"))?;
+            assert_eq!(text.get_num_points()?, 0);
+        }
         for shape in [&rectangle, &ellipse] {
             scene.add(shape)?;
             let query = shape.path_query()?;

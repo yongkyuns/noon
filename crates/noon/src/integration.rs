@@ -70,7 +70,7 @@ pub use crate::host_callbacks::{
 pub use crate::path_alignment::publish_alignment;
 pub use crate::path_queries::{
     effective_all_points, effective_boundary_point, effective_center_of_mass,
-    effective_extremum_along_dim, effective_length_over_dim,
+    effective_extremum_along_dim, effective_length_over_dim, effective_mobject_point_count,
     effective_path_boundary_extremum_along_dim, effective_path_boundary_point,
     effective_path_boundary_points, effective_path_query, effective_point_reduction_tree,
     effective_vector_boundary_points,

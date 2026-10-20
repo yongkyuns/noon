@@ -2411,6 +2411,19 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn effective_point_count(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<usize, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_mobject_point_count(&semantics, &self.session, mobject)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn effective_path_query(
         &mut self,
         mobject: &noon::Mobject,
