@@ -114,7 +114,8 @@ impl StrokePattern {
         Ok(())
     }
 
-    /// Unwrapped phase interpolation; changes of pattern shape switch at the end.
+    /// Interpolate unwrapped phase and gap opacity for a fixed pattern shape.
+    /// Changes of pattern shape or presence still switch at the end.
     pub fn interpolate(from: Option<Self>, to: Option<Self>, progress: f32) -> Option<Self> {
         if progress <= 0.0 {
             return from;
@@ -124,13 +125,17 @@ impl StrokePattern {
         }
         match (from, to) {
             (Some(a), Some(b))
-                if a.dash_length == b.dash_length
-                    && a.gap_length == b.gap_length
-                    && a.gap_opacity == b.gap_opacity =>
+                if a.dash_length == b.dash_length && a.gap_length == b.gap_length =>
             {
                 let p = f64::from(progress);
                 let phase = ((1.0 - p) * f64::from(a.phase) + p * f64::from(b.phase)) as f32;
-                Some(Self { phase, ..a })
+                let gap_opacity =
+                    ((1.0 - p) * f64::from(a.gap_opacity) + p * f64::from(b.gap_opacity)) as f32;
+                Some(Self {
+                    phase,
+                    gap_opacity,
+                    ..a
+                })
             }
             _ => from,
         }
@@ -170,6 +175,74 @@ mod tests {
             assert_eq!(value.phase(), -8.0 * p);
             assert!((0.0..0.5).contains(&value.packed()[2]));
         }
+    }
+
+    #[test]
+    fn gap_opacity_changes_do_not_freeze_phase_during_repeated_samples() {
+        for pattern in [
+            StrokePattern::dashed(0.25, 0.25).unwrap(),
+            StrokePattern::dotted(0.5).unwrap(),
+        ] {
+            for (start_opacity, end_opacity) in [(0.25, 0.75), (0.75, 0.25)] {
+                let from = pattern
+                    .with_phase(0.125)
+                    .unwrap()
+                    .with_gap_opacity(start_opacity)
+                    .unwrap();
+                let to = pattern
+                    .with_phase(-1.875)
+                    .unwrap()
+                    .with_gap_opacity(end_opacity)
+                    .unwrap();
+                for p in [0.0, 0.125, 0.5, 1.0, 0.375, 0.125, 0.0] {
+                    let value = StrokePattern::interpolate(Some(from), Some(to), p).unwrap();
+                    let phase = 0.125 - 2.0 * p;
+                    let opacity = start_opacity + (end_opacity - start_opacity) * p;
+                    assert_eq!(value.phase(), phase);
+                    assert_eq!(value.gap_opacity(), opacity);
+                    assert_eq!(value.packed()[2], phase.rem_euclid(0.5));
+                    assert_eq!(value.packed()[3], opacity);
+                    value.validate().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gap_opacity_interpolation_preserves_shape_and_presence_switches() {
+        let from = StrokePattern::dashed(0.25, 0.25).unwrap();
+        for to in [
+            None,
+            Some(StrokePattern::dotted(0.5).unwrap()),
+            Some(StrokePattern::dashed(0.5, 0.25).unwrap()),
+            Some(StrokePattern::dashed(0.25, 0.5).unwrap()),
+        ] {
+            for p in [0.0, 0.125, 0.5, 0.875] {
+                assert_eq!(StrokePattern::interpolate(Some(from), to, p), Some(from));
+            }
+            assert_eq!(StrokePattern::interpolate(Some(from), to, 1.0), to);
+        }
+        assert_eq!(StrokePattern::interpolate(None, Some(from), 0.5), None);
+        assert_eq!(StrokePattern::interpolate(None, Some(from), 1.0), Some(from));
+    }
+
+    #[test]
+    fn gap_opacity_changes_preserve_finite_opposite_extreme_phase_interpolation() {
+        let pattern = StrokePattern::dotted(0.5).unwrap();
+        let from = pattern
+            .with_phase(f32::MAX)
+            .unwrap()
+            .with_gap_opacity(0.0)
+            .unwrap();
+        let to = pattern
+            .with_phase(-f32::MAX)
+            .unwrap()
+            .with_gap_opacity(1.0)
+            .unwrap();
+        let value = StrokePattern::interpolate(Some(from), Some(to), 0.5).unwrap();
+        assert_eq!(value.phase(), 0.0);
+        assert_eq!(value.gap_opacity(), 0.5);
+        value.validate().unwrap();
     }
 
     #[test]
