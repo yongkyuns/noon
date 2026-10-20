@@ -117,7 +117,8 @@ const counts = Object.fromEntries(
     classified.filter((entry) => entry.family === family).length,
   ]),
 );
-console.log(`✓ classified ${workflowFiles.length} CI workflows: ${JSON.stringify(counts)}`);
+// Node 22's test reporter can corrupt non-ASCII stdout (nodejs/node#65934).
+console.log(`classified ${workflowFiles.length} CI workflows: ${JSON.stringify(counts)}`);
 
 
 // Read the actual event filter. Deliberately accept only this workflow's simple
