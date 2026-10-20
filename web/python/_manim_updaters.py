@@ -235,7 +235,10 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
 
     history: list[_UpdaterRegistration] = []
     for mobject in _TRACKED_MOBJECTS.values():
-        if mobject._scene is scene:
+        # Group/VGroup wrappers intentionally have no typed-Mobject ``_scene``
+        # field. Their callbacks are not yet admitted to the canonical model,
+        # so detached family registrations are ignored during typed binding.
+        if getattr(mobject, "_scene", None) is scene:
             history.extend(_registration_history(mobject))
     if not history:
         return None
@@ -290,11 +293,6 @@ def add_updater(
 ) -> _base.Mobject:
     if not callable(update_function):
         raise TypeError("updater must be callable")
-    if call_updater and getattr(self, "_semantic_handle", None) is not None:
-        raise NotImplementedError(
-            "call_updater=True is not supported for canonical callbacks until "
-            "immediate invocation has one atomic shared-semantic operation"
-        )
     callbacks = _updaters(self)
     registrations = _registrations(self)
     registration = _UpdaterRegistration(
@@ -333,6 +331,23 @@ def add_updater(
     if call_updater:
         _invoke(update_function, self, 0.0)
     return self
+
+
+class _UpdaterBuilder:
+    """Syntactic sugar for immediate method calls that also become updaters."""
+
+    def __init__(self, mobject: _base.Mobject) -> None:
+        self._mobject = mobject
+
+    def __getattr__(self, name: str, /) -> Callable[..., _UpdaterBuilder]:
+        def add_method_updater(*method_args: Any, **method_kwargs: Any) -> _UpdaterBuilder:
+            self._mobject.add_updater(
+                lambda mobject: getattr(mobject, name)(*method_args, **method_kwargs),
+                call_updater=True,
+            )
+            return self
+
+        return add_method_updater
 
 
 def remove_updater(
@@ -384,6 +399,132 @@ def clear_updaters(self: _base.Mobject, recursive: bool = True) -> _base.Mobject
 
 def get_updaters(self: _base.Mobject) -> list[Callable[..., Any]]:
     return list(_updaters(self))
+
+
+def get_time_based_updaters(self: _base.Mobject) -> list[Callable[..., Any]]:
+    return [
+        updater
+        for updater in _updaters(self)
+        if "dt" in inspect.signature(updater).parameters
+    ]
+
+
+def has_time_based_updater(self: _base.Mobject) -> bool:
+    return any(
+        "dt" in inspect.signature(updater).parameters for updater in _updaters(self)
+    )
+
+
+def match_updaters(self: _base.Mobject, mobject: _base.Mobject) -> _base.Mobject:
+    for member in self.get_family():
+        clear_updaters(member, recursive=False)
+    for updater in mobject.get_updaters():
+        add_updater(self, updater)
+    return self
+
+
+def _suspension_target(mobject: _base.Mobject):
+    import _manim_semantic_handles as semantic
+
+    target, context, suffix = semantic._style_target(mobject)
+    if target is None:
+        raise RuntimeError("updater suspension requires a current shared Rust handle")
+    return target, context, suffix
+
+
+def updating_suspended(mobject: _base.Mobject) -> bool:
+    target, _context, _suffix = _suspension_target(mobject)
+    return bool(engine_call(target.updatingSuspended))
+
+
+def _set_updating_suspended(
+    mobject: _base.Mobject, suspended: bool, recursive: bool
+) -> _base.Mobject:
+    target, context, suffix = _suspension_target(mobject)
+    if context is None:
+        engine_call(target.setUpdatingSuspended, suspended, recursive)
+    else:
+        method = "liveSetFamilyUpdatingSuspended" if suffix == "Family" else "liveSetUpdatingSuspended"
+        engine_call(getattr(context, method), target, suspended, recursive)
+    return mobject
+
+
+def _require_detached_suspension_target(
+    mobject: _base.Mobject, recursive: bool
+) -> None:
+    if (
+        _ACTIVE_CANONICAL_CONTEXT.get() is not None
+        or _canonical_phase_context(mobject) is not None
+    ):
+        raise NotImplementedError(
+            "updater suspension during a callback requires ordered callback-phase support"
+        )
+    family = mobject.get_family() if recursive else [mobject]
+    if any(getattr(member, "_scene", None) is not None for member in family):
+        raise NotImplementedError(
+            "updater suspension on Scene-bound objects requires the ordered callback phase"
+        )
+
+
+def set_updating_suspended(
+    mobject: _base.Mobject, suspended: bool, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+    return _set_updating_suspended(mobject, bool(suspended), recursive)
+
+
+def suspend_updating(
+    mobject: _base.Mobject, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+    return _set_updating_suspended(mobject, True, recursive)
+
+
+def resume_updating(
+    mobject: _base.Mobject, recursive: bool = True
+) -> _base.Mobject:
+    _require_detached_suspension_target(mobject, recursive)
+
+    def resume(member: _base.Mobject) -> None:
+        _set_updating_suspended(member, False, recursive=False)
+        if recursive:
+            for child in getattr(member, "submobjects", ()):
+                resume(child)
+        update(member, dt=0, recursive=recursive)
+
+    resume(mobject)
+    return mobject
+
+
+def update(
+    self: _base.Mobject, dt: float = 0, recursive: bool = True
+) -> _base.Mobject:
+    if getattr(self, "_scene", None) is not None:
+        raise NotImplementedError(
+            "Mobject.update on Scene-bound objects must enter the canonical Rust "
+            "callback phase"
+        )
+    family = self.get_family() if recursive else [self]
+    if any(getattr(member, "_scene", None) is not None for member in family):
+        raise NotImplementedError(
+            "Mobject.update on Scene-bound objects must enter the canonical Rust "
+            "callback phase"
+        )
+
+    def update_member(member: _base.Mobject) -> None:
+        if getattr(member, "updating_suspended", False):
+            return
+        for updater in _updaters(member):
+            if "dt" in inspect.signature(updater).parameters:
+                updater(member, dt)
+            else:
+                updater(member)
+        if recursive:
+            for child in getattr(member, "submobjects", ()):
+                update_member(child)
+
+    update_member(self)
+    return self
 
 
 def has_updaters(self: _base.Mobject) -> bool:
@@ -1792,8 +1933,21 @@ def _canonical_vmobject_set_opacity(
 
 
 def _canonical_fade(self, darkness=0.5, family=True):
-    from _manim_compat import _opacity, _is_shared_family
+    from _manim_compat import Group, VGroup, _opacity, _is_shared_family
+    if not family and isinstance(self, Group) and not isinstance(self, VGroup):
+        # Match base Mobject.fade: family=False skips the recursive walk, so
+        # plain Group observes no paint write (and does not inspect darkness).
+        return self
     darkness = _opacity("darkness", darkness)
+    if not family and isinstance(self, VGroup):
+        if (
+            _ACTIVE_CANONICAL_CONTEXT.get() is not None
+            or _canonical_phase_context(self) is not None
+        ):
+            raise NotImplementedError(
+                "root-only VGroup fade is unavailable inside staged callbacks"
+            )
+        return _base._semantic_operations()._fade(self, darkness, family=False)
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")
     context = (_ACTIVE_CANONICAL_CONTEXT.get() if _is_shared_family(self)

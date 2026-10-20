@@ -786,11 +786,83 @@
       "scene": "OrdinaryFamilyMembershipOrder",
       "source": "parity/manim-v0.21/core-examples/family_membership_order.py",
       "expected_duration": 0.2,
+      "notes": "Family add and add_to_back preserve duplicate suppression, requested ordering, and overlapping painter order. Group/VGroup insert has separate detached/live differential fixtures for Python list index behavior; repeated direct identities remain an explicit unsupported boundary because semantic families store one edge per identity.",
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "family-invert-order",
+      "scene": "OrdinaryFamilyInvertOrder",
+      "source": "parity/manim-v0.21/core-examples/family_invert_order.py",
+      "expected_duration": 0.2,
+      "notes": "Direct Group.invert reverses two overlapping family members and their Cairo painter order.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-sort-order",
+      "scene": "OrdinaryFamilySortOrder",
+      "source": "parity/manim-v0.21/core-examples/family_sort_order.py",
+      "expected_duration": 0.2,
+      "notes": "Mobject.sort changes painter order after the family is admitted to the live scene, using a point-derived key while preserving receiver identity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-shuffle-order",
+      "scene": "OrdinaryFamilyShuffleOrder",
+      "source": "parity/manim-v0.21/core-examples/family_shuffle_order.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded Mobject.shuffle changes painter order after live family admission while preserving receiver identity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-reverse-points",
+      "scene": "OrdinaryFamilyReversePoints",
+      "source": "parity/manim-v0.21/core-examples/family_reverse_points.py",
+      "expected_duration": 0.2,
+      "notes": "Reverse points across a nested family after live scene admission, asserting each VMobject's endpoints reverse while family membership and geometry remain unchanged."
+    },
+    {
+      "id": "family-repeat-points",
+      "scene": "OrdinaryFamilyRepeatPoints",
+      "source": "parity/manim-v0.21/core-examples/family_repeat_points.py",
+      "expected_duration": 0.2,
+      "notes": "Repeat the raw point array of each nested-family VMobject twice after scene admission, preserving family membership while drawing coincident paths."
+    },
+    {
+      "id": "family-space-out-submobjects",
+      "scene": "OrdinaryFamilySpaceOutSubmobjects",
+      "source": "parity/manim-v0.21/core-examples/family_space_out_submobjects.py",
+      "expected_duration": 0.2,
+      "notes": "Expand a nested Group, then inversely scale its direct children through the existing shared transforms."
+    },
+    {
+      "id": "family-shift-onto-screen",
+      "scene": "OrdinaryFamilyShiftOntoScreen",
+      "source": "parity/manim-v0.21/core-examples/family_shift_onto_screen.py",
+      "expected_duration": 0.2,
+      "notes": "Shift a nested family back within the default frame using ordered Rust-backed edge placement."
+    },
+    {
+      "id": "family-position-function-methods",
+      "scene": "OrdinaryFamilyPositionFunctionMethods",
+      "source": "parity/manim-v0.21/core-examples/family_position_function_methods.py",
+      "expected_duration": 0.2,
+      "notes": "Map the root and direct-child centers through user functions and apply each result through shared Rust placement."
     },
     {
       "id": "family-grid-options",
@@ -899,6 +971,18 @@
         "max_differing_ratio": 0.0036,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "point-introspection",
+      "scene": "PointIntrospection",
+      "source": "parity/manim-v0.21/core-examples/point_introspection.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.0036,
+        "max_mean_absolute_channel_error": 0.1
+      },
+      "notes": "Original seven-class own-point assertions from #2182, retained byte for byte. Counts inspect only root-owned points for base Mobject, Rectangle, Circle, Line, VGroup, ImageMobject and Text. Raster covers the displayed Rectangle and Circle; wider mesh/buffer contracts remain separately scoped."
     },
     {
       "id": "animated-stroke-width",
@@ -1507,7 +1591,22 @@
       "source": "parity/manim-v0.21/core-examples/paint_fade.py",
       "expected_duration": 0.2,
       "notes": "Leaf/default/nonrecursive and repeated nested-alias paint fades plus repeated-alias RGB fade_to interpolation with unchanged paint opacity; existing raster policy applies."
-    }
+    },
+    {
+      "id": "stroke-caps",
+      "scene": "StrokeCaps",
+      "source": "parity/manim-v0.21/core-examples/stroke_caps.py",
+      "expected_duration": 0.2,
+      "notes": "Static open VMobject strokes for AUTO, ROUND, BUTT, and SQUARE, checking Manim Cairo cap appearance against the product renderer's WebGPU and WebGL2 output."
+    },
+    {
+      "id": "put-start-and-end-on",
+      "scene": "PutStartAndEndOn",
+      "source": "parity/manim-v0.21/core-examples/put_start_and_end_on.py",
+      "expected_duration": 0.2,
+      "notes": "Two transformed planar paths are mapped to new endpoint pairs; the unchanged raster policy checks shared Rust scale/rotation/translation output."
+    },
+    {"id": "circle-surround-upstream", "scene": "CircleSurround", "source": "parity/manim-v0.21/upstream-examples/circle_surround.py", "expected_duration": 0.0, "expected_object_count": 6, "sample_times": [0.0], "notes": "Literal pinned ManimCE v0.21.0 Circle.surround example (arc.py:681), body SHA256 48f896925a56c1a2f44d5c57be5894662faadba8b52e34cb2aef9ed3f8431260. Import-only substitution; original Triangle, Line, Square, buffers, Groups and arrangement. Uses unchanged global raster limits. Current-head semantic/raster qualification remains required."}
   ],
   "sample_fractions": [
     0.0,

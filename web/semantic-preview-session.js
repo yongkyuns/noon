@@ -78,6 +78,7 @@ export class SemanticPreviewSession {
       let resolveAttached;
       const attached = new Promise((resolve) => { resolveAttached = resolve; });
       let registered = false;
+      let initialTime;
       const attach = async (descriptor, continuation) => {
         this.#assertActive();
         if (registered) throw new Error("preview source registered multiple execution contexts");
@@ -89,13 +90,25 @@ export class SemanticPreviewSession {
         // terminate() can therefore retire it even if startup never completes.
         await this.#execution.prepare({ transportMode: "transferable" });
         this.#assertActive();
-        await this.#execution.startSemanticExecution(descriptor, {
+        const ready = await this.#execution.startSemanticExecution(descriptor, {
           authoringClient: this.#authoring,
           loopDurationSeconds,
           transportMode: "transferable",
           ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
         });
         this.#assertActive();
+        // Explicit live work may precede the first ordinary continuation.
+        // Use the existing presented publication, never an invented time zero.
+        initialTime = ready?.render?.time;
+        if (!Number.isFinite(initialTime) || initialTime < 0) {
+          throw new Error("preview host returned invalid initial frame time");
+        }
+        if (!continuation && initialTime !== 0) {
+          throw new RangeError("static preview has only its authored time-zero frame");
+        }
+        if (initialTime > this.#limits.maxTimeSeconds) {
+          throw new RangeError("preview sampling limit exceeded");
+        }
         resolveAttached();
       };
       const run = this.#authoring.run(source, context, {
@@ -129,7 +142,7 @@ export class SemanticPreviewSession {
       }).catch((error) => this.#fail(error));
       await Promise.race([attached, this.#abort]);
       this.#assertActive();
-      await this.#capture(0);
+      await this.#capture(initialTime);
       this.#assertActive();
       this.#state = "ready";
       return this.snapshot;

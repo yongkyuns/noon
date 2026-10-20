@@ -156,6 +156,21 @@ pub enum SemanticMutation {
         node: SemanticTransactionNodeRef,
         color: crate::Color,
     },
+    SetFamilyStyle {
+        node: SemanticTransactionNodeRef,
+        style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    },
+    SetSheenDirection {
+        node: SemanticTransactionNodeRef,
+        direction: crate::SemanticSheenDirection,
+    },
+    SetUpdatingSuspended {
+        node: SemanticTransactionNodeRef,
+        suspended: bool,
+    },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
@@ -238,6 +253,9 @@ impl SemanticMutation {
     fn node_references(&self) -> Vec<SemanticTransactionNodeRef> {
         match self {
             Self::SetFamilyColor { node: object, .. }
+            | Self::SetFamilyStyle { node: object, .. }
+            | Self::SetSheenDirection { node: object, .. }
+            | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -323,6 +341,9 @@ impl SemanticMutation {
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
             Self::SetFamilyColor { node: object, .. }
+            | Self::SetFamilyStyle { node: object, .. }
+            | Self::SetSheenDirection { node: object, .. }
+            | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
@@ -395,6 +416,13 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::TextPresentationBaseline(*object))
             }
             Self::SetFamilyColor { node, .. } => Some(SemanticMutationKey::FamilyColor(*node)),
+            Self::SetFamilyStyle { node, .. } => Some(SemanticMutationKey::FamilyStyle(*node)),
+            Self::SetSheenDirection { node, .. } => {
+                Some(SemanticMutationKey::SheenDirection(*node))
+            }
+            Self::SetUpdatingSuspended { node, .. } => {
+                Some(SemanticMutationKey::UpdaterSuspension(*node))
+            }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -451,6 +479,9 @@ pub(super) enum SemanticMutationKey {
     TextPresentationBaseline(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
     FamilyColor(SemanticTransactionNodeRef),
+    FamilyStyle(SemanticTransactionNodeRef),
+    SheenDirection(SemanticTransactionNodeRef),
+    UpdaterSuspension(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
@@ -489,6 +520,9 @@ pub enum SemanticMutationImpact {
         parameter: crate::GlowParameter,
     },
     FamilyColor {
+        node: SemanticNodeId,
+    },
+    FamilyStyle {
         node: SemanticNodeId,
     },
     ZIndex {
@@ -546,6 +580,9 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     UpdaterRegistrations {
+        target: SemanticNodeId,
+    },
+    UpdaterSuspension {
         target: SemanticNodeId,
     },
     SignalScoped {
@@ -607,6 +644,7 @@ pub(super) struct SemanticTransactionPreflight {
         HashMap<SemanticLocalNodeToken, Box<crate::SemanticTransformEffectSnapshot>>,
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
     staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
+    staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
@@ -1032,6 +1070,85 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyColor {
             node: node.into(),
             color,
+        });
+        self
+    }
+
+    /// Replace one non-rendered family's own vector paint style atomically.
+    pub fn set_family_style(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            background_stroke_color: None,
+            background_stroke_width: None,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// Replace a non-rendered family's own foreground style and default-width
+    /// background-stroke opacity in one atomic publication.
+    pub fn set_family_style_with_background_stroke_opacity(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+        background_stroke_opacity: f64,
+    ) -> &mut Self {
+        self.set_family_style_with_background_stroke_update(
+            node,
+            style,
+            None,
+            None,
+            Some(background_stroke_opacity),
+        )
+    }
+
+    /// Replace a non-rendered family's foreground and selected background
+    /// stroke fields in one atomic publication.
+    pub fn set_family_style_with_background_stroke_update(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            background_stroke_color,
+            background_stroke_width,
+            background_stroke_opacity,
+        });
+        self
+    }
+
+    /// Set a semantic object's or family root's authored sheen direction.
+    pub fn set_sheen_direction(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        direction: crate::SemanticSheenDirection,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetSheenDirection {
+            node: node.into(),
+            direction,
+        });
+        self
+    }
+
+    /// Set the shared per-node Manim updater suspension state atomically.
+    pub fn set_updating_suspended(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        suspended: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetUpdatingSuspended {
+            node: node.into(),
+            suspended,
         });
         self
     }
@@ -2108,6 +2225,9 @@ impl SemanticMutationTransaction {
         let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
             HashMap::new();
         let mut staged_family_colors = HashMap::new();
+        let mut staged_family_styles = HashMap::new();
+        let mut staged_sheen_directions = HashMap::new();
+        let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
@@ -2774,10 +2894,101 @@ impl SemanticMutationTransaction {
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous = catalog.family_color(*node).expect("validated family");
-                    let previous = staged_family_colors.entry(*node).or_insert(previous);
-                    changed.push(*previous != *color);
-                    *previous = *color;
+                    let previous_color = staged_family_colors
+                        .get(node)
+                        .copied()
+                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
+                    let previous_style = staged_family_styles
+                        .get(node)
+                        .cloned()
+                        .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
+                    let mut next_style = previous_style.clone();
+                    next_style.set_family_color(*color);
+                    changed.push(previous_color != *color || previous_style != next_style);
+                    staged_family_colors.insert(*node, *color);
+                    staged_family_styles.insert(*node, next_style);
+                }
+                SemanticMutation::SetFamilyStyle {
+                    node,
+                    style,
+                    background_stroke_color,
+                    background_stroke_width,
+                    background_stroke_opacity,
+                } => {
+                    catalog.ensure_family(*node, index)?;
+                    if !style.is_finite() {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    if background_stroke_opacity.is_some_and(|opacity| {
+                        !opacity.is_finite() || !(0.0..=1.0).contains(&opacity)
+                    }) {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    if background_stroke_color.is_some_and(|color| {
+                        ![color.red, color.green, color.blue, color.alpha]
+                            .into_iter()
+                            .all(f32::is_finite)
+                    }) || background_stroke_width
+                        .is_some_and(|width| !width.is_finite() || width < 0.0)
+                    {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    let previous_style = staged_family_styles
+                        .get(node)
+                        .cloned()
+                        .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
+                    let previous_background_stroke_opacity = catalog
+                        .family_background_stroke_opacity(*node)
+                        .expect("validated family");
+                    let previous_background_stroke_color = catalog
+                        .family_background_stroke_color(*node)
+                        .expect("validated family");
+                    let previous_background_stroke_width = catalog
+                        .family_background_stroke_width(*node)
+                        .expect("validated family");
+                    let previous_color = staged_family_colors
+                        .get(node)
+                        .copied()
+                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
+                    let next_color = style.family_color().unwrap_or(previous_color);
+                    let next_background_stroke_opacity =
+                        background_stroke_opacity.unwrap_or(previous_background_stroke_opacity);
+                    let next_background_stroke_color =
+                        background_stroke_color.unwrap_or(previous_background_stroke_color);
+                    let next_background_stroke_width =
+                        background_stroke_width.unwrap_or(previous_background_stroke_width);
+                    changed.push(
+                        previous_style != *style
+                            || previous_color != next_color
+                            || previous_background_stroke_opacity != next_background_stroke_opacity
+                            || previous_background_stroke_color != next_background_stroke_color
+                            || previous_background_stroke_width != next_background_stroke_width,
+                    );
+                    staged_family_styles.insert(*node, style.clone());
+                    staged_family_colors.insert(*node, next_color);
+                }
+                SemanticMutation::SetSheenDirection { node, direction } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    if !direction.is_valid() {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    let previous = staged_sheen_directions
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.sheen_direction(*node))
+                        .expect("validated authoring node sheen direction");
+                    changed.push(previous != *direction);
+                    staged_sheen_directions.insert(*node, *direction);
+                }
+                SemanticMutation::SetUpdatingSuspended { node, suspended } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    let previous = staged_updating_suspended
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.updating_suspended(*node))
+                        .expect("validated authoring node suspension state");
+                    changed.push(previous != *suspended);
+                    staged_updating_suspended.insert(*node, *suspended);
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -3337,6 +3548,7 @@ impl SemanticMutationTransaction {
             }
         }
         staged_family_colors.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
+        staged_family_styles.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
@@ -3344,6 +3556,7 @@ impl SemanticMutationTransaction {
             pending_effect_order: HashMap::new(),
             staged_effects,
             staged_family_colors,
+            staged_family_styles,
             staged_family_z,
             changed,
             staged_objects,
@@ -3997,6 +4210,14 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         node: SemanticNodeId,
     },
+    DuplicateFamilyStyle {
+        index: usize,
+        node: SemanticNodeId,
+    },
+    DuplicateSheenDirection {
+        index: usize,
+        node: SemanticNodeId,
+    },
     DuplicateZIndex {
         index: usize,
         node: SemanticNodeId,
@@ -4575,6 +4796,8 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 "mutation {index} has non-finite z-index for {node:?}"
             ),
             Self::DuplicateFamilyColor { index, node } => write!(formatter, "mutation {index} duplicates family own color for {node:?}"),
+            Self::DuplicateFamilyStyle { index, node } => write!(formatter, "mutation {index} duplicates family own style for {node:?}"),
+            Self::DuplicateSheenDirection { index, node } => write!(formatter, "mutation {index} duplicates sheen direction for {node:?}"),
             Self::DuplicateZIndex { index, node } => write!(
                 formatter,
                 "mutation {index} duplicates z-index for {node:?}"
@@ -5002,6 +5225,9 @@ mod z_index_tests;
 
 #[cfg(test)]
 mod family_color_tests;
+
+#[cfg(test)]
+mod family_style_tests;
 
 #[cfg(test)]
 mod foreground_tests;

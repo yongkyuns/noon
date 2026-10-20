@@ -1065,6 +1065,14 @@ pub async fn create_direct_dimension_fitting_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+#[wasm_bindgen(js_name = createDirectObjectMembershipSmokeRenderer)]
+pub async fn create_direct_object_membership_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::object_membership::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Family become/target/restore use the same Rust continuation on native and web.
 #[wasm_bindgen(js_name = createDirectFamilyStateSmokeRenderer)]
 pub async fn create_direct_family_state_smoke_renderer(
@@ -1097,6 +1105,15 @@ pub async fn create_direct_family_replacement_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::family_replacement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Circle's specialized size/center contract shares authored and live semantics.
+#[wasm_bindgen(js_name = createDirectCircleSurroundSmokeRenderer)]
+pub async fn create_direct_circle_surround_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::circle_surround::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

@@ -6,6 +6,8 @@ import weakref
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from noon import Mobject
+import _manim_compat as compat
 import _manim_updaters as updaters
 
 
@@ -41,10 +43,105 @@ class UpdaterLifecycleTests(unittest.TestCase):
         if session is not None:
             updaters.release_session(session.session_id)
         updaters._TRACKED_MOBJECTS.pop(id(self.mobject), None)
+        group = getattr(self, "family_group", None)
+        if group is not None:
+            updaters._TRACKED_MOBJECTS.pop(id(group), None)
 
     def bind(self):
         self.mobject._scene = self.scene
         updaters.prepare_canonical_callbacks(self.scene, self.context)
+
+    def test_callback_bootstrap_skips_detached_family_wrappers_without_scene_field(self):
+        group = compat.Group.__new__(compat.Group)
+        group._semantic_family_handle = object()
+        self.family_group = group
+        updaters._track(group)
+
+        self.assertIsNone(
+            updaters.prepare_canonical_callbacks(self.scene, self.context)
+        )
+
+    def test_always_builder_invokes_methods_now_and_registers_each_as_updater(self):
+        mobject = Mobject.__new__(Mobject)
+        events = []
+        registered = []
+
+        def shift(distance, *, axis):
+            events.append(("shift", distance, axis))
+            return mobject
+
+        def scale(factor):
+            events.append(("scale", factor))
+            return mobject
+
+        def record_updater(callback, index=None, call_updater=False):
+            registered.append(callback)
+            if call_updater:
+                callback(mobject)
+            return mobject
+
+        mobject.shift = shift
+        mobject.scale = scale
+        mobject.add_updater = record_updater
+
+        builder = mobject.always
+        self.assertIs(builder.shift(2.0, axis="x"), builder)
+        self.assertIs(builder.scale(0.5), builder)
+
+        self.assertEqual(events, [("shift", 2.0, "x"), ("scale", 0.5)])
+        self.assertEqual(len(registered), 2)
+        for callback in registered:
+            callback(mobject)
+        self.assertEqual(
+            events,
+            [
+                ("shift", 2.0, "x"),
+                ("scale", 0.5),
+                ("shift", 2.0, "x"),
+                ("scale", 0.5),
+            ],
+        )
+
+    def test_immediate_updater_runs_for_detached_rust_handles(self):
+        events = []
+        callback = lambda mobject: events.append(mobject)
+
+        result = updaters.add_updater(
+            self.mobject, callback, call_updater=True
+        )
+
+        self.assertIs(result, self.mobject)
+        self.assertEqual(events, [self.mobject])
+        self.assertEqual(updaters.get_updaters(self.mobject), [callback])
+
+    def test_immediate_updater_is_registered_before_invocation_for_live_handles(self):
+        events = []
+
+        def callback(mobject):
+            events.append((mobject, updaters.get_updaters(mobject)))
+
+        self.bind()
+        result = updaters.add_updater(self.mobject, callback, call_updater=True)
+
+        self.assertIs(result, self.mobject)
+        self.assertEqual(updaters.get_updaters(self.mobject), [callback])
+        self.assertEqual(events, [(self.mobject, [callback])])
+        self.assertEqual(
+            self.context.calls,
+            [("add", self.handle, "0", 0.0, None)],
+        )
+
+    def test_live_immediate_callback_does_not_run_when_shared_registration_fails(self):
+        events = []
+        callback = lambda mobject: events.append(mobject)
+        self.bind()
+        self.context.reject = True
+
+        with self.assertRaisesRegex(ValueError, "shared transaction rejected registration"):
+            updaters.add_updater(self.mobject, callback, call_updater=True)
+
+        self.assertEqual(events, [])
+        self.assertEqual(updaters.get_updaters(self.mobject), [])
 
     def test_add_remove_and_clear_delegate_authored_boundaries(self):
         forward = lambda mobject, dt: None
@@ -78,6 +175,264 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.assertEqual(updaters.get_updaters(self.mobject), [callback])
         updaters.prepare_canonical_callbacks(self.scene, self.context)
         self.assertEqual(len(self.context.calls), 3, "published occurrences are not replayed")
+
+    def test_time_based_updater_introspection_matches_explicit_dt_parameter(self):
+        def plain(mobject):
+            return mobject
+
+        def positional_dt(mobject, dt):
+            return dt
+
+        def keyword_only_dt(mobject, *, dt):
+            return dt
+
+        def variadic(mobject, *args):
+            return args
+
+        callbacks = [plain, positional_dt, keyword_only_dt, variadic]
+        for callback in callbacks:
+            updaters.add_updater(self.mobject, callback)
+
+        self.assertEqual(
+            updaters.get_time_based_updaters(self.mobject),
+            [positional_dt, keyword_only_dt],
+        )
+        self.assertTrue(updaters.has_time_based_updater(self.mobject))
+        self.assertFalse(updaters.has_time_based_updater(SimpleNamespace()))
+
+    def test_match_updaters_clears_receiver_family_then_copies_donor_root(self):
+        events = []
+
+        class Mobject:
+            def __init__(self, name, callbacks=()):
+                self.name = name
+                self._noon_updaters = list(callbacks)
+                self.family = [self]
+
+            def get_family(self):
+                return self.family
+
+            @property
+            def callbacks(self):
+                return self._noon_updaters
+
+            def get_updaters(self):
+                events.append(("get", self.name))
+                return list(self._noon_updaters)
+
+        old_root = lambda mobject: None
+        old_child = lambda mobject: None
+        donor_root = lambda mobject: None
+        donor_child = lambda mobject: None
+        root = Mobject("root", [old_root])
+        child = Mobject("child", [old_child])
+        root.family.append(child)
+        donor = Mobject("donor", [donor_root])
+        donor_child_object = Mobject("donor-child", [donor_child])
+        donor.family.append(donor_child_object)
+        tracked_ids = {id(root), id(child), id(donor), id(donor_child_object)}
+        for key in tracked_ids:
+            self.addCleanup(updaters._TRACKED_MOBJECTS.pop, key, None)
+
+        clear = updaters.clear_updaters
+        add = updaters.add_updater
+
+        def record_clear(mobject, recursive=True):
+            events.append(("clear", mobject.name, recursive))
+            return clear(mobject, recursive)
+
+        def record_add(mobject, updater, *args, **kwargs):
+            events.append(("add", mobject.name, updater))
+            return add(mobject, updater, *args, **kwargs)
+
+        with patch.object(updaters, "clear_updaters", side_effect=record_clear):
+            with patch.object(updaters, "add_updater", side_effect=record_add):
+                result = updaters.match_updaters(root, donor)
+
+        self.assertIs(result, root)
+        self.assertEqual(root.callbacks, [donor_root])
+        self.assertEqual(child.callbacks, [])
+        self.assertEqual(donor.callbacks, [donor_root])
+        self.assertEqual(donor_child_object.callbacks, [donor_child])
+        self.assertEqual(
+            events[:2], [("clear", "root", False), ("clear", "child", False)]
+        )
+        self.assertEqual(events[2], ("get", "donor"))
+        self.assertIs(events[3][2], donor_root)
+
+    def test_update_runs_dt_and_plain_callbacks_recursively_unless_suspended(self):
+        events = []
+
+        class Mobject:
+            def __init__(self, name, callbacks=(), children=()):
+                self.name = name
+                self._noon_updaters = list(callbacks)
+                self.submobjects = list(children)
+                self._scene = None
+                self.updating_suspended = False
+
+            def get_family(self):
+                members = [self]
+                for child in self.submobjects:
+                    members.extend(child.get_family())
+                return members
+
+        def root_updater(mobject, dt):
+            events.append((mobject.name, dt))
+
+        def child_updater(mobject):
+            events.append((mobject.name, None))
+
+        def suspended_updater(mobject):
+            events.append((mobject.name, None))
+
+        leaf = Mobject("leaf", [suspended_updater])
+        suspended = Mobject("suspended", [child_updater], [leaf])
+        suspended.updating_suspended = True
+        child = Mobject("child", [child_updater])
+        root = Mobject("root", [root_updater], [child, suspended])
+
+        result = updaters.update(root, dt=0.5)
+
+        self.assertIs(result, root)
+        self.assertEqual(events, [("root", 0.5), ("child", None)])
+        events.clear()
+        updaters.update(root, dt=0.25, recursive=False)
+        self.assertEqual(events, [("root", 0.25)])
+
+    def test_suspension_uses_shared_state_and_resume_matches_pinned_recursion(self):
+        import _manim_semantic_handles as semantic
+
+        class SharedStateHandle:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def updatingSuspended(self):
+                return self.owner.suspended
+
+            def setUpdatingSuspended(self, suspended, recursive):
+                seen = set()
+
+                def write(member):
+                    if id(member) in seen:
+                        return
+                    seen.add(id(member))
+                    member.suspended = suspended
+                    if recursive:
+                        for child in member.submobjects:
+                            write(child)
+
+                write(self.owner)
+
+        class Mobject:
+            def __init__(self, name, children=()):
+                self.name = name
+                self.submobjects = list(children)
+                self._scene = None
+                self.suspended = False
+                self._noon_updaters = []
+                self._handle = SharedStateHandle(self)
+
+            def get_family(self):
+                members = [self]
+                for child in self.submobjects:
+                    members.extend(child.get_family())
+                return members
+
+            @property
+            def updating_suspended(self):
+                return updaters.updating_suspended(self)
+
+            @updating_suspended.setter
+            def updating_suspended(self, value):
+                updaters.set_updating_suspended(self, bool(value), recursive=False)
+
+            def suspend_updating(self, recursive=True):
+                return updaters.suspend_updating(self, recursive)
+
+            def resume_updating(self, recursive=True):
+                return updaters.resume_updating(self, recursive)
+
+        events = []
+        leaf = Mobject("leaf")
+        child = Mobject("child", [leaf])
+        root = Mobject("root", [child])
+        for member in (root, child, leaf):
+            member._noon_updaters.append(
+                lambda target, member=member: events.append(member.name)
+            )
+
+        with patch.object(
+            semantic,
+            "_style_target",
+            side_effect=lambda member: (member._handle, None, ""),
+        ):
+            self.assertFalse(root.updating_suspended)
+            root.updating_suspended = True
+            self.assertTrue(root.updating_suspended)
+            self.assertFalse(child.updating_suspended)
+            root.suspend_updating(recursive=True)
+            self.assertTrue(root.updating_suspended)
+            self.assertTrue(child.updating_suspended)
+            self.assertTrue(leaf.updating_suspended)
+            self.assertEqual(events, [])
+
+            self.assertIs(root.resume_updating(), root)
+            self.assertFalse(root.updating_suspended)
+            self.assertFalse(child.updating_suspended)
+            self.assertFalse(leaf.updating_suspended)
+            # Manim recursively resumes each child (including its immediate
+            # update), then runs update(0) from the root.
+            self.assertEqual(events, ["leaf", "child", "leaf", "root", "child", "leaf"])
+
+    def test_recursive_suspension_rejects_scene_owned_descendant_before_mutation(self):
+        import _manim_semantic_handles as semantic
+
+        class Handle:
+            def __init__(self, owner):
+                self.owner = owner
+                self.calls = []
+
+            def setUpdatingSuspended(self, suspended, recursive):
+                self.calls.append((suspended, recursive))
+
+        class Mobject:
+            def __init__(self, children=()):
+                self.submobjects = list(children)
+                self._scene = None
+                self._handle = Handle(self)
+
+            def get_family(self):
+                return [self, *(member for child in self.submobjects for member in child.get_family())]
+
+        child = Mobject()
+        child._scene = object()
+        root = Mobject([child])
+        with patch.object(
+            semantic,
+            "_style_target",
+            side_effect=lambda member: (member._handle, None, ""),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "Scene-bound"):
+                updaters.suspend_updating(root, recursive=True)
+        self.assertEqual(root._handle.calls, [])
+
+    def test_update_rejects_scene_bound_targets_before_invoking_callbacks(self):
+        calls = []
+
+        class Mobject:
+            _scene = object()
+
+            def get_family(self):
+                return [self]
+
+        target = Mobject()
+        updaters._updaters(target).append(lambda mobject: calls.append(mobject))
+        with self.assertRaisesRegex(
+            NotImplementedError, "canonical Rust callback phase"
+        ):
+            updaters.update(target)
+        self.assertEqual(calls, [])
 
     def test_failed_shared_registration_does_not_commit_callable_identity(self):
         self.bind()

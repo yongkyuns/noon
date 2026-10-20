@@ -385,6 +385,10 @@ pub struct SemanticObjectState {
     pub content: SemanticObjectContent,
     pub transform: SemanticTransform,
     pub style: SemanticStyle,
+    /// Current Manim sheen direction; the renderer may ignore it while
+    /// `sheen_factor` remains zero, but getters and future style operations
+    /// must observe the authored value.
+    pub sheen_direction: crate::SemanticSheenDirection,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
     // Numeric inputs are only present on DecimalNumber objects. Keep ordinary
@@ -461,6 +465,7 @@ impl SemanticObjectState {
             content: content.into(),
             transform: SemanticTransform::default(),
             style: SemanticStyle::default(),
+            sheen_direction: crate::SemanticSheenDirection::DEFAULT,
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
             decimal_number: None,
@@ -484,6 +489,7 @@ impl SemanticObjectState {
             content: target.content,
             transform: target.transform,
             style: target.style.clone(),
+            sheen_direction: target.sheen_direction,
             presentation: self.presentation,
             role: self.role,
             // Manim become replaces geometry and paint, not the receiver's
@@ -641,8 +647,14 @@ impl SemanticObjectState {
         (0.0..=1.0).contains(&self.style.object_opacity)
             && self.style.stroke_width.is_finite()
             && (0.0..=f64::from(f32::MAX)).contains(&self.style.stroke_width)
+            && self.style.background_stroke_width.is_finite()
+            && (0.0..=f64::from(f32::MAX)).contains(&self.style.background_stroke_width)
             && paint_supported(self.style.fill.as_ref(), self.style.fill_opacity)
             && paint_supported(self.style.stroke.as_ref(), self.style.stroke_opacity)
+            && paint_supported(
+                self.style.background_stroke.as_ref(),
+                self.style.background_stroke_opacity,
+            )
     }
 
     /// Authored UV-cell identity for one leaf in a sampled Surface family.

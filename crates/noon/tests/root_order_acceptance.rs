@@ -60,14 +60,13 @@ fn reference_order(store: &SemanticStore, root: SemanticNodeId) -> Vec<ObjectId>
         let node = store.node(id).unwrap();
         match node.kind() {
             SemanticNodeKind::AuthoringObject => result.push(semantic_execution_object_id(id)),
-            SemanticNodeKind::Family(_) => {
-                for child in node.members_iter() {
-                    visit(store, child, seen, result);
-                }
-            }
+            SemanticNodeKind::Family(_) => {}
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
-            | SemanticNodeKind::Effect(_) => {}
+            | SemanticNodeKind::Effect(_) => return,
+        }
+        for child in node.members_iter() {
+            visit(store, child, seen, result);
         }
     }
     let mut result = Vec::new();
@@ -254,7 +253,7 @@ fn invalid_explicit_root_rejects_before_publication_and_valid_root_recovers() {
         let b = object(&mut store);
         let root = family(&mut store, &[a, b]);
         let invalid = if wrong_kind {
-            a
+            store.insert_semantic_input_signal(0.0_f64).unwrap()
         } else {
             SemanticNodeId::new(root.slot(), root.generation() + 1)
         };
@@ -289,6 +288,44 @@ fn invalid_explicit_root_rejects_before_publication_and_valid_root_recovers() {
             .unwrap();
         assert_reference(&owner, &live, root);
     }
+}
+
+#[test]
+fn explicit_point_owning_root_preserves_its_draw_during_child_reorder_and_seek() {
+    let mut store = SemanticStore::new();
+    let root = object(&mut store);
+    let a = object(&mut store);
+    let b = object(&mut store);
+    store.add_member(root, a).unwrap();
+    store.add_member(root, b).unwrap();
+    let own_state = store.semantic_object_state_checked(root).unwrap().clone();
+    let (owner, mut live) = session(store, root);
+    assert_eq!(
+        painter_order(&live),
+        [root, a, b].map(semantic_execution_object_id)
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.reorder_member(root, b, Some(a));
+    LiveSession::new(&owner, root, &mut live)
+        .apply(transaction)
+        .unwrap();
+    assert_eq!(
+        painter_order(&live),
+        [root, b, a].map(semantic_execution_object_id)
+    );
+    assert_reference(&owner, &live, root);
+    for time in [0.25, 0.0, 0.25] {
+        live.seek(time).unwrap();
+        assert_reference(&owner, &live, root);
+        assert_eq!(
+            painter_order(&live).first(),
+            Some(&semantic_execution_object_id(root))
+        );
+    }
+    assert_eq!(
+        owner.borrow().semantic_object_state_checked(root).unwrap(),
+        &own_state
+    );
 }
 
 #[test]

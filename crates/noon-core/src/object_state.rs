@@ -66,7 +66,9 @@ pub fn validate_transform(
 pub fn validate_style(object: ObjectId, style: Style) -> Result<(), ObjectStateError> {
     let valid = style.fill.is_none_or(color_is_finite)
         && style.stroke.is_none_or(color_is_finite)
+        && style.background_stroke.is_none_or(color_is_finite)
         && style.stroke_width.is_finite()
+        && style.background_stroke_width.is_finite()
         && style.opacity.is_finite();
     valid.then_some(()).ok_or(ObjectStateError {
         object,

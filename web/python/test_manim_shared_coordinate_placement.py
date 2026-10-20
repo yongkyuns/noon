@@ -83,7 +83,7 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
             import noon
             geometry_methods = {
                 name: getattr(noon.Mobject, name)
-                for name in ("set_coord", "match_coord", "match_x", "match_y", "rotate_about_origin")
+                for name in ("set_coord", "set_z", "match_coord", "match_x", "match_y", "rotate_about_origin")
             }
             import _manim_compat
 
@@ -107,6 +107,7 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
 
             assert source.set_x(5.0, RIGHT) is source
             assert source.set_y(-4.0, UP) is source
+            assert source.set_z(0.0) is source
             assert source.match_coord(target, 0, RIGHT) is source
             assert source.match_coord(target, 1, UP) is source
 
@@ -123,9 +124,18 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
             try:
                 source.set_coord(1.0, 2)
             except NotImplementedError as error:
-                assert "only x/y" in str(error)
+                assert "only planar z=0" in str(error)
             else:
-                raise AssertionError("2D set_coord unexpectedly accepted z")
+                raise AssertionError("planar set_coord unexpectedly accepted nonzero z")
+
+            before = dict(source.transform["translation"])
+            try:
+                source.set_z(1.0)
+            except NotImplementedError as error:
+                assert "planar" in str(error)
+            else:
+                raise AssertionError("planar set_z unexpectedly accepted nonzero z")
+            assert source.transform["translation"] == before
             """
         )
         completed = subprocess.run(

@@ -83,6 +83,7 @@ on:
       - "scripts/semantic-preview-*"
       - "scripts/agent-preview-capture*.mjs"
       - "scripts/manim-differential.py"
+      - "scripts/test_manim_differential.py"
       - "scripts/manim-differential-noon.mjs"
       - "scripts/manim-raster-*.mjs"
       - "scripts/manim-raster-*.py"
@@ -121,6 +122,7 @@ jobs:
           node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/manim-raster-support.test.mjs scripts/shared-playback-raster-config.test.mjs
           python3 -m json.tool parity/manim-v0.21/manifest.json > /dev/null
           python3 -m py_compile scripts/test_manim_raster_manifest.py
+          python3 scripts/test_manim_differential.py
       - name: Validate preview capture and camera negative controls
         run: |
           node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs scripts/agent-preview-capture.test.mjs scripts/semantic-preview-observations.test.mjs scripts/special-camera-qualification.test.mjs

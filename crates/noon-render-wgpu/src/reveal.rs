@@ -1,8 +1,40 @@
-use noon_core::{GeometryRef, VectorPath};
+use noon_core::{GeometryRef, Style, VectorPath};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnalyticRevealKey {
     Rectangle(u32, u32),
+    Circle(u32),
+    Line([u32; 4]),
+}
+
+/// Analytic primitives with a background stroke need the same layered path
+/// rendering as authored vector paths. Keep ordinary primitives analytic.
+pub(crate) fn temporary_style_path(
+    geometry: &GeometryRef,
+    reveal: f32,
+    style: Style,
+) -> Option<(AnalyticRevealKey, VectorPath)> {
+    if super::effective_background_stroke_width(style) <= 0.0 {
+        return temporary_reveal_path(geometry, reveal);
+    }
+    let key = match geometry {
+        GeometryRef::Rectangle { .. } => analytic_reveal_key(geometry)?,
+        GeometryRef::Circle { radius } => AnalyticRevealKey::Circle(radius.to_bits()),
+        GeometryRef::Line { start, end } => AnalyticRevealKey::Line([
+            start.x.to_bits(),
+            start.y.to_bits(),
+            end.x.to_bits(),
+            end.y.to_bits(),
+        ]),
+        GeometryRef::VectorPath(_) | GeometryRef::External(_) => return None,
+    };
+    let path = noon_geometry::canonical_outline_path(geometry)?;
+    let path = if reveal < 1.0 {
+        noon_geometry::pointwise_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0))
+    } else {
+        path
+    };
+    Some((key, path))
 }
 
 pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {

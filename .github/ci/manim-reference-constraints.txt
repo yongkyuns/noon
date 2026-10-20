@@ -1,3 +1,5 @@
 # ManimCE 0.21.0 reinterprets a float array as RGBA in Camera.display_image_mobject.
 # Pillow 13 rejects that operation; keep the unmodified pinned oracle reproducible.
 pillow==12.3.0
+# Frozen Code token colors are qualified against this lexer/theme version.
+pygments==2.19.2

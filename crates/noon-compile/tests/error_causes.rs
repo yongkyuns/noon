@@ -386,6 +386,7 @@ fn prepared_lookup_preserves_a_multilevel_chain_and_leaf_termination() {
 #[test]
 fn actual_invalid_root_keeps_index_and_semantics_then_recovers() {
     let mut store = SemanticStore::new();
+    let invalid = store.insert_semantic_input_signal(0.0_f64).unwrap();
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
@@ -395,7 +396,7 @@ fn actual_invalid_root_keeps_index_and_semantics_then_recovers() {
     let revision = store.scene_revision();
     let nodes = store.len();
     let state = store.semantic_object_state_checked(object).unwrap().clone();
-    let error = lower_semantic_execution_root(&store, object, &mut index).unwrap_err();
+    let error = lower_semantic_execution_root(&store, invalid, &mut index).unwrap_err();
     let SemanticExecutionLoweringError::Object(inner) = &error else {
         panic!("unexpected error category");
     };
@@ -410,7 +411,7 @@ fn actual_invalid_root_keeps_index_and_semantics_then_recovers() {
             .source()
             .unwrap()
             .downcast_ref::<noon_core::SemanticStoreError>(),
-        Some(&noon_core::SemanticStoreError::NotFamily(object))
+        Some(&noon_core::SemanticStoreError::NotFamily(invalid))
     );
     assert!(index.is_empty());
     assert_eq!(store.scene_revision(), revision);

@@ -3,7 +3,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 
 use noon_core::{
     HostCallbackId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectProperty, SemanticStore, SemanticUpdaterRegistration,
+    SemanticObjectProperty, SemanticStore, SemanticUpdaterRegistration,
 };
 
 /// One authored native binding evaluated at its position among host updaters.
@@ -459,7 +459,7 @@ pub(super) fn lower_semantic_host_callbacks(
                 }
             }
         }
-        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+        if node.can_own_members() {
             pending.extend(node.members().into_iter().rev());
         }
     }
@@ -529,6 +529,29 @@ mod tests {
                 (first, HostCallbackId::new(2)),
                 (first, HostCallbackId::new(2)),
                 (nested, HostCallbackId::new(3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn point_owning_root_callbacks_precede_descendants_and_aliases_run_once() {
+        let mut store = SemanticStore::new();
+        let root = object(&mut store, 2.0);
+        let child = object(&mut store, 1.0);
+        let nested = store.insert_family();
+        store.add_member(root, nested).unwrap();
+        store.add_member(nested, child).unwrap();
+        store.add_member(root, child).unwrap();
+        add_updater(&mut store, root, 1, 0.0);
+        add_updater(&mut store, child, 2, 0.0);
+        let plan = lower_semantic_host_callbacks(&store, &[root]);
+        assert_eq!(
+            plan.occurrences()
+                .map(|entry| (entry.target(), entry.callback_id()))
+                .collect::<Vec<_>>(),
+            [
+                (root, HostCallbackId::new(1)),
+                (child, HostCallbackId::new(2))
             ]
         );
     }

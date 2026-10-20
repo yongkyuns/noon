@@ -327,6 +327,141 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn family_style(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::SemanticStyle> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_style)
+                .cloned(),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn family_background_stroke_opacity(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<f64> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_opacity),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(1.0),
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn family_background_stroke_color(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::Color> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_color),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::Color::BLACK)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn family_background_stroke_width(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<f64> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_background_stroke_width),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn sheen_direction(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::SemanticSheenDirection> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::sheen_direction),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Object { state, .. }) => {
+                    Some(state.sheen_direction)
+                }
+                PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject {
+                    ..
+                })
+                | PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::SemanticSheenDirection::DEFAULT)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn updating_suspended(&self, node: SemanticTransactionNodeRef) -> Option<bool> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .map(crate::SemanticNode::updating_suspended),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(_) => Some(false),
+                PendingSemanticNode::Animation(_) => None,
+            },
+        }
+    }
+
+    pub(super) fn ensure_membership_owner(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        let owns_members = match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .is_some_and(crate::SemanticNode::can_own_members),
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Family { .. }
+                            | SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
+                )
+            }
+        };
+        if owns_members {
+            Ok(())
+        } else {
+            self.ensure_family(node, index)
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,
@@ -688,6 +823,9 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::FamilyColor(object)
+        | SemanticMutationKey::FamilyStyle(object)
+        | SemanticMutationKey::SheenDirection(object)
+        | SemanticMutationKey::UpdaterSuspension(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
@@ -750,6 +888,12 @@ pub(super) fn duplicate_mutation_error(
         )) => SemanticMutationTransactionError::DuplicateContent { index, object },
         SemanticMutationKey::FamilyColor(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateFamilyColor { index, node }
+        }
+        SemanticMutationKey::FamilyStyle(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateFamilyStyle { index, node }
+        }
+        SemanticMutationKey::SheenDirection(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateSheenDirection { index, node }
         }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }

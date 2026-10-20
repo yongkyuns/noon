@@ -59,8 +59,11 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries }) => {
         if (label === "python") {
           if (duration > 0) {
-            await window.noonHostRaster.load(source, duration);
-            const times = sampleTime > 0 ? [0, sampleTime] : [0];
+            const initial = await window.noonHostRaster.load(source, duration);
+            if (!Number.isFinite(initial.time) || sampleTime < initial.time) {
+              throw new Error(`paired sample ${sampleTime} precedes initial frame ${initial.time}`);
+            }
+            const times = sampleTime > initial.time ? [initial.time, sampleTime] : [initial.time];
             return window.noonHostRaster.renderThrough(times.length - 1, times);
           }
           const { PythonAuthoringClient } = await import("./authoring-client.js");

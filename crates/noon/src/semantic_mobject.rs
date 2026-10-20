@@ -7,9 +7,9 @@ use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOption
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticLocalNodeToken,
     SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Transform2D, Vec2, VectorPath,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticSheenDirection,
+    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -23,13 +23,14 @@ pub(crate) use bounds::{
     boundary_center, boundary_for_content, layout_for_content, transformed_path_layout_bounds,
 };
 pub(crate) use style::{
+    edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fade_occurrences,
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
-    edit_stroke_width, manim_color_from_effective, opaque_paint_color, validate_fade_to_inputs,
-    PaintStyleEdit,
+    edit_stroke_width, fade_factor, manim_color_from_effective, opaque_paint_color,
+    parse_stroke_cap, validate_fade_to_inputs, PaintStyleEdit,
 };
-use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
+use style::{parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -56,6 +57,7 @@ pub struct ManimGeometryOptions {
     geometry: GeometryRef,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
+    sheen_direction: SemanticSheenDirection,
     z_index: f64,
     role: noon_core::SemanticObjectRole,
     explicit_angle_radius: Option<f64>,
@@ -231,6 +233,7 @@ impl ManimGeometryOptions {
             geometry,
             transform: SemanticTransform2_5D::default(),
             style,
+            sheen_direction: SemanticSheenDirection::DEFAULT,
             z_index: 0.0,
             role: noon_core::SemanticObjectRole::Ordinary,
             explicit_angle_radius: None,
@@ -394,6 +397,25 @@ impl ManimGeometryOptions {
         Ok(())
     }
 
+    /// Set authored sheen-direction metadata before geometry publication.
+    pub fn set_sheen_direction(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+    ) -> Result<(), AuthoringError> {
+        let direction = SemanticSheenDirection::new(SemanticVec3::new(x, y, z), dimensions);
+        if !direction.value.is_finite() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        if !matches!(dimensions, 2 | 3) || (dimensions == 2 && z != 0.0) {
+            return Err(AuthoringError::InvalidDimension(u32::from(dimensions)));
+        }
+        self.sheen_direction = direction;
+        Ok(())
+    }
+
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         edit_object_opacity(&mut self.style, opacity)
     }
@@ -413,6 +435,7 @@ impl ManimGeometryOptions {
             geometry,
             transform,
             style,
+            sheen_direction,
             z_index,
             role,
             explicit_angle_radius: _,
@@ -425,16 +448,15 @@ impl ManimGeometryOptions {
                 unreachable!("inline geometry returned from inline_state")
             }
             GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
-                publish(
-                    store,
-                    manim_geometry_state(
-                        StoredGeometry::Resource(handle),
-                        transform,
-                        style,
-                        z_index,
-                        role,
-                    ),
-                )
+                let mut state = manim_geometry_state(
+                    StoredGeometry::Resource(handle),
+                    transform,
+                    style,
+                    z_index,
+                    role,
+                );
+                state.sheen_direction = sheen_direction;
+                publish(store, state)
             }),
             GeometryRef::External(_) => Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::ExternalGeometry,
@@ -455,6 +477,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.sheen_direction.is_valid()
             || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
@@ -463,6 +486,7 @@ impl ManimGeometryOptions {
             geometry,
             transform,
             style,
+            sheen_direction,
             z_index,
             role,
             explicit_angle_radius: _,
@@ -477,11 +501,13 @@ impl ManimGeometryOptions {
         // This transaction-only creation declaration is resolved by the shared
         // prepared resource suffix. It cannot enter durable object content with
         // a local token in place of a store-owned resource handle.
-        Ok(
-            transaction.create_node(SemanticNodeCreation::pending_path_object(
-                resource, transform, style, z_index, role,
-            )),
-        )
+        let node = transaction.create_node(SemanticNodeCreation::pending_path_object(
+            resource, transform, style, z_index, role,
+        ));
+        if sheen_direction != SemanticSheenDirection::DEFAULT {
+            transaction.set_sheen_direction(node, sheen_direction);
+        }
+        Ok(node)
     }
 
     /// Materialize analytic geometry without admitting an arena resource.
@@ -498,6 +524,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.sheen_direction.is_valid()
             || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
@@ -516,13 +543,15 @@ impl ManimGeometryOptions {
                 ));
             }
         };
-        Ok(Some(manim_geometry_state(
+        let mut state = manim_geometry_state(
             geometry,
             self.transform,
             self.style.clone(),
             self.z_index,
             self.role,
-        )))
+        );
+        state.sheen_direction = self.sheen_direction;
+        Ok(Some(state))
     }
 
     /// State-only materialization for remaining callers tracked by #1603.
@@ -657,16 +686,7 @@ impl Mobject {
     }
 
     pub fn copy_handle(&self) -> Result<Self, AuthoringError> {
-        let mut transaction = SemanticMutationTransaction::new();
-        let copied = transaction.create_node(SemanticNodeCreation::object(self.state()?));
-        self.store
-            .borrow()
-            .copy_effects_into(self.id, copied, &mut transaction)?;
-        let result = transaction.apply(&mut self.store.borrow_mut())?;
-        let id = result
-            .resolve(copied)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(copied))?;
-        Self::from_node(Rc::clone(&self.store), id)
+        Ok(self.copy_with_references(&[])?.root().clone())
     }
     pub fn target_editor(&self) -> Result<Self, AuthoringError> {
         self.copy_handle()
@@ -711,6 +731,7 @@ impl Mobject {
                 geometry,
                 transform,
                 style,
+                sheen_direction: SemanticSheenDirection::DEFAULT,
                 z_index: 0.0,
                 role: noon_core::SemanticObjectRole::Ordinary,
                 explicit_angle_radius: None,
@@ -792,6 +813,9 @@ impl Mobject {
     pub fn wire_stroke_width(&self) -> Result<f64, AuthoringError> {
         Ok(finite_f32("stroke width", self.state()?.style.stroke_width)? as f64)
     }
+    pub fn stroke_cap(&self) -> Result<StrokeCap, AuthoringError> {
+        Ok(self.state()?.style.stroke_cap)
+    }
     pub fn wire_object_opacity(&self) -> Result<f64, AuthoringError> {
         Ok(self.state()?.style.object_opacity as f32 as f64)
     }
@@ -814,6 +838,75 @@ impl Mobject {
         style::manim_color_from_semantic(&self.state()?.style)
     }
 
+    /// Interpolate the Manim VMobject color channels and sheen direction from
+    /// two source states, publishing the complete result through this object's
+    /// shared semantic store.
+    pub fn interpolate_manim_style(
+        &mut self,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_same_store(start)?;
+        self.require_same_store(end)?;
+
+        let mut result = self.state()?;
+        let start_state = start.state()?;
+        let end_state = end.state()?;
+        let (style, sheen_direction) =
+            interpolate_manim_vmobject_style(&result.style, &start_state, &end_state, alpha)?;
+        result.style = style;
+        result.sheen_direction = sheen_direction;
+        self.commit_state(result)
+    }
+
+    /// Interpolate one Manim VMobject's world-space point array and supported
+    /// style fields, publishing the geometry and style through one transaction.
+    pub fn interpolate_manim(
+        &mut self,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_same_store(start)?;
+        self.require_same_store(end)?;
+
+        let receiver_state = self.state()?;
+        let start_state = start.state()?;
+        let end_state = end.state()?;
+        let (start_points, end_points) = {
+            let store = self.store.borrow();
+            let points = |state: &SemanticObjectState| {
+                let path = crate::path_editing::world_path(&store, state)?;
+                crate::path_editing::manim_points_for_path(&path).map(|points| {
+                    points
+                        .into_iter()
+                        .map(|point| (f64::from(point.x), f64::from(point.y)))
+                        .collect::<Vec<_>>()
+                })
+            };
+            (points(&start_state)?, points(&end_state)?)
+        };
+        let prepared = prepare_manim_interpolation(
+            &self.store.borrow(),
+            self.id,
+            receiver_state,
+            ManimInterpolationInput {
+                start_state: &start_state,
+                end_state: &end_state,
+                start_points: &start_points,
+                end_points: &end_points,
+                alpha,
+            },
+        )?;
+        prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+
     pub(crate) fn manim_line_endpoints_at(
         &self,
         transform: Transform2D,
@@ -833,6 +926,13 @@ impl Mobject {
     }
 
     pub(crate) fn boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.boundary_bounds());
+        }
+        self.content_boundary_bounds()
+    }
+
+    pub(crate) fn content_boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -871,6 +971,13 @@ impl Mobject {
     /// Bounds used for authored dimensions. Paths include their equivalent cubic
     /// handles; centers and critical points use path anchors instead.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.bounds());
+        }
+        self.content_layout_bounds()
+    }
+
+    pub(crate) fn content_layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -906,7 +1013,26 @@ impl Mobject {
         layout_for_content(&store, state.content, semantic_transform)
     }
 
+    pub(crate) fn has_members(&self) -> Result<bool, AuthoringError> {
+        self.validate()?;
+        Ok(self
+            .store
+            .borrow()
+            .node(self.id)
+            .expect("validated object")
+            .members_iter()
+            .next()
+            .is_some())
+    }
+
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
+        if self.has_members()? {
+            return Ok(crate::LayoutAnchor::from(self).layout()?.center());
+        }
+        self.content_center()
+    }
+
+    pub(crate) fn content_center(&self) -> Result<(f64, f64), AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
@@ -1028,18 +1154,12 @@ impl Mobject {
         ))
     }
 
+    /// Shift own content and every unique descendant in one validated transaction.
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
-        let mut state = self.state()?;
-        let offset = authoring_xy_f64(x, y)?;
-        let translation = SemanticVec3::new(
-            state.transform.translation.x + offset.x,
-            state.transform.translation.y + offset.y,
-            state.transform.translation.z,
-        );
-        translation.lower_xy_f32().map_err(AuthoringError::from)?;
-        state.transform.translation = translation;
-        self.commit_state(state)
+        let translation =
+            crate::family_authoring::FamilyTranslation::begin(&self.store.borrow(), self.id, x, y)?;
+        translation.apply(&mut self.store.borrow_mut())
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
@@ -1159,6 +1279,9 @@ pub(crate) fn stage_state_changes(
     }
     if previous.style != next.style {
         transaction.replace_style(target, next.style.clone());
+    }
+    if previous.sheen_direction != next.sheen_direction {
+        transaction.set_sheen_direction(target, next.sheen_direction);
     }
 }
 
@@ -1367,10 +1490,205 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke: Some(SemanticPaint::Solid(color)),
         stroke_opacity: 1.0,
         stroke_width: 0.04,
+        background_stroke: Some(SemanticPaint::Solid(Color::BLACK)),
+        background_stroke_opacity: 1.0,
+        background_stroke_width: 0.0,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
-        stroke_cap: StrokeCap::Butt,
+        // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
+        stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
+    }
+}
+
+/// Derive Manim VMobject's interpolated paint profile without mutating either
+/// endpoint. Discrete style metadata remains owned by the receiver; Manim only
+/// interpolates its RGBA rows, stroke width, and sheen direction here.
+pub(crate) fn interpolate_manim_vmobject_style(
+    receiver: &SemanticStyle,
+    start: &SemanticObjectState,
+    end: &SemanticObjectState,
+    alpha: f64,
+) -> Result<(SemanticStyle, SemanticSheenDirection), AuthoringError> {
+    interpolate_manim_vmobject_style_values(
+        receiver,
+        &start.style,
+        &end.style,
+        start.sheen_direction,
+        end.sheen_direction,
+        alpha,
+    )
+}
+
+pub(crate) fn interpolate_manim_vmobject_style_values(
+    receiver: &SemanticStyle,
+    start: &SemanticStyle,
+    end: &SemanticStyle,
+    start_direction: SemanticSheenDirection,
+    end_direction: SemanticSheenDirection,
+    alpha: f64,
+) -> Result<(SemanticStyle, SemanticSheenDirection), AuthoringError> {
+    if !alpha.is_finite() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+
+    let mut style = receiver.clone();
+    style.fill = interpolate_manim_paint(start.fill.as_ref(), end.fill.as_ref(), alpha)?;
+    style.fill_opacity = interpolate_manim_scalar(start.fill_opacity, end.fill_opacity, alpha)?;
+    style.stroke = interpolate_manim_paint(start.stroke.as_ref(), end.stroke.as_ref(), alpha)?;
+    style.stroke_opacity =
+        interpolate_manim_scalar(start.stroke_opacity, end.stroke_opacity, alpha)?;
+    style.stroke_width = interpolate_manim_scalar(start.stroke_width, end.stroke_width, alpha)?;
+    style.background_stroke = interpolate_manim_paint(
+        start.background_stroke.as_ref(),
+        end.background_stroke.as_ref(),
+        alpha,
+    )?;
+    style.background_stroke_opacity = interpolate_manim_scalar(
+        start.background_stroke_opacity,
+        end.background_stroke_opacity,
+        alpha,
+    )?;
+    style.background_stroke_width = interpolate_manim_scalar(
+        start.background_stroke_width,
+        end.background_stroke_width,
+        alpha,
+    )?;
+
+    if start_direction.dimensions != end_direction.dimensions {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ManimStyleInterpolation,
+        ));
+    }
+    let direction = SemanticSheenDirection::new(
+        SemanticVec3::new(
+            interpolate_manim_scalar(start_direction.value.x, end_direction.value.x, alpha)?,
+            interpolate_manim_scalar(start_direction.value.y, end_direction.value.y, alpha)?,
+            interpolate_manim_scalar(start_direction.value.z, end_direction.value.z, alpha)?,
+        ),
+        start_direction.dimensions,
+    );
+    if !style.is_finite() || !direction.is_valid() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    Ok((style, direction))
+}
+
+pub(crate) fn interpolate_manim_color(
+    start: Color,
+    end: Color,
+    alpha: f64,
+) -> Result<Color, AuthoringError> {
+    match interpolate_manim_paint(
+        Some(&SemanticPaint::Solid(start)),
+        Some(&SemanticPaint::Solid(end)),
+        alpha,
+    )? {
+        Some(SemanticPaint::Solid(color)) => Ok(color),
+        _ => unreachable!("solid color interpolation returns solid paint"),
+    }
+}
+
+pub(crate) fn interpolate_manim_scalar(
+    start: f64,
+    end: f64,
+    alpha: f64,
+) -> Result<f64, AuthoringError> {
+    let value = start * (1.0 - alpha) + end * alpha;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or(AuthoringError::NonFiniteObjectState)
+}
+
+pub(crate) struct ManimInterpolationInput<'a> {
+    pub start_state: &'a SemanticObjectState,
+    pub end_state: &'a SemanticObjectState,
+    pub start_points: &'a [(f64, f64)],
+    pub end_points: &'a [(f64, f64)],
+    pub alpha: f64,
+}
+
+pub(crate) fn prepare_manim_interpolation(
+    store: &SemanticStore,
+    receiver: SemanticNodeId,
+    mut receiver_state: SemanticObjectState,
+    input: ManimInterpolationInput<'_>,
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    let path = interpolate_manim_point_arrays(input.start_points, input.end_points, input.alpha)?;
+    let (style, sheen_direction) = interpolate_manim_vmobject_style(
+        &receiver_state.style,
+        input.start_state,
+        input.end_state,
+        input.alpha,
+    )?;
+    receiver_state.style = style;
+    receiver_state.sheen_direction = sheen_direction;
+    crate::path_editing::PreparedPathEdits::prepare(store, [(receiver, receiver_state, path)])
+}
+
+pub(crate) fn interpolate_manim_point_arrays(
+    start: &[(f64, f64)],
+    end: &[(f64, f64)],
+    alpha: f64,
+) -> Result<VectorPath, AuthoringError> {
+    if !alpha.is_finite() {
+        return Err(AuthoringError::NonFiniteObjectState);
+    }
+    if start.len() != end.len() {
+        return Err(AuthoringError::ManimPointArrayLengthMismatch {
+            start: start.len(),
+            end: end.len(),
+        });
+    }
+    let points = start
+        .iter()
+        .zip(end)
+        .map(|(&(start_x, start_y), &(end_x, end_y))| {
+            let x = interpolate_manim_scalar(start_x, end_x, alpha)? as f32;
+            let y = interpolate_manim_scalar(start_y, end_y, alpha)? as f32;
+            (x.is_finite() && y.is_finite())
+                .then_some(Vec2::new(x, y))
+                .ok_or(AuthoringError::NonFiniteGeometry)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VectorPath::from_manim_points(points))
+}
+
+fn interpolate_manim_paint(
+    start: Option<&SemanticPaint>,
+    end: Option<&SemanticPaint>,
+    alpha: f64,
+) -> Result<Option<SemanticPaint>, AuthoringError> {
+    if alpha == 0.0 {
+        return Ok(start.cloned());
+    }
+    if alpha == 1.0 {
+        return Ok(end.cloned());
+    }
+    match (start, end) {
+        (None, None) => Ok(None),
+        (Some(SemanticPaint::Solid(start)), Some(SemanticPaint::Solid(end))) => {
+            let component = |start: f32, end: f32| {
+                interpolate_manim_scalar(f64::from(start), f64::from(end), alpha)
+                    .map(|value| value as f32)
+            };
+            let color = Color {
+                red: component(start.red, end.red)?,
+                green: component(start.green, end.green)?,
+                blue: component(start.blue, end.blue)?,
+                alpha: component(start.alpha, end.alpha)?,
+            };
+            Ok(Some(SemanticPaint::Solid(color)))
+        }
+        (Some(SemanticPaint::Resource(start)), Some(SemanticPaint::Resource(end)))
+            if start == end =>
+        {
+            Ok(Some(SemanticPaint::Resource(*start)))
+        }
+        _ => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ManimStyleInterpolation,
+        )),
     }
 }
 

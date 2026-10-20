@@ -49,6 +49,9 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintColorQuery,
     /// Manim opacity queries do not support resource paints.
     ResourcePaintOpacityQuery,
+    /// Manim style interpolation requires matching solid-paint channels and
+    /// compatible sheen-direction dimensions.
+    ManimStyleInterpolation,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
     /// 2D layout and boundary queries do not project spatial mesh geometry.
@@ -67,6 +70,8 @@ pub enum UnsupportedAuthoringOperation {
     ApplyMatrixNonPlanar,
     /// CyclicReplace currently requires one non-empty flat family of object members.
     CyclicReplaceFamilyTopology,
+    /// Updater suspension requires the ordered host callback phase for scene-owned nodes.
+    UpdaterSuspensionLive,
 }
 
 impl std::fmt::Display for UnsupportedAuthoringOperation {
@@ -87,6 +92,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
+            Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::PathQueryContent => "path queries require retained geometry",
@@ -101,6 +107,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
             Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
             Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
+            Self::UpdaterSuspensionLive => "updater suspension on scene-owned objects requires the ordered callback phase",
         })
     }
 }
@@ -171,8 +178,15 @@ pub enum AuthoringError {
     },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
-    /// Flattened XY point input has an incomplete coordinate pair.
+    /// Flattened point input has an incomplete coordinate row.
     InvalidPointCoordinates(usize),
+    /// Manim's elementwise point interpolation received arrays of unequal length.
+    ManimPointArrayLengthMismatch {
+        start: usize,
+        end: usize,
+    },
+    /// A repeated path point array exceeds addressable allocation capacity.
+    PointArrayCapacityExceeded(usize),
     /// A polygon or star constructor has invalid topology options.
     InvalidPolygonOptions(&'static str),
     /// An Angle constructor has invalid line or geometry options.
@@ -210,7 +224,7 @@ pub enum AuthoringError {
     DegenerateLine,
     /// A requested bounds rectangle has reversed limits.
     UnorderedBounds(noon_core::Bounds2D64),
-    /// An operation requested a dimension other than width or height.
+    /// An operation requested a dimension outside width, height, and planar depth.
     InvalidDimension(u32),
     /// Stretch matching would divide by a zero target extent.
     ZeroStretchTarget,
@@ -218,6 +232,8 @@ pub enum AuthoringError {
     ZeroMatchHeight,
     /// Width matching would divide by a zero target width.
     ZeroMatchWidth,
+    /// A point-coordinate dimension is outside the supplied point width.
+    InvalidPointDimension(u32),
     /// An operation requires finite bounds for this node.
     MissingLayoutBounds(noon_core::SemanticNodeId),
     /// The requested direct family member index does not exist.
@@ -332,8 +348,15 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::InvalidPointCoordinates(count) => write!(
                 f,
-                "point coordinates require XY pairs, received {count} values"
+                "point coordinates do not form complete rows, received {count} values"
             ),
+            Self::ManimPointArrayLengthMismatch { start, end } => write!(
+                f,
+                "operands could not be broadcast together with shapes ({start}, 3) ({end}, 3)"
+            ),
+            Self::PointArrayCapacityExceeded(count) => {
+                write!(f, "repeated path point array exceeds capacity ({count} points)")
+            }
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::InvalidPolygonOptions(reason) => f.write_str(reason),
             Self::InvalidAngleOptions(reason) => f.write_str(reason),
@@ -352,7 +375,9 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("stroke_width_mode must be scale_with_object or screen_space")
             }
             Self::InvalidStrokeJoin(_) => f.write_str("stroke_join must be round, miter, or bevel"),
-            Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
+            Self::InvalidStrokeCap(_) => {
+                f.write_str("stroke_cap must be auto, round, butt, or square")
+            }
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
             Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
             Self::FamilyMemberValueCount { expected, actual } => write!(
@@ -368,7 +393,10 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::UnorderedBounds(_) => f.write_str("layout bounds must be ordered"),
             Self::InvalidDimension(_) => {
-                f.write_str("dimension fitting supports width (0) and height (1) only")
+                f.write_str("dimension fitting requires width (0), height (1), or planar depth (2)")
+            }
+            Self::InvalidPointDimension(dim) => {
+                write!(f, "point dimension {dim} is outside the point coordinate width")
             }
             Self::ZeroStretchTarget => {
                 f.write_str("cannot stretch a zero-width or zero-height target")

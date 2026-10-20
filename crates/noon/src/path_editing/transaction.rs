@@ -38,6 +38,33 @@ impl PreparedPathEdits {
         Ok(result)
     }
 
+    /// Prepare paths that were edited in local coordinates and keep their
+    /// captured object transforms intact. Family `Mobject.reverse_points`
+    /// reverses point order without changing the affine state of each member.
+    pub(crate) fn prepare_preserving_transform(
+        store: &SemanticStore,
+        replacements: impl IntoIterator<Item = (SemanticNodeId, SemanticObjectState, VectorPath)>,
+    ) -> Result<Self, AuthoringError> {
+        let mut result = Self {
+            states: Vec::new(),
+            paths: Vec::new(),
+            property_edits: Vec::new(),
+            transaction: SemanticMutationTransaction::new(),
+        };
+        for (node, after, path) in replacements {
+            let before = store.semantic_object_state_checked(node)?;
+            if path_is_unchanged(store, before, &after, &path) {
+                let mut after = after;
+                after.content = before.content;
+                result.property_edits.push((node, before.clone(), after));
+            } else {
+                result.states.push((node, before.clone(), after));
+                result.paths.push(path);
+            }
+        }
+        Ok(result)
+    }
+
     pub(crate) fn with_transaction(mut self, transaction: SemanticMutationTransaction) -> Self {
         self.transaction = transaction;
         self

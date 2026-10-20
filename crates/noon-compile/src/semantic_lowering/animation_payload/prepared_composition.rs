@@ -315,7 +315,7 @@ where
         if prepared
             .store()
             .node(member)
-            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
+            .is_some_and(|node| node.can_own_members())
         {
             admitted.extend(
                 prepared

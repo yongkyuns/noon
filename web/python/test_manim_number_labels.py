@@ -40,7 +40,7 @@ class LabelFamilyTypeTests(unittest.TestCase):
         self.assertIsInstance(family, labels._compat.VGroup)
         with patch.object(labels._shared, '_group_set_stroke', return_value=family) as stroke:
             self.assertIs(family.set_stroke(width=2), family)
-        stroke.assert_called_once_with(family, None, 2, None)
+        stroke.assert_called_once_with(family, None, 2, None, True)
 
 
 class NumericLabelAdapterTests(unittest.TestCase):
