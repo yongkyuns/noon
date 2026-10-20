@@ -210,7 +210,9 @@ class TableFacadeTests(unittest.TestCase):
     def test_constructor_distinguishes_absent_and_empty_labels_at_bridge(self):
         with patch.object(table.Table, "_initialize_table"), \
                 patch.object(table.Table, "submobjects", new_callable=PropertyMock, return_value=[None, None, None, types.SimpleNamespace()]):
-            table.Table([["a"]], row_labels=[])
+            value = table.Table([["a"]], row_labels=[])
+        self.assertIsNone(value.row_labels)
+        self.assertIsNone(value.col_labels)
         args = self.context.calls[-1][1]
         self.assertEqual(args[1], [])
         self.assertIsNone(args[2])

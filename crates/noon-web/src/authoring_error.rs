@@ -83,6 +83,10 @@ impl From<noon::TableAuthoringError> for AuthoringFailure {
             RaggedRows { .. } => Self::new("invalid_input", "table.ragged_rows", error),
             DuplicateEntry => Self::new("invalid_input", "table.duplicate_entry", error),
             InvalidLabels { .. } => Self::new("invalid_input", "table.invalid_labels", error),
+            InvalidLabelIndex { .. } => Self::new("index_error", "table.label_index", error),
+            InsufficientColumnLabels { .. } => {
+                Self::new("invalid_input", "table.short_columns", error)
+            }
             TopLeftRequiresLabels => {
                 Self::new("invalid_input", "table.top_left_requires_labels", error)
             }
@@ -1061,6 +1065,31 @@ impl From<noon::SpatialCompositionError> for AuthoringFailure {
 mod tests {
     use super::*;
     use noon_core::SemanticNodeId;
+
+    #[test]
+    fn table_label_errors_preserve_builtin_categories() {
+        let error = AuthoringFailure::from(noon::TableAuthoringError::InvalidLabelIndex {
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(
+            (error.category, error.code),
+            ("index_error", "table.label_index")
+        );
+        assert_eq!(error.message, "list index out of range");
+        let error = AuthoringFailure::from(noon::TableAuthoringError::InsufficientColumnLabels {
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(
+            (error.category, error.code),
+            ("invalid_input", "table.short_columns")
+        );
+        assert_eq!(
+            error.message,
+            "Too few rows and columns to fit all submobjetcs."
+        );
+    }
 
     #[test]
     fn duplicate_effect_parameter_keeps_a_typed_language_boundary_error() {

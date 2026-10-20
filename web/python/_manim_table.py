@@ -246,12 +246,12 @@ class Table(_compat.VGroup):
         else:
             handle = engine_call(_create_table, _rows(table, str), *_options(kwargs), context)
         self._initialize_table(handle, context)
-        self.row_labels = row_label_mobjects
-        self.col_labels = column_label_mobjects
+        self.row_labels = row_label_mobjects or None
+        self.col_labels = column_label_mobjects or None
         self.top_left_entry = top_left_entry
         family_index = 3
         for labels in (row_label_mobjects, column_label_mobjects):
-            if labels is not None:
+            if labels:
                 label_group = self.submobjects[family_index]
                 label_group._semantic_member_wrappers = {
                     _family_wrapper_key(value): value for value in labels
@@ -540,8 +540,8 @@ class MobjectTable(Table):
             ),
             context,
         )
-        self.row_labels = row_label_mobjects
-        self.col_labels = column_label_mobjects
+        self.row_labels = row_label_mobjects or None
+        self.col_labels = column_label_mobjects or None
         self.top_left_entry = top_left_entry
         for row_group, row in zip(self._entry_family().submobjects, source_rows):
             row_group._semantic_member_wrappers = {

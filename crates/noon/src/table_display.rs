@@ -144,6 +144,16 @@ pub enum TableAuthoringError {
         expected: usize,
         actual: usize,
     },
+    /// A row label mismatch or oversized column list, matching Manim's list lookup.
+    InvalidLabelIndex {
+        expected: usize,
+        actual: usize,
+    },
+    /// A nonempty short column list cannot fit the displayed grid.
+    InsufficientColumnLabels {
+        expected: usize,
+        actual: usize,
+    },
     TopLeftRequiresLabels,
     InvalidOption {
         name: &'static str,
@@ -167,6 +177,10 @@ impl std::fmt::Display for TableAuthoringError {
             Self::DuplicateEntry => f.write_str("a MobjectTable entry may occur only once"),
             Self::InvalidLabels { expected, actual } => {
                 write!(f, "table label count is {actual}; expected {expected}")
+            }
+            Self::InvalidLabelIndex { .. } => f.write_str("list index out of range"),
+            Self::InsufficientColumnLabels { .. } => {
+                f.write_str("Too few rows and columns to fit all submobjetcs.")
             }
             Self::TopLeftRequiresLabels => {
                 f.write_str("top_left_entry requires both row_labels and column_labels")
@@ -1867,6 +1881,101 @@ mod tests {
             assert_eq!(bounds.width(), 0.0);
             assert!(bounds.height() > 0.0);
         }
+    }
+
+    #[test]
+    fn labeled_constructor_counts_follow_pinned_reference_errors() {
+        // Actual ManimCE 0.21.0: rows/columns of length 0..3 on a 2x2 body,
+        // with and without a supplied corner. O=success, I=IndexError, V=ValueError.
+        let expected = [
+            [b'O', b'V', b'O', b'I'],
+            [b'I', b'V', b'I', b'I'],
+            [b'O', b'V', b'O', b'I'],
+            [b'I', b'I', b'I', b'I'],
+        ];
+        for corner in [false, true] {
+            for (row_count, outcomes) in expected.into_iter().enumerate() {
+                for (column_count, outcome) in outcomes.into_iter().enumerate() {
+                    let mut scene = Scene::new();
+                    let store = Rc::clone(scene.integration_store());
+                    let cells: Vec<_> = (0..4).map(|_| circle(&store, 0.5)).collect();
+                    let rows: Vec<_> = (0..row_count).map(|_| circle(&store, 0.2)).collect();
+                    let columns: Vec<_> = (0..column_count).map(|_| circle(&store, 0.15)).collect();
+                    let top = circle(&store, 0.1);
+                    let before = cells[0].state().unwrap();
+                    let result = MobjectTable::from_target_rows_with_optional_composite_labels(
+                        &mut scene,
+                        cells
+                            .chunks(2)
+                            .map(|row| row.iter().map(MobjectTarget::from).collect::<Vec<_>>()),
+                        Some(rows.iter().map(MobjectTarget::from).collect()),
+                        Some(columns.iter().map(MobjectTarget::from).collect()),
+                        corner.then(|| MobjectTarget::from(&top)),
+                        TableOptions::default(),
+                    );
+                    match outcome {
+                        b'O' => {
+                            let table = result.unwrap().into_table();
+                            assert_eq!(
+                                table.get_rows().unwrap().len(),
+                                2 + usize::from(column_count == 2)
+                            );
+                            assert_eq!(
+                                table.get_columns().unwrap().len(),
+                                2 + usize::from(row_count == 2)
+                            );
+                        }
+                        b'I' => {
+                            let error = result
+                                .err()
+                                .expect("the pinned constructor rejects this label count");
+                            assert!(matches!(
+                                error,
+                                TableAuthoringError::InvalidLabelIndex { .. }
+                            ));
+                            assert_eq!(error.to_string(), "list index out of range");
+                            assert_eq!(cells[0].state().unwrap(), before);
+                        }
+                        b'V' => {
+                            let error = result
+                                .err()
+                                .expect("the pinned constructor rejects this label count");
+                            assert!(matches!(
+                                error,
+                                TableAuthoringError::InsufficientColumnLabels { .. }
+                            ));
+                            assert_eq!(
+                                error.to_string(),
+                                "Too few rows and columns to fit all submobjetcs."
+                            );
+                            assert_eq!(cells[0].state().unwrap(), before);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "native-text")]
+    #[test]
+    fn labeled_native_text_empty_labels_use_shared_normalization() {
+        let mut scene = Scene::new();
+        let store = Rc::clone(scene.integration_store());
+        let column = circle(&store, 0.15);
+        let table = Table::from_rows_with_composite_labels(
+            &mut scene,
+            [["body"]],
+            Some(vec![]),
+            Some(vec![(&column).into()]),
+            None,
+            TableOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(table.get_rows().unwrap().len(), 2);
+        assert_eq!(table.get_columns().unwrap().len(), 1);
+        assert!(table.row_label_family().is_none());
+        assert!(table.column_label_family().is_some());
     }
 
     #[test]

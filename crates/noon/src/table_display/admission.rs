@@ -35,6 +35,43 @@ pub(super) fn table_shape<T>(rows: &[Vec<T>]) -> Result<TableShape, TableAuthori
     })
 }
 
+fn normalize_labels<T>(labels: Option<Vec<T>>) -> Option<Vec<T>> {
+    labels.filter(|labels| !labels.is_empty())
+}
+
+/// Preserve the pinned constructor's error precedence before publication.
+fn validate_label_counts(
+    shape: TableShape,
+    rows: Option<usize>,
+    columns: Option<usize>,
+) -> Result<(), TableAuthoringError> {
+    if let Some(actual) = rows.filter(|count| *count > shape.rows) {
+        return Err(TableAuthoringError::InvalidLabelIndex {
+            expected: shape.rows,
+            actual,
+        });
+    }
+    if let Some(actual) = columns.filter(|count| *count < shape.columns) {
+        return Err(TableAuthoringError::InsufficientColumnLabels {
+            expected: shape.columns,
+            actual,
+        });
+    }
+    if let Some(actual) = rows.filter(|count| *count < shape.rows) {
+        return Err(TableAuthoringError::InvalidLabelIndex {
+            expected: shape.rows,
+            actual,
+        });
+    }
+    if let Some(actual) = columns.filter(|count| *count > shape.columns) {
+        return Err(TableAuthoringError::InvalidLabelIndex {
+            expected: shape.columns,
+            actual,
+        });
+    }
+    Ok(())
+}
+
 pub(super) enum TablePublisher<'a, 'session> {
     Store(Rc<RefCell<noon_core::SemanticStore>>),
     Scene(&'a mut Scene),
@@ -195,6 +232,7 @@ impl GridLayout {
         if top_left_bounds.is_some() && (row_count.is_none() || column_count.is_none()) {
             return Err(TableAuthoringError::TopLeftRequiresLabels);
         }
+        validate_label_counts(shape, row_count, column_count)?;
         let row_offset = usize::from(column_count.is_some());
         let column_offset = usize::from(row_count.is_some());
         let mut widths: Vec<f64> = vec![0.0; shape.columns + column_offset];
@@ -205,25 +243,13 @@ impl GridLayout {
             heights[index / shape.columns + row_offset] =
                 heights[index / shape.columns + row_offset].max(bounds.height());
         }
-        if let (Some(count), Some(bounds)) = (row_count, row_bounds) {
-            if count != shape.rows {
-                return Err(TableAuthoringError::InvalidLabels {
-                    expected: shape.rows,
-                    actual: count,
-                });
-            }
+        if let (Some(_), Some(bounds)) = (row_count, row_bounds) {
             for (index, bound) in bounds.iter().enumerate() {
                 widths[0] = widths[0].max(bound.width());
                 heights[index + row_offset] = heights[index + row_offset].max(bound.height());
             }
         }
-        if let (Some(count), Some(bounds)) = (column_count, column_bounds) {
-            if count != shape.columns {
-                return Err(TableAuthoringError::InvalidLabels {
-                    expected: shape.columns,
-                    actual: count,
-                });
-            }
+        if let (Some(_), Some(bounds)) = (column_count, column_bounds) {
             for (index, bound) in bounds.iter().enumerate() {
                 heights[0] = heights[0].max(bound.height());
                 widths[index + column_offset] = widths[index + column_offset].max(bound.width());
@@ -588,18 +614,11 @@ fn preflight(
             return Err(TableAuthoringError::DuplicateEntry);
         }
     }
-    if rows.is_some_and(|items| items.len() != shape.rows) {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.rows,
-            actual: rows.unwrap().len(),
-        });
-    }
-    if columns.is_some_and(|items| items.len() != shape.columns) {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.columns,
-            actual: columns.unwrap().len(),
-        });
-    }
+    validate_label_counts(
+        shape,
+        rows.map(<[Mobject]>::len),
+        columns.map(<[Mobject]>::len),
+    )?;
     Ok(())
 }
 #[cfg(feature = "latex")]
@@ -622,6 +641,8 @@ fn commit_composite(
     top_left_entry: Option<MobjectTarget<'_>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
+    let rows = normalize_labels(rows);
+    let columns = normalize_labels(columns);
     let options = options.validate()?;
     let store = publisher.store();
     for target in entries
@@ -632,24 +653,11 @@ fn commit_composite(
     {
         target.require_store(&store)?;
     }
-    if rows
-        .as_ref()
-        .is_some_and(|labels| labels.len() != shape.rows)
-    {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.rows,
-            actual: rows.as_ref().unwrap().len(),
-        });
-    }
-    if columns
-        .as_ref()
-        .is_some_and(|labels| labels.len() != shape.columns)
-    {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.columns,
-            actual: columns.as_ref().unwrap().len(),
-        });
-    }
+    validate_label_counts(
+        shape,
+        rows.as_ref().map(Vec::len),
+        columns.as_ref().map(Vec::len),
+    )?;
 
     let entry_count = entries.len();
     let row_count = rows.as_ref().map(Vec::len);
@@ -915,6 +923,8 @@ fn publish_prepared_text_table(
     top_left_entry: Option<MobjectTarget<'_>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
+    let rows = normalize_labels(rows);
+    let columns = normalize_labels(columns);
     let options = options.validate()?;
     let store = publisher.store();
     for target in rows
@@ -925,21 +935,11 @@ fn publish_prepared_text_table(
     {
         target.require_store(&store)?;
     }
-    if rows.as_ref().is_some_and(|items| items.len() != shape.rows) {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.rows,
-            actual: rows.as_ref().unwrap().len(),
-        });
-    }
-    if columns
-        .as_ref()
-        .is_some_and(|items| items.len() != shape.columns)
-    {
-        return Err(TableAuthoringError::InvalidLabels {
-            expected: shape.columns,
-            actual: columns.as_ref().unwrap().len(),
-        });
-    }
+    validate_label_counts(
+        shape,
+        rows.as_ref().map(Vec::len),
+        columns.as_ref().map(Vec::len),
+    )?;
     let row_count = rows.as_ref().map(Vec::len);
     let column_count = columns.as_ref().map(Vec::len);
     let mut label_targets = Vec::new();
@@ -1218,6 +1218,8 @@ pub(super) fn publish_numeric_table(
     columns: Option<Vec<Mobject>>,
     options: TableOptions,
 ) -> Result<Table, TableAuthoringError> {
+    let rows = normalize_labels(rows);
+    let columns = normalize_labels(columns);
     let options = options.validate()?;
     let prepared = values
         .into_iter()
