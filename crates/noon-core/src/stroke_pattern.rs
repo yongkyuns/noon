@@ -223,7 +223,10 @@ mod tests {
             assert_eq!(StrokePattern::interpolate(Some(from), to, 1.0), to);
         }
         assert_eq!(StrokePattern::interpolate(None, Some(from), 0.5), None);
-        assert_eq!(StrokePattern::interpolate(None, Some(from), 1.0), Some(from));
+        assert_eq!(
+            StrokePattern::interpolate(None, Some(from), 1.0),
+            Some(from)
+        );
     }
 
     #[test]
