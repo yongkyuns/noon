@@ -119,24 +119,25 @@ def connector(points, color=MUTED, width=2.2):
 
 
 def card(title, detail, x, y, width=3.5, height=1.0, color=CONTROL):
-    objects = [panel(x, y, width, height),
-               panel(x - width / 2 + 0.025, y, 0.05, height, color, color, stroke=0)]
+    body = panel(x, y, width, height)
+    accent = panel(0, 0, 0.05, height, color, color, stroke=0).move_to(body).match_x(body, LEFT)
+    labels = [words(title, size=19, color=color, width=width - 0.3)]
     if detail:
-        objects += [words(title, x, y + 0.16, 19, color, width - 0.3),
-                    words(detail, x, y - 0.22, 13, MUTED, width - 0.3)]
-    else:
-        objects.append(words(title, x, y, 19, color, width - 0.3))
-    return tuple(objects)
+        labels.append(words(detail, size=13, color=MUTED, width=width - 0.3))
+    VGroup(*labels).arrange(DOWN, buff=0.15).move_to(body)
+    return body, accent, *labels
 
 
 def badge(text, x, y, color=CONTROL, width=1.7):
-    return (panel(x, y, width, 0.42, RAISED, color),
-            words(text, x, y, 13, color, width - 0.14))
+    body = panel(x, y, width, 0.42, RAISED, color)
+    return body, words(text, size=13, color=color, width=width - 0.14).move_to(body)
 
 
 def station(title, x, y, width=3.0, height=1.45, color=INK):
-    return (panel(x, y, width, height),
-            words(title, x, y + height / 2 - 0.21, 13, color, width - 0.25))
+    body = panel(x, y, width, height)
+    label = words(title, size=13, color=color, width=width - 0.25)
+    label.next_to(body.get_top(), DOWN, buff=0.13)
+    return body, label
 
 
 def job(letter, x, y, color, completed=0):
@@ -146,11 +147,11 @@ def job(letter, x, y, color, completed=0):
     not percentages or instruction counts; the microsecond axis carries time.
     """
     body = panel(x, y, 0.98, 0.70, RAISED, color, stroke=2)
-    name = words(letter, x, y + 0.11, 21, color, 0.7)
-    marks = [panel(x + (i - 1.5) * 0.185, y - 0.205, 0.125, 0.105,
-                   GOOD if i < completed else EDGE, EDGE, stroke=0)
-             for i in range(4)]
-    return VGroup(body, name, *marks)
+    name = words(letter, size=21, color=color, width=0.7).next_to(body.get_top(), DOWN, buff=0.10)
+    marks = VGroup(*(panel(0, 0, 0.125, 0.105, GOOD if i < completed else EDGE,
+                           EDGE, stroke=0) for i in range(4)))
+    marks.arrange(RIGHT, buff=0.06).next_to(body.get_bottom(), UP, buff=0.10)
+    return VGroup(body, name, *marks.submobjects)
 
 
 def packet(x, y, color=ESTIMATE):
@@ -224,7 +225,12 @@ class AsyncThreadsRealtime(Scene):
 
     async def hide(self, *items, seconds=0.3):
         objects = authored_objects(*items)
-        await self.play_for(*(FadeOut(obj) for obj in objects), seconds=seconds)
+        # Promote the selection to one native scene root before fading. This
+        # preserves layout families while removing all selected root members,
+        # including leaves that still have detached layout-family parents.
+        fading = VGroup(*objects)
+        self.add(fading)
+        await self.play_for(FadeOut(fading), seconds=seconds)
         removed = {id(obj) for obj in objects}
         self.content = [obj for obj in self.content if id(obj) not in removed]
 
@@ -259,17 +265,19 @@ class AsyncThreadsRealtime(Scene):
             await self.hide(self.focus, seconds=0.25)
             self.focus = None
 
-    async def focus_rect(self, x, y, width, height, color=CONTROL):
+    async def focus_on(self, target, color=CONTROL, buff=0.055):
         await self.clear_focus()
         # An attention cue, independent of every program's execution pointer.
-        self.focus = RoundedRectangle(width=width, height=height, corner_radius=0.07,
+        # SurroundingRectangle measures the current native bounds; the next cue
+        # is constructed after any layout change, rather than following a callback.
+        self.focus = SurroundingRectangle(target, buff=buff, corner_radius=0.07,
                 color=color, stroke_width=1.5).set_fill(color, opacity=0.055).set_stroke(
-                    color, opacity=0.8).move_to((x, y, 0))
+                    color, opacity=0.8)
         await self.show(self.focus, seconds=0.35)
 
     async def loop_board(self, subtitle, positions=(0, 0, 0),
                          states=("WAITING", "READY", "READY"), owner=None):
-        """Author three stationary programs using ordinary native Noon leaves.
+        """Arrange three native program families; retain named handles for cues.
 
         The returned dictionary contains authored handles and hypothetical CPU
         ownership only. It does not mirror Noon state, interpolate frames or
@@ -282,44 +290,72 @@ class AsyncThreadsRealtime(Scene):
             ("receive packet", "encode + buffer", "if due: flush output"),
         )
         board = {"owner": owner}
-        objects = [words(subtitle, y=2.43, size=11, color=MUTED)]
-        for x, (letter, title, color), program, position, state in zip(
-                (-4.5, 0, 4.5), ROLES, programs, positions, states):
-            rows = [words(line, x - 1.47, 1.16 - i * 0.28, 13, INK,
-                          3.26, left=True) for i, line in enumerate(program)]
-            pc_y = 1.16 - position * 0.28
-            highlight = RoundedRectangle(width=3.50, height=0.25, corner_radius=0.045,
+        families, objects = [], []
+        width, height, padding, indent = 4.07, 2.62, 0.24, 0.20
+        listing_width = width - 2 * padding - indent
+        for (letter, title, color), program, position, state in zip(
+                ROLES, programs, positions, states):
+            body = panel(0, 0, width, height)
+            heading = words(letter + " / " + title, size=13, color=color, width=2.15)
+            heading.move_to(body, aligned_edge=UL).shift((padding, -0.17, 0))
+            # Reserve a stable status slot so READY -> RUNNING -> PREEMPTED
+            # changes the label without resizing the card or shifting its title.
+            state_slot = Rectangle(width=1.38, height=0.22, stroke_width=0, fill_opacity=0)
+            state_slot.move_to(body, aligned_edge=UR).shift((-0.16, -0.17, 0))
+            state_label = words(state, size=10, color=color, width=state_slot.width).move_to(state_slot)
+            header = VGroup(heading, state_slot)
+            repeat = words("repeat:", size=12, color=MUTED)
+            repeat.next_to(header, DOWN, buff=0.24, aligned_edge=LEFT)
+            rows = [words(line, size=13, width=listing_width) for line in program]
+            listing = VGroup(*rows).arrange(DOWN, buff=0.10, aligned_edge=LEFT)
+            listing.next_to(repeat, DOWN, buff=0.12, aligned_edge=LEFT).shift((indent, 0, 0))
+            # The execution strip spans the code area; the separate attention
+            # outline below hugs the actual line being explained.
+            highlight = RoundedRectangle(width=listing_width + 0.14,
+                    height=max(row.height for row in rows) + 0.08, corner_radius=0.045,
                     color=color, stroke_width=0.8).set_fill(color, opacity=0.07).set_stroke(
-                        color, opacity=0.50).move_to((x + 0.10, pc_y, 0))
-            pointer = Circle(radius=0.038, color=color, stroke_width=0).set_fill(
-                    color, opacity=1).move_to((x - 1.82, pc_y, 0))
+                        color, opacity=0.50)
+            highlight.match_x(listing, LEFT).shift((-0.07, 0, 0)).set_y(rows[position].get_y())
+            pointer = Circle(radius=0.038, color=color, stroke_width=0).set_fill(color, opacity=1)
+            pointer.next_to(rows[position], LEFT, buff=0.18)
             pointer.set_glow(color=color, radius=Pixels(3.5), intensity=0.65)
-            state_label = words(state, x + 1.15, 1.87, 10, color, 1.47)
-            marks = [panel(x - 0.30 + i * 0.52, -0.24, 0.42, 0.065,
-                           EDGE, EDGE, stroke=0) for i in range(4)]
-            objects += [panel(x, 0.84, 4.07, 2.62),
-                        words(letter + " / " + title, x - 1.80, 1.87, 13,
-                              color, 2.22, left=True),
-                        state_label, rule((x - 1.79, 1.65), (x + 1.79, 1.65)),
-                        words("repeat:", x - 1.67, 1.44, 12, MUTED, left=True),
-                        highlight, *rows, pointer,
-                        words("work", x - 1.40, -0.24, 10, MUTED), *marks]
-            board[letter] = {"x": x, "color": color, "rows": rows,
-                             "state": state_label, "pointer": pointer,
+            marks = [panel(0, 0, 0.42, 0.065, EDGE, EDGE, stroke=0) for _ in range(4)]
+            work_marks = VGroup(*marks).arrange(RIGHT, buff=0.10)
+            work_label = words("work", size=10, color=MUTED)
+            VGroup(work_label, work_marks).arrange(RIGHT, buff=0.34).next_to(body.get_bottom(), UP, buff=0.16)
+            leaves = [body, heading, state_label, repeat,
+                      highlight, *rows, pointer, work_label, *marks]
+            families.append(VGroup(*leaves, state_slot))
+            objects.extend(leaves)
+            board[letter] = {"body": body, "header": header, "color": color, "rows": rows, "listing": listing,
+                             "state": state_label, "state_slot": state_slot, "pointer": pointer,
                              "highlight": highlight, "marks": marks}
-        cpu_label = words((owner + " RUNNING") if owner else "NO TASK SELECTED",
-                          0.75, -0.86, 13, dict((r[0], r[2]) for r in ROLES).get(owner, MUTED), 2.9)
-        objects += [panel(0, -0.86, 4.0, 0.51, RAISED),
-                    words("ONE CPU", -1.33, -0.86, 11, MUTED, 1.1), cpu_label]
-        board["cpu"] = cpu_label
+        program_row = VGroup(*families).arrange(RIGHT, buff=0.43).move_to((0, 0.84, 0))
+        # Decorative strokes are created after family placement. Native Create
+        # leaf targets must start without a family parent in this revision.
+        for letter, _, _ in ROLES:
+            item = board[letter]
+            start = Vec2(item["header"].get_left().x, item["header"].get_bottom().y - 0.12)
+            objects.append(rule(start, start + RIGHT * (item["body"].width - 2 * padding)))
+        subtitle_label = words(subtitle, size=11, color=MUTED).next_to(program_row, UP, buff=0.20)
+        cpu_body = panel(0, 0, 4.0, 0.51, RAISED).next_to(program_row, DOWN, buff=0.135)
+        cpu_title = words("ONE CPU", size=11, color=MUTED, width=1.1)
+        cpu_title.next_to(cpu_body.get_left(), RIGHT, buff=0.16)
+        cpu_slot = Rectangle(width=2.65, height=0.27, stroke_width=0, fill_opacity=0)
+        cpu_slot.move_to(cpu_body, aligned_edge=RIGHT).shift((-0.12, 0, 0))
+        cpu_label = words((owner + " RUNNING") if owner else "NO TASK SELECTED", size=13,
+                          color=dict((r[0], r[2]) for r in ROLES).get(owner, MUTED),
+                          width=cpu_slot.width).move_to(cpu_slot)
+        objects += [subtitle_label, cpu_body, cpu_title, cpu_label]
+        board.update(programs=program_row, cpu=cpu_label, cpu_body=cpu_body, cpu_slot=cpu_slot)
         await self.show(objects, seconds=0.75)
         return board
 
     async def set_state(self, board, role, state):
         item = board[role]
         await self.hide(item["state"], seconds=0.12)
-        item["state"] = words(state, item["x"] + 1.15, 1.87, 10,
-                              item["color"], 1.47)
+        item["state"] = words(state, size=10, color=item["color"],
+                              width=item["state_slot"].width).move_to(item["state_slot"])
         await self.show(item["state"], seconds=0.22)
 
     async def select(self, board, role):
@@ -328,7 +364,8 @@ class AsyncThreadsRealtime(Scene):
         await self.hide(board["cpu"], seconds=0.12)
         label = role + " RUNNING" if role else "DISPATCH"
         color = board[role]["color"] if role else MUTED
-        board["cpu"] = words(label, 0.75, -0.86, 13, color, 2.9)
+        board["cpu"] = words(label, size=13, color=color,
+                              width=board["cpu_slot"].width).move_to(board["cpu_slot"])
         board["owner"] = role
         await self.show(board["cpu"], seconds=0.22)
         if role:
@@ -338,9 +375,9 @@ class AsyncThreadsRealtime(Scene):
         if board["owner"] != role:
             raise ValueError("Only the CPU-selected program can advance.")
         item = board[role]
-        y = 1.16 - index * 0.28
-        await self.play_for(item["pointer"].animate.move_to((item["x"] - 1.82, y, 0)),
-                            item["highlight"].animate.move_to((item["x"] + 0.10, y, 0)),
+        row = item["rows"][index]
+        await self.play_for(item["pointer"].animate.next_to(row, LEFT, buff=0.18),
+                            item["highlight"].animate.set_y(row.get_y()),
                             *[mark.animate.set_fill(EDGE, opacity=1) for mark in item["marks"]],
                             seconds=seconds)
 
@@ -357,10 +394,9 @@ class AsyncThreadsRealtime(Scene):
                              for letter, _, _ in ROLES for row in board[letter]["rows"]],
                             seconds=0.25)
         if index is None:
-            await self.focus_rect(item["x"], 0.84, 4.18, 2.73, item["color"])
+            await self.focus_on(item["body"], item["color"])
         else:
-            await self.focus_rect(item["x"] + 0.10, 1.16 - index * 0.28,
-                                  3.57, 0.28, item["color"])
+            await self.focus_on(item["rows"][index], item["color"], buff=0.055)
 
     async def restore_board(self, board):
         await self.clear_focus()
@@ -375,7 +411,7 @@ class AsyncThreadsRealtime(Scene):
         self.heading = [words(title, -6.48, 3.20, 28, width=12.6, left=True),
                         words("%02d / 13" % number, 5.93, 3.72, 12, MUTED)]
         if old:
-            await self.play_for(*(FadeOut(obj) for obj in old), seconds=0.25)
+            await self.hide(old, seconds=0.25)
         else:
             await self.pause(0.25)
         await self.play_for(*(Write(obj) for obj in self.heading), seconds=0.40)
@@ -427,13 +463,16 @@ class AsyncThreadsRealtime(Scene):
         await self.at_line(board, "E", 2, seconds=0.3)
         await self.work(board, "E", 0, 2, seconds=0.9)
         await self.restore_board(board)
-        await self.show(card("STATE REPRESENTATION", "Thread stacks / suspended async state", -3.25,
-                             -1.82, 6.08, 1.06, CONTROL),
-                        card("SCHEDULING POLICY", "Cooperative / preemptive execution boundaries", 3.25,
-                             -1.82, 6.08, 1.06, ESTIMATE))
+        choices = VGroup(
+            VGroup(*card("STATE REPRESENTATION", "Thread stacks / suspended async state",
+                         0, 0, 6.08, 1.06, CONTROL)),
+            VGroup(*card("SCHEDULING POLICY", "Cooperative / preemptive execution boundaries",
+                         0, 0, 6.08, 1.06, ESTIMATE)),
+        ).arrange(RIGHT, buff=0.42).next_to(board["cpu_body"], DOWN, buff=0.175)
+        await self.show(*(tuple(choice.submobjects) for choice in choices))
         await self.explain("State representation and scheduling are separate choices.",
                            "Async describes suspension and saved state. The surrounding runtime determines preemption.")
-        await self.focus_rect(3.25, -1.82, 6.15, 1.13, ESTIMATE)
+        await self.focus_on(choices[1][0], ESTIMATE)
         await self.notice("Keep these same three loops in view as the runtime changes.",
                           "Waiting, readiness, CPU ownership and resource ownership will remain separate facts.")
 
@@ -458,12 +497,9 @@ class AsyncThreadsRealtime(Scene):
         for x, (initial, _, color) in zip((1.6, 3.5, 5.4), ROLES):
             states.extend((panel(x, 0.67, 1.45, 0.99, PANEL, color),
                            words(initial + " state", x, 1.32, 13, color, 1.40)))
-        await self.show(
-            stacks, states,
-            station("CPU USES THE SELECTED THREAD STACK", -3.55, -0.99,
-                    5.4, 1.18),
-            station("CPU USES THE ACTIVE EXECUTION STACK", 3.5, -0.99,
-                    5.4, 1.18), seconds=0.55)
+        thread_cpu = station("CPU USES THE SELECTED THREAD STACK", -3.55, -0.99, 5.4, 1.18)
+        async_cpu = station("CPU USES THE ACTIVE EXECUTION STACK", 3.5, -0.99, 5.4, 1.18)
+        await self.show(stacks, states, thread_cpu, async_cpu, seconds=0.55)
 
         tc = job("C", -3.55, -1.11, CONTROL)
         tl = job("L", -1.75, 0.63, LOGGER)
@@ -471,7 +507,7 @@ class AsyncThreadsRealtime(Scene):
         al = job("L", 5.4, 0.63, LOGGER)
         await self.show(tc, tl, ac, al, seconds=0.45)
 
-        await self.focus_rect(-3.55, 0, 5.70, 3.26, color=CONTROL)
+        await self.focus_on(VGroup(*stacks, *thread_cpu), color=CONTROL, buff=0.15)
         await self.watch(
             "First, C is a thread. Watch its unfinished operation stay intact.",
             "The reserved stack retains the call and the saved execution position.",
@@ -485,7 +521,7 @@ class AsyncThreadsRealtime(Scene):
             "A waiting program keeps its place even while another program runs.",
             hold=2.1)
 
-        await self.focus_rect(3.5, 0, 5.70, 3.26, color=LOGGER)
+        await self.focus_on(VGroup(*states, *async_cpu), color=LOGGER, buff=0.15)
         await self.explain(
             "Now perform the same handoff with async state.",
             "C retains its continuation and live data; the active stack can execute L.",
@@ -525,11 +561,15 @@ class AsyncThreadsRealtime(Scene):
                 self.focus = None
             board = await self.loop_board(mode + " / C waits for the same sensor transfer",
                     positions=(1, 0, 1), states=("RUNNING", "WAITING", "READY"), owner="C")
-            await self.show(station("SPI / DMA", -4.5, -1.65, 3.8, 1.00, ESTIMATE),
-                            rule((-5.66, -1.83), (-3.34, -1.83), EDGE, 3),
-                            words("DEVICE PROGRESS", -4.5, -2.27, 10, MUTED))
-            issue = ((-5.20, -0.50), (-5.20, -1.11))
-            ready = ((-3.80, -1.11), (-3.80, -0.50))
+            device = VGroup(*station("SPI / DMA", 0, 0, 3.8, 1.00, ESTIMATE)).next_to(
+                board["C"]["body"], DOWN, buff=0.68)
+            track = rule((-1.16, 0), (1.16, 0), EDGE, 3).next_to(device[0].get_bottom(), UP, buff=0.32)
+            await self.show(tuple(device.submobjects), track,
+                            words("DEVICE PROGRESS", size=10, color=MUTED).next_to(device, DOWN, buff=0.07))
+            control_port = board["C"]["body"].get_bottom() + DOWN * 0.03
+            device_port = device[0].get_top() + UP * 0.04
+            issue = (control_port + LEFT * 0.70, device_port + LEFT * 0.70)
+            ready = (device_port + RIGHT * 0.70, control_port + RIGHT * 0.70)
             await self.draw_route(issue, CONTROL, seconds=0.3)
             await self.draw_route(ready, ESTIMATE, seconds=0.3)
             await self.focus_loop(board, "C", 1)
@@ -542,11 +582,11 @@ class AsyncThreadsRealtime(Scene):
             await self.clear_focus()
             await self.watch("L computes while DMA progresses independently.",
                              "C's acquire-sample pointer stays frozen. The device does not use this CPU work track.", hold=0.5)
-            dma = packet(-5.66, -1.83, ESTIMATE)
+            dma = packet(*track.get_left(), ESTIMATE)
             await self.show(dma, seconds=0.12)
             for i in range(3):
                 await self.play_for(board["L"]["marks"][i].animate.set_fill(GOOD, opacity=1),
-                        dma.animate.move_to((-5.66 + (i + 1) * 2.32 / 3, -1.83, 0)),
+                        dma.animate.move_to(track.get_left() + (track.get_right() - track.get_left()) * (i + 1) / 3),
                         seconds=0.5, rate_func=linear)
             await self.focus_loop(board, "C", 1)
             await self.notice("Waiting saves C's place; useful work continues elsewhere.",
@@ -576,9 +616,11 @@ class AsyncThreadsRealtime(Scene):
     async def await_paths(self):
         board = await self.loop_board("ONE COOPERATIVE EXECUTOR / C is ready / flush is not due in this example",
                     positions=(3, 0, 0), states=("READY", "WAITING", "RUNNING"), owner="L")
-        queue_label = words("3 PACKETS READY", 4.5, -1.68, 14, LOGGER, 3.4)
-        await self.show(station("INPUT QUEUE", 4.5, -1.64, 3.8, 1.03, LOGGER), queue_label)
-        feed = ((4.5, -1.09), (4.5, -0.50))
+        queue = VGroup(*station("INPUT QUEUE", 0, 0, 3.8, 1.03, LOGGER)).next_to(
+            board["L"]["body"], DOWN, buff=0.655)
+        queue_label = words("3 PACKETS READY", size=14, color=LOGGER, width=3.4).move_to(queue[0]).shift((0, -0.04, 0))
+        await self.show(tuple(queue.submobjects), queue_label)
+        feed = (queue[0].get_top() + UP * 0.035, board["L"]["body"].get_bottom() + DOWN * 0.03)
         await self.draw_route(feed, LOGGER, seconds=0.4)
         await self.explain("An asynchronous receive can complete immediately.",
                            "Already available input lets L continue inside the same poll; await syntax alone is not a yield.")
@@ -589,7 +631,7 @@ class AsyncThreadsRealtime(Scene):
             await self.pulse_data(feed, LOGGER, seconds=0.65)
             await self.hide(queue_label, seconds=0.1)
             queue_label = words((str(remaining) + " PACKETS READY") if remaining else "EMPTY",
-                                4.5, -1.68, 14, LOGGER if remaining else MUTED, 3.4)
+                                size=14, color=LOGGER if remaining else MUTED, width=3.4).move_to(queue[0]).shift((0, -0.04, 0))
             await self.show(queue_label, seconds=0.2)
             await self.clear_focus()
             await self.at_line(board, "L", 1, seconds=0.3)
@@ -610,37 +652,57 @@ class AsyncThreadsRealtime(Scene):
                           "The duration of a whole poll matters; counting await expressions does not bound it.", GOOD)
 
 
-    @staticmethod
-    def tx(microseconds):
-        return -5.45 + 11.3 * microseconds / AXIS_US
-
-
     async def trace_shell(self, subtitle):
         board = await self.loop_board(subtitle, positions=(3, 0, 1),
                     states=("READY", "WAITING", "RUNNING"), owner="L")
         await self.work(board, "L", 0, 1, seconds=0.2)
-        axis = [rule((self.tx(0), -1.65), (self.tx(AXIS_US), -1.65))]
-        for tick in (0, 100, 200, 250, 300, 400, 500, 600, 650):
+        # One native coordinate frame owns every quantitative position. Author
+        # ticks, deadlines and intervals from n2p after the axis is laid out.
+        self.trace_axis = NumberLine([0, AXIS_US, 100], length=11.3,
+                include_ticks=False, color=EDGE, stroke_width=1.5).next_to(
+                    board["cpu_body"], DOWN, buff=0.535)
+        # Live coordinate queries read the native frame after scene attachment.
+        # Create below still owns the reveal, in this same authored cue.
+        self.add(self.trace_axis)
+        ticks, labels = [], {}
+        for tick in (0, 100, 200, DEADLINE_US, 300, 400, 500, 600, AXIS_US):
             color = BAD if tick == DEADLINE_US else MUTED
-            axis += [rule((self.tx(tick), -1.65), (self.tx(tick), -1.75), color),
-                     words(str(tick), self.tx(tick), -1.90, 10, color)]
-        axis += [rule((self.tx(DEADLINE_US), -1.64), (self.tx(DEADLINE_US), -1.17), BAD, 2),
-                 words("DEADLINE", self.tx(DEADLINE_US), -2.10, 9, BAD),
-                 words("µs after C release", 4.65, -2.10, 9, MUTED)]
-        cursor = rule((self.tx(0), -1.64), (self.tx(0), -1.20), INK, 2.7)
-        await self.show(axis, cursor, seconds=0.5)
+            point = self.trace_axis.n2p(tick)
+            mark = Line(point, point + 0.10 * DOWN, color=color, stroke_width=1.5)
+            ticks.append(mark)
+            labels[tick] = words(str(tick), size=10, color=color).next_to(
+                mark, DOWN, buff=0.10)
+        deadline = Line(ORIGIN, 0.47 * UP, color=BAD, stroke_width=2).next_to(
+            self.trace_axis.n2p(DEADLINE_US), UP, buff=0.01)
+        deadline_label = words("DEADLINE", size=9, color=BAD).next_to(
+            labels[DEADLINE_US], DOWN, buff=0.12)
+        units = words("µs after C release", size=9, color=MUTED).match_y(
+            deadline_label).match_x(self.trace_axis, RIGHT)
+        self.trace_footer = VGroup(deadline_label, units)
+        cursor = Line(ORIGIN, 0.44 * UP, color=INK, stroke_width=2.7).next_to(
+            self.trace_axis.n2p(0), UP, buff=0.01)
+        # Keep the axis reveal and written labels at the original cue duration.
+        objects = [self.trace_axis, *ticks, *labels.values(), deadline,
+                   deadline_label, units, cursor]
+        self.content.extend(objects)
+        self.remove(self.trace_axis)
+        await self.play_for(Create(self.trace_axis),
+                *(Create(mark) for mark in ticks),
+                *(Write(label) for label in labels.values()),
+                Create(deadline), Write(deadline_label), Write(units), Create(cursor),
+                seconds=0.5)
         return board, cursor
 
 
     async def trace_segment(self, cursor, begin_us, end_us, color, markers=(), seconds=None):
-        x1, x2 = self.tx(begin_us), self.tx(end_us)
-        bar = panel(x1 + 0.003, -1.42, 0.006, 0.28, color, color,
-                    opacity=0.87, stroke=0)
+        start, end = self.trace_axis.n2p(begin_us), self.trace_axis.n2p(end_us)
+        bar = panel(0, 0, 0.006, 0.28, color, color, opacity=0.87, stroke=0).next_to(
+            start, UP, buff=0.09).set_x(start.x, LEFT)
         self.content.append(bar)
         self.add(bar)
-        animations = [bar.animate.stretch((x2 - x1) / 0.006, 0).move_to(
-                          ((x1 + x2) / 2, -1.42, 0)),
-                      cursor.animate.move_to((x2, -1.42, 0))]
+        animations = [bar.animate.stretch((end.x - start.x) / bar.width, 0).set_x(
+                          (start.x + end.x) / 2),
+                      cursor.animate.set_x(end.x)]
         animations += [mark.animate.set_fill(GOOD, opacity=1) for mark in markers]
         await self.play_for(*animations,
                 seconds=(end_us - begin_us) * 0.016 if seconds is None else seconds,
@@ -650,11 +712,14 @@ class AsyncThreadsRealtime(Scene):
     async def control_execution(self, board, cursor, start):
         if board["owner"] != "C":
             raise ValueError("C must own the CPU during its response-time computation.")
-        for i in range(4):
-            await self.trace_segment(cursor, start + i * 20, start + (i + 1) * 20,
-                                     CONTROL, (board["C"]["marks"][i],))
-        await self.show(words("C", self.tx(start + CONTROL_US / 2), -1.42,
-                              11, BG, 0.5), seconds=0.2)
+        marks = board["C"]["marks"]
+        step_us = CONTROL_US / len(marks)
+        for i, mark in enumerate(marks):
+            await self.trace_segment(cursor, start + i * step_us, start + (i + 1) * step_us,
+                                     CONTROL, (mark,))
+        label = words("C", size=11, color=BG, width=0.5).move_to(cursor).set_x(
+            self.trace_axis.n2p(start + CONTROL_US / 2).x)
+        await self.show(label, seconds=0.2)
 
 
     async def trace_result(self, example):
@@ -664,8 +729,11 @@ class AsyncThreadsRealtime(Scene):
             blocking, DISPATCH_US, CONTROL_US, example["finish"])
         outcome = ("MET · %d µs margin" % example["margin"] if example["met"]
                    else "MISSED by %d µs" % -example["margin"])
-        await self.show(words(equation, -2.35, -2.36, 18, color, 7.5),
-                        words(outcome, 3.65, -2.36, 14, color, 4.5), seconds=0.5)
+        result = VGroup(words(equation, size=18, color=color, width=7.5),
+                        words(outcome, size=14, color=color, width=4.5)).arrange(
+                            RIGHT, buff=0.8).next_to(self.trace_footer, DOWN, buff=0.15)
+        result.set_x(self.trace_axis.get_center().x)
+        await self.show(*result.submobjects, seconds=0.5)
 
 
     async def long_poll(self):
@@ -769,17 +837,18 @@ class AsyncThreadsRealtime(Scene):
                     states=("READY", "READY", "RUNNING"), owner="L")
             frames = []
             if not preemptive:
-                frames.append(Rectangle(width=13.23, height=2.85, color=GOOD,
-                              stroke_width=1.7, fill_opacity=0).move_to((0, 0.84, 0)))
+                frames.append(SurroundingRectangle(board["programs"], buff=0.11,
+                              color=GOOD, stroke_width=1.7, fill_opacity=0))
             else:
-                for x, color in ((-4.5, CONTROL), (0, ESTIMATE), (4.5, LOGGER)):
-                    frames.append(Rectangle(width=4.20, height=2.85, color=color,
-                                  stroke_width=1.7, fill_opacity=0).move_to((x, 0.84, 0)))
+                for letter, _, color in ROLES:
+                    frames.append(SurroundingRectangle(board[letter]["body"], buff=0.11,
+                                  color=color, stroke_width=1.7, fill_opacity=0))
             labels = (("task", "task", "task") if not preemptive else
                       ("high-priority executor", "medium-priority executor", "background executor")
                       if index == 1 else ("high-priority thread", "medium-priority thread", "thread: async executor"))
-            await self.show(frames, *[words(label, x, -1.39, 12, color, 4.1)
-                    for label, x, color in zip(labels, (-4.5, 0, 4.5), (CONTROL, ESTIMATE, LOGGER))],
+            await self.show(frames, *[words(label, size=12, color=color, width=4.1).next_to(
+                    board[letter]["body"], DOWN, buff=0.81)
+                    for label, (letter, _, color) in zip(labels, ROLES)],
                     words("ONE CORE / scheduling changes ownership, never the number of CPUs",
                           y=-2.12, size=12, color=MUTED), seconds=0.5)
             await self.explain(explanation, detail, hold=1.8)
@@ -798,25 +867,35 @@ class AsyncThreadsRealtime(Scene):
 
 
     async def performance(self):
-        def metric(title, claim, qualifier, x, y, color):
-            return (panel(x, y, 6.10, 1.25),
-                    words(title, x, y + 0.38, 13, color, 5.6),
-                    words(claim, x, y + 0.01, 17, INK, 5.6),
-                    words(qualifier, x, y - 0.37, 11, MUTED, 5.6))
+        def metric(title, claim, qualifier, color):
+            body = panel(0, 0, 6.10, 1.25)
+            labels = VGroup(words(title, size=13, color=color, width=5.6),
+                            words(claim, size=17, width=5.6),
+                            words(qualifier, size=11, color=MUTED, width=5.6))
+            labels.arrange(DOWN, buff=0.15).move_to(body)
+            return VGroup(body, *labels.submobjects)
+
+        operation = card("E / update estimate", "The same numerical algorithm in both designs",
+                         0, 1.80, 12.6, 0.82, ESTIMATE)
+        metrics = VGroup(
+            metric("RAM", "Saved state + stacks + buffers",
+                   "Possible reduction; count the complete budget", CONTROL),
+            metric("COORDINATION", "Wait / wake / dispatch",
+                   "Measure the selected runtime and drivers", LOGGER),
+            metric("COMPUTATION", "The same estimate update",
+                   "Async does not remove the arithmetic", ESTIMATE),
+            metric("DEADLINE RESPONSE", "When the result becomes usable",
+                   "Bound blocking and interference", GOOD),
+        ).arrange_in_grid(rows=2, cols=2, buff=(0.44, 0.29)).next_to(operation[0], DOWN, buff=0.455)
 
         await self.explain(
             "Which performance cost could this workload improve?",
             "Keep E's update-estimate operation and the useful workload the same.",
             hold=2.3)
-        await self.show(
-            card("E / update estimate", "The same numerical algorithm in both designs",
-                 0, 1.80, 12.6, 0.82, ESTIMATE), seconds=0.55)
+        await self.show(operation, seconds=0.55)
 
-        await self.show(
-            metric("RAM", "Saved state + stacks + buffers",
-                   "Possible reduction; count the complete budget",
-                   -3.27, 0.31, CONTROL), seconds=0.45)
-        await self.focus_rect(-3.27, 0.31, 6.20, 1.35, color=CONTROL)
+        await self.show(tuple(metrics[0].submobjects), seconds=0.45)
+        await self.focus_on(metrics[0][0], color=CONTROL)
         await self.notice(
             "RAM can improve when many programs mostly wait.",
             "Count retained state, active stacks, buffers and queues in both designs.",
@@ -826,36 +905,27 @@ class AsyncThreadsRealtime(Scene):
             "Coordination has a separate implementation cost.",
             "Waiting, waking and selecting a program all consume CPU work.",
             hold=1.2)
-        await self.show(
-            metric("COORDINATION", "Wait / wake / dispatch",
-                   "Measure the selected runtime and drivers",
-                   3.27, 0.31, LOGGER), seconds=0.45)
-        await self.focus_rect(3.27, 0.31, 6.20, 1.35, color=LOGGER)
+        await self.show(tuple(metrics[1].submobjects), seconds=0.45)
+        await self.focus_on(metrics[1][0], color=LOGGER)
         await self.notice(
             "A smaller coordination path can help; more yields also add work.",
             "The runtime, driver and synchronization choices determine the actual cost.",
             hold=1.9)
 
-        await self.focus_rect(0, 1.80, 12.70, 0.92, color=ESTIMATE)
+        await self.focus_on(operation[0], color=ESTIMATE)
         await self.watch(
             "Keep E's numerical operation unchanged.",
             "Changing its execution wrapper does not remove the estimate calculation.",
             hold=0.8)
-        await self.show(
-            metric("COMPUTATION", "The same estimate update",
-                   "Async does not remove the arithmetic",
-                   -3.27, -1.23, ESTIMATE), seconds=0.45)
+        await self.show(tuple(metrics[2].submobjects), seconds=0.45)
         await self.pause(1.4)
 
         await self.explain(
             "Now ask when C's result becomes usable.",
             "Response includes blocking, dispatch, execution and the dependencies that exist.",
             hold=1.4)
-        await self.show(
-            metric("DEADLINE RESPONSE", "When the result becomes usable",
-                   "Bound blocking and interference",
-                   3.27, -1.23, GOOD), seconds=0.45)
-        await self.focus_rect(3.27, -1.23, 6.20, 1.35, color=GOOD)
+        await self.show(tuple(metrics[3].submobjects), seconds=0.45)
+        await self.focus_on(metrics[3][0], color=GOOD)
         await self.notice(
             "Earlier access to the CPU can improve deadline response.",
             "The controller's opportunity to execute can change while its arithmetic stays the same.",
@@ -863,7 +933,7 @@ class AsyncThreadsRealtime(Scene):
         await self.clear_focus()
         await self.show(
             words("Equivalent work, drivers, allocation rules and timing obligations.",
-                  y=-2.23, size=14, color=GOOD), seconds=0.4)
+                  size=14, color=GOOD).next_to(metrics, DOWN, buff=0.28), seconds=0.4)
         await self.notice(
             "State the metric and compare equally capable designs.",
             "Measure RAM, throughput, energy and jitter; justify the required timing bounds.",
@@ -874,12 +944,17 @@ class AsyncThreadsRealtime(Scene):
     async def inversion(self):
         board = await self.loop_board("PRIORITIES: C HIGH / E MEDIUM / L LOW / L initially owns the shared SPI resource",
                     positions=(1, 1, 2), states=("READY", "READY", "RUNNING"), owner="L")
-        owner_label = words("OWNER: L", 4.5, -1.69, 18, LOGGER, 3.3)
-        await self.show(station("SHARED SPI", 4.5, -1.63, 3.8, 1.05, LOGGER), owner_label)
-        request = ((-4.5, -0.50), (-4.5, -1.63), (2.54, -1.63))
+        spi = VGroup(*station("SHARED SPI", 0, 0, 3.8, 1.05, LOGGER)).next_to(
+            board["L"]["body"], DOWN, buff=0.635)
+        owner_label = words("OWNER: L", size=18, color=LOGGER, width=3.3).move_to(spi[0]).shift((0, -0.06, 0))
+        await self.show(tuple(spi.submobjects), owner_label)
+        start = board["C"]["body"].get_bottom() + DOWN * 0.03
+        end = spi[0].get_left() + LEFT * 0.06
+        request = (start, (start.x, end.y), end)
         await self.draw_route(request, CONTROL, seconds=0.6)
-        await self.show(rule((4.5, -0.50), (4.5, -1.09), LOGGER, 1.6),
-                        words("resource ownership", 4.5, -2.30, 11, MUTED))
+        await self.show(rule(board["L"]["body"].get_bottom() + DOWN * 0.03,
+                             spi[0].get_top() + UP * 0.015, LOGGER, 1.6),
+                        words("resource ownership", size=11, color=MUTED).next_to(spi, DOWN, buff=0.08))
         await self.work(board, "L", 0, 1, seconds=0.7)
         await self.explain("C can preempt L, but it cannot use SPI until L releases it.",
                            "Expand L's flush-output operation: it holds this resource while doing protected work.")
@@ -892,7 +967,7 @@ class AsyncThreadsRealtime(Scene):
         await self.watch("C blocks on SPI. E can run ahead of the low-priority owner L.",
                          "Watch E's work marks advance while L's flush operation stays frozen.")
         await self.work(board, "E", 0, 2, seconds=1.8)
-        await self.focus_rect(4.5, -1.63, 3.88, 1.13, LOGGER)
+        await self.focus_on(spi[0], LOGGER)
         await self.notice("CPU owner: E. SPI owner: L. C waits for L's progress.",
                           "This indirect delay is priority inversion; the highest-priority task can still be blocked.", BAD)
         boost = badge("L inherits C's effective priority", -0.45, -2.26, GOOD, 7.7)
@@ -904,7 +979,7 @@ class AsyncThreadsRealtime(Scene):
         await self.focus_loop(board, "L", 2)
         await self.work(board, "L", 1, 4, seconds=2.0)
         await self.hide(owner_label, boost, seconds=0.25)
-        free_label = words("FREE", 4.5, -1.69, 18, GOOD, 3.3)
+        free_label = words("FREE", size=18, color=GOOD, width=3.3).move_to(owner_label)
         await self.show(free_label, seconds=0.3)
         await self.set_state(board, "C", "READY")
         await self.notice("L releases SPI. C becomes ready to acquire it.",
@@ -914,7 +989,7 @@ class AsyncThreadsRealtime(Scene):
         await self.focus_loop(board, "C", 1)
         await self.pulse_data(request, CONTROL, seconds=1.0)
         await self.hide(free_label, seconds=0.15)
-        await self.show(words("OWNER: C", 4.5, -1.69, 18, CONTROL, 3.3), seconds=0.3)
+        await self.show(words("OWNER: C", size=18, color=CONTROL, width=3.3).move_to(free_label), seconds=0.3)
         await self.work(board, "C", 0, 2, seconds=0.7)
         await self.notice("C now acquires SPI and continues.",
                           "Bound lock hold time, device transactions and service queues as well as CPU execution.")
@@ -923,15 +998,17 @@ class AsyncThreadsRealtime(Scene):
     async def timeouts(self):
         board = await self.loop_board("TRIAL 1 / a cooperative timeout wrapper surrounds L's inner operation",
                     positions=(0, 0, 1), states=("WAITING", "WAITING", "RUNNING"), owner="L")
-        timer = words("ARMED", 4.5, -1.70, 17, MUTED, 3.4)
-        await self.show(station("TIMEOUT TIMER", 4.5, -1.64, 3.8, 1.07, BAD), timer)
+        timer_panel = VGroup(*station("TIMEOUT TIMER", 0, 0, 3.8, 1.07, BAD)).next_to(
+            board["L"]["body"], DOWN, buff=0.635)
+        timer = words("ARMED", size=17, color=MUTED, width=3.4).move_to(timer_panel[0]).shift((0, -0.06, 0))
+        await self.show(tuple(timer_panel.submobjects), timer)
         await self.explain("A timeout can become ready while its inner operation still runs.",
                            "The wrapper cannot inspect the timer while a synchronous inner call holds control.")
         await self.focus_loop(board, "L", 1)
         await self.work(board, "L", 0, 1, seconds=0.8)
         await self.hide(timer, seconds=0.15)
-        await self.show(words("READY", 4.5, -1.70, 17, BAD, 3.4), seconds=0.3)
-        await self.focus_rect(4.5, -1.64, 3.88, 1.15, BAD)
+        await self.show(words("READY", size=17, color=BAD, width=3.4).move_to(timer), seconds=0.3)
+        await self.focus_on(timer_panel[0], BAD)
         await self.notice("The timer is ready. L still owns the CPU.",
                           "An async timeout does not itself enforce a CPU execution budget.", BAD, hold=2.0)
         await self.work(board, "L", 1, 4, seconds=1.7)
@@ -941,17 +1018,19 @@ class AsyncThreadsRealtime(Scene):
                           "A schedulable monitor or watchdog needs its own enforcement boundary and timing analysis.", hold=2.0)
         await self.hide(list(self.content), seconds=0.35)
         self.focus = None
+        caller = VGroup(*station("CALLER", 0, 0, 3.1, 1.2, CONTROL))
+        driver = VGroup(*station("DRIVER", 0, 0, 3.7, 1.2, MUTED))
+        device_node = VGroup(*station("DEVICE", 0, 0, 3.1, 1.2, ESTIMATE))
+        command_path = VGroup(caller, driver, device_node).arrange(RIGHT, buff=1.25).move_to((0, 0.94, 0))
         await self.show(words("TRIAL 2 / cancellation after an external command has started", y=2.43,
                               size=12, color=MUTED),
-                        station("CALLER", -4.65, 0.94, 3.1, 1.2, CONTROL),
-                        station("DRIVER", 0, 0.94, 3.7, 1.2, MUTED),
-                        station("DEVICE", 4.65, 0.94, 3.1, 1.2, ESTIMATE))
-        caller_state = words("REQUEST ACTIVE", -4.65, 0.75, 14, CONTROL, 2.8)
-        device_state = words("IDLE", 4.65, 0.75, 14, MUTED, 2.8)
+                        *(tuple(node.submobjects) for node in command_path))
+        caller_state = words("REQUEST ACTIVE", size=14, color=CONTROL, width=2.8).next_to(caller[1], DOWN, buff=0.22)
+        device_state = words("IDLE", size=14, color=MUTED, width=2.8).next_to(device_node[1], DOWN, buff=0.22)
         await self.show(caller_state, device_state,
-                        words("operation in flight", 0, 0.75, 14, MUTED, 3.35))
-        issue = ((-3.06, 0.94), (-1.89, 0.94))
-        device = ((1.89, 0.94), (3.06, 0.94))
+                        words("operation in flight", size=14, color=MUTED, width=3.35).next_to(driver[1], DOWN, buff=0.22))
+        issue = (caller[0].get_right() + RIGHT * 0.04, driver[0].get_left() + LEFT * 0.04)
+        device = (driver[0].get_right() + RIGHT * 0.04, device_node[0].get_left() + LEFT * 0.04)
         await self.draw_route(issue, CONTROL, seconds=0.35)
         await self.draw_route(device, ESTIMATE, seconds=0.35)
         await self.explain("Cancellation has to account for effects already outside the caller.",
@@ -959,15 +1038,16 @@ class AsyncThreadsRealtime(Scene):
         await self.pulse_data(issue, CONTROL, seconds=0.8)
         await self.pulse_data(device, ESTIMATE, seconds=0.8)
         await self.hide(device_state, seconds=0.15)
-        await self.show(words("COMMAND ISSUED", 4.65, 0.75, 14, ESTIMATE, 2.8), seconds=0.3)
+        await self.show(words("COMMAND ISSUED", size=14, color=ESTIMATE, width=2.8).move_to(device_state), seconds=0.3)
         await self.watch("The caller cancels after the driver has issued the command.")
         await self.hide(caller_state, seconds=0.15)
-        await self.show(words("REQUEST CANCELLED", -4.65, 0.75, 14, BAD, 2.8), seconds=0.3)
-        await self.focus_rect(4.65, 0.94, 3.18, 1.28, ESTIMATE)
+        await self.show(words("REQUEST CANCELLED", size=14, color=BAD, width=2.8).move_to(caller_state), seconds=0.3)
+        await self.focus_on(device_node[0], ESTIMATE)
         await self.notice("Cancelling the caller does not rewind the device.",
                           "The command may already be acting on the physical system.", BAD, hold=2.0)
-        await self.show(card("DRIVER + PROTOCOL CONTRACT", "Specify abort, completion, cleanup and resource lifetimes",
-                             0, -1.03, 11.8, 1.2, GOOD))
+        contract = VGroup(*card("DRIVER + PROTOCOL CONTRACT", "Specify abort, completion, cleanup and resource lifetimes",
+                                0, 0, 11.8, 1.2, GOOD)).next_to(command_path, DOWN, buff=0.77)
+        await self.show(tuple(contract.submobjects))
         await self.notice("Define the actual cancellation contract before relying on it.",
                           "Immediate abort, deferred cleanup and completion have different semantics and timing costs.")
 
@@ -977,32 +1057,34 @@ class AsyncThreadsRealtime(Scene):
             "Could C finish on time and still use an invalid input?",
             "Consider valid snapshot storage whose timestamp violates C's input-age policy.",
             hold=2.1)
+        snapshot = VGroup(*card("STATE SNAPSHOT", "Age: 12 ms / allowed: 5 ms",
+                                0, 0, 5.05, 1.38, ESTIMATE))
+        consumer = VGroup(*card("C / read state snapshot", "A valid memory access can still read stale data",
+                                0, 0, 5.05, 1.38, CONTROL))
+        inputs = VGroup(snapshot, consumer).arrange(RIGHT, buff=1.85).move_to((0, 0.78, 0))
         example = (
-            words("ILLUSTRATIVE INPUT-AGE POLICY", y=1.99, size=13, color=MUTED),
-            card("STATE SNAPSHOT", "Age: 12 ms / allowed: 5 ms",
-                 -3.45, 0.78, 5.05, 1.38, ESTIMATE),
-            card("C / read state snapshot", "A valid memory access can still read stale data",
-                 3.45, 0.78, 5.05, 1.38, CONTROL),
-            words("valid storage and lifetime", -3.45, -0.34, 14, GOOD, 5.05),
-            words("timely computation is still possible", 3.45, -0.34, 14, MUTED, 5.05),
+            words("ILLUSTRATIVE INPUT-AGE POLICY", size=13, color=MUTED).next_to(inputs, UP, buff=0.42),
+            tuple(snapshot.submobjects), tuple(consumer.submobjects),
+            words("valid storage and lifetime", size=14, color=GOOD, width=5.05).next_to(snapshot, DOWN, buff=0.32),
+            words("timely computation is still possible", size=14, color=MUTED, width=5.05).next_to(consumer, DOWN, buff=0.32),
         )
         await self.show(example, seconds=0.55)
-        await self.focus_rect(-3.45, 0.78, 5.17, 1.50, color=ESTIMATE)
+        await self.focus_on(snapshot[0], color=ESTIMATE)
         await self.watch(
             "Watch the snapshot's age when C reads it.",
             "Twelve milliseconds exceeds this example's five-millisecond limit.",
             hold=0.8)
-        age_route = await self.draw_route(((-0.88, 0.78), (0.88, 0.78)),
-                                         ESTIMATE, seconds=0.45)
-        await self.pulse_data(((-0.88, 0.78), (0.88, 0.78)), ESTIMATE, seconds=1.1)
-        stale = badge("AGE LIMIT EXCEEDED", 3.45, -0.94, BAD, width=4.25)
-        await self.show(stale, seconds=0.35)
+        age_path = (snapshot[0].get_right() + RIGHT * 0.05, consumer[0].get_left() + LEFT * 0.05)
+        age_route = await self.draw_route(age_path, ESTIMATE, seconds=0.45)
+        await self.pulse_data(age_path, ESTIMATE, seconds=1.1)
+        stale = VGroup(*badge("AGE LIMIT EXCEEDED", 0, 0, BAD, width=4.25)).next_to(example[-1], DOWN, buff=0.30)
+        await self.show(tuple(stale.submobjects), seconds=0.35)
         await self.notice(
             "Valid memory does not establish valid control input.",
             "A timely task can still violate its required data-age contract.",
             color=BAD, hold=2.1)
         await self.clear_focus()
-        await self.hide(example, age_route, stale, seconds=0.35)
+        await self.hide(example, age_route, tuple(stale.submobjects), seconds=0.35)
 
         await self.explain(
             "Name the property that the design actually guarantees.",
@@ -1022,17 +1104,22 @@ class AsyncThreadsRealtime(Scene):
              "Data age, requirements, fault handling and verification", GOOD,
              "Verify the required response of the complete physical system."),
         )
-        for number, (title, question, evidence, color, explanation) in enumerate(rows):
-            y = 1.64 - number * 1.12
+        layers = []
+        for title, question, evidence, color, _ in rows:
+            body = panel(0, 0, 12.65, 0.93)
+            accent = panel(0, 0, 0.07, body.height, color, color, stroke=0).match_x(body, LEFT)
+            name = words(title, size=15, color=color, width=2.18)
+            name.next_to(body.get_left(), RIGHT, buff=0.22)
+            details = VGroup(words(question, size=17, width=9.22),
+                             words(evidence, size=12, color=MUTED, width=9.22))
+            details.arrange(DOWN, buff=0.15, aligned_edge=LEFT).move_to(body)
+            details.align_to(body, LEFT).shift((2.80, 0, 0))
+            layers.append(VGroup(body, accent, name, *details.submobjects))
+        VGroup(*layers).arrange(DOWN, buff=0.19).move_to((0, -0.04, 0))
+        for layer, (_, _, _, color, explanation) in zip(layers, rows):
             await self.watch(explanation, hold=0.6)
-            await self.show(
-                panel(0, y, 12.65, 0.93),
-                panel(-6.27, y, 0.07, 0.93, color, color, stroke=0),
-                words(title, -5.06, y, 15, color, 2.18),
-                words(question, -3.53, y + 0.18, 17, INK, 9.22, left=True),
-                words(evidence, -3.53, y - 0.22, 12, MUTED, 9.22, left=True),
-                seconds=0.45)
-            await self.focus_rect(0, y, 12.76, 1.03, color=color)
+            await self.show(tuple(layer.submobjects), seconds=0.45)
+            await self.focus_on(layer[0], color=color)
             await self.pause(0.9)
         await self.clear_focus()
         await self.notice(
@@ -1042,41 +1129,67 @@ class AsyncThreadsRealtime(Scene):
 
 
     async def control_boundary(self):
-        await self.show(
-            card("SENSOR CAPTURE", "Timestamp / DMA", -4.75, 1.35,
-                 3.1, 1.45, ESTIMATE),
-            station("C / HIGH-PRIORITY CONTROL", 0, 1.35, 3.85, 1.45, CONTROL),
-            card("ACTUATOR", "Bound command latency", 4.75, 1.35,
-                 3.1, 1.45, CONTROL),
-            station("L / BACKGROUND ASYNC", -4.75, -1.45, 3.1, 1.45, LOGGER),
-            station("E / ESTIMATION", 0, -1.45, 3.85, 1.45, ESTIMATE),
-            card("MONITOR / PROTECTION", "Independent fault path", 4.75, -1.45,
-                 3.1, 1.45, GOOD), seconds=0.6)
-        c = job("C", 0, 1.13, CONTROL)
-        e = job("E", 0, -1.67, ESTIMATE)
-        l = job("L", -5.56, -1.61, LOGGER)
-        queue = [panel(x, -1.39, 0.33, 0.27, PANEL, LOGGER)
-                 for x in (-4.70, -4.23, -3.76)]
-        await self.show(c, e, l, queue,
-                        words("log queue", -4.23, -1.83, 10, MUTED, 1.85),
-                        seconds=0.4)
+        # Arrange native node families before deriving any connections. The
+        # shared grid measures their bounds; only panel sizes and gaps are style.
+        sensor = VGroup(*card("SENSOR CAPTURE", "Timestamp / DMA", 0, 0,
+                              3.1, 1.45, ESTIMATE))
+        control = VGroup(*station("C / HIGH-PRIORITY CONTROL", 0, 0,
+                                  3.85, 1.45, CONTROL))
+        actuator = VGroup(*card("ACTUATOR", "Bound command latency", 0, 0,
+                                3.1, 1.45, CONTROL))
+        logger = VGroup(*station("L / BACKGROUND ASYNC", 0, 0,
+                                 3.1, 1.45, LOGGER))
+        estimator = VGroup(*station("E / ESTIMATION", 0, 0,
+                                    3.85, 1.45, ESTIMATE))
+        monitor = VGroup(*card("MONITOR / PROTECTION", "Independent fault path", 0, 0,
+                               3.1, 1.45, GOOD))
+        nodes = VGroup(sensor, control, actuator, logger, estimator, monitor)
+        nodes.arrange_in_grid(rows=2, cols=3, buff=(1.25, 1.35))
+        sensor_body, control_body, actuator_body, logger_body, estimator_body, monitor_body = (
+            node.submobjects[0] for node in nodes.submobjects)
+        # Reveal the native leaves so headings still write on instead of fading
+        # an entire family in as a single visual block.
+        await self.show([tuple(node.submobjects) for node in nodes.submobjects], seconds=0.6)
+
+        c = job("C", 0, 0, CONTROL).next_to(control_body.get_bottom(), UP, buff=0.15)
+        e = job("E", 0, 0, ESTIMATE).next_to(estimator_body.get_bottom(), UP, buff=0.15)
+        l = job("L", 0, 0, LOGGER)
+        queue = [panel(0, 0, 0.33, 0.27, PANEL, LOGGER) for _ in range(3)]
+        queue_cells = VGroup(*queue).arrange(RIGHT, buff=0.14)
+        queue_label = words("log queue", size=10, color=MUTED, width=1.85)
+        queue_contents = VGroup(queue_cells, queue_label).arrange(DOWN, buff=0.17)
+        VGroup(l, queue_contents).arrange(RIGHT, buff=0.20).next_to(
+            logger_body.get_bottom(), UP, buff=0.15)
+        await self.show(c, e, l, queue, queue_label, seconds=0.4)
         await self.explain(
             "Where does the end-to-end control deadline end?",
             "Trace one sample through shared-CPU computation to the physical actuator.",
             hold=2.3)
 
-        sample_route = ((-3.16, 1.35), (-1.97, 1.35))
-        command_route = ((1.97, 1.35), (3.16, 1.35))
-        snapshot_route = ((0, -0.68), (0, 0.58))
-        log_route = ((-1.22, 0.58), (-1.22, 0.04), (-4.75, 0.04), (-4.75, -0.68))
-        fault_route = ((4.75, -0.68), (4.75, 0.58))
+        # Wiring expresses this diagram's topology, not a layout engine. Ports
+        # come from the arranged bodies; drawing and moving signals reuse the
+        # same routes. The log copy has a reserved left-hand interrow corridor.
+        port_gap = 0.05
+        sample_route = (sensor_body.get_right() + RIGHT * port_gap,
+                        control_body.get_left() + LEFT * port_gap)
+        command_route = (control_body.get_right() + RIGHT * port_gap,
+                         actuator_body.get_left() + LEFT * port_gap)
+        snapshot_route = (estimator_body.get_top() + UP * port_gap,
+                          control_body.get_bottom() + DOWN * port_gap)
+        fault_route = (monitor_body.get_top() + UP * port_gap,
+                       actuator_body.get_bottom() + DOWN * port_gap)
+        log_start = control_body.get_bottom() + LEFT * (control_body.width * 0.32) + DOWN * port_gap
+        log_end = logger_body.get_top() + UP * port_gap
+        corridor_y = (control_body.get_bottom()[1] + logger_body.get_top()[1]) / 2
+        log_route = (log_start, (log_start[0], corridor_y), (log_end[0], corridor_y), log_end)
 
-        await self.focus_rect(-4.75, 1.35, 3.22, 1.57, color=ESTIMATE)
+        await self.focus_on(sensor_body, color=ESTIMATE)
         await self.watch(
             "Start with a timestamped sensor sample.",
             "Acquisition and delivery count before control can use the data.",
             hold=1.1)
-        await self.show(words("sample", -2.58, 1.81, 10, ESTIMATE, 1.1), seconds=0.3)
+        await self.show(words("sample", size=10, color=ESTIMATE, width=1.1).next_to(
+            (sample_route[0] + sample_route[1]) / 2, UP, buff=0.25), seconds=0.3)
         await self.draw_route(sample_route, ESTIMATE, seconds=0.5)
         await self.pulse_data(sample_route, ESTIMATE, seconds=1.2)
         await self.notice(
@@ -1084,46 +1197,51 @@ class AsyncThreadsRealtime(Scene):
             "Arrival alone does not establish freshness or consistency.",
             hold=1.8)
 
-        await self.focus_rect(0, -1.45, 3.97, 1.57, color=ESTIMATE)
+        await self.focus_on(estimator_body, color=ESTIMATE)
         await self.explain(
             "E publishes its next coherent snapshot.",
             "Only E's illustrated computation advances during this CPU turn.",
             hold=1.8)
         await self.compute(e, 0, 4, seconds=1.8)
         await self.draw_route(snapshot_route, ESTIMATE, seconds=0.45)
-        await self.show(
-            words("coherent snapshot", 1.35, 0.24, 11, ESTIMATE, 2.4),
-            words("timestamp + age", 1.35, -0.14, 11, MUTED, 2.4), seconds=0.3)
+        snapshot_labels = VGroup(
+            words("coherent snapshot", size=11, color=ESTIMATE, width=2.4),
+            words("timestamp + age", size=11, color=MUTED, width=2.4),
+        ).arrange(DOWN, buff=0.20, aligned_edge=LEFT).next_to(
+            (snapshot_route[0] + snapshot_route[1]) / 2, RIGHT, buff=0.25)
+        await self.show(tuple(snapshot_labels.submobjects), seconds=0.3)
         await self.pulse_data(snapshot_route, ESTIMATE, seconds=1.0)
         await self.notice(
             "C can now read a coherent snapshot with an allowed age.",
             "Specify the age policy separately from memory ownership.",
             hold=1.4)
 
-        await self.focus_rect(0, 1.35, 3.97, 1.57, color=CONTROL)
+        await self.focus_on(control_body, color=CONTROL)
         await self.explain(
             "C gets the CPU and computes the command.",
             "E and L retain their positions while C advances.",
             hold=1.5)
         await self.compute(c, 0, 4, seconds=1.8)
-        await self.show(words("command", 2.58, 1.81, 10, CONTROL, 1.1), seconds=0.3)
+        await self.show(words("command", size=10, color=CONTROL, width=1.1).next_to(
+            (command_route[0] + command_route[1]) / 2, UP, buff=0.25), seconds=0.3)
         await self.draw_route(command_route, CONTROL, seconds=0.45)
         await self.pulse_data(command_route, CONTROL, seconds=1.0)
-        applied = words("command applied", 4.75, 0.85, 11, GOOD, 2.7)
+        applied = words("command applied", size=11, color=GOOD, width=2.7).next_to(
+            actuator_body.get_bottom(), UP, buff=0.15)
         await self.show(applied, seconds=0.3)
         await self.notice(
             "The end-to-end path includes applying the actuator command.",
             "Finishing C's arithmetic is only one part of that path.",
             hold=1.6)
 
-        await self.focus_rect(-4.75, -1.45, 3.22, 1.57, color=LOGGER)
+        await self.focus_on(logger_body, color=LOGGER)
         await self.explain(
             "A log copy enters a bounded background queue.",
             "The full-queue policy must preserve the control contract.",
             hold=1.3)
         await self.draw_route(log_route, LOGGER, seconds=0.5)
-        await self.show(words("bounded log queue", -3.33, 0.33, 11, LOGGER, 2.65),
-                        seconds=0.3)
+        await self.show(words("bounded log queue", size=11, color=LOGGER, width=2.65).next_to(
+            ((log_start[0] + log_end[0]) / 2, corridor_y), UP, buff=0.20), seconds=0.3)
         await self.pulse_data(log_route, LOGGER, seconds=1.3)
         await self.play_for(queue[1].animate.set_fill(LOGGER, opacity=1), seconds=0.3)
         await self.pause(0.8)
@@ -1138,18 +1256,22 @@ class AsyncThreadsRealtime(Scene):
             "Bound storage, waiting and service time.",
             hold=0.9)
 
-        await self.focus_rect(4.75, -1.45, 3.22, 1.57, color=GOOD)
+        await self.focus_on(monitor_body, color=GOOD)
         await self.explain(
             "A detected fault follows a separate containment contract.",
             "The monitor needs a schedulable enforcement boundary and platform evidence.",
             hold=1.5)
         await self.draw_route(fault_route, GOOD, seconds=0.45)
-        await self.show(words("detect", 5.71, 0.24, 11, GOOD, 1.25),
-                        words("contain", 5.71, -0.14, 11, GOOD, 1.25), seconds=0.3)
+        fault_labels = VGroup(
+            words("detect", size=11, color=GOOD, width=1.25),
+            words("contain", size=11, color=GOOD, width=1.25),
+        ).arrange(DOWN, buff=0.20, aligned_edge=LEFT).next_to(
+            (fault_route[0] + fault_route[1]) / 2, RIGHT, buff=0.35)
+        await self.show(tuple(fault_labels.submobjects), seconds=0.3)
         await self.pulse_data(fault_route, GOOD, seconds=1.0)
         await self.hide(applied, seconds=0.2)
-        await self.show(words("specified fault response", 4.75, 0.85,
-                              10, GOOD, 2.8), seconds=0.3)
+        await self.show(words("specified fault response", size=10, color=GOOD, width=2.8).next_to(
+            actuator_body.get_bottom(), UP, buff=0.15), seconds=0.3)
         await self.notice(
             "The monitor's fault response has its own bounds.",
             "Scheduling urgency and fault containment are separate design obligations.",
@@ -1157,7 +1279,7 @@ class AsyncThreadsRealtime(Scene):
         await self.clear_focus()
         await self.show(
             words("Choose execution boundaries to match urgency and containment needs.",
-                  y=2.27, size=12, color=GOOD, width=12.5), seconds=0.4)
+                  size=12, color=GOOD, width=12.5).next_to(nodes, UP, buff=0.12), seconds=0.4)
         await self.notice(
             "Prove execution, blocking and data-age bounds.",
             "Async, threads or a hybrid can fit when their concrete contracts support the system.",

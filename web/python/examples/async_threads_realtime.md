@@ -534,6 +534,95 @@ detail.
   guarantees are scoped to the enforced model; arbitrary communication cycles
   and a complete physical system need their own argument.
 
+## Layout with existing Manim-style operations
+
+The scene now expresses repeated layouts through native `VGroup` families and
+relative placement. The Python file still composes ordinary Noon objects; it
+does not add a public row, panel, connector, or layout API. The shared Rust
+engine owns family bounds, placement, targets, and animation.
+
+The recurring program panels retain named handles to their body, text rows,
+execution pointer, work marks, and status slot. Those handles give each cue a
+semantic target: “the third operation in C” or “the SPI panel” replaces a second
+copy of that target's center, width, and height.
+
+| Scene element | Existing operation | What an edit now changes together |
+| --- | --- | --- |
+| Pseudocode listing | `VGroup(*rows).arrange(DOWN, aligned_edge=LEFT)` | Row spacing and the positions used by the execution pointer. |
+| Three program panels | `arrange(RIGHT)` | Panel placement, contents, and the CPU strip positioned below them. |
+| Status and CPU labels | `move_to(reserved_slot)` | Replacement text stays in its intended region without moving the panel. |
+| Execution pointer | `pointer.animate.next_to(row, LEFT)` | The destination follows the selected row's measured position. |
+| Attention outline | `SurroundingRectangle(target)` | The cue uses the actual text or panel bounds. |
+| Deadline trace | `NumberLine.n2p(microseconds)` | Ticks, bars, cursor, and deadline marker use one native numerical mapping. |
+| Architecture and metric panels | `arrange_in_grid` | Rows and columns share deliberate gap settings. |
+| Devices, queues, labels, and messages | `next_to`, `move_to`, `match_x`, `match_y` | Related elements are placed from their native anchors. |
+
+For example, the program listing and execution cue follow this pattern:
+
+```python
+rows = [words(line, size=13, width=listing_width) for line in program]
+listing = VGroup(*rows).arrange(DOWN, buff=0.10, aligned_edge=LEFT)
+listing.next_to(repeat, DOWN, buff=0.12, aligned_edge=LEFT)
+
+row = rows[index]
+await self.play_for(pointer.animate.next_to(row, LEFT, buff=0.18))
+await self.focus_on(row, color=CONTROL)
+```
+
+`focus_on` is a small scene helper that creates a native
+`SurroundingRectangle`. It controls the tutorial's attention choreography; it
+does not calculate a separate layout. The full-width execution strip and the
+tighter attention outline remain distinct visual signals.
+
+The final architecture first arranges six named node families in a two-by-three
+grid. Only then does it read the body edges and construct the sample, command,
+snapshot, logging, and fault routes. Four routes join facing edges. The logging
+elbow uses a deliberate port on C and the midpoint of the space between rows.
+Drawing and transport animation reuse the same route points, so the glowing
+circle follows the connector that was just introduced. This is explicit
+diagram wiring with a reserved corridor, not automatic graph routing.
+
+These layout calls are **one-shot operations**. They measure and place objects
+when authored; they do not install persistent constraints. A newly created
+`SurroundingRectangle` measures its current target, and a connector's stored
+waypoints do not automatically follow nodes moved independently afterward.
+This scene therefore lays out components before wiring and creates attention
+cues after the relevant placement. The text helper fits measured text within
+its stated width by scaling; it does not promise automatic wrapping.
+
+Some numbers remain intentionally: font sizes, card dimensions, padding, gaps,
+port clearance, a few overall scene anchors, and the hypothetical microsecond
+budgets. These express presentation or domain choices. The refactor removes
+duplicated coordinates for related objects rather than replacing every number.
+The existing `card`, `station`, and `job` helpers also arrange their own native
+labels and work marks relative to their body.
+
+Chapter 2 retains its authored memory-transfer choreography: stack and saved-
+state centers are still repeated in the `move_job` waypoints. That is the main
+remaining manual spatial relationship. The scene is longer after this refactor
+because it names component handles explicitly; the maintenance improvement is
+fewer duplicated spatial relationships, not a reduction in total source lines.
+
+There is a current Noon qualification limit: leaf `align_to` rejects the live
+scene context used here. The scene uses the already available
+`move_to(..., aligned_edge=...)`, `match_x`, `match_y`, and aligned `next_to`
+operations for those placements. This does not establish support for every
+Manim API or every live layout combination. The retained-text wrapper needed
+one compatibility correction: `Text.move_to` now forwards its alignment and
+coordinate-mask arguments unchanged to the existing base placement operation.
+The Rust engine and layout calculations are unchanged. There is no Python
+frame callback, alternate scene state, or custom layout evaluator.
+
+Reveals also follow the existing native lifecycle. Decorative divider lines
+are created from the measured headers after panel arrangement, outside the
+layout families, because this revision's leaf `Create` requires a target with
+no family parent. The number line is attached for live `n2p` queries, removed,
+then revealed with `Create` in the same cue. Neither step adds presentation
+time or replaces the native drawing animation. To hide a selection, `hide`
+adds `VGroup(*objects)` as one native scene root and applies `FadeOut` to that
+family. Scene admission replaces the selected root members, so the fade
+removes their scene membership while preserving their layout handles.
+
 ## Authoring and verification notes
 
 The scene is authored with ordinary Noon objects and native animations.
@@ -541,7 +630,56 @@ Progressive connectors, transport circles, focus highlights, written labels,
 and program markers express the lesson's transitions. The shared engine owns
 animation and rendering; presentation holds use authored scene time.
 
-**The revision 3 development export is verified.** The assembled movie contains
+### Current layout refactor
+
+The four focused domain checks passed after the layout refactor, as did Python
+syntax compilation and `git diff --check`. The checks cover response intervals,
+the exact-deadline boundary, unchanged execution and dispatch budgets, and the
+complete 13-chapter, 522-second cue sheet. Native `NumberLine` geometry is no
+longer reimplemented in the domain test.
+
+Eight focused text and coordinate-placement tests also passed. The new text
+regression first reproduced the wrapper rejection, then verified that cold and
+live aligned/masked requests reach the existing shared-handle operations.
+These dispatch checks do not substitute for rendered inspection.
+
+`bash scripts/check.sh fast` was attempted and stopped at its architecture gate
+because Cargo is unavailable. Qualified preview setup also failed because the
+host has no Docker executable.
+
+A fresh development capture of the current source presented **72 native
+1600×900 WebGL2 images**, sampled forward from 0 through 522 seconds. Every
+requested time exactly matched its published time. All image hashes and
+dimensions were verified, and the final status reports source completion and
+an authored duration of exactly 522 seconds. There were no renderer, browser,
+or cleanup errors and no blocked HTTP(S) requests.
+
+The authoring team visually inspected **21 selected images spanning all 13
+chapters**, including the program board, I/O and readiness changes, the three
+deadline results, saved preemption progress, runtime boundaries, performance
+grid, resource and cancellation diagrams, assurance rows, and final
+architecture. Settled views and selected transition interiors were checked;
+these samples do not establish continuous-animation smoothness.
+
+The captured scene SHA-256 is
+`9a45832944b35f962f30eef7276a731fd4db43dad9ebdc7ac0fae0e0953f0eb0`.
+The unchanged WASM and glue come from engine base commit
+`b11f450551ef2db4daf99f873b16cab974e4c887`; the regenerated Python worker bundle
+includes the text placement forwarding correction. The development build ID is
+`5ea3918811f117ee452bf253108233d3f58e2224c23d04ffd92e7fccfa7119b9`.
+
+Capture used the unchanged `SemanticPreviewSession` implementation with its
+supported operation deadline set to 120 seconds in the scratch host. Chromium
+ran sandboxed under an unprivileged account, with HTTP(S) requests restricted
+to loopback and locally served pinned Pyodide. This is trusted-source authored-
+time development rendering, not hardened Docker CLI/MCP qualification,
+ordinary Run/replay/seek qualification, or a real-time performance benchmark.
+The historical movie below remains evidence for its earlier source only.
+
+### Historical revision 3 development export
+
+**The following evidence applies to the pre-refactor revision 3 source and
+movie, not to the current layout refactor.** That assembled movie contains
 15,660 frames at 30 fps, 1600×900 resolution, a duration of 522 seconds, and
 13 chapter markers. Every absolute movie-frame index from 0 through 15,659
 occurs exactly once, in order, with the expected presentation timestamp. The
@@ -577,8 +715,9 @@ Rendering used actual Noon WebGL2 through the unchanged
 `b11f450551ef2db4daf99f873b16cab974e4c887` and build ID
 `d6cd1c9a0dc2bbc16657db8003ebea4971c5b89ebb122b2089e2579ad69b19ab`.
 
-The focused checks for domain arithmetic, the exact-deadline boundary, the
-proportional axis, and the cue sheet are separate from rendered verification:
+The historical focused checks for domain arithmetic, the exact-deadline
+boundary, the then-authored proportional axis, and the cue sheet were separate
+from rendered verification. The current command remains:
 
 ```bash
 python3 -m unittest web/python/test_async_threads_realtime.py
@@ -594,7 +733,7 @@ qualification have not been performed.
 For the hardened supported preview workflow, follow
 [`skills/noon-authoring/references/verification.md`](../../../skills/noon-authoring/references/verification.md)
 using a current browser build and the pinned Docker runtime. The following
-invocation uses the current revision 3 cue map and samples near each chapter's
+invocation uses the preserved 522-second cue map and samples near each chapter's
 end. It is a preview recipe, not a report that this command has been run:
 
 ```bash

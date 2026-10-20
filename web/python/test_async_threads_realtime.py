@@ -1,7 +1,6 @@
 """Check the tutorial's numerical claims without substituting a Noon renderer."""
 
 import ast
-from copy import deepcopy
 from pathlib import Path
 import unittest
 
@@ -23,11 +22,6 @@ def domain_values():
              and node.targets[0].id in names]
     nodes += [node for node in TREE.body if isinstance(node, ast.FunctionDef)
               and node.name == "response_example"]
-    scene = next(node for node in TREE.body if isinstance(node, ast.ClassDef))
-    axis = deepcopy(next(node for node in scene.body
-                         if isinstance(node, ast.FunctionDef) and node.name == "tx"))
-    axis.decorator_list = []
-    nodes.append(axis)
     namespace = {}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), namespace)
     return namespace
@@ -66,16 +60,16 @@ class AsyncThreadsNumericalClaims(unittest.TestCase):
         self.assertFalse(late["met"])
         self.assertEqual(late["margin"], -1)
 
-    def test_timeline_preserves_proportions_including_narrow_dispatch(self):
-        tx = self.values["tx"]
-        span = tx(650) - tx(0)
+    def test_intervals_preserve_the_given_execution_and_dispatch_budgets(self):
+        # Geometry is now owned by native NumberLine.n2p. These checks concern
+        # the lesson's time budgets, not a reimplementation of that mapping.
         for _, blocking in self.values["SCENARIOS"]:
             result = self.values["response_example"](blocking)
-            for interval in (result["blocking"], result["dispatch"], result["control"]):
-                start, end = interval
-                self.assertAlmostEqual((tx(end) - tx(start)) / span, (end - start) / 650)
-        self.assertAlmostEqual((tx(250) - tx(0)) / span, 250 / 650)
-        self.assertAlmostEqual((tx(55) - tx(50)) / (tx(135) - tx(55)), 5 / 80)
+            durations = [end - start for start, end in
+                         (result["blocking"], result["dispatch"], result["control"])]
+            self.assertEqual(durations, [blocking, self.values["DISPATCH_US"], self.values["CONTROL_US"]])
+            self.assertEqual(sum(durations), result["finish"])
+            self.assertAlmostEqual(durations[1] / durations[2], 5 / 80)
 
     def test_complete_chapter_cue_sheet_and_entry_points(self):
         chapters = self.values["CHAPTERS"]
