@@ -348,6 +348,7 @@ impl SemanticStyle {
     /// the compatibility layer maps Manim's four-pixel default to `0.04`.
     pub fn manim_family_root(color: crate::Color) -> Self {
         Self {
+            stroke_pattern: None,
             fill: Some(SemanticPaint::Solid(color)),
             fill_opacity: 0.0,
             stroke: Some(SemanticPaint::Solid(color)),
