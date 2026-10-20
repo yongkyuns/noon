@@ -46,8 +46,11 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     return self.centerX + (-self.width / 2 if x < 0 else self.width / 2 if x > 0 else 0.0)
                 def criticalY(self, x, y):
                     return self.centerY + (-self.height / 2 if y < 0 else self.height / 2 if y > 0 else 0.0)
+                @property
+                def pointCount(self):
+                    return 4
                 def pathQuery(self):
-                    return types.SimpleNamespace(pointCount=4, free=lambda: None)
+                    return types.SimpleNamespace(pointCount=self.pointCount, free=lambda: None)
                 def pathBoundaryExtremumAlongDim(self, dim, key):
                     if dim == 0:
                         return self.criticalX(key, 0.0)

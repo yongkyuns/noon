@@ -8,6 +8,18 @@ import _manim_semantic_handles as semantic_handles
 from _typed_geometry_test_support import identity_only_wrapper
 
 
+def _path_observation(query):
+    """Return scalar counts or owned snapshots at the typed test boundary."""
+    def observe(_value, method, context_method, *, handle_property=False):
+        if method == "pointCount":
+            assert context_method == "queryMobjectPointCount" and handle_property
+            return query.pointCount
+        assert method == "pathQuery" and context_method == "queryMobjectPath"
+        assert not handle_property
+        return query
+    return observe
+
+
 class PathQueryTests(unittest.TestCase):
     def test_vmobject_point_equality_uses_rust_with_broadcast_arrays_and_tolerance(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -958,7 +970,7 @@ class PathQueryTests(unittest.TestCase):
         query.curveLength.return_value = 7.25
         query.start.return_value = [1., 2.]
         query.end.return_value = [3., 4.]
-        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
+        with patch.object(queries, '_typed_manim_observation', side_effect=_path_observation(query)) as observe:
             self.assertEqual(value.point_from_proportion(0.25), (2.5, -1.0))
             observe.assert_called_with(value, 'pathQuery', 'queryMobjectPath')
             query.pointFromProportion.assert_called_with(0.25)
@@ -982,7 +994,7 @@ class PathQueryTests(unittest.TestCase):
                 np.testing.assert_array_equal(end, [3., 4.])
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.curveLength.assert_called_with(0, 20)
-        self.assertEqual(query.free.call_count, 6)
+        self.assertEqual(query.free.call_count, 4)
 
     def test_endpoint_queries_fall_back_to_vec2_without_numpy(self):
         import noon
@@ -993,11 +1005,11 @@ class PathQueryTests(unittest.TestCase):
         query.start.return_value = [1.25, -2.5]
         query.end.return_value = [3.75, 4.5]
         with patch.dict("sys.modules", {"numpy": None}), patch.object(
-            queries, "_typed_manim_observation", return_value=query
+            queries, "_typed_manim_observation", side_effect=_path_observation(query)
         ):
             self.assertEqual(value.get_start(), noon.Vec2(1.25, -2.5))
             self.assertEqual(value.get_end(), noon.Vec2(3.75, 4.5))
-        self.assertEqual(query.free.call_count, 4)
+        self.assertEqual(query.free.call_count, 2)
 
     def test_get_pieces_builds_independent_equal_proportion_path_copies(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -1260,7 +1272,7 @@ class PathQueryTests(unittest.TestCase):
         query.pointCount = 4
         query.start.return_value = [1.0, 2.0]
         query.end.return_value = [3.0, 4.0]
-        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+        with patch.object(queries, "_typed_manim_observation", side_effect=_path_observation(query)) as observe:
             points = value.get_start_and_end()
             try:
                 import numpy as np
@@ -1278,7 +1290,7 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(observe.call_count, 4)
             self.assertEqual(query.start.call_count, 1)
             self.assertEqual(query.end.call_count, 1)
-            self.assertEqual(query.free.call_count, 4)
+            self.assertEqual(query.free.call_count, 2)
 
         line = identity_only_wrapper(compat.Line)
         line.get_start = Mock(return_value=noon.Vec2(-1.0, 0.0))
@@ -1327,13 +1339,13 @@ class PathQueryTests(unittest.TestCase):
             ):
                 method()
 
-    def test_base_point_count_queries_share_the_path_snapshot_contract(self):
+    def test_base_point_count_queries_use_scalar_rust_observation(self):
         import noon
 
         value = identity_only_wrapper(noon.Mobject)
         query = Mock()
         query.pointCount = 4
-        with patch.object(queries, "_typed_manim_observation", return_value=query) as observe:
+        with patch.object(queries, "_typed_manim_observation", side_effect=_path_observation(query)) as observe:
             self.assertEqual(value.get_num_points(), 4)
             self.assertTrue(value.has_points())
             self.assertFalse(value.has_no_points())
@@ -1341,7 +1353,50 @@ class PathQueryTests(unittest.TestCase):
             self.assertFalse(value.has_points())
             self.assertTrue(value.has_no_points())
         self.assertEqual(observe.call_count, 5)
-        self.assertEqual(query.free.call_count, 5)
+        query.free.assert_not_called()
+        observe.assert_called_with(value, "pointCount", "queryMobjectPointCount", handle_property=True)
+
+    def test_image_and_text_point_counts_use_the_same_typed_scalar_operation(self):
+        from _manim_image import ImageMobject
+        from _manim_typst import Text
+
+        for cls, count in ((ImageMobject, 4), (Text, 0)):
+            with self.subTest(cls=cls.__name__):
+                value = identity_only_wrapper(cls)
+                with patch.object(queries, "_typed_manim_observation", return_value=count) as observe:
+                    self.assertEqual(value.get_num_points(), count)
+                    self.assertEqual(value.has_points(), count > 0)
+                    self.assertEqual(value.has_no_points(), count == 0)
+                self.assertEqual(observe.call_count, 3)
+                observe.assert_called_with(
+                    value, "pointCount", "queryMobjectPointCount", handle_property=True
+                )
+
+    def test_bound_point_count_reads_effective_owner_and_keeps_its_failure(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock(pointCount=32)
+        value._semantic_handle = handle
+        value._semantic_handle_fresh = True
+        value._object = object()
+        context = Mock()
+        context.queryMobjectPointCount.return_value = 12
+        value._scene = Mock(_canonical_authoring_context=context)
+        self.assertEqual(value.get_num_points(), 12)
+        context.queryMobjectPointCount.assert_called_once_with(handle)
+        context.queryMobjectPointCount.side_effect = RuntimeError("stale publication")
+        with self.assertRaisesRegex(Exception, "stale publication"):
+            value.get_num_points()
+        self.assertEqual(context.queryMobjectPointCount.call_count, 2)
+        handle.pathQuery.assert_not_called()
+
+    def test_custom_stride_point_count_keeps_staged_query_guard(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        with patch("_manim_updaters.canonical_callback_phase_active", return_value=True), \
+             patch.object(queries, "_typed_manim_observation") as observe:
+            with self.assertRaisesRegex(NotImplementedError, "staged callbacks"):
+                value.get_num_points()
+        observe.assert_not_called()
 
     def test_get_last_point_returns_the_final_anchor_and_matches_empty_index_error(self):
         import noon
@@ -1461,7 +1516,7 @@ class PathQueryTests(unittest.TestCase):
         query.firstHandles.return_value = [1., 2., 3.3, 0.]
         query.secondHandles.return_value = [2., 2., 3.6, 0.]
         query.anchors.return_value = [0., 0., 3., 0., 3., 0., 4., 0.]
-        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe, patch.object(
+        with patch.object(queries, '_typed_manim_observation', side_effect=_path_observation(query)) as observe, patch.object(
             queries, "_handle_for", return_value=handle
         ):
             self.assertEqual(value.get_num_curves(), 2)
@@ -1491,10 +1546,10 @@ class PathQueryTests(unittest.TestCase):
             else:
                 np.testing.assert_array_equal(columns[1], [[1., 2.], [3.3, 0.]])
             self.assertEqual(observe.call_count, 8)
-            self.assertEqual(query.free.call_count, 8)
+            self.assertEqual(query.free.call_count, 7)
             with self.assertRaises(AssertionError):
                 value.get_nth_curve_points(4)
-            self.assertEqual(query.free.call_count, 9)
+            self.assertEqual(query.free.call_count, 8)
             self.assertEqual(handle.cubicBezierPointRanges.call_count, 3)
 
     def test_nth_curve_points_match_negative_slice_and_assertion_semantics(self):

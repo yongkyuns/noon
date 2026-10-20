@@ -1462,6 +1462,13 @@ impl<'a> LiveSession<'a> {
         })
     }
 
+    /// Count the addressed object's own points in the current publication.
+    pub fn get_num_points(&self, mobject: &Mobject) -> Result<usize, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        crate::path_queries::effective_mobject_point_count(self.store, self.session, mobject)
+            .map_err(Into::into)
+    }
+
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(

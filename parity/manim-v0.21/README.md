@@ -432,3 +432,22 @@ Synchronous ordinary play still requires a JSPI-capable browser; the no-JSPI
 rejection remains explicit. These bounded checks do not qualify every host or
 broader class/array/callback contract. Full current-source and hosted gates remain
 required before merge.
+
+
+Root-owned point counts share one Rust authored/live observation. Geometry keeps
+its existing cubic, custom-stride and effective morph/reveal behavior; an
+ImageMobject owns four corners and a Text root owns zero glyph points. Descendant
+points are excluded, so a VGroup root remains zero. Python adapts the scalar
+through typed handles and preserves publication, ownership and staged-query guards.
+
+The detached/live `mobject_own_point_counts` profiles match actual pinned ManimCE
+for Mobject, Rectangle, Circle, Line, VGroup, ImageMobject and Text. All 272 prior
+product profiles remain unchanged. Native tests also cover partial Create counts,
+zero-scale geometry, descendants, foreign/stale publications and read-only revision
+identity. Equivalent native/direct-WASM/Python path-query examples exercise the
+seven classes with identical final pixels on both browser backends. The original
+`point_introspection.py` source from #2182 is retained byte for byte and passes its
+unchanged 1-pixel / 0.0036 differing-ratio / 0.1 channel-error limits locally.
+Current-head full and hosted qualification remain required before merge. This
+qualifies scalar counts and predicates; mutable image/text point arrays, buffer
+shape/dtype and broader class/family contracts remain partial in #2011 and #2009.

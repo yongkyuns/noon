@@ -1226,8 +1226,11 @@ mod wasm {
     impl WasmAuthoringFamilyHandle {
         #[wasm_bindgen(js_name = pointCount)]
         pub fn point_count(&self) -> Result<u32, JsValue> {
-            self.semantic_family()?;
-            Ok(0)
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .get_num_points()
+                .map(|count| count as u32)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = extremumAlongDim)]
@@ -2948,6 +2951,14 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = semanticGeneration)]
         pub fn semantic_generation(&self) -> u32 {
             self.handle.node_id().generation()
+        }
+
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> Result<u32, JsValue> {
+            self.handle
+                .get_num_points()
+                .map(|count| count as u32)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = familyKeys)]

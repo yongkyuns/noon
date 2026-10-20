@@ -7,7 +7,19 @@ class OrdinaryPathQueries(Scene):
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
         ellipse = Circle(radius=0.8, color=WHITE)
         ellipse.stretch_to_fit_width(2.4).shift(RIGHT * 2.5)
-        for shape in (rectangle, ellipse):
+        assert Mobject().get_num_points() == 0
+        assert Mobject().has_no_points()
+        assert VGroup(Circle()).get_num_points() == 0
+        assert VGroup(Circle()).has_no_points()
+        assert Line(LEFT, RIGHT).get_num_points() == 4
+        assert ImageMobject([[0]]).get_num_points() == 4
+        assert ImageMobject([[0]]).has_points()
+        assert Text("A").get_num_points() == 0
+        assert Text("A").has_no_points()
+        for shape, expected_points in ((rectangle, 16), (ellipse, 32)):
+            assert shape.get_num_points() == expected_points
+            assert shape.has_points()
+            assert not shape.has_no_points()
             self.add(shape)
             assert shape.get_arc_length() > 0
             for alpha in (0.125, 0.375, 0.625, 0.875):

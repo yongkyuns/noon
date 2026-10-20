@@ -973,6 +973,18 @@
       }
     },
     {
+      "id": "point-introspection",
+      "scene": "PointIntrospection",
+      "source": "parity/manim-v0.21/core-examples/point_introspection.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.0036,
+        "max_mean_absolute_channel_error": 0.1
+      },
+      "notes": "Original seven-class own-point assertions from #2182, retained byte for byte. Counts inspect only root-owned points for base Mobject, Rectangle, Circle, Line, VGroup, ImageMobject and Text. Raster covers the displayed Rectangle and Circle; wider mesh/buffer contracts remain separately scoped."
+    },
+    {
       "id": "animated-stroke-width",
       "scene": "OrdinaryAnimatedStrokeWidth",
       "source": "parity/manim-v0.21/core-examples/animated_stroke_width.py",

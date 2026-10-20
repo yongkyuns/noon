@@ -3,6 +3,115 @@ use noon::{
     RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 
+#[test]
+fn own_point_counts_ignore_descendants_and_accept_image_content() {
+    let mut scene = Scene::new();
+    let rectangle = scene.rectangle(2.0, 1.0).unwrap();
+    let mut circle = scene.circle(0.8).unwrap();
+    let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    let image = scene
+        .image(noon::ImageMobjectOptions::rgba8(1, 1, vec![0, 0, 0, 255]).unwrap())
+        .unwrap();
+    let group = scene.family(&[(&circle).into()]).unwrap();
+    let mut membership = noon_core::SemanticMutationTransaction::new();
+    membership.add_member(rectangle.node_id(), circle.node_id());
+    membership
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    circle.set_scale(0.0, 0.0).unwrap();
+    let revision = scene.revision();
+    for (object, count) in [
+        (&rectangle, 16),
+        (&circle, 32),
+        (&line, 4),
+        (&empty, 0),
+        (&image, 4),
+    ] {
+        assert_eq!(object.get_num_points().unwrap(), count);
+        assert_eq!(MobjectTarget::from(object).get_num_points().unwrap(), count);
+    }
+    assert_eq!(MobjectTarget::from(&group).get_num_points().unwrap(), 0);
+    assert_eq!(scene.revision(), revision);
+}
+
+#[cfg(feature = "native-text")]
+#[test]
+fn text_root_owns_no_points_on_authored_and_live_paths() {
+    let mut scene = Scene::new();
+    let text = scene.text(noon::Text::new("A")).unwrap();
+    assert_eq!(text.get_num_points().unwrap(), 0);
+    scene.add(&text).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let publication = execution.publication_context();
+    assert_eq!(scene.live(&mut execution).get_num_points(&text).unwrap(), 0);
+    assert_eq!(execution.publication_context(), publication);
+}
+
+#[test]
+fn live_point_counts_preserve_partial_paths_and_publication_guards() {
+    let mut scene = Scene::new();
+    let circle = scene.circle(0.8).unwrap();
+    let mut image = scene
+        .image(noon::ImageMobjectOptions::rgba8(1, 1, vec![0, 0, 0, 255]).unwrap())
+        .unwrap();
+    let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
+    scene.add(&image).unwrap();
+    scene.add(&empty).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let reveal = scene
+        .live(&mut execution)
+        .declare_and_activate_create(
+            &circle,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    // Actual pinned ManimCE Create observations, including zero-length curves
+    // retained at exact segment boundaries.
+    for (alpha, expected) in [
+        (0.0, 4),
+        (0.125, 8),
+        (0.25, 12),
+        (0.5, 20),
+        (0.75, 28),
+        (1.0, 32),
+    ] {
+        scene
+            .live(&mut execution)
+            .advance_segment_to(reveal, alpha)
+            .unwrap();
+        let publication = execution.publication_context();
+        assert_eq!(
+            scene.live(&mut execution).get_num_points(&circle).unwrap(),
+            expected
+        );
+        assert_eq!(
+            noon::integration::effective_path_query(scene.integration_store(), &execution, &circle)
+                .unwrap()
+                .point_count(),
+            expected
+        );
+        assert_eq!(
+            scene.live(&mut execution).get_num_points(&image).unwrap(),
+            4
+        );
+        assert_eq!(
+            scene.live(&mut execution).get_num_points(&empty).unwrap(),
+            0
+        );
+        assert_eq!(execution.publication_context(), publication);
+    }
+    let publication = execution.publication_context();
+    let mut other_scene = Scene::new();
+    let foreign = other_scene.circle(1.0).unwrap();
+    assert!(scene.live(&mut execution).get_num_points(&foreign).is_err());
+    image.set_object_opacity(0.5).unwrap();
+    assert!(scene.live(&mut execution).get_num_points(&image).is_err());
+    assert_eq!(execution.publication_context(), publication);
+}
+
 fn near(actual: (f64, f64), expected: (f64, f64)) {
     assert!(
         (actual.0 - expected.0).abs() < 1e-6 && (actual.1 - expected.1).abs() < 1e-6,
