@@ -32,13 +32,18 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         observe.assert_called_once_with(root)
         root._semantic_family_handle.familyKeys.assert_called_once_with()
 
-    def test_empty_default_family_preserves_pinned_empty_numpy_shape(self):
-        import numpy as np
+    def test_empty_default_family_preserves_the_host_array_contract(self):
         root, _ = self.family(empty=True)
         with patch.object(queries, '_vector_boundary_points_observation', return_value=[]) as observe:
             result = root.get_points_defining_boundary()
-        self.assertEqual(result.shape, (0,))
-        self.assertEqual(result.dtype, np.dtype('float64'))
+        try:
+            import numpy as np
+        except ImportError:
+            self.assertIsInstance(result, list)
+            self.assertEqual(result, [])
+        else:
+            self.assertEqual(result.shape, (0,))
+            self.assertEqual(result.dtype, np.dtype('float64'))
         observe.assert_called_once_with(root)
 
     def test_default_family_without_numpy_returns_vec2_values(self):
