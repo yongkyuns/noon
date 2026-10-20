@@ -210,11 +210,11 @@ impl CanonicalAuthoringScene {
         object: &noon::Mobject,
         profile: noon_core::ManimCamera3DProfile,
         options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, crate::authoring_error::AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.to_string());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
-        object.validate().map_err(|error| error.to_string())?;
+        object.validate()?;
         let child = super::OrdinaryCompositionChild::CameraProfile {
             target: object.clone(),
             profile,

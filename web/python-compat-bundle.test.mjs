@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import test from "node:test";
 
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 
@@ -10,6 +11,51 @@ await import("../scripts/build-python-worker.mjs");
 
 const generatedWorker = await readFile(new URL("./python-worker.js", import.meta.url), "utf8");
 const sourceWorker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+
+// Exercise the generated startup boundary, including its resolved value. Keeping
+// the loader's whole result here also keeps the large verified input reachable.
+const runtimeStartup = new Function("loadRuntimeBuild", "initNoonWeb", `${generatedWorker.slice(
+  generatedWorker.indexOf("const runtimeBuildPromise ="),
+  generatedWorker.indexOf("const pyodidePromise ="),
+)}; return runtimeBuildPromise;`);
+
+test("verified startup consumes the exact input once and retains only identity", async () => {
+  const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+  const identity = Object.freeze({ buildId: "verified-build" });
+  const initialized = Promise.withResolvers();
+  let calls = 0;
+  let settled = false;
+  const ready = runtimeStartup(async () => ({ identity, wasmBytes }), options => {
+    calls += 1;
+    assert.equal(options.module_or_path, wasmBytes);
+    return initialized.promise;
+  });
+  void ready.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  assert.equal(settled, false, "readiness must wait for actual WASM initialization");
+  initialized.resolve({ memory: "module exports must not replace build identity" });
+  assert.equal(await ready, identity);
+  assert.equal(calls, 1);
+  assert.equal(Object.hasOwn(await ready, "wasmBytes"), false);
+});
+
+for (const stage of ["verification", "initialization"]) {
+  test(`${stage} failure preserves the original startup rejection`, async () => {
+    const failure = new Error(stage);
+    let initializationCalls = 0;
+    const ready = runtimeStartup(
+      async () => {
+        if (stage === "verification") throw failure;
+        return { identity: {}, wasmBytes: new Uint8Array() };
+      },
+      async () => { initializationCalls += 1; throw failure; },
+    );
+    await assert.rejects(ready, error => error === failure);
+    assert.equal(initializationCalls, stage === "verification" ? 0 : 1);
+  });
+}
+
 const bundleMatch = generatedWorker.match(
   /\.\/python\/(compat-bundle\.([0-9a-f]{64})\.json)/,
 );

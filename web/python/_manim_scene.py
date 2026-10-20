@@ -2860,7 +2860,7 @@ def _build_canonical_composition_candidate(
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Scene.play")
     return (
         candidate,
         reservations,
@@ -2890,7 +2890,7 @@ def _play_canonical_composition(
         else:
             context.ordinaryPlayComposition(candidate)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Scene.play")
     for tracker in tracker_associations:
         tracker._commit_canonical_association(self, context)
     for source, reservation in reservations:

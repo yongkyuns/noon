@@ -59,7 +59,11 @@ const generatedFetchBlock = [
 
 const promiseBlock = "const pyodidePromise = initializePyodide();";
 const generatedPromiseBlock = [
-  "const runtimeBuildPromise = loadRuntimeBuild();",
+  // Keep only provenance after initialization, not the full verified WASM input.
+  "const runtimeBuildPromise = loadRuntimeBuild().then(async (runtimeBuild) => {",
+  "  await initNoonWeb({ module_or_path: runtimeBuild.wasmBytes });",
+  "  return runtimeBuild.identity;",
+  "});",
   promiseBlock,
 ].join("\n");
 const readyBlock = [
@@ -72,19 +76,14 @@ const readyBlock = [
 ].join("\n");
 const generatedReadyBlock = [
   "Promise.all([pyodidePromise, runtimeBuildPromise])",
-  "  .then(([, runtimeBuild]) => {",
+  "  .then(([, buildIdentity]) => {",
   "    authoringMilestones.authoringWorkerReadyAtMs = performance.now();",
-  '    post("ready", { buildIdentity: runtimeBuild.identity });',
+  '    post("ready", { buildIdentity });',
   "  })",
   "  .catch(failAuthoringWorker);",
 ].join("\n");
 const wasmInitBlock = '  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());';
-const generatedWasmInitBlock = [
-  '  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", async () => {',
-  "    const runtimeBuild = await runtimeBuildPromise;",
-  "    return initNoonWeb({ module_or_path: runtimeBuild.wasmBytes });",
-  "  });",
-].join("\n");
+const generatedWasmInitBlock = '  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => runtimeBuildPromise);';
 for (const [label, block] of [["runtime promise", promiseBlock], ["ready", readyBlock], ["WASM init", wasmInitBlock]]) {
   if (source.indexOf(block) === -1 || source.indexOf(block) !== source.lastIndexOf(block)) {
     throw new Error(`Python worker ${label} boundary changed; update the generator explicitly`);
