@@ -61,13 +61,30 @@ impl Table {
     }
     /// Flat entries omit the unsupplied corner and preserve last-occurrence order.
     pub fn get_entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        self.family_entries(&self.painted_entries)
+        self.family_entries(&self.entries_family()?)
     }
     pub fn entries(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
         self.get_entries()
     }
     pub fn get_entries_without_labels(&self) -> Result<Vec<TableEntry>, TableAuthoringError> {
-        self.family_entries(&self.body_entries)
+        self.family_entries(&self.body_entries_family()?)
+    }
+    /// The canonical displayed group. Membership edits affect subsequent
+    /// entry queries and ordinary table painting, independently of raw rows.
+    pub fn entries_family(&self) -> Result<MobjectFamily, TableAuthoringError> {
+        self.checked_entry_family(&self.painted_entries)
+    }
+    /// The canonical body-only group, independently editable from display.
+    pub fn body_entries_family(&self) -> Result<MobjectFamily, TableAuthoringError> {
+        self.checked_entry_family(&self.body_entries)
+    }
+    fn checked_entry_family(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<MobjectFamily, TableAuthoringError> {
+        self.family.validate()?;
+        family.validate()?;
+        Ok(family.clone())
     }
     fn family_entries(
         &self,

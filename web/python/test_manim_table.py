@@ -12,8 +12,31 @@ class _Handle:
         self.semanticGeneration = 1
 
 
-class _Family:
-    pass
+class _Family(_Handle):
+    def __init__(self, slot=99, members=()):
+        super().__init__(slot)
+        self.members = list(members)
+
+    def memberKeys(self):
+        return [f"{m.semanticSlot}:{m.semanticGeneration}" for m in self.members]
+
+
+class _Group:
+    def __init__(self, *items):
+        self._items = list(items)
+
+    @property
+    def submobjects(self):
+        if not hasattr(self, "_semantic_family_handle"):
+            return self._items
+        return [self._semantic_member_wrappers[f"{m.semanticSlot}:{m.semanticGeneration}"]
+                for m in self._semantic_family_handle.members]
+
+    def __len__(self):
+        return len(self.submobjects)
+
+    def __getitem__(self, index):
+        return self.submobjects[index]
 
 
 class _EntrySelection:
@@ -55,6 +78,8 @@ class _TableHandle:
         self._family = _Family()
         self.selection = _EntrySelection(self)
         self.body_selection = _EntrySelection(self)
+        self._entries_family = _Family(100)
+        self._body_entries_family = _Family(101)
 
     def entrySelection(self, without_labels):
         return self.body_selection if without_labels else self.selection
@@ -70,6 +95,14 @@ class _TableHandle:
 
     def entryAtPosition(self, row, column):
         return self.entries()[row * 2 + column]
+
+    def entriesFamily(self):
+        self._entries_family.members = self.entries()
+        return self._entries_family
+
+    def bodyEntriesFamily(self):
+        self._body_entries_family.members = self.bodyEntries()
+        return self._body_entries_family
 
     def bodyEntries(self):
         return [self.a, self.b, self.c, self.d]
@@ -154,7 +187,10 @@ class TableFacadeTests(unittest.TestCase):
         self.context = _Context(self.handle)
 
         def attach_family(wrapper, _handle, context):
-            wrapper._semantic_member_wrappers = {}
+            wrapper._semantic_member_wrappers = {
+                f"{m.semanticSlot}:{m.semanticGeneration}": types.SimpleNamespace(_semantic_handle=m)
+                for m in getattr(_handle, "members", [])
+            }
             wrapper._semantic_family_handle = _handle
             wrapper._canonical_live_target_context = context
             return wrapper
@@ -168,7 +204,7 @@ class TableFacadeTests(unittest.TestCase):
             patch.object(table, "_attach_shared_family", side_effect=attach_family),
             patch.object(table, "_attach_shared_handle", side_effect=lambda wrapper, handle: setattr(wrapper, "_semantic_handle", handle)),
             patch.object(table, "_family_wrapper_key", side_effect=lambda value: f"{value._semantic_handle.semanticSlot}:{value._semantic_handle.semanticGeneration}"),
-            patch.object(table._compat, "VGroup", side_effect=lambda *items: types.SimpleNamespace(submobjects=list(items))),
+            patch.object(table._compat, "VGroup", _Group),
             patch.object(table, "_table_cell", side_effect=lambda *_: _Handle(9)),
             patch.object(table, "_highlight_table", side_effect=lambda *_: _Handle(10)),
             patch.object(table, "_get_highlighted_table", side_effect=lambda *_: _Handle(11)),
@@ -244,6 +280,23 @@ class TableFacadeTests(unittest.TestCase):
         value.get_cell()
         self.assertEqual(table._table_cell.call_args.args[1].row, 0)
         self.assertEqual(table._table_cell.call_args.args[2], "0")
+
+    def test_flat_queries_reuse_the_canonical_group_wrappers(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        displayed = value.get_entries()
+        body = value.get_entries_without_labels()
+        self.assertIs(displayed, value.get_entries())
+        self.assertIs(body, value.get_entries_without_labels())
+        self.assertIsNot(displayed, body)
+        self.assertIs(displayed._semantic_family_handle, self.handle._entries_family)
+        self.assertIs(body._semantic_family_handle, self.handle._body_entries_family)
+
+    def test_displayed_group_preserves_its_identity_when_exposing_the_vector_class(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        wrapper = object.__new__(table._compat.Group)
+        value._table_query_wrappers[table._handle_key(self.handle._entries_family)] = wrapper
+        self.assertIs(value.get_entries(), wrapper)
+        self.assertIs(type(wrapper), _Group)
 
     def test_single_entry_does_not_enumerate_other_rows_or_all_entries(self):
         value = table.Table([["a", "b"], ["c", "d"]])

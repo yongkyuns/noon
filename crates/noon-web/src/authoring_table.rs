@@ -325,6 +325,20 @@ impl WasmTableHandle {
         .map_err(js_error)?;
         Ok(WasmTableEntrySelection { selection })
     }
+    #[wasm_bindgen(js_name = entriesFamily)]
+    pub fn entries_family(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        self.table
+            .entries_family()
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = bodyEntriesFamily)]
+    pub fn body_entries_family(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        self.table
+            .body_entries_family()
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = cellRows)]
     pub fn cell_rows(&self) -> Result<WasmTableCellRows, JsValue> {
         Ok(WasmTableCellRows {

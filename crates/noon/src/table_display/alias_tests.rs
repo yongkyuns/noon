@@ -391,6 +391,154 @@ fn retained_query_requests_reject_a_retired_table_owner() {
     assert!(entries.select_index(0).is_err());
     assert!(rows.select_row(0).is_err());
     assert!(columns.get_cell(0).is_err());
+    assert!(table.entries_family().is_err());
+    assert!(table.body_entries_family().is_err());
+    assert!(table.get_entries().is_err());
+    assert!(table.get_entries_without_labels().is_err());
+}
+
+#[test]
+fn canonical_entry_groups_match_pinned_mutation_order_queries_and_copies() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/manim-v0.21/table-groups.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["manimVersion"], "0.21.0");
+    assert_eq!(fixture["cases"].as_array().unwrap().len(), 2);
+    for case in fixture["cases"].as_array().unwrap() {
+        let (scene, table, cells, ids) = position_table(case["labels"].as_bool().unwrap());
+        let store = scene.integration_store();
+        let displayed = table.entries_family().unwrap();
+        let body = table.body_entries_family().unwrap();
+        let name = |entry: &TableEntry| {
+            ids.get(&entry.as_target().node_id())
+                .map(String::as_str)
+                .unwrap_or("missing-corner")
+                .to_owned()
+        };
+        let named = |entries: Vec<TableEntry>| entries.iter().map(&name).collect::<Vec<_>>();
+        let snapshot = || {
+            let selections: Vec<Vec<Value>> = [false, true]
+                .into_iter()
+                .map(|body| {
+                    [(0, 0), (0, 1), (1, 1), (-1, -1)]
+                        .into_iter()
+                        .map(|(r, c)| {
+                            let result = if body {
+                                table.body_entry_at_position(r, c)
+                            } else {
+                                table.entry_at_position(r, c)
+                            };
+                            match result {
+                                Ok(entry) => json!(name(&entry)),
+                                Err(error) => {
+                                    assert!(matches!(
+                                        error,
+                                        TableAuthoringError::InvalidEntryIndex
+                                    ));
+                                    json!({"exception":"IndexError", "message":error.to_string()})
+                                }
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            json!({
+                "displayedStable": table.entries_family().unwrap().node_id() == displayed.node_id(),
+                "bodyStable": table.body_entries_family().unwrap().node_id() == body.node_id(),
+                "distinctGroups": displayed.node_id() != body.node_id(),
+                "displayed": named(table.get_entries().unwrap()),
+                "body": named(table.get_entries_without_labels().unwrap()),
+                "rows": table.get_rows().unwrap().into_iter().map(&named).collect::<Vec<_>>(),
+                "columns": table.get_columns().unwrap().into_iter().map(&named).collect::<Vec<_>>(),
+                "selections": selections,
+            })
+        };
+        let before = store.borrow().len();
+        for (index, wanted) in case["states"].as_array().unwrap().iter().enumerate() {
+            match index {
+                0 => (),
+                1 => {
+                    displayed.remove((&cells[0]).into()).unwrap();
+                }
+                2 => {
+                    body.remove((&cells[1]).into()).unwrap();
+                }
+                3 => {
+                    displayed.add((&cells[0]).into()).unwrap();
+                }
+                4 => {
+                    body.add((&cells[1]).into()).unwrap();
+                }
+                5 => {
+                    displayed.add((&cells[1]).into()).unwrap();
+                }
+                _ => panic!("unhandled pinned mutation phase"),
+            }
+            assert_eq!(
+                snapshot(),
+                *wanted,
+                "labels={}/phase={index}",
+                case["labels"]
+            );
+            assert_eq!(
+                store.borrow().len(),
+                before,
+                "queries and membership edits allocate no nodes"
+            );
+            assert_eq!(
+                store
+                    .borrow()
+                    .semantic_family_members_checked(table.painted_entries.node_id())
+                    .unwrap(),
+                table
+                    .get_entries()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| entry.as_target().node_id())
+                    .collect::<Vec<_>>(),
+                "the canonical displayed group is the actual painted group"
+            );
+        }
+        let restored = Table::from_family(table.family().clone()).unwrap();
+        assert_eq!(
+            restored.entries_family().unwrap().node_id(),
+            displayed.node_id()
+        );
+        assert_eq!(
+            restored.body_entries_family().unwrap().node_id(),
+            body.node_id()
+        );
+        let copy = table.family().copy_family().unwrap();
+        let clone = Table::from_family(copy.root().clone()).unwrap();
+        let copied_displayed = clone.entries_family().unwrap();
+        let copied_body = clone.body_entries_family().unwrap();
+        copied_displayed
+            .remove(clone.get_entries().unwrap()[0].as_target())
+            .unwrap();
+        copied_body
+            .remove(
+                clone
+                    .get_entries_without_labels()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .as_target(),
+            )
+            .unwrap();
+        assert_eq!(
+            json!({
+                "displayedStable": copied_displayed.node_id() == clone.entries_family().unwrap().node_id(),
+                "bodyStable": copied_body.node_id() == clone.body_entries_family().unwrap().node_id(),
+                "independentGroups": copied_displayed.node_id() != displayed.node_id() && copied_body.node_id() != body.node_id(),
+                "independentLeaves": clone.get_entries().unwrap().iter().all(|entry| !ids.contains_key(&entry.as_target().node_id())),
+                "displayedCount": clone.get_entries().unwrap().len(),
+                "bodyCount": clone.get_entries_without_labels().unwrap().len(),
+                "originalUnchanged": snapshot() == *case["states"].as_array().unwrap().last().unwrap(),
+            }),
+            case["copy"]
+        );
+    }
 }
 
 fn optional_label_targets(present: bool, values: &[TableEntry]) -> Option<Vec<MobjectTarget<'_>>> {

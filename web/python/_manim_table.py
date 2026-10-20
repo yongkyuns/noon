@@ -347,13 +347,21 @@ class Table(_compat.VGroup):
 
     def get_entries_without_labels(self, pos=None):
         if pos is None:
-            return self._query_entries("bodyEntries")
+            return self._canonical_entry_group("bodyEntriesFamily")
         return self._positioned_entry(pos, True)
 
     def get_entries(self, pos=None):
         if pos is None:
-            return self._query_entries("entries")
+            return self._canonical_entry_group("entriesFamily")
         return self._positioned_entry(pos, False)
+
+    def _canonical_entry_group(self, method):
+        wrapper = self._query_entry_wrapper(engine_call(getattr(self._table_handle, method)))
+        # The generic family bridge initially wraps internal groups as Group.
+        # Keep that same identity while exposing Table's Python vector class.
+        if type(wrapper) is _compat.Group:
+            wrapper.__class__ = _compat.VGroup
+        return wrapper
 
     def _entry_family(self):
         return self._query_entry_wrapper(engine_call(self._table_handle.entryFamily))
