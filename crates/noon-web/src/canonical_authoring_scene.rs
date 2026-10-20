@@ -925,6 +925,27 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    /// Observe one family's own root through the current execution owner.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_own_path_query(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PathQuery, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        family.validate().map_err(AuthoringFailure::from)?;
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.effective_family_own_path_query(family);
+            }
+        }
+        family.own_path_query().map_err(AuthoringFailure::from)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_path_query(
         &mut self,
@@ -7341,6 +7362,18 @@ mod wasm {
             })
         }
 
+        /// Observe only the owned root without capturing descendant membership.
+        #[wasm_bindgen(js_name = queryFamilyOwnPath)]
+        pub fn query_family_own_path(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<crate::WasmPathQuery, JsValue> {
+            self.inner
+                .family_own_path_query(&handle.semantic_family()?)
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
         /// Read a family through the same live session that owns its effective leaves.
         #[wasm_bindgen(js_name = queryFamilyLayout)]
         pub fn query_family_layout(
@@ -12029,6 +12062,63 @@ mod tests {
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
         context.live_target_editor(&source).unwrap();
+    }
+
+    #[test]
+    fn family_own_path_queries_follow_authored_active_transferred_and_returned_ownership() {
+        let mut context = CanonicalAuthoringScene::default();
+        let empty = context.scene.family(&[]).unwrap();
+        let owned = context.scene.family(&[]).unwrap();
+        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        owned.set_points_f64(&points).unwrap();
+        context
+            .scene
+            .add_many(&[(&empty).into(), (&owned).into()])
+            .unwrap();
+        assert!(context
+            .family_own_path_query(&empty)
+            .unwrap()
+            .points()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.family(&[]).unwrap();
+        assert!(context.family_own_path_query(&foreign).is_err());
+        context.live_player(1.0).unwrap();
+        assert!(context
+            .family_own_path_query(&empty)
+            .unwrap()
+            .points()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        let transferred = context.take_execution_player(1.0, 41).unwrap();
+        assert!(context.family_own_path_query(&empty).is_err());
+        assert!(context.family_own_path_query(&owned).is_err());
+        context.return_execution_player(transferred).unwrap();
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
     }
 
     #[test]

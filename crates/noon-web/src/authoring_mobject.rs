@@ -1224,6 +1224,14 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = pathQuery)]
+        pub fn path_query(&self) -> Result<crate::WasmPathQuery, JsValue> {
+            self.semantic_family()?
+                .own_path_query()
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = pointCount)]
         pub fn point_count(&self) -> Result<u32, JsValue> {
             let family = self.semantic_family()?;

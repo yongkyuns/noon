@@ -158,7 +158,7 @@ class CyclicReplace(Transform):
         path_arc: float = math.pi / 2.0,
         **kwargs: Any,
     ) -> None:
-        if len(mobjects) == 1 and isinstance(mobjects[0], _compat.Group):
+        if len(mobjects) == 1 and isinstance(mobjects[0], (_compat.Group, _compat.VGroup)):
             group = mobjects[0]
         else:
             group = _compat.Group(*mobjects)
@@ -343,7 +343,7 @@ class ShrinkToCenter:
     _canonical_affine_lifecycle = "shrink"
 
     def __init__(self, mobject: object, **kwargs: Any) -> None:
-        if isinstance(mobject, _compat.Group):
+        if isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError("ShrinkToCenter currently supports one leaf Mobject")
         if not isinstance(mobject, _base.Mobject):
             raise TypeError("ShrinkToCenter target must be a Mobject")

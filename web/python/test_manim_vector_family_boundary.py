@@ -7,7 +7,7 @@ import noon
 import _manim_compat as compat
 import _manim_path_queries as queries
 import _manim_semantic_handles as handles
-from _typed_geometry_test_support import identity_only_wrapper
+from _typed_geometry_test_support import identity_only_wrapper, empty_path_query
 
 
 class VectorFamilyBoundaryTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         child._semantic_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=0)
         child._semantic_handle_fresh = True
         root._semantic_family_handle = SimpleNamespace(
-            semanticSlot=2, semanticGeneration=0,
+            semanticSlot=2, semanticGeneration=0, pathQuery=empty_path_query,
             familyKeys=Mock(return_value=['2:0'] if empty else ['2:0', '1:0']),
             memberKeys=lambda: [] if empty else ['1:0'],
         )
@@ -80,7 +80,7 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         child.n_points_per_cubic_curve = 2
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
-        with patch.object(queries, '_typed_manim_observation', return_value=query), patch.object(queries, '_vector_boundary_points_observation', side_effect=AssertionError('custom stride ignored')):
+        with patch.object(queries, '_typed_manim_observation', side_effect=lambda value, *args: empty_path_query() if value is root else query), patch.object(queries, '_vector_boundary_points_observation', side_effect=AssertionError('custom stride ignored')):
             result = root.get_points_defining_boundary()
         self.assertEqual([list(p) for p in result], [[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
         query.free.assert_called_once_with()
@@ -104,3 +104,16 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
                 handles._vector_boundary_points_observation(root)
         self.assertEqual(context.queryFamilyVectorBoundaryPoints.call_count, 2)
         context.queryFamilyVectorBoundaryPoints.assert_called_with(root._semantic_family_handle)
+
+    def test_custom_selector_keeps_root_owned_anchors_before_its_children(self):
+        root, child = self.family()
+        root.get_family = Mock(return_value=[root, child])
+        child.get_anchors = Mock(return_value=[noon.Vec2(9, 8)])
+        owned = Mock(pointCount=4)
+        owned.anchors.return_value = [-2., 1., 2., 1.]
+        root._semantic_family_handle.pathQuery = Mock(return_value=owned)
+        with patch.object(handles, '_live_mutation_context', return_value=None), patch.object(handles, '_live_constructor_context', return_value=None):
+            result = root.get_points_defining_boundary()
+        self.assertEqual([list(point) for point in result], [[-2., 1.], [2., 1.], [9., 8.]])
+        root._semantic_family_handle.pathQuery.assert_called_once_with()
+        owned.free.assert_called_once_with()

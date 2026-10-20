@@ -39,7 +39,7 @@ class GrowFromPoint:
     """Introduce one leaf mobject from an exact scene point."""
 
     def __init__(self, mobject: object, point: object, point_color: object | None = None, **kwargs: Any) -> None:
-        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, _compat.Group):
+        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError("GrowFromPoint currently supports one leaf 2D Mobject; retained groups remain partial")
         self.mobject = mobject
         self.target = mobject
@@ -52,7 +52,7 @@ class GrowFromCenter(GrowFromPoint):
     """Introduce one leaf mobject from its shared Rust center query."""
 
     def __init__(self, mobject: object, point_color: object | None = None, **kwargs: Any) -> None:
-        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, _compat.Group):
+        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError("GrowFromCenter currently supports one leaf 2D Mobject; retained groups remain partial")
         super().__init__(mobject, mobject.get_center(), point_color=point_color, **kwargs)
 
@@ -61,7 +61,7 @@ class GrowFromEdge(GrowFromPoint):
     """Introduce one leaf mobject from its shared Rust critical-point query."""
 
     def __init__(self, mobject: object, edge: object, point_color: object | None = None, **kwargs: Any) -> None:
-        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, _compat.Group):
+        if not isinstance(mobject, _base.Mobject) or isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError("GrowFromEdge currently supports one leaf 2D Mobject; retained groups remain partial")
         direction = _base._as_vec2(edge)
         super().__init__(mobject, mobject.get_critical_point(direction), point_color=point_color, **kwargs)

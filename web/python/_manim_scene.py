@@ -1553,7 +1553,7 @@ def _canonical_family_fade_animation(
     else:
         return None
     family = getattr(animation, "target", None)
-    if not isinstance(family, _compat.Group):
+    if not isinstance(family, (_compat.Group, _compat.VGroup)):
         return None
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
@@ -1753,7 +1753,7 @@ def _canonical_cyclic_replace_transform(
     if not isinstance(animation, _animate.CyclicReplace):
         return None
     source = animation.group
-    if not isinstance(source, _compat.Group):
+    if not isinstance(source, (_compat.Group, _compat.VGroup)):
         raise TypeError("CyclicReplace requires Mobjects or one Group/VGroup")
     leaves = _compat._leaf_mobjects(source)
     if not leaves or any(member._scene is not scene for member in leaves):
@@ -1780,16 +1780,16 @@ def _canonical_family_transform_animation(
         source, target = animation.source, animation.target
     elif type(animation) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex):
         source, target = animation.source, animation.target
-    elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
+    elif type(animation) is _base.Transform and isinstance(animation.source, (_compat.Group, _compat.VGroup)):
         source, target = animation.source, animation.target
     else:
         return None
-    if not isinstance(source, _compat.Group):
+    if not isinstance(source, (_compat.Group, _compat.VGroup)):
         return None
     source_leaves = _compat._leaf_mobjects(source)
     if not source_leaves or any(member._scene is not scene for member in source_leaves):
         return None
-    if not isinstance(target, _compat.Group) or any(
+    if not isinstance(target, (_compat.Group, _compat.VGroup)) or any(
         member._scene is not None for member in _compat._leaf_mobjects(target)
     ):
         raise NotImplementedError("canonical family Transform target must be detached")
@@ -1806,7 +1806,7 @@ def _canonical_indicate_animation(
     if not isinstance(animation, _animate.Indicate):
         return None
     target = animation.mobject
-    family = isinstance(target, _compat.Group)
+    family = isinstance(target, (_compat.Group, _compat.VGroup))
     handle_name = "_semantic_family_handle" if family else "_semantic_handle"
     bound = (
         bool(_compat._leaf_mobjects(target))
@@ -1869,7 +1869,7 @@ def _canonical_passing_flash_animation(
     if not isinstance(animation, _indication.ShowPassingFlash):
         return None
     target = animation.mobject
-    if not isinstance(target, _base.Mobject) or isinstance(target, _compat.Group):
+    if not isinstance(target, _base.Mobject) or isinstance(target, (_compat.Group, _compat.VGroup)):
         raise NotImplementedError("canonical ShowPassingFlash requires one typed Line")
     if target._scene not in (None, scene):
         raise ValueError("ShowPassingFlash target belongs to another Scene")
@@ -1923,7 +1923,7 @@ def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: ob
         leaves = _compat._leaf_mobjects(target)
         if not leaves or any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
             return None
-        family = target if isinstance(target, _compat.Group) else getattr(
+        family = target if isinstance(target, (_compat.Group, _compat.VGroup)) else getattr(
             animation, "_ordinary_write_family", None
         )
         if family is None:
@@ -1949,7 +1949,7 @@ def _canonical_text_write_animation(scene: _base.Scene, animation: object):
     if not isinstance(animation, _family_creation.Write):
         return None
     target = animation.target
-    if not isinstance(target, _typst._RetainedTextMobject) or isinstance(target, _compat.Group):
+    if not isinstance(target, _typst._RetainedTextMobject) or isinstance(target, (_compat.Group, _compat.VGroup)):
         return None
     if getattr(target, "_semantic_handle", None) is None:
         raise NotImplementedError("canonical Text Write requires a typed retained text target")
@@ -1966,7 +1966,7 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
     if not isinstance(animation, _family_creation.Write):
         return None
     family = animation.target
-    if not isinstance(family, _compat.Group):
+    if not isinstance(family, (_compat.Group, _compat.VGroup)):
         return None
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
@@ -1992,7 +1992,7 @@ def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
     if type(animation) not in (_base.Create, _base.Uncreate):
         return None
     target = getattr(animation, "target", None)
-    if isinstance(target, _compat.Group):
+    if isinstance(target, (_compat.Group, _compat.VGroup)):
         return None
     if not isinstance(target, _typst._RetainedTextMobject):
         return None
@@ -2015,7 +2015,7 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
     if type(animation) not in (_base.Create, _base.Uncreate):
         return None
     family = getattr(animation, "target", None)
-    if not isinstance(family, _compat.Group):
+    if not isinstance(family, (_compat.Group, _compat.VGroup)):
         return None
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
@@ -2103,12 +2103,12 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     family = animation.group
     leaves = list(family.submobjects)
     if (
-        not isinstance(family, _compat.Group)
+        not isinstance(family, (_compat.Group, _compat.VGroup))
         or getattr(family, "_semantic_family_handle", None) is None
         or not leaves
         or any(
             not isinstance(member, _base.Mobject)
-            or isinstance(member, _compat.Group)
+            or isinstance(member, (_compat.Group, _compat.VGroup))
             or getattr(member, "_semantic_handle", None) is None
             or (member._scene is not None and member._scene is not scene)
             for member in leaves
@@ -2124,7 +2124,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
     """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
     rows, columns, values = _animate._matrix_arguments(animation.matrix)
     about = _base._as_vec2(animation.about_point)
-    is_family = isinstance(target, _compat.Group)
+    is_family = isinstance(target, (_compat.Group, _compat.VGroup))
     handle = getattr(
         target,
         "_semantic_family_handle" if is_family else "_semantic_handle",
@@ -2164,7 +2164,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
 
 def _validate_apply_matrix_target(scene: _base.Scene, source: object) -> None:
     """Check wrapper ownership without assuming Groups carry Mobject fields."""
-    if isinstance(source, _compat.Group):
+    if isinstance(source, (_compat.Group, _compat.VGroup)):
         if getattr(source, "_semantic_family_handle", None) is None:
             raise NotImplementedError(
                 "ApplyMatrix family target requires a typed semantic family"
@@ -2314,7 +2314,7 @@ def _build_canonical_composition_candidate(
             # play-begin state belong to the shared semantic operations.
             _canonical_composition_child_options(animation, child_kwargs)
             source = animation.source
-            if isinstance(source, _compat.Group):
+            if isinstance(source, (_compat.Group, _compat.VGroup)):
                 if not _compat._leaf_mobjects(source) or any(
                     member._scene is not self for member in _compat._leaf_mobjects(source)
                 ):
@@ -2686,7 +2686,7 @@ def _build_canonical_composition_candidate(
         if isinstance(animation, _composition.Add):
             if child_kwargs:
                 raise NotImplementedError("Add inside a composition does not accept play timing overrides")
-            if not isinstance(animation.mobject, _base.Mobject) or isinstance(animation.mobject, _compat.Group):
+            if not isinstance(animation.mobject, _base.Mobject) or isinstance(animation.mobject, (_compat.Group, _compat.VGroup)):
                 raise NotImplementedError("canonical Add requires one detached typed leaf")
             member = animation.mobject
             if getattr(member, "_semantic_handle", None) is None or member._scene is not None:

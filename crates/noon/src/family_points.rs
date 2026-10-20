@@ -38,6 +38,27 @@ impl MobjectFamily {
         }
     }
 
+    /// Read only the root's own current path through a coherent execution.
+    /// Empty roots validate the same store/publication contract as owned roots.
+    pub fn effective_own_path_query(
+        &self,
+        execution: &crate::ExecutionSession,
+    ) -> Result<PathQuery, AuthoringError> {
+        match self.own_object()? {
+            Some(object) => crate::path_queries::effective_path_query(
+                self.integration_store(),
+                execution,
+                &object,
+            ),
+            None => {
+                execution
+                    .require_published_store(&self.integration_store().borrow())
+                    .map_err(AuthoringError::from)?;
+                self.own_path_query()
+            }
+        }
+    }
+
     /// Replace this root's owned cubic point array in authored state. The
     /// existing root style, presentation, identity and members are retained.
     /// Use Scene/LiveSession publication for changes after execution bootstrap.
@@ -236,3 +257,40 @@ mod tests {
 
 #[cfg(all(test, feature = "diagnostics"))]
 mod reference_tests;
+
+#[cfg(test)]
+mod effective_query_tests {
+    use crate::Scene;
+
+    #[test]
+    fn own_root_query_validates_empty_publications_and_observes_live_content_only() {
+        let mut scene = Scene::new();
+        let child = scene.square(0.5).unwrap();
+        let family = scene.family(&[(&child).into()]).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let execution = scene.execution_session().unwrap();
+        assert!(family
+            .effective_own_path_query(&execution)
+            .unwrap()
+            .points()
+            .unwrap()
+            .is_empty());
+        let foreign = Scene::new().execution_session().unwrap();
+        assert!(family.effective_own_path_query(&foreign).is_err());
+        scene.install_execution(execution);
+        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        scene.set_family_points_f64(&family, &points).unwrap();
+        assert_eq!(
+            family
+                .effective_own_path_query(scene.owned_execution())
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        family.clear_points().unwrap();
+        assert!(family
+            .effective_own_path_query(scene.owned_execution())
+            .is_err());
+    }
+}

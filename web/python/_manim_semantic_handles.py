@@ -74,8 +74,8 @@ def _raw_from_json(value: str) -> _ir.Mobject:
 def _is_bound(value: object) -> bool:
     return (
         isinstance(value, _base.Mobject)
-        and value._scene is not None
-        and value._object is not None
+        and getattr(value, "_scene", None) is not None
+        and getattr(value, "_object", None) is not None
     )
 
 
@@ -130,6 +130,12 @@ def _typed_manim_observation(
     authored semantic handle. A typed wrapper never falls through to a Python
     scene projection.
     """
+    if handle_method == "pathQuery" and _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _live_mutation_context(value) or _live_constructor_context()
+        if context is not None:
+            return engine_call(context.queryFamilyOwnPath, family)
+        return engine_call(family.pathQuery)
     semantic_handle = getattr(value, "_semantic_handle", None)
     if semantic_handle is None:
         return None
@@ -678,6 +684,8 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _vmobject_path_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _is_shared_family(value):
+        return False
     if _is_bound(value):
         context = getattr(value._scene, "_canonical_authoring_context", None)
         return (
@@ -724,6 +732,10 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
+    if _is_shared_family(self):
+        layout = _group_layout_observation(self)
+        return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
+                          float(engine_call(layout.criticalY, axis.x, axis.y)))
     if isinstance(self, _compat.VMobject):
         if self.get_num_points() == 0:
             return _base.ORIGIN
@@ -731,10 +743,6 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
             _extremum_along_dim_observation(self, 0, axis.x),
             _extremum_along_dim_observation(self, 1, axis.y),
         )
-    if _is_shared_family(self):
-        layout = _group_layout_observation(self)
-        return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
-                          float(engine_call(layout.criticalY, axis.x, axis.y)))
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(
@@ -1537,7 +1545,7 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
         for value in objects
     )
     leaf_profile = all(
-        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        isinstance(value, _compat.VMobject) and not isinstance(value, (_compat.Group, _compat.VGroup))
         for value in objects
     )
     if not family_profile and not leaf_profile:
@@ -1601,7 +1609,7 @@ def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
         for value in objects
     )
     leaf_profile = all(
-        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        isinstance(value, _compat.VMobject) and not isinstance(value, (_compat.Group, _compat.VGroup))
         for value in objects
     )
     if not family_profile and not leaf_profile:
@@ -2674,13 +2682,12 @@ def _merged_points_observation(value: _base.Mobject):
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
     if not _is_shared_family(value):
         return None
-    # Family nodes own membership but no point array of their own, matching
-    # Mobject.get_num_points() on Manim Group/VGroup instances.
+    # Only root-owned points contribute; direct-child membership stays separate.
     return int(engine_call(value._semantic_family_handle.pointCount))
 
 
 def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
-    if isinstance(value, _compat.VMobject):
+    if isinstance(value, _compat.VMobject) and not _is_shared_family(value):
         try:
             stride = operator.index(
                 getattr(value, "n_points_per_cubic_curve", 4)
@@ -2783,7 +2790,7 @@ def _boundary_point_observation(
     direction_x: float,
     direction_y: float,
 ):
-    if isinstance(value, _compat.VMobject):
+    if isinstance(value, _compat.VMobject) and not _is_shared_family(value):
         try:
             stride = operator.index(
                 getattr(value, "n_points_per_cubic_curve", 4)
@@ -2900,7 +2907,7 @@ def _boundary_point_from_points_observation(
 
 def _is_shared_family(value: object) -> bool:
     return (
-        isinstance(value, _compat.Group)
+        isinstance(value, (_compat.Group, _compat.VGroup))
         and getattr(value, "_semantic_family_handle", None) is not None
     )
 

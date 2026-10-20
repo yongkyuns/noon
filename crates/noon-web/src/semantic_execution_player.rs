@@ -2424,6 +2424,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn effective_family_own_path_query(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PathQuery, AuthoringFailure> {
+        family
+            .effective_own_path_query(&self.session)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn effective_path_query(
         &mut self,
         mobject: &noon::Mobject,
