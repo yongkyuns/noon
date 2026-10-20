@@ -8,6 +8,7 @@ export class MainThreadRenderWorker extends EventTarget {
       (module) => {
         if (this.#closed) return null;
         return module.createAuthoringRenderController({
+          animationFrameSource: typeof globalThis.requestAnimationFrame === "function" ? "document" : "timer",
           postMessage: (message) => {
             if (this.#closed) return;
             queueMicrotask(() => {

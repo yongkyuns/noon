@@ -118,6 +118,74 @@ async function startClient(errors = []) {
   return { client, authoring, engine, render };
 }
 
+function documentFrames(t) {
+  const pending = new Map(), cancelled = [];
+  let nextId = 0;
+  const previous = new Map();
+  for (const [name, value] of Object.entries({
+    requestAnimationFrame(callback) { const id = ++nextId; pending.set(id, callback); return id; },
+    cancelAnimationFrame(id) { cancelled.push(id); pending.delete(id); },
+  })) {
+    previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  }
+  t.after(() => {
+    for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  });
+  return { pending, cancelled };
+}
+
+test("document refresh pulses are negotiated and never carry authored time", async (t) => {
+  const frames = documentFrames(t);
+  const { client, render } = await startClient();
+  try {
+    assert.equal(requestMessage(render, "prepare").documentAnimationFrames, true);
+    render.emitMessage(renderMessage("animation_frame_request", { frameId: 1 }));
+    assert.equal(frames.pending.size, 1);
+    const callback = [...frames.pending.values()][0];
+    frames.pending.clear();
+    callback(123456);
+    const pulse = requestMessage(render, "animation_frame");
+    assert.deepEqual(pulse, renderMessage("animation_frame", { frameId: 1 }));
+    assert.equal(client.diagnostics.render.pendingRequests, 0);
+  } finally { client.terminate(); }
+});
+
+test("cancel and terminate retire pending refresh callbacks including already queued deliveries", async (t) => {
+  const frames = documentFrames(t);
+  const { client, render } = await startClient();
+  render.emitMessage(renderMessage("animation_frame_request", { frameId: 1 }));
+  const cancelled = [...frames.pending.values()][0];
+  render.emitMessage(renderMessage("animation_frame_cancel", { frameId: 1 }));
+  assert.equal(frames.pending.size, 0);
+  cancelled();
+  assert.equal(render.messages.filter(entry => (entry.message ?? entry).type === "animation_frame").length, 0);
+  render.emitMessage(renderMessage("animation_frame_request", { frameId: 2 }));
+  const retired = [...frames.pending.values()][0];
+  client.terminate();
+  assert.equal(frames.pending.size, 0);
+  retired();
+  render.emitMessage(renderMessage("animation_frame_request", { frameId: 3 }));
+  assert.equal(frames.pending.size, 0);
+});
+
+test("a fatal render owner cancels its refresh resource", async (t) => {
+  const frames = documentFrames(t), errors = [];
+  const { client, render } = await startClient(errors);
+  try {
+    render.emitMessage(renderMessage("animation_frame_request", { frameId: 1 }));
+    assert.equal(frames.pending.size, 1);
+    render.emitMessage(renderMessage("error", { message: "render lost" }));
+    assert.equal(frames.pending.size, 0);
+    assert.deepEqual(errors, ["render: render lost"]);
+    render.emitMessage(renderMessage("animation_frame_request", { frameId: 2 }));
+    assert.equal(frames.pending.size, 0);
+  } finally { client.terminate(); }
+});
+
 function requestMessage(worker, type) {
   const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
   assert.ok(entry, `missing ${worker.name} ${type} request`);

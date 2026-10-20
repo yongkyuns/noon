@@ -1069,6 +1069,8 @@ export function createAuthoringRenderController(host) {
   function currentMetrics({ profileRenderSubstages, profileGpuCompletion } = {}) {
     const base = {
       ready: renderer !== null,
+      animationFrameSource: host.animationFrameSource ??
+        (typeof host.requestAnimationFrame === "function" ? "host" : "timer"),
       mode,
       ...modeFlags(),
       transportMode,

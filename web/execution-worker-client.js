@@ -6,6 +6,7 @@ import {
 } from "./execution-transport.js";
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
+import { createDocumentFrameSource } from "./render-frame-source.js";
 import {
   RENDER_HOST_MAIN_THREAD,
   RENDER_HOST_WORKER,
@@ -48,6 +49,7 @@ export class ExecutionWorkerClient {
   #candidateEngineWorker = null;
   #candidateEngineReject = null;
   #renderWorker = null;
+  #renderFrameSource = null;
   #renderPrepared = null;
   #renderHost = null;
   #renderHostSelection = null;
@@ -170,6 +172,7 @@ export class ExecutionWorkerClient {
             transportMode,
             width,
             height,
+            documentAnimationFrames: this.#renderFrameSource !== null,
           },
           [offscreen],
         );
@@ -782,6 +785,8 @@ export class ExecutionWorkerClient {
         this.#semanticContextId,
       );
     }
+    this.#renderFrameSource?.close();
+    this.#renderFrameSource = null;
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
@@ -911,6 +916,7 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "render" && this.#renderFrameSource?.receive(message)) return;
         if (owner === "engine" && message.type === "pointer_presented") {
           const receipt = message.receipt;
           if (!receipt || ![receipt.session, receipt.sequence, receipt.presentation, receipt.view_revision]
@@ -1071,6 +1077,8 @@ export class ExecutionWorkerClient {
 
   #rollbackFailedStart(error, replaceCanvas) {
     retireSemanticEndpoint(this.#engineWorker);
+    this.#renderFrameSource?.close();
+    this.#renderFrameSource = null;
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
@@ -1122,10 +1130,25 @@ export class ExecutionWorkerClient {
       return new MainThreadRenderWorker();
     }
     if (this.#renderHost === RENDER_HOST_WORKER) {
-      return new Worker(new URL("./execution-render-worker.js", import.meta.url), {
+      const worker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
         type: "module",
         name: "noon-render",
       });
+      if (typeof globalThis.requestAnimationFrame === "function" &&
+          typeof globalThis.cancelAnimationFrame === "function") {
+        this.#renderFrameSource = createDocumentFrameSource({
+          request: (callback) => globalThis.requestAnimationFrame(callback),
+          cancel: (handle) => globalThis.cancelAnimationFrame(handle),
+          send: (message) => {
+            if (!this.#isCurrentWorker("render", worker)) return;
+            try { worker.postMessage(message); } catch (error) {
+              this.#rejectOwner("render", error);
+              this.#notifyError(error, "render");
+            }
+          },
+        });
+      }
+      return worker;
     }
     throw new Error("execution render host must be selected before renderer startup");
   }
@@ -1154,6 +1177,7 @@ export class ExecutionWorkerClient {
   }
 
   #markFatalOwner(owner) {
+    if (owner === "render") this.#renderFrameSource?.close();
     if (owner === "render" || this.#fatalOwner === null) {
       this.#fatalOwner = owner;
     }
