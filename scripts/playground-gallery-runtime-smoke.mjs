@@ -2,12 +2,11 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
-import { createBrowserFailureTrace } from './playground-browser-failure-evidence.mjs';
+import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
@@ -33,24 +32,13 @@ const startedAt = performance.now();
 const results = [];
 const nativeFailureDiagnostics = browserName === 'webkit' && process.platform === 'darwin' &&
   process.env.GITHUB_ACTIONS === 'true';
-async function webKitProcesses() {
-  if (!nativeFailureDiagnostics) return [];
-  const exec = promisify(execFile);
-  const installation = `${path.dirname(playwright.webkit.executablePath())}${path.sep}`;
-  const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 1024 * 1024 });
-  return stdout.split('\n').flatMap(line => {
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    return match?.[2].startsWith(installation) ? [{ pid: match[1], executable: match[2] }] : [];
-  });
-}
-async function captureWebKitFailure(name) {
+async function captureWebKitFailure(name, processes) {
   if (!nativeFailureDiagnostics) return null;
   // macOS launches WebContent/GPU XPC services under launchd, outside Node's
   // process tree. Restrict evidence to this Playwright installation on CI.
   const exec = promisify(execFile);
   try {
-    const processes = (await webKitProcesses()).slice(0, 4);
-    return await Promise.all(processes.map(async entry => {
+    return await Promise.all(processes.slice(0, 4).map(async entry => {
       const file = `${name}-process-${entry.pid}.txt`;
       try {
         await exec('/usr/bin/sample', [entry.pid, '2', '10', '-file', path.join(artifacts, file)],
@@ -122,7 +110,6 @@ try {
   async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
     const caseStartedWallMs = Date.now();
-    let nativeProcesses = [];
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
     if (noJspi) await disableAuthoringJspi(context);
@@ -183,6 +170,12 @@ try {
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
+    const native = createNativeWebKitEvidence({
+      enabled: nativeFailureDiagnostics,
+      executablePath: playwright.webkit.executablePath(),
+      artifacts, prefix: `${name}-failure`, startedAtMs: caseStartedWallMs,
+      collect: collectWebKitCrashReports,
+    });
     const pendingRequests = new Map();
     context.on('request', request => pendingRequests.set(request, {
       url: request.url(), resourceType: request.resourceType(), startedAt: performance.now(),
@@ -212,8 +205,9 @@ try {
             { waitUntil: 'domcontentloaded', timeout: 30000 });
           // Remember the content process while alive; post-crash sampling cannot
           // find it. This Node-side observation does not query scene/runtime state.
-          try { nativeProcesses = await webKitProcesses(); } catch { /* Evidence unavailable. */ }
+          await native.observe('gallery-navigation');
           await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
+          await native.observe('gallery-shell-ready');
           trace.setPhase('gallery-authored-execution', { exampleId: entry.id, noJspi });
           let completed = false;
           // Longer authored examples can run materially slower than real time in Firefox CI.
@@ -375,14 +369,11 @@ try {
       };
       // Capture outside the browser protocol: even page.evaluate can be stuck.
       // Failure remains a failure regardless of whether stack collection works.
-      result.failureDiagnostics.nativeSamples = await captureWebKitFailure(name);
-      if (nativeFailureDiagnostics) {
-        result.failureDiagnostics.nativeCrashReports = await collectWebKitCrashReports({
-          directories: [path.join(homedir(), 'Library/Logs/DiagnosticReports'), '/Library/Logs/DiagnosticReports'],
-          pids: nativeProcesses.map(entry => Number(entry.pid)), startedAtMs: caseStartedWallMs,
-          endedAtMs: Date.now(), artifacts, prefix: name,
-        });
-      }
+      await native.observe('failure-before-sampling');
+      result.failureDiagnostics.nativeSamples = await captureWebKitFailure(name,
+        native.snapshots().at(-1)?.processes ?? []);
+      result.failureDiagnostics.nativeCrashReports = await native.failure();
+      result.failureDiagnostics.nativeProcessSnapshots = native.snapshots();
     } finally {
       clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});

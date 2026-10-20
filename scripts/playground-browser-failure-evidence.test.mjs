@@ -197,8 +197,33 @@ test("native evidence observes only installed PIDs before a process disappears",
   await evidence.observe("before-showcase");
   assert.deepEqual(await evidence.failure(), { reports: [], errors: [] });
   assert.deepEqual(requested.pids, [222]);
+  assert.equal(requested.prefix, "matrix-failure");
   assert.deepEqual([requested.startedAtMs, requested.endedAtMs], [1000, 2000]);
   assert.deepEqual(evidence.snapshots().map(x => x.stage), ["before-showcase", "after-failure"]);
+});
+
+test("native gallery evidence retains a later content PID and isolates case artifacts", async () => {
+  const requests = [];
+  for (const prefix of ["noon-ordinary-matrix-failure", "noon-ordinary-table-failure"]) {
+    const tables = [
+      "101 /pw/webkit-x/Playwright",
+      "101 /pw/webkit-x/Playwright\n222 /pw/webkit-x/WebKit.WebContent\n333 /other/WebKit.WebContent",
+      "101 /pw/webkit-x/Playwright",
+    ];
+    const evidence = createNativeWebKitEvidence({ enabled: true,
+      executablePath: "/pw/webkit-x/pw_run.sh", artifacts: "/diagnostics", prefix,
+      readProcessTable: async () => tables.shift(),
+      collect: async args => { requests.push(args); return { reports: [], errors: [] }; },
+    });
+    await evidence.observe("gallery-navigation");
+    await evidence.observe("gallery-shell-ready");
+    await evidence.failure();
+    assert.deepEqual(requests.at(-1).pids, [101, 222]);
+    assert.deepEqual(evidence.snapshots().map(snapshot => snapshot.processes.map(p => p.pid)),
+      [[101], [101, 222], [101]]);
+  }
+  assert.deepEqual(requests.map(request => request.prefix),
+    ["noon-ordinary-matrix-failure", "noon-ordinary-table-failure"]);
 });
 
 test("native reporting failures never replace original test failure", async () => {
