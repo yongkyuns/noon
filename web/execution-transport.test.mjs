@@ -299,7 +299,7 @@ test("canonical worker header avoids full producer and receiver parses of the un
   const json = JSON.stringify({ ...header, time: 0,
     objects: Array.from({ length: 600 }, (_, id) => ({ id, geometry: "●\n".repeat(256) })) });
   const packet = `${JSON.stringify(header)}\n${json}`;
-  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(packet).length);
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length);
   const shared = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const { port1, port2 } = new MessageChannel();
@@ -369,7 +369,7 @@ test("worker receivers parse only the bounded header of a 600-object delta", asy
     points: Array.from({ length: 12 }, (_, i) => [i / 10, id / 600]) })) });
   assert.equal(JSON.parse(json).objects.length, 600);
   assert.ok(json.length > 100_000);
-  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length + 512);
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length);
   const writer = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const { port1, port2 } = new MessageChannel();
@@ -392,4 +392,28 @@ test("worker receivers parse only the bounded header of a 600-object delta", asy
     } finally { JSON.parse = originalParse; }
     assert.equal(parsed.length, 2);
   } finally { port1.close(); port2.close(); }
+});
+
+test("shared framing preserves the configured UTF-8 body capacity and accounts for bounded overhead", () => {
+  const value = { ...JSON.parse(delta(0)), padding: "é🚀".repeat(512) };
+  const json = JSON.stringify(value);
+  const capacity = new TextEncoder().encode(json).byteLength;
+  const mailbox = createSharedExecutionMailbox(capacity);
+  assert.equal(mailbox.slotCapacity, capacity);
+  assert.equal(mailbox.buffer.byteLength, capacity * 2 + 1058,
+    "two 513-byte frame headers and the existing 32-byte mailbox control header");
+  const writer = new SharedExecutionDeltaWriter(mailbox);
+  const reader = new SharedExecutionDeltaReader(mailbox);
+  assert.equal(writer.send(json), true, "the same exact-capacity body remains accepted");
+  assert.throws(() => writer.send(JSON.stringify({ ...value, padding: value.padding + "x" })),
+    /exceeds shared slot capacity/);
+  assert.equal(reader.drain(body => assert.equal(body, json)), 1);
+  assert.equal(writer.canSend(), true);
+});
+
+test("transferable framing bounds the metadata header in UTF-8 bytes", () => {
+  const header = { ...JSON.parse(delta(0)), extra: "é".repeat(300) };
+  const encoded = new TextEncoder().encode(`${JSON.stringify(header)}\n${delta(0)}`);
+  assert.throws(() => decodeTransferableExecutionDelta({ type: "execution_delta",
+    session: 1, sequence: 0, buffer: encoded.buffer }), /bounded metadata header/);
 });

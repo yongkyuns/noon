@@ -12,8 +12,10 @@ const SLOT_LENGTH_0 = 2;
 const SLOT_LENGTH_1 = 3;
 const WAKE_COUNTER = 4;
 const BACKPRESSURE_COUNTER = 5;
-// Two slots reserve 4 MiB per isolated execution. This covers the gallery's
-// 600-object morph deltas without the 32 MiB slots used by stress experiments.
+const PACKET_HEADER_CAPACITY = 512;
+const PACKET_FRAMING_CAPACITY = PACKET_HEADER_CAPACITY + 1;
+// Two slots retain their 4 MiB body budget, plus 513 framing bytes each.
+// Framing must not reduce the configured capacity for 600-object morph deltas.
 export const DEFAULT_SHARED_SLOT_CAPACITY = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -52,12 +54,20 @@ function decodeExecutionDeltaPacket(packet) {
     throw new TypeError("worker publication must be a header/body string");
   }
   const separator = packet.indexOf("\n");
-  if (separator < 1 || separator > 512 || separator === packet.length - 1) {
+  if (separator < 1 || separator > PACKET_HEADER_CAPACITY || separator === packet.length - 1) {
     throw new Error("worker publication has an invalid bounded metadata header");
   }
   const metadata = parseExecutionDeltaMetadata(packet.slice(0, separator));
   const json = packet.slice(separator + 1);
   return { json, metadata };
+}
+
+function packetBodyByteLength(payload) {
+  const separator = payload.indexOf(10);
+  if (separator < 1 || separator > PACKET_HEADER_CAPACITY || separator === payload.byteLength - 1) {
+    throw new Error("worker publication has an invalid bounded metadata header");
+  }
+  return payload.byteLength - separator - 1;
 }
 
 function parseExecutionDeltaMetadata(json) {
@@ -129,7 +139,9 @@ export function decodeTransferableExecutionDelta(message) {
   if (!(message.buffer instanceof ArrayBuffer)) {
     throw new Error("transferable execution delta payload must be an ArrayBuffer");
   }
-  const { json, metadata } = decodeExecutionDeltaPacket(decoder.decode(new Uint8Array(message.buffer)));
+  const payload = new Uint8Array(message.buffer);
+  packetBodyByteLength(payload);
+  const { json, metadata } = decodeExecutionDeltaPacket(decoder.decode(payload));
   if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
     throw new Error("transferable execution delta metadata does not match its envelope");
   }
@@ -144,7 +156,7 @@ export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SHARED_SLOT_
     throw new Error("SharedArrayBuffer is unavailable");
   }
   const headerBytes = HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT;
-  const buffer = new SharedArrayBuffer(headerBytes + slotCapacity * 2);
+  const buffer = new SharedArrayBuffer(headerBytes + (slotCapacity + PACKET_FRAMING_CAPACITY) * 2);
   return { buffer, slotCapacity };
 }
 
@@ -173,9 +185,10 @@ export class SharedExecutionDeltaWriter {
   send(json, validatedMetadata = null) {
     const { packet } = packetForSend(json, validatedMetadata);
     const payload = encoder.encode(packet);
-    if (payload.byteLength > this.#slotCapacity) {
+    const bodyBytes = packetBodyByteLength(payload);
+    if (bodyBytes > this.#slotCapacity) {
       throw new Error(
-        `execution delta ${payload.byteLength} bytes exceeds shared slot capacity ${this.#slotCapacity}`,
+        `execution delta ${bodyBytes} bytes exceeds shared slot capacity ${this.#slotCapacity}`,
       );
     }
     for (let slot = 0; slot < 2; slot += 1) {
@@ -183,7 +196,7 @@ export class SharedExecutionDeltaWriter {
       if (Atomics.compareExchange(this.#header, stateIndex, SLOT_FREE, SLOT_WRITING) !== SLOT_FREE) {
         continue;
       }
-      const offset = slot * this.#slotCapacity;
+      const offset = slot * (this.#slotCapacity + PACKET_FRAMING_CAPACITY);
       this.#bytes.set(payload, offset);
       Atomics.store(
         this.#header,
@@ -233,15 +246,20 @@ export class SharedExecutionDeltaReader {
         this.#header,
         slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
       );
-      if (length < 0 || length > this.#slotCapacity) {
+      if (length < 0 || length > this.#slotCapacity + PACKET_FRAMING_CAPACITY) {
         this.#release(slot, stateIndex);
         throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
       }
-      const offset = slot * this.#slotCapacity;
+      const offset = slot * (this.#slotCapacity + PACKET_FRAMING_CAPACITY);
       // TextDecoder cannot consume a SharedArrayBuffer-backed view in browsers.
-      const packet = decoder.decode(this.#bytes.slice(offset, offset + length));
       let decoded;
-      try { decoded = decodeExecutionDeltaPacket(packet); }
+      try {
+        const payload = this.#bytes.slice(offset, offset + length);
+        if (packetBodyByteLength(payload) > this.#slotCapacity) {
+          throw new Error("shared execution delta body exceeds its slot capacity");
+        }
+        decoded = decodeExecutionDeltaPacket(decoder.decode(payload));
+      }
       catch (error) { this.#release(slot, stateIndex); throw error; }
       ready.push({ slot, stateIndex, ...decoded });
     }
@@ -307,6 +325,7 @@ export class TransferableExecutionDeltaSender {
       return false;
     }
     const payload = encoder.encode(packet);
+    packetBodyByteLength(payload);
     // TextEncoder normally returns an exact, standalone buffer. Transfer that
     // allocation directly; retain the fallback for nonstandard typed-array views.
     const buffer = payload.byteOffset === 0 && payload.byteLength === payload.buffer.byteLength
@@ -433,7 +452,8 @@ function validateSharedMailbox(mailbox) {
     throw new TypeError("shared execution mailbox capacity must be a positive integer");
   }
   const expected =
-    HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT + mailbox.slotCapacity * 2;
+    HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT +
+    (mailbox.slotCapacity + PACKET_FRAMING_CAPACITY) * 2;
   if (mailbox.buffer.byteLength !== expected) {
     throw new Error(
       `shared execution mailbox has ${mailbox.buffer.byteLength} bytes; expected ${expected}`,
