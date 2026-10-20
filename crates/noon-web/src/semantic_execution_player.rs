@@ -3108,9 +3108,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         request: &noon::AnimationCompositionRequest<'_>,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<f64, AuthoringFailure> {
+        self.require_completed_live_segment()?;
         let semantics = self
             .semantics
             .clone()
@@ -3122,7 +3121,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .declare_and_activate_composition(request, play_options)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         let end_time = segment.end_time();
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)

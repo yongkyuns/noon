@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const source = readFileSync(new URL("../workflows/manim-plotting-qualification.yml", import.meta.url), "utf8");
@@ -45,4 +46,22 @@ test("every executed plotting case retains its command and cancellation evidence
   assert.match(qualify, /Retain every executed case, including cancellation evidence\n\s+if: always\(\)/);
   assert.match(qualify, /plotting-\$\{\{ matrix\.case \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
   assert.match(qualify, /node "\$NOON_CASE_SCRIPT" "\$NOON_CASE_MODE"/);
+});
+
+test("case recovery reuses its producing build's artifact and rejects a missing identity", () => {
+  const build = section("build"), qualify = section("qualify");
+  assert.match(build, /package_artifact_id: \$\{\{ steps\.package\.outputs\.artifact-id \}\}/);
+  assert.match(build, /Publish the exact-source package\n\s+id: package/);
+  assert.match(qualify, /artifact-ids: \$\{\{ needs\.build\.outputs\.package_artifact_id \}\}/);
+  assert.match(qualify, /merge-multiple: true\n\s+path: web/);
+  assert.doesNotMatch(qualify, /name: plotting-package-/,
+    "a case's rerun attempt is independent of the successful package producer's attempt");
+  const guard = qualify.split("      - name: Require the producing build's artifact identity\n")[1]?.split("      - name:")[0];
+  assert.ok(qualify.indexOf("Require the producing build's artifact identity") < qualify.indexOf("Download the same validated package"));
+  assert.match(guard, /PACKAGE_ARTIFACT_ID: \$\{\{ needs\.build\.outputs\.package_artifact_id \}\}/);
+  const command = guard.match(/run: '([^']+)'/)[1];
+  for (const [id, valid] of [["12345", true], ["", false], ["0", false], ["missing", false], ["1,2", false]]) {
+    const result = spawnSync("bash", ["-c", command], { env: { ...process.env, PACKAGE_ARTIFACT_ID: id } });
+    assert.equal(result.status, valid ? 0 : 1, `artifact identity ${JSON.stringify(id)}`);
+  }
 });
