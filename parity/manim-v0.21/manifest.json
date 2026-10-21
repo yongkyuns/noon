@@ -830,6 +830,21 @@
       }
     },
     {
+      "id": "object-membership-copy-worker",
+      "scene": "ObjectMembers",
+      "source": "parity/manim-v0.21/core-examples/object_membership_copy.py",
+      "noon_source": "web/python/examples/manim_parity_object_members.py",
+      "expected_duration": 0.5,
+      "sample_times": [0.5],
+      "stop_at_source_completion": true,
+      "notes": "Completed public ordinary-object membership/copy continuation endpoint. Canonical source differs only in import and async/wait syntax. Native and direct Rust/WASM use the equivalent typed example; interior structural history and seek qualification remain open.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "family-membership-order",
       "scene": "OrdinaryFamilyMembershipOrder",
       "source": "parity/manim-v0.21/core-examples/family_membership_order.py",

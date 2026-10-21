@@ -295,6 +295,43 @@ class Mobject:
         self.generate_points()
         self.init_colors()
 
+    @property
+    def submobjects(self):
+        """Read direct children from Rust; use membership methods to edit them."""
+        return _semantic_operations()._group_members(self)
+
+    @submobjects.setter
+    def submobjects(self, members):
+        _semantic_operations()._replace_submobjects(self, members)
+
+    def _assert_valid_submobjects(self, submobjects):
+        return self._assert_valid_submobjects_internal(submobjects, Mobject)
+
+    def _assert_valid_submobjects_internal(self, submobjects, mob_class):
+        for index, member in enumerate(submobjects):
+            if not isinstance(member, mob_class):
+                message = (f"Only values of type {mob_class.__name__} can be added "
+                           f"as submobjects of {type(self).__name__}, but the value "
+                           f"{member} (at index {index}) is of type {type(member).__name__}.")
+                if isinstance(member, Mobject):
+                    message += " You can try adding this value into a Group instead."
+                raise TypeError(message)
+            if member is self:
+                raise ValueError(f"Cannot add {type(self).__name__} as a submobject of itself (at index {index}).")
+        return self
+
+    def add(self, *mobjects):
+        return _semantic_operations()._group_add(self, *mobjects)
+
+    def add_to_back(self, *mobjects):
+        return _semantic_operations()._group_add_to_back(self, *mobjects)
+
+    def insert(self, index, mobject):
+        return _semantic_operations()._group_insert(self, index, mobject)
+
+    def remove(self, *mobjects):
+        return _semantic_operations()._group_remove(self, *mobjects)
+
     def get_group_class(self):
         from _manim_compat import Group
         return Group

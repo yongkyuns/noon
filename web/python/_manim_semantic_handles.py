@@ -681,6 +681,8 @@ def _clone_mobject(
 
 
 def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
+    if getattr(self, "_semantic_member_wrappers", None):
+        return _group_copy_operation(self, cyclic_replace=False)
     return _clone_mobject(self)
 
 
@@ -2922,6 +2924,9 @@ def _family_member_handle(value: object) -> tuple[str | None, object | None]:
 
 
 def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) -> None:
+    if not isinstance(owner, (_compat.Group, _compat.VGroup)):
+        owner._assert_valid_submobjects(mobjects)
+        return
     for mobject in mobjects:
         if not isinstance(mobject, (_base.Mobject, _compat.Group)):
             raise TypeError("Group members must be Mobjects or Groups")
@@ -3003,7 +3008,7 @@ def _group_members(self: _compat.Group) -> list[object]:
     if refresh is not None:
         refresh()
     return [self._semantic_member_wrappers[str(key)]
-            for key in engine_call(self._semantic_family_handle.memberKeys)]
+            for key in engine_call(_family_query_handle(self).memberKeys)]
 
 
 def _family_query_handle(root):
@@ -3036,6 +3041,8 @@ def _retain_group_wrapper_references(root):
 
 
 def _fork_group_wrapper_references(root):
+    if getattr(root, "_semantic_member_wrappers", None) is None:
+        root._semantic_member_wrappers = {}
     scope = getattr(root, "_semantic_member_reference_scope", None)
     if scope is not None and scope.wrappers is root._semantic_member_wrappers and scope.readers:
         # A native list replacement has committed. Preserve original host
@@ -3273,15 +3280,32 @@ def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, colo
         self._canonical_live_target_context = context
 
 
+def _membership_call(root, context, family_method, object_method, direct_method, *args, **kwargs):
+    handle = _family_query_handle(root)
+    if context is None:
+        return engine_call(getattr(handle, direct_method), *args, **kwargs)
+    method = family_method if _is_shared_family(root) else object_method
+    return engine_call(getattr(context, method), handle, *args, **kwargs)
+
+
+def _replace_submobjects(root, members):
+    members = tuple(members)
+    _validate_group_members(root, members)
+    keys = [_family_wrapper_key(member) for member in members]
+    if len(set(keys)) != len(keys):
+        raise NotImplementedError("repeated direct child identities require a shared occurrence model")
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", members)
+    _membership_call(root, context, "liveReplaceFamilyMembers", "liveReplaceObjectMembers", "replaceMembers", batch)
+    _fork_group_wrapper_references(root)
+    root._semantic_member_wrappers = dict(zip(keys, members))
+
+
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
-    if context is not None:
-        engine_call(context.liveEditFamilyMembership, family_handle, batch)
-    else:
-        engine_call(family_handle.editMembership, batch)
+    _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
     _fork_group_wrapper_references(self)
     for value in mobjects:
         self._semantic_member_wrappers[_family_wrapper_key(value)] = value
@@ -3306,46 +3330,20 @@ def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.G
             "semantic families store each child identity once"
         )
 
-    family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", (mobject,))
-    if context is not None:
-        engine_call(
-            context.liveInsertFamilyMember,
-            family_handle,
-            position,
-            batch,
-            operation="Mobject.insert",
-        )
-    else:
-        engine_call(
-            family_handle.insertMember,
-            position,
-            batch,
-            operation="Mobject.insert",
-        )
+    _membership_call(self, context, "liveInsertFamilyMember", "liveInsertObjectMember", "insertMember", position, batch, operation="Mobject.insert")
+    if getattr(self, "_semantic_member_wrappers", None) is None:
+        self._semantic_member_wrappers = {}
     self._semantic_member_wrappers[key] = mobject
     return self
 
 
 def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
-    if context is not None:
-        engine_call(
-            context.livePrependFamilyMembers,
-            family_handle,
-            batch,
-            operation="Mobject.add_to_back",
-        )
-    else:
-        engine_call(
-            family_handle.prependMembers,
-            batch,
-            operation="Mobject.add_to_back",
-        )
+    _membership_call(self, context, "livePrependFamilyMembers", "livePrependObjectMembers", "prependMembers", batch, operation="Mobject.add_to_back")
     _fork_group_wrapper_references(self)
     for value in mobjects:
         self._semantic_member_wrappers[_family_wrapper_key(value)] = value
@@ -3478,14 +3476,9 @@ def _group_shuffle(self: _compat.Group, recursive: bool = False) -> _compat.Grou
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self
-    family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "remove", mobjects)
-    changed = (
-        engine_call(context.liveEditFamilyMembership, family_handle, batch)
-        if context is not None
-        else engine_call(family_handle.editMembership, batch)
-    )
+    changed = _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
     for value, removed in zip(mobjects, changed):
         if removed:
             self._semantic_member_wrappers.pop(_family_wrapper_key(value), None)
@@ -3554,9 +3547,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         )
     else:
         copied = (
-            engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
-            if context is not None
-            else engine_call(self._semantic_family_handle.copyFamily, references)
+            _membership_call(self, context, "liveCopyFamily", "liveCopyMobjectFamily", "copyFamily", references)
         )
     for source, target in pairs:
         if _is_shared_family(source):

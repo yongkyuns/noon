@@ -47,6 +47,7 @@ const examples = [
   { name: "Polynomial rate functions", factory: "createDirectPolynomialRatesRenderer", objectCount: 5, duration: 1 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Public object membership/copy", factory: "createDirectObjectMembershipQueriesRenderer", objectCount: 6, duration: 0.5 },
   { name: "Object membership", factory: "createDirectObjectMembershipSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },

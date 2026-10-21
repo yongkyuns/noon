@@ -79,11 +79,13 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/shared-authoring-smoke.mjs
   node --check scripts/shared-authoring-pyodide-contract.mjs
   node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/object-membership-qualification.mjs
   node --test scripts/manim-family-points-reference.test.mjs
   node --check scripts/family-root-points-qualification.mjs
   node --test scripts/manim-family-iteration-reference.test.mjs
   node --test scripts/manim-family-slices-reference.test.mjs
   node --test scripts/manim-object-queries-reference.test.mjs
+  node --test scripts/manim-object-members-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
   node --check scripts/table-group-checks.mjs

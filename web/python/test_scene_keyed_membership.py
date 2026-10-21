@@ -190,7 +190,10 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertFalse(hasattr(group, "_canonical_live_target_context"))
 
     def test_group_derived_surface_routes_family_and_single_mesh_membership(self):
-        SurfaceWrapper = type("SurfaceWrapper", (Group, self.Mobject), {})
+        SurfaceWrapper = type("SurfaceWrapper", (Group, self.Mobject), {
+            "submobjects": property(lambda value: value.__dict__["test_members"],
+                                   lambda value, members: value.__dict__.__setitem__("test_members", members)),
+        })
         family_leaf = self.mobject(70)
         family_surface = object.__new__(SurfaceWrapper)
         family_surface._semantic_family_handle = SimpleNamespace(

@@ -2141,6 +2141,23 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_copy_mobject_family(
+        &mut self,
+        source: &noon::Mobject,
+        references: &[noon::MobjectTarget<'_>],
+    ) -> Result<noon::MobjectCopy, AuthoringFailure> {
+        self.with_live_session(|live| live.copy_mobject_with_references(source, references))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_replace_members(
+        &mut self,
+        root: noon::MobjectTarget<'_>,
+        members: &[noon::MobjectTarget<'_>],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.replace_members(root, members))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_cyclic_replace_target(
         &mut self,
         source: &noon::MobjectFamily,
@@ -3262,7 +3279,7 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_edit_family_members(
         &mut self,
-        family: &noon::MobjectFamily,
+        family: noon::MobjectTarget<'_>,
         members: &[noon::MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringFailure> {
@@ -3286,7 +3303,7 @@ impl SemanticExecutionPlayer {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_prepend_family_members(
         &mut self,
-        family: &noon::MobjectFamily,
+        family: noon::MobjectTarget<'_>,
         members: &[noon::MobjectTarget<'_>],
     ) -> Result<(), AuthoringFailure> {
         let semantics = self
@@ -3305,7 +3322,7 @@ impl SemanticExecutionPlayer {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_family_member(
         &mut self,
-        family: &noon::MobjectFamily,
+        family: noon::MobjectTarget<'_>,
         index: usize,
         member: noon::MobjectTarget<'_>,
     ) -> Result<(), AuthoringFailure> {
