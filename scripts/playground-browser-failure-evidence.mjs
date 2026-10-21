@@ -1,9 +1,14 @@
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const short = (value, limit = 300) => typeof value === "string" ? value.slice(0, limit) : null;
+const nativeLogCapacity = 128 * 1024;
+const readNativeProcessLog = args => promisify(execFile)("/usr/bin/log", args, {
+  encoding: "buffer", timeout: 5000, killSignal: "SIGKILL", maxBuffer: nativeLogCapacity,
+});
 
 /** Bounded evidence from the test-owned file server; never restart or retry it. */
 export function captureChildProcessDiagnostics(child, { maxOutputChars = 16_000 } = {}) {
@@ -144,6 +149,51 @@ export function parsePlaywrightWebKitProcesses(output, executablePath) {
   return result;
 }
 
+/** Failure-only native context for known PIDs, including a vanished WebContent process. */
+export async function captureNativeProcessLog({ pids, startedAtMs, endedAtMs, artifacts,
+  prefix, readNativeLog = readNativeProcessLog }) {
+  const owned = [...new Set(pids.filter(pid => Number.isSafeInteger(pid) && pid > 0))];
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs) || endedAtMs < startedAtMs) {
+    return { reason: "invalid native log window" };
+  }
+  if (owned.length === 0) return { reason: "no observed WebKit process IDs" };
+  const result = { pids: owned.slice(0, 32), startedAtMs, endedAtMs };
+  result.omittedPidCount = owned.length - result.pids.length;
+  if (endedAtMs - startedAtMs > 180_000) {
+    return { ...result, reason: "native log window exceeds 180 seconds" };
+  }
+  // Use whole-second Unix bounds accepted by log. Keep the actual query
+  // window separate from the original case's millisecond timestamps.
+  result.queriedStartAtMs = Math.floor(startedAtMs / 1000) * 1000;
+  result.queriedEndAtMs = Math.ceil(endedAtMs / 1000) * 1000;
+  const args = ["show", "--style", "ndjson", "--timezone", "UTC", "--info", "--debug",
+    "--start", `@${result.queriedStartAtMs / 1000}`,
+    "--end", `@${result.queriedEndAtMs / 1000}`, "--predicate",
+    result.pids.map(pid => `processIdentifier == ${pid}`).join(" OR ")];
+  let stdout = Buffer.alloc(0);
+  try {
+    const response = await readNativeLog(args);
+    stdout = response.stdout;
+    if (response.stderr?.length) result.stderr = short(String(response.stderr));
+  }
+  catch (error) {
+    stdout = error.stdout ?? stdout;
+    result.error = short(String(error));
+    result.stderr = short(String(error.stderr ?? ""));
+    result.truncated = error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+  }
+  try {
+    const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? "");
+    const kept = bytes.subarray(0, nativeLogCapacity);
+    result.truncated ||= bytes.length > kept.length;
+    const file = `${prefix}-native.log`;
+    await writeFile(path.join(artifacts, file), kept);
+    result.file = file;
+    result.bytes = kept.length;
+  } catch (error) { result.writeError = short(String(error)); }
+  return result;
+}
+
 /** Collect only failure evidence, never retry a failed browser cell. */
 export function createNativeWebKitEvidence({ enabled = false, executablePath, artifacts,
   prefix = "matrix-failure", startedAtMs = Date.now(), now = () => Date.now(),
@@ -151,6 +201,7 @@ export function createNativeWebKitEvidence({ enabled = false, executablePath, ar
     timeout: 5000, maxBuffer: 1024 * 1024,
   })).stdout,
   collect,
+  collectLog = captureNativeProcessLog,
 } = {}) {
   if (enabled && typeof collect !== "function") throw new TypeError("native crash report collector required");
   const snapshots = [];
@@ -168,14 +219,20 @@ export function createNativeWebKitEvidence({ enabled = false, executablePath, ar
   const failure = async () => {
     if (!enabled) return null;
     await observe("after-failure");
+    const request = {
+      directories: [path.join(homedir(), "Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"],
+      pids: [...observed], startedAtMs, endedAtMs: now(), artifacts, prefix,
+    };
+    let result;
     try {
-      return await collect({
-        directories: [path.join(homedir(), "Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"],
-        pids: [...observed], startedAtMs, endedAtMs: now(), artifacts, prefix,
-      });
+      result = await collect(request);
     } catch (error) {
-      return { reports: [], errors: [{ message: short(String(error)) }] };
+      result = { reports: [], errors: [{ message: short(String(error)) }] };
     }
+    let processLog;
+    try { processLog = await collectLog(request); }
+    catch (error) { processLog = { error: short(String(error)) }; }
+    return { ...result, processLog };
   };
   return Object.freeze({ observe, failure, snapshots: () => snapshots.map(item => ({ ...item, processes: item.processes?.map(x => ({ ...x })) })) });
 }
