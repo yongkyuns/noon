@@ -462,6 +462,13 @@ impl WasmTableEntrySelection {
             .map(entry_handle)
             .map_err(js_error)
     }
+    #[wasm_bindgen(js_name = selectNormalizedIndex)]
+    pub fn select_normalized_index(&self, index: usize) -> Result<JsValue, JsValue> {
+        self.selection
+            .select_normalized_index(index)
+            .map(|entry| entry.map(entry_handle).unwrap_or(JsValue::NULL))
+            .map_err(js_error)
+    }
 }
 #[wasm_bindgen]
 pub struct WasmTableCellRows {

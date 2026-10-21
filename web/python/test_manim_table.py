@@ -52,7 +52,7 @@ class _EntrySelection:
     def length(self):
         return 4
 
-    def selectIndex(self, index):
+    def selectNormalizedIndex(self, index):
         return (self.table.a, self.table.b, self.table.c, self.table.d)[int(index)]
 
 
@@ -298,6 +298,30 @@ class TableFacadeTests(unittest.TestCase):
         self.assertIs(value.get_entries(), wrapper)
         self.assertIs(type(wrapper), _Group)
 
+    def test_missing_rank_after_normalization_preserves_the_list_index_error(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        with patch.object(self.handle.selection, "selectNormalizedIndex", return_value=None):
+            with self.assertRaisesRegex(IndexError, "^list index out of range$"):
+                value.get_entries((2, 2))
+
+    def test_explicit_js_null_after_normalization_is_a_list_index_error(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        sentinel = object()
+        with patch("_manim_semantic_handles._jsnull", sentinel), \
+                patch.object(self.handle.selection, "selectNormalizedIndex", return_value=sentinel):
+            with self.assertRaisesRegex(IndexError, "^list index out of range$"):
+                value.get_entries((2, 2))
+
+    def test_an_appended_entry_reuses_its_existing_view_wrapper(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        view = value.get_entries()
+        handle = _Handle(70)
+        wrapper = types.SimpleNamespace(_semantic_handle=handle)
+        view._semantic_member_wrappers["70:1"] = wrapper
+        with patch.object(self.handle.selection, "selectNormalizedIndex", return_value=handle):
+            self.assertIs(value.get_entries((1, 1)), wrapper)
+        self.assertIs(value._table_query_wrappers["70:1"], wrapper)
+
     def test_single_entry_does_not_enumerate_other_rows_or_all_entries(self):
         value = table.Table([["a", "b"], ["c", "d"]])
         leaf = types.SimpleNamespace(_semantic_handle=self.handle.c)
@@ -308,7 +332,7 @@ class TableFacadeTests(unittest.TestCase):
         value._entry_family = lambda: types.SimpleNamespace(
             submobjects=[UnrelatedRow(), types.SimpleNamespace(submobjects=[leaf])])
         value._table_query_wrappers["2:1"] = leaf
-        with patch.object(self.handle.selection, "selectIndex", return_value=self.handle.c), \
+        with patch.object(self.handle.selection, "selectNormalizedIndex", return_value=self.handle.c), \
                 patch.object(self.handle, "entries", side_effect=AssertionError("enumerated all entries")):
             self.assertIs(value.get_entries((2, 1)), leaf)
 
@@ -406,16 +430,16 @@ class TableFacadeTests(unittest.TestCase):
                 patch.object(self.handle, "columns", return_value=[[self.handle.b], [self.handle.a, self.handle.d]]), \
                 patch.object(self.handle, "entries", return_value=[self.handle.c, self.handle.a]), \
                 patch.object(self.handle, "bodyEntries", return_value=[self.handle.b]), \
-                patch.object(self.handle.selection, "selectIndex", return_value=self.handle.d) as select, \
-                patch.object(self.handle.body_selection, "selectIndex", return_value=self.handle.b) as select_body:
+                patch.object(self.handle.selection, "selectNormalizedIndex", return_value=self.handle.d) as select, \
+                patch.object(self.handle.body_selection, "selectNormalizedIndex", return_value=self.handle.b) as select_body:
             self.assertEqual([row.submobjects for row in value.get_rows().submobjects], [[wrappers[3], wrappers[0]], [wrappers[2]]])
             self.assertEqual([column.submobjects for column in value.get_columns().submobjects], [[wrappers[1]], [wrappers[0], wrappers[3]]])
             self.assertEqual(value.get_entries().submobjects, [wrappers[2], wrappers[0]])
             self.assertEqual(value.get_entries_without_labels().submobjects, [wrappers[1]])
             self.assertIs(value.get_entries((0, -1)), wrappers[3])
-            select.assert_called_once_with("0")
+            select.assert_called_once_with(0)
             self.assertIs(value.get_entries_without_labels((2, 1)), wrappers[1])
-            select_body.assert_called_once_with("2")
+            select_body.assert_called_once_with(2)
 
     def test_missing_corner_query_creates_one_stable_vmobject_wrapper(self):
         value = table.Table([["a"]])

@@ -18,6 +18,11 @@ from typing import Any
 import noon as _base
 import _manim_compat as _compat
 
+try:
+    from pyodide.ffi import jsnull as _jsnull
+except ImportError:  # Native CPython adapters receive None for optional handles.
+    _jsnull = None
+
 
 def _alignment_mask2(value: object) -> _base.Vec2:
     try:
@@ -2937,7 +2942,15 @@ def _family_wrapper_key(value: object) -> str:
     _, handle = _family_member_handle(value)
     if handle is None:
         raise RuntimeError("family member has no shared semantic identity")
+    return _shared_handle_key(handle)
+
+
+def _shared_handle_key(handle: object) -> str:
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _is_missing_handle(handle: object) -> bool:
+    return handle is None or handle is _jsnull
 
 
 def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
@@ -2983,6 +2996,25 @@ def _group_members(self: _compat.Group) -> list[object]:
         refresh()
     return [self._semantic_member_wrappers[str(key)]
             for key in engine_call(self._semantic_family_handle.memberKeys)]
+
+
+def _group_indexed_member(self: _compat.Group, index: object) -> object:
+    # Python owns its index protocol. Rust observes current membership only
+    # after __index__ finishes, using the already-normalized absolute rank.
+    normalized = range(len(self))[index]
+    handle = engine_call(self._semantic_family_handle.memberAt, normalized)
+    if _is_missing_handle(handle):
+        raise IndexError("list index out of range")
+    key = _shared_handle_key(handle)
+    # Specialized wrappers refresh language metadata even for known identities.
+    # Ordinary Group/VGroup reads have no such hook or sibling traversal.
+    refresh = getattr(self, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
+    try:
+        return self._semantic_member_wrappers[key]
+    except KeyError as error:
+        raise RuntimeError("shared family identity has no Python wrapper") from error
 
 
 def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
