@@ -16,6 +16,13 @@ test('path keyword controls pin the shared observer, generator and all five CE m
   assert.deepEqual(fixture.cases.map(row => row.method), methods);
   assert.deepEqual(Object.keys(fixture.methodSourceSha256), methods);
   assert.ok(fixture.cases.every(row => row.returnsSelf));
+  assert.deepEqual(fixture.quadraticPrecisionCases.map(row => row.spec.id),
+    ['fractional-singleton', 'fractional-complete-prefix']);
+  assert.ok(fixture.quadraticPrecisionCases.every(row => row.returnsSelf));
+  for (const row of fixture.quadraticPrecisionCases) {
+    assert.deepEqual(row.pointsXY.slice(0, row.spec.prefix.length), row.spec.prefix.map(p => p.slice(0, 2)));
+    assert.deepEqual(row.pointsXY.at(-1), row.spec.anchor.slice(0, 2));
+  }
   assert.deepEqual(fixture.cases.map(row => row.keywords), [
     ['new_points'], ['handle1', 'handle2', 'anchor'], ['handle', 'anchor'],
     ['vectorized_mobject'], ['point_or_mobject'],

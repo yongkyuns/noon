@@ -32,3 +32,27 @@ def observe_path_keyword(module, method):
     return {"method": method, "keywords": list(keywords), "returnsSelf": result is value,
             "pointsXY": [[float(p[0]), float(p[1])] for p in value.get_all_points()],
             "centerXY": [float(value.get_center()[i]) for i in (0, 1)]}
+
+
+QUADRATIC_PRECISION_SPECS = [
+    {"id": "fractional-singleton", "prefix": [[.123456789012345, .234567890123456, 0.]],
+     "control": [.123456789012345, .987654321098765, 0.],
+     "anchor": [1.23456789012345, -.456789012345678, 0.]},
+    {"id": "fractional-complete-prefix",
+     "prefix": [[.123456789012345, .234567890123456, 0.],
+                [.345678901234567, .456789012345678, 0.],
+                [.567890123456789, .67890123456789, 0.],
+                [.789012345678901, .890123456789012, 0.]],
+     "control": [.123456789012345, .987654321098765, 0.],
+     "anchor": [1.23456789012345, -.456789012345678, 0.]},
+]
+
+
+def observe_quadratic_precision(module, spec):
+    import numpy as np
+
+    value = module.VMobject().set_points(np.array(spec["prefix"]))
+    result = value.add_quadratic_bezier_curve_to(
+        handle=np.array(spec["control"]), anchor=np.array(spec["anchor"]))
+    return {"spec": spec, "returnsSelf": result is value,
+            "pointsXY": [[float(p[0]), float(p[1])] for p in value.get_all_points()]}

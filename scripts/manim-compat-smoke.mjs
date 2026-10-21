@@ -43,6 +43,7 @@ const pathKeywordFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/path-keywords.json"), "utf8"));
 const pathKeywordSource = `import json
 PATH_KEYWORD_CASES = json.loads(${JSON.stringify(JSON.stringify(pathKeywordFixture.cases))})
+QUADRATIC_PRECISION_CASES = json.loads(${JSON.stringify(JSON.stringify(pathKeywordFixture.quadraticPrecisionCases))})
 ${await readFile(path.join(repoRoot, "scripts/manim_path_keyword_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_path_keyword_controls.py"), "utf8")}`;
 const queryHookFixture = JSON.parse(await readFile(
@@ -1070,7 +1071,7 @@ result = Scene()
     }
   }
   console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-3).metrics.backend}.`);
-  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
+  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
     [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],

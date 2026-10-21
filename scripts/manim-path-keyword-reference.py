@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 
 import manim as m
-from manim_path_keyword_observation import PATH_KEYWORD_METHODS, observe_path_keyword
+from manim_path_keyword_observation import (
+    PATH_KEYWORD_METHODS, QUADRATIC_PRECISION_SPECS,
+    observe_path_keyword, observe_quadratic_precision,
+)
 
 
 def main():
@@ -24,7 +27,9 @@ def main():
               "observerSourceSha256": hashlib.sha256(Path(__file__).with_name("manim_path_keyword_observation.py").read_bytes()).hexdigest(),
               "methodSourceSha256": {name: hashlib.sha256(inspect.getsource(method).encode()).hexdigest()
                                      for name, method in methods.items()},
-              "cases": cases}
+              "cases": cases,
+              "quadraticPrecisionCases": [observe_quadratic_precision(m, spec)
+                                          for spec in QUADRATIC_PRECISION_SPECS]}
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print("Observed all five pinned CE path keyword calls")
 

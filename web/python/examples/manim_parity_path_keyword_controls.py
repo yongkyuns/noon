@@ -14,4 +14,11 @@ class PathKeywordControls(m.Scene):
                 for field in ("pointsXY", "centerXY"):
                     np.testing.assert_allclose(actual[field], expected[field], rtol=1e-12, atol=1e-12,
                                                err_msg=f"{phase}: {expected['method']} {field}")
+            assert len(QUADRATIC_PRECISION_CASES) == 2
+            for expected in QUADRATIC_PRECISION_CASES:
+                actual = observe_quadratic_precision(m, expected["spec"])
+                assert actual["returnsSelf"] is expected["returnsSelf"]
+                np.testing.assert_allclose(actual["pointsXY"], expected["pointsXY"],
+                                           rtol=1e-12, atol=1e-12,
+                                           err_msg=f"{phase}: {expected['spec']['id']}")
             await self.wait(.25)
