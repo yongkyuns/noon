@@ -1069,15 +1069,16 @@ result = Scene()
       resolveQualifiedBackend(expected, result.metrics.backend);
     }
   }
-  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
+  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-3).metrics.backend}.`);
+  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {
