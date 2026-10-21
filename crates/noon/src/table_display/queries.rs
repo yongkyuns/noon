@@ -196,15 +196,7 @@ impl TableEntrySelection {
     }
     pub fn len(&self) -> Result<usize, TableAuthoringError> {
         self.owner.validate()?;
-        self.family.validate()?;
-        Ok(self
-            .family
-            .integration_store()
-            .borrow()
-            .node(self.family.node_id())
-            .ok_or(TableAuthoringError::InvalidStructure)?
-            .members()
-            .len())
+        Ok(self.family.member_count()?)
     }
     pub fn is_empty(&self) -> Result<bool, TableAuthoringError> {
         Ok(self.len()? == 0)
@@ -222,17 +214,18 @@ impl TableEntrySelection {
     ) -> Result<TableEntry, TableAuthoringError> {
         let index = normalize_index(index.into(), self.len()?)
             .ok_or(TableAuthoringError::InvalidEntryIndex)?;
-        let node = self
-            .family
-            .integration_store()
-            .borrow()
-            .semantic_family_member_at_checked(self.family.node_id(), index)
-            .map_err(AuthoringError::from)?
-            .ok_or(TableAuthoringError::InvalidStructure)?;
-        Ok(CompositeEntryHandle::from_node(
-            Rc::clone(self.family.integration_store()),
-            node,
-        )?)
+        self.select_normalized_index(index)?
+            .ok_or(TableAuthoringError::InvalidStructure)
+    }
+
+    /// Read a current entry after an earlier language-level normalization.
+    /// A callback may have removed this rank; preserve that distinct outcome.
+    pub fn select_normalized_index(
+        &self,
+        index: usize,
+    ) -> Result<Option<TableEntry>, TableAuthoringError> {
+        self.owner.validate()?;
+        Ok(self.family.member_at(index)?)
     }
 }
 

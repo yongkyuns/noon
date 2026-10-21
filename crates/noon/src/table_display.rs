@@ -8,6 +8,8 @@ mod admission;
 #[cfg(all(test, feature = "diagnostics"))]
 mod alias_tests;
 mod cells;
+#[cfg(all(test, feature = "diagnostics"))]
+mod mutation_tests;
 mod queries;
 pub use cells::{TableCellColumns, TableCellRows};
 pub use queries::TableEntrySelection;

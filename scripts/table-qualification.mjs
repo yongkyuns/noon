@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { qualifyPairedAuthoring, qualifyPythonPlayback } from "./paired-authoring-qualification.mjs";
 import { qualifyTablePositionProtocols } from "./table-position-checks.mjs";
 import { qualifyTableQueryGroups } from "./table-group-checks.mjs";
+import { qualifyTableMutationPositions } from "./table-mutation-checks.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_TABLE_ARTIFACTS ?? "table-artifacts",
@@ -124,6 +125,7 @@ class TableLifecycle(Scene):
     assert.equal(positions.sceneCaseCount, 228);
     assert.equal(positions.moduleCaseCount, 8);
     const groups = await qualifyTableQueryGroups(context, baseUrl, expectedBackend);
-    return { ...result, positions, groups };
+    const mutations = await qualifyTableMutationPositions(context, baseUrl, expectedBackend);
+    return { ...result, positions, groups, mutations };
   },
 });

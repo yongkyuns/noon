@@ -22,7 +22,7 @@ fn key(entry: &TableEntry, names: &HashMap<SemanticNodeId, String>) -> Value {
     assert!(object.layout_bounds().unwrap().is_none());
     json!({"type":"VMobject","points":0})
 }
-fn names(entries: Vec<TableEntry>, ids: &HashMap<SemanticNodeId, String>) -> Value {
+pub(super) fn names(entries: Vec<TableEntry>, ids: &HashMap<SemanticNodeId, String>) -> Value {
     Value::Array(entries.iter().map(|entry| key(entry, ids)).collect())
 }
 fn near(value: f64, expected: &Value, context: &str) {
@@ -244,7 +244,9 @@ fn geometric_table_queries_match_all_pinned_alias_and_label_cases() {
     }
 }
 
-fn position_table(labeled: bool) -> (Scene, Table, Vec<Mobject>, HashMap<SemanticNodeId, String>) {
+pub(super) fn position_table(
+    labeled: bool,
+) -> (Scene, Table, Vec<Mobject>, HashMap<SemanticNodeId, String>) {
     let mut scene = Scene::new();
     let mut ids = HashMap::new();
     let cells: Vec<_> = (0..4)
@@ -389,6 +391,7 @@ fn retained_query_requests_reject_a_retired_table_owner() {
     tx.apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     assert!(entries.select_index(0).is_err());
+    assert!(entries.select_normalized_index(0).is_err());
     assert!(rows.select_row(0).is_err());
     assert!(columns.get_cell(0).is_err());
     assert!(table.entries_family().is_err());

@@ -11,6 +11,8 @@ from _manim_semantic_handles import (
     _family_wrapper_key,
     _handle_for,
     _live_constructor_context,
+    _is_missing_handle,
+    _shared_handle_key as _handle_key,
 )
 
 try:
@@ -189,10 +191,6 @@ def _rows(values, convert):
     return [[convert(value) for value in row] for row in values]
 
 
-def _handle_key(handle):
-    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
-
-
 def _label_handle(value, kind="Table"):
     if not isinstance(value, _base.Mobject):
         raise TypeError(f"{kind} labels must be shared Mobjects")
@@ -310,9 +308,13 @@ class Table(_compat.VGroup):
                     self._table_query_wrappers[key] = member
                 stack.append(members[key])
 
-    def _query_entry_wrapper(self, handle):
+    def _query_entry_wrapper(self, handle, peers=None):
         key = _handle_key(handle)
         wrapper = self._table_query_wrappers.get(key)
+        if wrapper is None and peers is not None:
+            wrapper = peers.get(key)
+            if wrapper is not None:
+                self._table_query_wrappers[key] = wrapper
         if wrapper is not None:
             return wrapper
         context = getattr(self, "_canonical_live_target_context", None)
@@ -343,7 +345,17 @@ class Table(_compat.VGroup):
         # rather than coerce each coordinate before evaluating the expression.
         index = stride * (pos[0] - 1) + pos[1] - offset
         index = range(int(engine_call(selection.length)))[index]
-        return self._query_entry_wrapper(engine_call(selection.selectIndex, str(index)))
+        handle = engine_call(selection.selectNormalizedIndex, index)
+        if _is_missing_handle(handle):
+            raise IndexError("list index out of range")
+        if _handle_key(handle) in self._table_query_wrappers:
+            return self._query_entry_wrapper(handle)
+        # An operand callback may have appended an existing Python wrapper to
+        # this view. Resolve just that host identity, without walking siblings.
+        method = "bodyEntriesFamily" if without_labels else "entriesFamily"
+        family = engine_call(getattr(self._table_handle, method))
+        parent = self._table_query_wrappers.get(_handle_key(family))
+        return self._query_entry_wrapper(handle, getattr(parent, "_semantic_member_wrappers", None))
 
     def get_entries_without_labels(self, pos=None):
         if pos is None:

@@ -6776,7 +6776,7 @@
     {
       "id": "reference-cc90efa64d56055d",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks random_bright_color. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "Current public Noon namespace lacks random_bright_color. This static admission blocker does not enumerate all behavior gaps. Scoped member/index-callback regression coverage is recorded in fixtures/manim-v0.21/table-mutation-positions.json and scripts/table-mutation-checks.mjs; it does not qualify this complete directive.",
       "owners": [
         "#83",
         "#89",
@@ -6798,7 +6798,7 @@
     {
       "id": "reference-c58e25a732c4c258",
       "status": "unqualified",
-      "reason": "Exact pinned directive needs canonical execution, semantic/effective-state, timing, raster and replay qualification; exported symbols alone are not support evidence.",
+      "reason": "Exact pinned directive needs canonical execution, semantic/effective-state, timing, raster and replay qualification; exported symbols alone are not support evidence. Scoped member/index-callback regression coverage is recorded in fixtures/manim-v0.21/table-mutation-positions.json and scripts/table-mutation-checks.mjs; it does not qualify this complete directive.",
       "owners": [
         "#83",
         "#89",

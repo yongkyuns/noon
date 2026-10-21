@@ -1125,7 +1125,8 @@ class Group(Mobject):
         if isinstance(index, slice):
             group_class = VGroup if isinstance(self, VGroup) else Group
             return group_class(*self.submobjects[index])
-        return self.submobjects[index]
+        from _manim_semantic_handles import _group_indexed_member
+        return _group_indexed_member(self, index)
 
     def insert(self, index: int, mobject: Mobject) -> Self:
         from _manim_semantic_handles import _group_insert
