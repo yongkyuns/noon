@@ -140,7 +140,7 @@ impl SemanticStore {
         Ok(node)
     }
 
-    fn semantic_authoring_node_checked(
+    pub fn semantic_authoring_node_checked(
         &self,
         id: SemanticNodeId,
     ) -> Result<&SemanticNode, SemanticSceneOperationError> {
@@ -234,6 +234,17 @@ impl SemanticStore {
         family: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
         Ok(self.semantic_family_checked(family)?.members())
+    }
+    /// Rank lookup for either a point-owning Mobject or a family root.
+    pub fn semantic_member_at_checked(
+        &self,
+        root: SemanticNodeId,
+        index: usize,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(self
+            .semantic_authoring_node_checked(root)?
+            .members
+            .member_at_rank(index))
     }
     pub fn semantic_family_member_at_checked(
         &self,

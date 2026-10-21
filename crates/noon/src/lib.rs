@@ -113,6 +113,9 @@ mod family_layout;
 mod family_layout_migration_tests;
 mod family_points;
 mod family_queries;
+pub use family_queries::{FamilyIterator, FamilyMemberView};
+mod family_slicing;
+pub use family_slicing::FamilySlicePlan;
 mod family_style;
 #[cfg(test)]
 mod family_transform_renderer_publication_tests;
@@ -412,3 +415,6 @@ pub mod prelude {
 }
 
 pub use family_gradient::color_gradient;
+
+#[cfg(all(test, feature = "diagnostics"))]
+mod object_member_queries;

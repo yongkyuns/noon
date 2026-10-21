@@ -40,7 +40,7 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         b = identity_only_wrapper(compat.Mobject)
         a._semantic_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=0)
         b._semantic_handle = SimpleNamespace(semanticSlot=2, semanticGeneration=0)
-        bridge = SimpleNamespace(memberCount=2, memberKeys=Mock(return_value=['2:0', '1:0']),
+        bridge = SimpleNamespace(memberCount=2, splitCount=lambda inclusion=None: 2, memberKeys=Mock(return_value=['2:0', '1:0']),
                                  editMembership=Mock(return_value=[False]))
         group = identity_only_wrapper(compat.Group)
         group._semantic_family_handle = bridge
@@ -65,8 +65,8 @@ class FamilyMembershipOrderTests(unittest.TestCase):
     def test_live_route_uses_the_same_rust_order_and_preserves_wrapper_identity(self):
         a = identity_only_wrapper(compat.Mobject)
         a._semantic_handle = SimpleNamespace(semanticSlot=7, semanticGeneration=3)
-        bridge = SimpleNamespace(memberCount=1, memberKeys=Mock(return_value=['7:3']),
-                                 memberAt=Mock(return_value=a._semantic_handle))
+        bridge = SimpleNamespace(memberCount=1, splitCount=lambda inclusion=None: 1, semanticSlot=99, semanticGeneration=0, memberKeys=Mock(return_value=['7:3']),
+                                 splitAt=Mock(return_value=a._semantic_handle))
         group = identity_only_wrapper(compat.VGroup)
         group._semantic_family_handle = bridge
         group._semantic_member_wrappers = {}

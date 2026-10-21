@@ -44,6 +44,10 @@ class _FamilyHandle:
         return member
 
 
+from _typed_family_test_support import install_split_queries
+install_split_queries(_FamilyHandle, lambda self: self._members)
+
+
 class _Options:
     def __init__(self, width, height):
         self.width = width
