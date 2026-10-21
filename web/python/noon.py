@@ -1312,6 +1312,11 @@ class Mobject:
         return deepcopy_semantic_wrapper(self, memo)
 
 
+# Compiler capture checks this original descriptor, including after a user
+# replaces the public method. It never executes user code to discover a kernel.
+_CANONICAL_MOBJECT_REPLACE_METHOD = Mobject.replace
+
+
 def _scene_operations():
     """Load the shared host adapter lazily, after public wrapper classes exist."""
     try:

@@ -1555,6 +1555,25 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage an affine Transform with an explicit start, without rewriting the
+    /// target's authored transform. Used when a pure expression specializes to
+    /// the ordinary affine channels; validation/publication remain transactional.
+    pub fn create_transform_animation_with_start(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        start: crate::SemanticTransform2_5D,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.create_transform_animation(target, target_state, options);
+        let Some(SemanticMutation::AddAnimation { animation, .. }) = self.mutations.last_mut()
+        else {
+            unreachable!("the preceding operation staged one Transform")
+        };
+        animation.transform_start = Some(Box::new(start));
+        token
+    }
+
     /// Stage a typed world-pose animation for one existing semantic object.
     pub fn create_world_transform_animation(
         &mut self,
@@ -4574,6 +4593,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationAngle {
         index: usize,
     },
+    InvalidTransformStart {
+        index: usize,
+    },
     InvalidIndicateEndpoint {
         index: usize,
     },
@@ -5170,6 +5192,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidObjectPropertyTrack { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} has an invalid exact object property track"
+            ),
+            Self::InvalidTransformStart { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid explicit affine Transform start"
             ),
             Self::NonFinitePropertyValue {
                 index,

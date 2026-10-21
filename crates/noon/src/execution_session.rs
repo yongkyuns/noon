@@ -197,6 +197,21 @@ pub(crate) enum SemanticCompositionRequest {
         callback: noon_core::HostCallbackId,
         options: AnimationOptions,
     },
+    LayoutReplaceInterval {
+        target: SemanticNodeId,
+        layout_target: SemanticNodeId,
+        fallback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
+    /// Candidate-local result of shared pure-expression specialization.
+    ResolvedLayoutReplace {
+        target: SemanticNodeId,
+        endpoints: Box<(
+            noon_core::SemanticTransform2_5D,
+            noon_core::SemanticObjectState,
+        )>,
+        options: AnimationOptions,
+    },
     WorldTransform {
         target: SemanticNodeId,
         transform: noon_core::SemanticWorldTransform3D,
@@ -346,7 +361,9 @@ impl SemanticCompositionRequest {
             | Self::FamilyMethodTargetTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
-            Self::CallbackInterval { target, .. } => Some(*target),
+            Self::CallbackInterval { target, .. }
+            | Self::LayoutReplaceInterval { target, .. }
+            | Self::ResolvedLayoutReplace { target, .. } => Some(*target),
             Self::MoveAlongPath { target, .. } => Some(*target),
             Self::Indicate { target, .. }
             | Self::FamilyIndicate { target, .. }
@@ -2118,6 +2135,8 @@ impl ExecutionSession {
         let mut callback_intervals = Vec::new();
         let mut family_colors = std::collections::BTreeMap::new();
         let mut family_styles = std::collections::BTreeMap::new();
+        let specialized = self.specialize_layout_replace(store, request, play_options);
+        let request = specialized.as_ref().unwrap_or(request);
         let animation = self.stage_composition_request(
             store,
             root,
@@ -2318,13 +2337,17 @@ impl ExecutionSession {
                 }
                 Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
             }
-            SemanticCompositionRequest::CallbackInterval { options, .. } => {
-                let SemanticCompositionRequest::CallbackInterval {
-                    target, callback, ..
-                } = request
-                else {
-                    unreachable!()
-                };
+            SemanticCompositionRequest::CallbackInterval {
+                target,
+                callback,
+                options,
+            }
+            | SemanticCompositionRequest::LayoutReplaceInterval {
+                target,
+                fallback: callback,
+                options,
+                ..
+            } => {
                 if !self.reachability.is_object_reachable(*target) {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "callback interval target must belong to the execution domain".into(),
@@ -2338,6 +2361,19 @@ impl ExecutionSession {
                 let marker = declaration.create_wait_animation(options.run_time.unwrap_or(1.0));
                 callback_intervals.push((marker, *target, *callback));
                 Ok(marker)
+            }
+            SemanticCompositionRequest::ResolvedLayoutReplace {
+                target,
+                endpoints,
+                options,
+            } => {
+                let (from, to) = endpoints.as_ref();
+                admit(*target, admitted)?;
+                let end = declaration.create_node(SemanticNodeCreation::object(to.clone()));
+                Ok(
+                    declaration
+                        .create_transform_animation_with_start(*target, end, *from, *options),
+                )
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,

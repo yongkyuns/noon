@@ -396,14 +396,41 @@ impl SceneInstance {
     /// Current effective visual bounds for one live retained object.
     pub fn effective_object_bounds(&self, id: ObjectId) -> Option<noon_core::Rect> {
         let index = self.frame_index_for_object(id)?;
+        self.retained_object_bounds_at_index(index, self.frame.render_transform(index), true)
+    }
+
+    /// Project the current retained content at a candidate affine transform.
+    /// This is a read-only bounds query, not time evaluation or a state edit.
+    pub fn retained_object_layout_bounds_at(
+        &self,
+        id: ObjectId,
+        transform: noon_core::Transform2D,
+    ) -> Option<noon_core::Rect> {
+        let index = self.frame_index_for_object(id)?;
+        self.retained_object_bounds_at_index(index, transform, false)
+    }
+
+    fn retained_object_bounds_at_index(
+        &self,
+        index: usize,
+        transform: noon_core::Transform2D,
+        conservative: bool,
+    ) -> Option<noon_core::Rect> {
         let object = self.frame.objects.get(index)?;
         crate::spatial_index::effective_object_conservative_bounds_with_resources(
             self.frame.render_geometry(index),
             object
                 .text_bounds
                 .or_else(|| object.content.image().map(|image| image.local_bounds())),
-            self.frame.render_transform(index),
-            object.style,
+            transform,
+            if conservative {
+                object.style
+            } else {
+                Style {
+                    stroke: None,
+                    ..object.style
+                }
+            },
             self,
         )
     }
@@ -441,8 +468,18 @@ impl SceneInstance {
         cached_bounds: Option<noon_core::Rect>,
     ) -> Option<EffectiveObjectProperties> {
         self.object_slot_is_live(object_index).then(|| {
-            let cached_bounds = cached_bounds
-                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id));
+            let object = &self.frame.objects[object_index];
+            // Index bounds include stroke expansion; callback getters need
+            // geometry layout. Reuse the cache only when those bounds coincide.
+            let cached_bounds = if object.style.stroke.is_none() || object.style.stroke_width == 0.0
+            {
+                cached_bounds.or_else(|| self.effective_object_bounds(object.id))
+            } else {
+                self.retained_object_layout_bounds_at(
+                    object.id,
+                    self.frame.render_transform(object_index),
+                )
+            };
             EffectiveObjectProperties::from_frame(&self.frame, object_index, cached_bounds)
         })
     }

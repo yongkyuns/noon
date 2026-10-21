@@ -49,7 +49,14 @@ class Wait:
 
 
 class UpdateFromFunc:
-    """Run one host callback over a finite, Rust-scheduled composition interval."""
+    """Run a callback over a finite, Rust-scheduled composition interval.
+
+    A direct ``lambda m: m.replace(target)`` with one closed typed target can
+    capture that target's identity when the composition is authored. Compatible
+    parallel affine motion runs as ordinary Rust tracks, including during seek.
+    Other callables and incompatible profiles retain ordered host execution and
+    its explicit replay restrictions. Capture never invokes the callable.
+    """
 
     def __init__(
         self,

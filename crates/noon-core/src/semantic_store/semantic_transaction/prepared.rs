@@ -1052,6 +1052,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Err(SemanticTransactionReadError::UnknownPendingNode(token))
     }
 
+    /// Read the optional affine start from the same prepared animation owner.
+    pub fn transform_start(
+        &self,
+        animation: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::SemanticTransform2_5D>, SemanticTransactionReadError> {
+        let animation = animation.into();
+        match animation {
+            SemanticTransactionNodeRef::Pending(token) => {
+                Ok(self.pending_animation(token)?.transform_start())
+            }
+            SemanticTransactionNodeRef::Existing(id) => {
+                if self.node_is_removed(id) {
+                    return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+                }
+                let node = self
+                    .store
+                    .node(id)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?;
+                let SemanticNodeKind::Animation(state) = node.kind() else {
+                    return Err(SemanticTransactionReadError::NotAnimation(animation));
+                };
+                Ok(state.transform_start())
+            }
+        }
+    }
+
     /// Read final direct family order through the transaction-local overlay.
     pub fn family_members(
         &self,

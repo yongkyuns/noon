@@ -234,12 +234,15 @@ impl SceneInstance {
                     .or_else(|| content.geometry()),
                 local_bounds,
                 row.render_transform.unwrap_or(row.transform),
-                row.style,
+                noon_core::Style {
+                    stroke: None,
+                    ..row.style
+                },
                 self.geometry_resources(),
             )
         } else {
-            cached_bounds
-                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id))
+            self.effective_properties_at(object_index, cached_bounds)?
+                .bounds
         };
         let object = &self.frame.objects[object_index];
         let content = row.content_override.as_ref().unwrap_or(&object.content);
@@ -747,6 +750,78 @@ mod tests {
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")
+    }
+
+    #[test]
+    fn callback_layout_bounds_exclude_stroke_in_current_and_prepared_rows() {
+        let object = ObjectId::new(1);
+        for stroke_width in [4.0, 1.0e12] {
+            let compiled = CompiledObject::new(
+                object,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style {
+                    stroke: Some(noon_core::Color::WHITE),
+                    stroke_width,
+                    ..Style::default()
+                },
+            );
+            let track = TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::new(10.0, 0.0),
+                },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::default(),
+            };
+            let mut instance = SceneInstance::new(
+                CompiledScene::compile_objects(vec![compiled], &[track]).unwrap(),
+            );
+            let visual = instance.effective_object_bounds(object).unwrap();
+            assert!(visual.width() > 2.0);
+            let layout = Some(noon_core::Rect::new(
+                Vec2::new(-1.0, -1.0),
+                Vec2::new(1.0, 1.0),
+            ));
+            assert_eq!(
+                instance
+                    .effective_properties_at(0, Some(visual))
+                    .unwrap()
+                    .bounds,
+                layout
+            );
+            let unchanged = instance.prepare_advance_to(0.0).unwrap();
+            assert_eq!(
+                instance
+                    .prepared_properties_at(&unchanged, 0, Some(visual))
+                    .unwrap()
+                    .bounds,
+                layout
+            );
+            let prepared = instance.prepare_advance_to(1.0).unwrap();
+            let projected = Some(noon_core::Rect::new(
+                Vec2::new(4.0, -1.0),
+                Vec2::new(6.0, 1.0),
+            ));
+            assert_eq!(
+                instance
+                    .prepared_properties_at(&prepared, 0, Some(visual))
+                    .unwrap()
+                    .bounds,
+                projected
+            );
+            // Preparing a callback phase does not publish the candidate pose.
+            assert_eq!(instance.effective_object_bounds(object), Some(visual));
+            instance.advance_to(1.0).unwrap();
+            assert!(instance.effective_object_bounds(object).unwrap().width() > 2.0);
+            assert_eq!(
+                instance.effective_properties_at(0, None).unwrap().bounds,
+                projected
+            );
+        }
     }
 
     #[test]

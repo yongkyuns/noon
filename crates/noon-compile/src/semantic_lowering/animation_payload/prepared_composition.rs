@@ -16,9 +16,9 @@ use super::super::{
 use super::affine::{
     affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
     lower_draw_border_then_fill_channels, lower_fade_channels, lower_passing_flash_phases,
-    lower_subset_display_phases, lower_transform_channels, reserve_affine_center_dependencies,
-    validate_affine_payload, validate_subset_display_time_map, AffinePayloadIssue,
-    EffectiveAnimationProperties, SemanticAnimationCompletion,
+    lower_subset_display_phases, lower_transform_channels_with_start,
+    reserve_affine_center_dependencies, validate_affine_payload, validate_subset_display_time_map,
+    AffinePayloadIssue, EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -551,13 +551,21 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let channels = lower_transform_channels(
+                let start = prepared.transform_start(leaf.animation).map_err(|error| {
+                    PreparedSemanticAnimationLoweringError::Target {
+                        animation: leaf.animation,
+                        node: leaf.animation,
+                        error,
+                    }
+                })?;
+                let channels = lower_transform_channels_with_start(
                     prepared.store(),
                     source,
                     target,
                     from,
                     interpolation,
                     leaf.options.path_arc,
+                    start,
                 )
                 .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
@@ -627,6 +635,14 @@ where
                 .map_err(glow_error)?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                    let track = tracks.last_mut().expect("pushed Transform channel");
+                    if let Some(completion) = super::affine::explicit_start_completion(
+                        track.property,
+                        track.timing,
+                        start,
+                    ) {
+                        track.completion = completion;
+                    }
                 }
                 for (property, values) in glow_channels {
                     super::glow_target::reserve(
