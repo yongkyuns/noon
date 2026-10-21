@@ -7,5 +7,7 @@ await qualifyPairedAuthoring({
     file: "manim_parity_family_root_drawing.py", scene: "FamilyRootDrawing",
     factory: "createDirectFamilyRootPointsSmokeRenderer",
     duration: 0.75, sampleTime,
+    playback: "live", boundaries: [0.25, 0.5],
+    directHeldSampleTime: index * 0.25,
   })),
 });
