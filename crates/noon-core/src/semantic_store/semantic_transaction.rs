@@ -17,10 +17,11 @@ use crate::{
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
-    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency, SemanticTransform,
-    SemanticTransformInterpolation, SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration,
-    SemanticVec3, StoredGeometry, TextPresentationBaseline, VectorPath,
+    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticTransactionTableLayout, SemanticTransform, SemanticTransformInterpolation,
+    SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
+    TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -218,7 +219,7 @@ pub enum SemanticMutation {
     },
     SetTableLayout {
         scope: SemanticTransactionNodeRef,
-        layout: SemanticTableLayout,
+        layout: SemanticTransactionTableLayout,
     },
     AddMember {
         family: SemanticTransactionNodeRef,
@@ -295,7 +296,9 @@ impl SemanticMutation {
             Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
                 .chain(graph.node_references())
                 .collect(),
-            Self::SetTableLayout { scope, .. } => vec![*scope],
+            Self::SetTableLayout { scope, layout } => std::iter::once(*scope)
+                .chain(layout.node_references())
+                .collect(),
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -1323,11 +1326,11 @@ impl SemanticMutationTransaction {
     pub fn set_table_layout(
         &mut self,
         scope: impl Into<SemanticTransactionNodeRef>,
-        layout: SemanticTableLayout,
+        layout: impl Into<SemanticTransactionTableLayout>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetTableLayout {
             scope: scope.into(),
-            layout,
+            layout: layout.into(),
         });
         self
     }
@@ -3286,25 +3289,36 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetTableLayout { scope, layout } => {
                     catalog.ensure_family(*scope, index)?;
+                    for node in layout.node_references() {
+                        catalog.ensure_authoring_node(node, index)?;
+                    }
+                    for family in layout.family_references() {
+                        catalog.ensure_family(family, index)?;
+                    }
+                    if let Some(node) = layout.placeholder() {
+                        catalog.ensure_object(node, index)?;
+                    }
                     if !layout.is_valid() {
                         return Err(SemanticMutationTransactionError::InvalidTableLayout {
                             index,
                             scope: *scope,
                         });
                     }
-                    let previous = match staged_table_layouts.get(scope).copied() {
+                    let previous = match staged_table_layouts.get(scope).cloned() {
                         Some(previous) => Some(previous),
                         None => match scope {
-                            SemanticTransactionNodeRef::Existing(scope) => {
-                                store.semantic_table_layout(*scope).map_err(|error| {
-                                    SemanticMutationTransactionError::Node { index, error }
+                            SemanticTransactionNodeRef::Existing(scope) => store
+                                .semantic_table_layout(*scope)
+                                .map_err(|error| SemanticMutationTransactionError::Node {
+                                    index,
+                                    error,
                                 })?
-                            }
+                                .map(SemanticTransactionTableLayout::from),
                             SemanticTransactionNodeRef::Pending(_) => None,
                         },
                     };
-                    changed.push(previous != Some(*layout));
-                    staged_table_layouts.insert(*scope, *layout);
+                    changed.push(previous != Some(layout.clone()));
+                    staged_table_layouts.insert(*scope, layout.clone());
                 }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);

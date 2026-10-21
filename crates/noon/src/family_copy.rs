@@ -235,6 +235,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 .semantic_table_layout(id)
                 .map_err(AuthoringError::from)?
             {
+                queue.extend(layout.referenced_nodes());
                 table_layouts.push((id, layout));
             }
         }
@@ -328,7 +329,12 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         );
     }
     for (source_family, layout) in table_layouts {
-        transaction.set_table_layout(copied[&source_family], layout);
+        transaction.set_table_layout(
+            copied[&source_family],
+            noon_core::SemanticTransactionTableLayout::map_existing(layout, |node| {
+                copied[&node].into()
+            }),
+        );
     }
     Ok((
         transaction,
@@ -367,6 +373,14 @@ fn graph_dependency_copy_rows<E: From<AuthoringError>>(
             }
         }
         stack.extend(node.members_iter());
+        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            if let Some(layout) = store
+                .semantic_table_layout(node_id)
+                .map_err(AuthoringError::from)?
+            {
+                stack.extend(layout.referenced_nodes());
+            }
+        }
     }
     Ok(rows)
 }

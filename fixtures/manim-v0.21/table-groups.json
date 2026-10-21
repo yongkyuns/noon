@@ -1,0 +1,778 @@
+{
+  "schemaVersion": 1,
+  "manimVersion": "0.21.0",
+  "generatorSha256": "0b3655d577954b101cee175b97f54f7babd8f2da5158bc6054db1f1515ecd02b",
+  "methodSourceSha256": {
+    "get_entries": "f83e56cbc308ef37d31f56082ad76c78af0faa4de74e2a590869cee1045960e3",
+    "get_entries_without_labels": "32dd62ca4a22b49d8f4d61579ac82178a49d4b1b03b3a31b767d6355c555ca0b"
+  },
+  "scope": "Canonical group identity, independent displayed/body membership, ordering, raw rows/columns, position selection and copies.",
+  "cases": [
+    {
+      "labels": false,
+      "states": [
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell00",
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell00",
+              "cell01",
+              "cell11",
+              "cell01"
+            ],
+            [
+              "cell00",
+              "cell01",
+              "cell11",
+              "cell01"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell01",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell01"
+            ],
+            [
+              "cell00",
+              "cell01",
+              "cell11",
+              "cell01"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell01",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell01"
+            ],
+            [
+              "cell00",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell00"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell01",
+            "cell10",
+            "cell11",
+            "cell00"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell01",
+              "cell10",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell00",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell00"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell01",
+            "cell10",
+            "cell11",
+            "cell00"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11",
+            "cell01"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell01",
+              "cell10",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell00",
+              "cell10",
+              "cell01",
+              "cell10"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "cell10",
+            "cell11",
+            "cell00",
+            "cell01"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11",
+            "cell01"
+          ],
+          "rows": [
+            [
+              "cell00",
+              "cell01"
+            ],
+            [
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "cell00",
+              "cell10"
+            ],
+            [
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell10",
+              "cell11",
+              "cell01",
+              "cell11"
+            ],
+            [
+              "cell00",
+              "cell10",
+              "cell01",
+              "cell10"
+            ]
+          ]
+        }
+      ],
+      "copy": {
+        "displayedStable": true,
+        "bodyStable": true,
+        "independentGroups": true,
+        "independentLeaves": true,
+        "displayedCount": 3,
+        "bodyCount": 3,
+        "originalUnchanged": true
+      },
+      "pythonTypes": {
+        "displayed": "VGroup",
+        "body": "VGroup"
+      }
+    },
+    {
+      "labels": true,
+      "states": [
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "cell00",
+            "cell01",
+            "row1",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell11",
+              "col0",
+              "cell00",
+              "cell00"
+            ],
+            [
+              "cell00",
+              "cell01",
+              "cell11",
+              "cell01"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "cell01",
+            "row1",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell01",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell11",
+              "col0",
+              "cell01",
+              "row0"
+            ],
+            [
+              "cell00",
+              "cell01",
+              "cell11",
+              "cell01"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "cell01",
+            "row1",
+            "cell10",
+            "cell11"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell11",
+              "col0",
+              "cell01",
+              "row0"
+            ],
+            [
+              "cell00",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell00"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "cell01",
+            "row1",
+            "cell10",
+            "cell11",
+            "cell00"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell00",
+              "col0",
+              "cell01",
+              "cell01"
+            ],
+            [
+              "cell00",
+              "cell10",
+              {
+                "exception": "IndexError",
+                "message": "range object index out of range"
+              },
+              "cell00"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "cell01",
+            "row1",
+            "cell10",
+            "cell11",
+            "cell00"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11",
+            "cell01"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell00",
+              "col0",
+              "cell01",
+              "cell01"
+            ],
+            [
+              "cell00",
+              "cell10",
+              "cell01",
+              "cell10"
+            ]
+          ]
+        },
+        {
+          "displayedStable": true,
+          "bodyStable": true,
+          "distinctGroups": true,
+          "displayed": [
+            "col0",
+            "col1",
+            "row0",
+            "row1",
+            "cell10",
+            "cell11",
+            "cell00",
+            "cell01"
+          ],
+          "body": [
+            "cell00",
+            "cell10",
+            "cell11",
+            "cell01"
+          ],
+          "rows": [
+            [
+              "missing-corner",
+              "col0",
+              "col1"
+            ],
+            [
+              "row0",
+              "cell00",
+              "cell01"
+            ],
+            [
+              "row1",
+              "cell10",
+              "cell11"
+            ]
+          ],
+          "columns": [
+            [
+              "missing-corner",
+              "row0",
+              "row1"
+            ],
+            [
+              "col0",
+              "cell00",
+              "cell10"
+            ],
+            [
+              "col1",
+              "cell01",
+              "cell11"
+            ]
+          ],
+          "selections": [
+            [
+              "cell01",
+              "col0",
+              "row1",
+              "row1"
+            ],
+            [
+              "cell00",
+              "cell10",
+              "cell01",
+              "cell10"
+            ]
+          ]
+        }
+      ],
+      "copy": {
+        "displayedStable": true,
+        "bodyStable": true,
+        "independentGroups": true,
+        "independentLeaves": true,
+        "displayedCount": 7,
+        "bodyCount": 3,
+        "originalUnchanged": true
+      },
+      "pythonTypes": {
+        "displayed": "VGroup",
+        "body": "VGroup"
+      }
+    }
+  ]
+}

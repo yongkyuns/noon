@@ -86,11 +86,11 @@ impl MobjectFamily {
     }
 }
 
-struct PlacementStep {
+struct PlacementStep<K> {
     cell: Option<(usize, usize)>,
-    moved: Vec<SemanticNodeId>,
-    source: Vec<SemanticNodeId>,
-    target: Vec<SemanticNodeId>,
+    moved: Vec<K>,
+    source: Vec<K>,
+    target: Vec<K>,
 }
 
 /// Measurements derived from one immutable leaf, with no independent identity.
@@ -101,10 +101,10 @@ pub(crate) struct ArrangementBounds {
 }
 
 /// Request-local observations and proposed deltas, never another scene or runtime.
-pub(crate) struct FamilyArrangePlan {
-    roots: Vec<SemanticNodeId>,
-    steps: Vec<PlacementStep>,
-    bounds: BTreeMap<SemanticNodeId, ArrangementBounds>,
+pub(crate) struct FamilyArrangePlan<K = SemanticNodeId> {
+    roots: Vec<K>,
+    steps: Vec<PlacementStep<K>>,
+    bounds: BTreeMap<K, ArrangementBounds>,
     observed: bool,
     placement: ManimNextToArgs,
     center: bool,
@@ -204,20 +204,50 @@ impl FamilyArrangePlan {
         family.validate()?;
         let store = family.integration_store().borrow();
         let ids = store.node(family.node_id()).unwrap().members();
-        let grid = GridPlan::new(options, ids.len())?;
         let roots = store
             .ordered_leaf_nodes(family.node_id())
             .map_err(AuthoringError::from)?;
-        let mut steps = Vec::with_capacity(ids.len());
-        for (index, &id) in ids.iter().enumerate() {
-            let moved = store.ordered_leaf_nodes(id).map_err(AuthoringError::from)?;
-            steps.push(PlacementStep {
+        let members = ids
+            .iter()
+            .map(|&id| store.ordered_leaf_nodes(id).map_err(AuthoringError::from))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::grid_entries(roots, members, options)
+    }
+
+    pub(crate) fn transaction<E: From<AuthoringError>>(
+        self,
+        authored_translation: impl FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
+    ) -> Result<SemanticMutationTransaction, E> {
+        let placement = self.resolve().map_err(E::from)?;
+        translation_transaction(
+            placement
+                .deltas
+                .into_iter()
+                .filter_map(|(id, (x, y))| (x != 0.0 || y != 0.0).then_some((id, x, y))),
+            authored_translation,
+        )
+    }
+}
+
+impl<K: Copy + Ord> FamilyArrangePlan<K> {
+    /// Resolve an already captured local member projection without publishing
+    /// a temporary family. Keys are local observations, never new scene IDs.
+    pub(crate) fn grid_entries(
+        roots: Vec<K>,
+        members: Vec<Vec<K>>,
+        options: &FamilyGridOptions,
+    ) -> Result<Self, AuthoringError> {
+        let grid = GridPlan::new(options, members.len())?;
+        let mut steps: Vec<_> = members
+            .into_iter()
+            .enumerate()
+            .map(|(index, moved)| PlacementStep {
                 cell: Some(grid.cell(index)),
                 source: moved.clone(),
                 moved,
                 target: Vec::new(),
-            });
-        }
+            })
+            .collect();
         steps.sort_by_key(|step| step.cell);
         Ok(Self {
             bounds: roots
@@ -240,7 +270,7 @@ impl FamilyArrangePlan {
 
     pub(crate) fn observe_leaf_bounds<E>(
         &mut self,
-        mut observe: impl FnMut(SemanticNodeId) -> Result<ArrangementBounds, E>,
+        mut observe: impl FnMut(K) -> Result<ArrangementBounds, E>,
     ) -> Result<(), E> {
         for (&id, bounds) in &mut self.bounds {
             *bounds = observe(id)?;
@@ -249,42 +279,13 @@ impl FamilyArrangePlan {
         Ok(())
     }
 
-    pub(crate) fn transaction<E: From<AuthoringError>>(
-        self,
-        authored_translation: impl FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
-    ) -> Result<SemanticMutationTransaction, E> {
+    pub(crate) fn resolve(self) -> Result<ArrangementPlacement<K>, AuthoringError> {
         if !self.observed {
-            return Err(AuthoringError::IncompleteArrangement.into());
+            return Err(AuthoringError::IncompleteArrangement);
         }
         let mut deltas: BTreeMap<_, _> = self.roots.iter().map(|&id| (id, (0.0, 0.0))).collect();
-        let aggregate = |ids: &[SemanticNodeId],
-                         deltas: &BTreeMap<SemanticNodeId, (f64, f64)>,
-                         dimensions: bool| {
-            let mut total: Option<Bounds2D64> = None;
-            for id in ids {
-                let measured = self.bounds[id];
-                let Some(bounds) = (if dimensions {
-                    measured.dimensions
-                } else {
-                    measured.anchors
-                }) else {
-                    continue;
-                };
-                let (x, y) = deltas.get(id).copied().unwrap_or((0.0, 0.0));
-                let shifted = Bounds2D64 {
-                    min_x: bounds.min_x + x,
-                    max_x: bounds.max_x + x,
-                    min_y: bounds.min_y + y,
-                    max_y: bounds.max_y + y,
-                };
-                if let Some(total) = &mut total {
-                    total.include(shifted.min_x, shifted.min_y);
-                    total.include(shifted.max_x, shifted.max_y);
-                } else {
-                    total = Some(shifted);
-                }
-            }
-            total
+        let aggregate = |ids: &[K], deltas: &BTreeMap<K, (f64, f64)>, dimensions: bool| {
+            aggregate_bounds(&self.bounds, deltas, ids, dimensions)
         };
         let original_center = if self.grid.is_some() {
             bounds_critical_point(aggregate(&self.roots, &deltas, false), 0.0, 0.0)
@@ -325,11 +326,65 @@ impl FamilyArrangePlan {
                 delta.1 -= center.1 - original_center.1;
             }
         }
-        translation_transaction(
-            deltas
-                .into_iter()
-                .filter_map(|(id, (x, y))| (x != 0.0 || y != 0.0).then_some((id, x, y))),
-            authored_translation,
-        )
+        Ok(ArrangementPlacement {
+            #[cfg(any(feature = "native-text", feature = "latex"))]
+            bounds: self.bounds,
+            deltas,
+        })
     }
+}
+
+/// Final request-local placement, shared by family operations and composites.
+/// It can be appended to the caller's existing publication transaction.
+pub(crate) struct ArrangementPlacement<K> {
+    #[cfg(any(feature = "native-text", feature = "latex"))]
+    bounds: BTreeMap<K, ArrangementBounds>,
+    pub(crate) deltas: BTreeMap<K, (f64, f64)>,
+}
+#[cfg(any(feature = "native-text", feature = "latex"))]
+impl<K: Copy + Ord> ArrangementPlacement<K> {
+    pub(crate) fn bounds(&self, ids: &[K], dimensions: bool) -> Option<Bounds2D64> {
+        aggregate_bounds(&self.bounds, &self.deltas, ids, dimensions)
+    }
+    pub(crate) fn center_at(&mut self, x: f64, y: f64) {
+        let keys: Vec<_> = self.deltas.keys().copied().collect();
+        let center = bounds_critical_point(self.bounds(&keys, false), 0.0, 0.0);
+        for delta in self.deltas.values_mut() {
+            delta.0 += x - center.0;
+            delta.1 += y - center.1;
+        }
+    }
+}
+
+fn aggregate_bounds<K: Copy + Ord>(
+    observed: &BTreeMap<K, ArrangementBounds>,
+    deltas: &BTreeMap<K, (f64, f64)>,
+    ids: &[K],
+    dimensions: bool,
+) -> Option<Bounds2D64> {
+    let mut total: Option<Bounds2D64> = None;
+    for id in ids {
+        let measured = observed[id];
+        let Some(bounds) = (if dimensions {
+            measured.dimensions
+        } else {
+            measured.anchors
+        }) else {
+            continue;
+        };
+        let (x, y) = deltas.get(id).copied().unwrap_or((0.0, 0.0));
+        let next = Bounds2D64 {
+            min_x: bounds.min_x + x,
+            max_x: bounds.max_x + x,
+            min_y: bounds.min_y + y,
+            max_y: bounds.max_y + y,
+        };
+        if let Some(total) = &mut total {
+            total.include(next.min_x, next.min_y);
+            total.include(next.max_x, next.max_y);
+        } else {
+            total = Some(next);
+        }
+    }
+    total
 }

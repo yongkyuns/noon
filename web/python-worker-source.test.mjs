@@ -4,6 +4,61 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("table cell selections dispatch through the cold store or owning live context", () => {
+  const worker = {};
+  const begin = source.indexOf("  self.noonHighlightTableCell =");
+  const end = source.indexOf("  const tableOptions =", begin);
+  assert.ok(begin >= 0 && end > begin);
+  new Function("self", source.slice(begin, end))(worker);
+  for (const contextKind of ["null", "undefined", "live"]) {
+    for (const [bridge, cold, live, colors] of [
+      ["noonTableCell", "getCell", "liveTableCell", []],
+      ["noonGetHighlightedTableCell", "getHighlightedCell", "liveGetHighlightedTableCell", [1, 0, 0, 1, 0.75]],
+      ["noonHighlightTableCell", "highlightCell", "liveHighlightTableCell", [0, 1, 0, 1, 0.5]],
+    ]) {
+      const calls = [], result = {};
+      const selection = { [cold]: (...args) => { calls.push(args); return result; } };
+      const context = contextKind === "live"
+        ? { [live]: (...args) => { calls.push(args); return result; } }
+        : contextKind === "null" ? null : undefined;
+      assert.equal(worker[bridge](context, selection, "1", ...colors), result);
+      assert.deepEqual(calls, [contextKind === "live" ? [selection, "1", ...colors] : ["1", ...colors]]);
+    }
+  }
+});
+
+test("Table constructors use the existing store outside a Scene and retain live routing", () => {
+  const worker = {}, calls = [], result = {};
+  const authoringStore = Object.fromEntries(["createTable", "createTableWithLabels", "createMobjectTableWithLabels"]
+    .map(name => [name, (...args) => { calls.push({ name, args }); return result; }]));
+  class Options {
+    constructor(...args) {
+      this.initial = args;
+      return new Proxy(this, { get: (value, key) => key in value ? value[key] : (...args) => { value[key] = args; } });
+    }
+  }
+  const begin = source.indexOf("  const tableOptions =");
+  const end = source.indexOf("  self.noonCreateAuthoringVariableHandle =", begin);
+  assert.ok(begin >= 0 && end > begin);
+  new Function("self", "authoringStore", "WasmTableOptions", "compositeRows", source.slice(begin, end))(
+    worker, authoringStore, Options, value => value);
+  const options = [0.8, 1.3, false, true, 1, 1, 1, 1, 4, 1, 0, 0, 0, 0];
+  for (const [bridge, cold, live, labels] of [
+    ["noonCreateAuthoringTableHandle", "createTable", "liveCreateTable", []],
+    ["noonCreateAuthoringTableWithLabelsHandle", "createTableWithLabels", "liveCreateTableWithLabels", [null, null, []]],
+    ["noonCreateAuthoringMobjectTableHandle", "createMobjectTableWithLabels", "liveCreateMobjectTableWithLabels", [[], [], []]],
+  ]) {
+    for (const active of [false, true]) {
+      const context = active ? { [live]: (...args) => { calls.push({ name: live, args }); return result; } } : undefined;
+      assert.equal(worker[bridge]([["entry"]], ...labels, ...options, context), result);
+      const call = calls.at(-1);
+      assert.equal(call.name, active ? live : cold);
+      assert.deepEqual(call.args[0], [["entry"]]);
+      assert.deepEqual(call.args.at(-1).initial, [0.8, 1.3, false]);
+    }
+  }
+});
+
 test("numeric label members reuse the DecimalNumber getter and live-query facade", () => {
   const worker = {};
   const compiler = {};

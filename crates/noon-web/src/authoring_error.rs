@@ -79,12 +79,20 @@ impl From<noon::TableAuthoringError> for AuthoringFailure {
     fn from(error: noon::TableAuthoringError) -> Self {
         use noon::TableAuthoringError::*;
         match error {
-            EmptyTable => Self::new("input", "table.empty", error),
-            RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
-            DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
-            InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
-            InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
+            EmptyTable => Self::new("invalid_input", "table.empty", error),
+            RaggedRows { .. } => Self::new("invalid_input", "table.ragged_rows", error),
+            DuplicateEntry => Self::new("invalid_input", "table.duplicate_entry", error),
+            InvalidLabels { .. } => Self::new("invalid_input", "table.invalid_labels", error),
+            InvalidLabelIndex { .. } => Self::new("index_error", "table.label_index", error),
+            InsufficientColumnLabels { .. } => {
+                Self::new("invalid_input", "table.short_columns", error)
+            }
+            TopLeftRequiresLabels => {
+                Self::new("invalid_input", "table.top_left_requires_labels", error)
+            }
+            InvalidOption { .. } => Self::new("invalid_input", "table.invalid_option", error),
             InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
+            InvalidEntryIndex => Self::new("index_error", "table.entry_index", error),
             Text(error) => error.into(),
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
@@ -1144,6 +1152,31 @@ mod tests {
             "parallel Create targets must be distinct".into(),
         );
         assert_eq!(AuthoringFailure::from(unknown).category, "unclassified");
+    }
+
+    #[test]
+    fn table_label_errors_preserve_builtin_categories() {
+        let error = AuthoringFailure::from(noon::TableAuthoringError::InvalidLabelIndex {
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(
+            (error.category, error.code),
+            ("index_error", "table.label_index")
+        );
+        assert_eq!(error.message, "list index out of range");
+        let error = AuthoringFailure::from(noon::TableAuthoringError::InsufficientColumnLabels {
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(
+            (error.category, error.code),
+            ("invalid_input", "table.short_columns")
+        );
+        assert_eq!(
+            error.message,
+            "Too few rows and columns to fit all submobjetcs."
+        );
     }
 
     #[test]

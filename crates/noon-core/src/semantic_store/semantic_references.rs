@@ -25,6 +25,8 @@ pub(crate) enum SemanticReferenceKind {
     AnimationChild,
     /// Hard authored topology dependency owned by one graph family root.
     GraphDependency,
+    /// Retained table query identity outside ordinary painter membership.
+    TableDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,7 +271,15 @@ impl SemanticStore {
         let Some(node) = self.node(owner) else {
             return Vec::new();
         };
-        outgoing_references(node)
+        let mut references = outgoing_references(node);
+        if let Some(layout) = self.table_layouts.get(&owner) {
+            references.extend(
+                layout
+                    .referenced_nodes()
+                    .map(|node| (node, SemanticReferenceKind::TableDependency)),
+            );
+        }
+        references
     }
 
     /// Compute every declaration that would be removed by the given explicit roots.
@@ -310,7 +320,8 @@ impl SemanticStore {
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
                     | SemanticReferenceKind::AnimationChild
-                    | SemanticReferenceKind::GraphDependency => stack.push(reference.owner),
+                    | SemanticReferenceKind::GraphDependency
+                    | SemanticReferenceKind::TableDependency => stack.push(reference.owner),
                 }
             }
         }
@@ -477,7 +488,8 @@ impl SemanticStore {
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
                 | SemanticReferenceKind::AnimationChild
-                | SemanticReferenceKind::GraphDependency => {
+                | SemanticReferenceKind::GraphDependency
+                | SemanticReferenceKind::TableDependency => {
                     self.remove_node_with_reverse_cleanup_inner(
                         reference.owner,
                         outcome,
@@ -524,6 +536,10 @@ impl SemanticStore {
             SemanticReferenceKind::GraphDependency => node
                 .graph_declaration()
                 .is_some_and(|graph| graph.references_node(target)),
+            SemanticReferenceKind::TableDependency => self
+                .table_layouts
+                .get(&owner)
+                .is_some_and(|layout| layout.referenced_nodes().any(|node| node == target)),
             _ => outgoing_references(node)
                 .into_iter()
                 .any(|candidate| candidate == (target, kind)),

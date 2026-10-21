@@ -79,6 +79,9 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/shared-authoring-smoke.mjs
   node --check scripts/shared-authoring-pyodide-contract.mjs
   node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/table-qualification.mjs
+  node --check scripts/table-position-checks.mjs
+  node --check scripts/table-group-checks.mjs
   node --check scripts/code-authoring-pyodide-contract.mjs
   node --check scripts/code-qualification.mjs
   node --check scripts/polynomial-rate-qualification.mjs

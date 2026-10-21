@@ -111,11 +111,59 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "decimal-table-format",
+      "scene": "DecimalTableFormatExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/decimal_table_format.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Exercises DecimalTable element_to_mobject_config for decimal places, explicit signs and comma grouping with retained shared cell identities. Broader formatting and label combinations require separate coverage."
+    },
+    {
+      "id": "table-labels",
+      "scene": "TableLabelsExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_labels.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises base Table row_labels, col_labels and top_left_entry with empty native-text cells, isolating label layout and displayed-grid queries from the remaining default Paragraph/font/config divergence."
+    },
+    {
       "id": "mobject-table",
       "scene": "MobjectTableExample",
       "source": "parity/manim-v0.21/core-examples/table.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+      "notes": "Nested family entries with two row labels and two column labels exercise retained identities and displayed-grid layout. A separate fixture covers a supplied corner entry."
+    },
+    {
+      "id": "mobject-table-top-left-entry",
+      "scene": "MobjectTableTopLeftEntryExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises ManimCE top_left_entry placement with direct retained Mobjects and both label axes under the existing raster policy."
+    },
+    {
+      "id": "mobject-table-family-labels",
+      "scene": "MobjectTableFamilyLabelsExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/mobject_table_family_labels.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises family-valued row labels, column labels and top-left entry. Each supplied family root must retain its identity while all descendant leaves move together."
+    },
+    {
+      "id": "table-inner-lines-omitted",
+      "scene": "TableInnerLinesOmittedExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_inner_lines_omitted.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises include_inner_lines=False with both outer rules retained, under the existing raster policy."
+    },
+    {
+      "id": "table-line-config-stroke",
+      "scene": "TableLineConfigExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "noon_source": "web/python/examples/table_line_config.py",
+      "expected_duration": 0.2,
+      "notes": "Exercises line_config color, stroke_width, stroke_opacity, joint_type and cap_style through the line constructor, plus arrange_in_grid_config.cell_alignment=LEFT+UP on a retained MobjectTable."
     },
     {
       "id": "table-highlights",
