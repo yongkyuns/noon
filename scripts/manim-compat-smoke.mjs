@@ -39,6 +39,12 @@ const objectMemberControlsSource = `import json
 OBJECT_MEMBER_CASES = json.loads(${JSON.stringify(JSON.stringify(objectMemberControlsFixture.cases))})
 ${await readFile(path.join(repoRoot, "scripts/manim_object_members_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_object_member_controls.py"), "utf8")}`;
+const pathKeywordFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/path-keywords.json"), "utf8"));
+const pathKeywordSource = `import json
+PATH_KEYWORD_CASES = json.loads(${JSON.stringify(JSON.stringify(pathKeywordFixture.cases))})
+${await readFile(path.join(repoRoot, "scripts/manim_path_keyword_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_path_keyword_controls.py"), "utf8")}`;
 const queryHookFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/query-hooks.json"), "utf8"));
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
@@ -1052,6 +1058,7 @@ result = Scene()
       objectQueriesSource,
       objectMembersSource,
       objectMemberControlsSource,
+      pathKeywordSource,
       queryHooksSource,
     ],
   );
