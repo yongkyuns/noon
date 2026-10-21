@@ -884,13 +884,18 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_transform_channels(
+        let start = store
+            .semantic_animation_state(leaf.animation)
+            .expect("scheduled animation was validated")
+            .transform_start();
+        let channels = lower_transform_channels_with_start(
             store,
             source,
             target,
             from,
             interpolation,
             leaf.options.path_arc,
+            start,
         )
         .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
@@ -922,6 +927,11 @@ where
                 .map_err(glow_error)?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            let track = tracks.last_mut().expect("pushed Transform channel");
+            if let Some(completion) = explicit_start_completion(track.property, track.timing, start)
+            {
+                track.completion = completion;
+            }
         }
         for (property, values) in glow_channels {
             super::glow_target::reserve(
@@ -2343,6 +2353,76 @@ pub fn lower_indicate_channels_with_bindings(
         &mut channels,
     )?;
     Ok(channels)
+}
+
+/// Explicit affine starts also need constant channels where the start and end
+/// agree but differ from the activation frame. Merge those from the ordinary
+/// lowering result rather than introducing another channel/value algorithm.
+pub(super) fn lower_transform_channels_with_start(
+    store: &SemanticStore,
+    source: &noon_core::SemanticObjectState,
+    target: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    interpolation: noon_core::SemanticTransformInterpolation,
+    path_arc: f64,
+    start: Option<noon_core::SemanticTransform2_5D>,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    let Some(start) = start else {
+        return lower_transform_channels(store, source, target, from, interpolation, path_arc);
+    };
+    let mut state = source.clone();
+    state.set_transform(start.into());
+    let mut captured = from;
+    captured.transform = lower_semantic_transform_value(&state)
+        .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
+    let mut channels =
+        lower_transform_channels(store, source, target, captured, interpolation, path_arc)?;
+    for mut channel in
+        lower_transform_channels(store, source, target, from, interpolation, path_arc)?
+    {
+        if channels
+            .iter()
+            .any(|existing| existing.property == channel.property)
+        {
+            continue;
+        }
+        match &mut channel.values {
+            TrackValues::Vec2 { from, to } => *from = *to,
+            TrackValues::Scalar { from, to } => *from = *to,
+            _ => return Err(AffinePayloadIssue::UnsupportedContentChange),
+        }
+        channels.push(channel);
+    }
+    Ok(channels)
+}
+
+/// A returning explicit-start Transform must persist its specified start rather
+/// than reveal an unrelated authored base at completion.
+pub(super) fn explicit_start_completion(
+    property: Property,
+    timing: noon_core::TrackTiming,
+    start: Option<noon_core::SemanticTransform2_5D>,
+) -> Option<SemanticAnimationCompletion> {
+    let start = start?;
+    if timing.terminal_progress() != 0.0 {
+        return None;
+    }
+    let (property, value) = match property {
+        Property::Position => (
+            SemanticObjectProperty::Translation,
+            SemanticSignalValue::Vec3(start.translation),
+        ),
+        Property::Scale => (
+            SemanticObjectProperty::Scale,
+            SemanticSignalValue::Vec3(start.scale),
+        ),
+        Property::Rotation => (
+            SemanticObjectProperty::RotationZ,
+            SemanticSignalValue::Scalar(start.rotation_z),
+        ),
+        _ => return None,
+    };
+    Some(SemanticAnimationCompletion::Property { property, value })
 }
 
 pub(super) fn lower_transform_channels(

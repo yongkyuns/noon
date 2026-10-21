@@ -569,6 +569,14 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 validate_style(*object, *style).map_err(map_object_state_error)?;
             }
+            ExecutionPatch::SetInset2DView { object, view } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                if view.is_some_and(|view| view.camera_frame == *object) {
+                    return Err(CompilePatchError::InvalidInset2DView(*object));
+                }
+            }
             ExecutionPatch::SetGraphDependencies {
                 owner,
                 dependencies,

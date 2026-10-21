@@ -218,6 +218,16 @@ pub enum AnimationCompositionRequest<'a> {
         callback: noon_core::HostCallbackId,
         options: AnimationOptions,
     },
+    /// Declare the pure default-width, non-stretch layout replacement. The
+    /// fallback must perform that same operation. A compatible flat parallel
+    /// affine driver specializes it to ordinary Transform channels; other
+    /// profiles retain the required host callback and its replay restriction.
+    LayoutReplaceInterval {
+        target: &'a Mobject,
+        layout_target: &'a Mobject,
+        fallback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
     /// Animate one mesh/camera/light through the shared effective world-pose track.
     WorldTransform {
         target: &'a Mobject,
@@ -2236,6 +2246,21 @@ impl<'a> LiveSession<'a> {
                 Request::CallbackInterval {
                     target: target.node_id(),
                     callback: *callback,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::LayoutReplaceInterval {
+                target,
+                layout_target,
+                fallback,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                self.require_mobject(layout_target)?;
+                Request::LayoutReplaceInterval {
+                    target: target.node_id(),
+                    layout_target: layout_target.node_id(),
+                    fallback: *fallback,
                     options: *options,
                 }
             }

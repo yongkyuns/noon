@@ -417,6 +417,12 @@ enum OrdinaryCompositionChild {
         callback: noon_core::HostCallbackId,
         options: noon_core::AnimationOptions,
     },
+    LayoutReplaceInterval {
+        target: noon::Mobject,
+        layout_target: noon::Mobject,
+        fallback: noon_core::HostCallbackId,
+        options: noon_core::AnimationOptions,
+    },
     FamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
@@ -2063,6 +2069,17 @@ impl CanonicalAuthoringScene {
                     callback: *callback,
                     options: *options,
                 },
+                OrdinaryCompositionChild::LayoutReplaceInterval {
+                    target,
+                    layout_target,
+                    fallback,
+                    options,
+                } => noon::AnimationCompositionRequest::LayoutReplaceInterval {
+                    target,
+                    layout_target,
+                    fallback: *fallback,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
@@ -2332,7 +2349,8 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::WorldTransform { .. }
                 | OrdinaryCompositionChild::CameraProfile { .. }
                 | OrdinaryCompositionChild::MoveAlongPath { .. }
-                | OrdinaryCompositionChild::CallbackInterval { .. } => {}
+                | OrdinaryCompositionChild::CallbackInterval { .. }
+                | OrdinaryCompositionChild::LayoutReplaceInterval { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -2566,6 +2584,9 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::CallbackInterval {
+                    target, options, ..
+                }
+                | OrdinaryCompositionChild::LayoutReplaceInterval {
                     target, options, ..
                 } => {
                     if !std::rc::Rc::ptr_eq(
@@ -4809,6 +4830,30 @@ mod wasm {
                 .push(OrdinaryCompositionChild::CallbackInterval {
                     target: target.semantic_mobject().clone(),
                     callback,
+                    options: noon_core::AnimationOptions::new().run_time(child_run_time),
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendLayoutReplaceInterval)]
+        pub fn append_layout_replace_interval(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            layout_target: &crate::WasmAuthoringMobjectHandle,
+            callback_id: &str,
+            child_run_time: f64,
+        ) -> Result<(), JsValue> {
+            let fallback = parse_callback_id(callback_id)?;
+            if !child_run_time.is_finite() || child_run_time < 0.0 {
+                return Err(js_error(
+                    "layout interval duration must be finite and non-negative",
+                ));
+            }
+            self.children
+                .push(OrdinaryCompositionChild::LayoutReplaceInterval {
+                    target: target.semantic_mobject().clone(),
+                    layout_target: layout_target.semantic_mobject().clone(),
+                    fallback,
                     options: noon_core::AnimationOptions::new().run_time(child_run_time),
                 });
             Ok(())
@@ -16059,6 +16104,49 @@ mod tests {
             context.active_live_player().unwrap().scene_revision(),
             authored_revision
         );
+    }
+
+    #[test]
+    fn ordinary_layout_follower_reaches_native_tracks_without_a_callback_barrier() {
+        let mut context = CanonicalAuthoringScene::default();
+        let helper = context.scene.rectangle(4.0, 2.0).unwrap();
+        let display = context.scene.rectangle(2.0, 1.0).unwrap();
+        let mut end = display.target_editor().unwrap();
+        end.set_scale(2.0, 3.0).unwrap();
+        end.set_translation(4.0, 0.8).unwrap();
+        context.bind_mobject(ObjectId::new(1), &helper).unwrap();
+        context.bind_mobject(ObjectId::new(2), &display).unwrap();
+        let children = [
+            bound_transform_child(&display, end, AnimationOptions::new().run_time(1.0)),
+            OrdinaryCompositionChild::LayoutReplaceInterval {
+                target: helper.clone(),
+                layout_target: display,
+                fallback: HostCallbackId::new(3),
+                options: AnimationOptions::new().run_time(1.0),
+            },
+        ];
+        assert_eq!(
+            context
+                .begin_ordinary_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        let player = context.active_live_player().unwrap();
+        assert!(!player.has_required_callbacks());
+        player.live_advance_segment_to(0.5).unwrap();
+        let midpoint = player.live_effective(&helper).unwrap().transform;
+        assert!((midpoint.scale.x * 4.0 - 3.0).abs() <= 1.0e-6);
+        player.live_advance_segment_to(1.0).unwrap();
+        player.live_complete_segment().unwrap();
+        let endpoint = player.live_effective(&helper).unwrap().transform;
+        assert!((endpoint.translation.x - 4.0).abs() <= 1.0e-6);
+        assert!((endpoint.translation.y - 0.8).abs() <= 1.0e-6);
+        assert!((endpoint.scale.x * 4.0 - 4.0).abs() <= 1.0e-6);
     }
 
     #[test]

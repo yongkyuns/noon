@@ -541,6 +541,7 @@ pub struct SemanticAnimationState {
     intent: SemanticAnimationIntent,
     options: AnimationOptions,
     pub(crate) transform_effects: Option<Box<SemanticTransformEffectSnapshot>>,
+    pub(crate) transform_start: Option<Box<crate::SemanticTransform2_5D>>,
 }
 
 impl SemanticAnimationState {
@@ -549,11 +550,18 @@ impl SemanticAnimationState {
             intent,
             options,
             transform_effects: None,
+            transform_start: None,
         }
     }
 
     pub fn transform_effect_snapshot(&self) -> Option<&SemanticTransformEffectSnapshot> {
         self.transform_effects.as_deref()
+    }
+
+    /// Explicit affine start for a compiled pure expression. Ordinary Transform
+    /// captures its effective start at activation. This does not edit the base.
+    pub fn transform_start(&self) -> Option<crate::SemanticTransform2_5D> {
+        self.transform_start.as_deref().copied()
     }
 
     pub const fn intent(&self) -> &SemanticAnimationIntent {

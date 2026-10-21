@@ -282,6 +282,7 @@ impl SemanticExecutionIndex {
         // live publication and every host consumer support this column (#1897).
         let roots = roots.into_iter().collect::<Vec<_>>();
         let mut pending = Vec::new();
+        let mut inset_2d_views = std::collections::BTreeMap::new();
         let mut seen = HashSet::new();
 
         for &root in &roots {
@@ -296,6 +297,15 @@ impl SemanticExecutionIndex {
                         semantic_id,
                     ))?;
                 let mut lowered = lower_object_state(semantic_id, state, store)?;
+                if let SemanticObjectRole::Inset2DView(view) = state.role() {
+                    inset_2d_views.insert(
+                        compatibility_object_id(semantic_id),
+                        crate::CompiledInset2DView {
+                            camera_frame: compatibility_object_id(view.camera_frame),
+                            capture_own_display: view.capture_own_display,
+                        },
+                    );
+                }
                 // Attachment topology belongs to this committed scene projection,
                 // not the shared value-lowering helper. Prepared transactions also
                 // lower provisional IDs which intentionally do not exist in the
@@ -340,6 +350,7 @@ impl SemanticExecutionIndex {
             .collect();
 
         Ok(SemanticExecutionProjection {
+            inset_2d_views,
             objects,
             graph_edges,
         })
@@ -363,6 +374,7 @@ impl SemanticExecutionIndex {
 pub struct SemanticExecutionProjection {
     objects: Vec<SemanticExecutionObject>,
     graph_edges: Vec<SemanticExecutionGraphEdgeDependency>,
+    pub(super) inset_2d_views: std::collections::BTreeMap<ObjectId, crate::CompiledInset2DView>,
 }
 
 impl SemanticExecutionProjection {

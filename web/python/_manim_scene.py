@@ -2263,9 +2263,17 @@ def _build_canonical_composition_candidate(
             callback_id = reserve_composition_callback(
                 self, target, animation.update_function
             )
-            builder.appendCallbackInterval(
-                target._semantic_handle, str(callback_id), float(child.run_time),
-            )
+            from _manim_updaters import native_layout_replace_target
+            layout_target = native_layout_replace_target(target, animation.update_function)
+            if layout_target is None:
+                builder.appendCallbackInterval(
+                    target._semantic_handle, str(callback_id), float(child.run_time),
+                )
+            else:
+                builder.appendLayoutReplaceInterval(
+                    target._semantic_handle, layout_target._semantic_handle,
+                    str(callback_id), float(child.run_time),
+                )
             return
         from _noon_spatial import WorldTransformTo, CameraProfileTo, _bulk
         if isinstance(animation, (WorldTransformTo, CameraProfileTo)):

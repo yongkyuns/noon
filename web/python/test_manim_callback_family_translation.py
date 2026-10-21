@@ -183,3 +183,71 @@ class CallbackFamilyTranslationTests(unittest.TestCase):
             member.shift.assert_not_called()
         finally:
             updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+
+
+class NativeLayoutCaptureTests(unittest.TestCase):
+    def fixture(self):
+        scene = compat._base.Scene()
+        source = identity_only_wrapper(compat.Square)
+        target = identity_only_wrapper(compat.Square)
+        source._scene = target._scene = scene
+        source._semantic_handle = object()
+        target._semantic_handle = object()
+        return source, target
+
+    def test_closed_canonical_replace_is_captured_without_invocation(self):
+        source, target = self.fixture()
+        callback = lambda rect: rect.replace(target)
+        with patch.object(updaters, "_canonical_phase_context", side_effect=AssertionError("invoked")):
+            self.assertIs(updaters.native_layout_replace_target(source, callback), target)
+
+    def test_side_effects_and_other_python_forms_keep_the_host_path(self):
+        source, target = self.fixture()
+        effects = []
+        callbacks = [
+            lambda rect: (effects.append(True), rect.replace(target)),
+            lambda rect: rect.replace(target, stretch=True),
+            lambda rect, dt: rect.replace(target),
+            lambda rect, target=target: rect.replace(target),
+            lambda rect: rect.shift((1, 0)),
+        ]
+        for callback in callbacks:
+            with self.subTest(callback=callback):
+                self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+        self.assertEqual(effects, [])
+
+    def test_custom_dispatch_and_replaced_methods_do_not_capture(self):
+        source, target = self.fixture()
+        callback = lambda rect: rect.replace(target)
+        with patch.object(compat._base.Mobject, "replace", Mock()):
+            self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+        source.replace = Mock()
+        self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+        source.replace.assert_not_called()
+
+    def test_wrong_identity_scope_and_non_handles_do_not_capture(self):
+        source, target = self.fixture()
+        callback = lambda rect: rect.replace(target)
+        target._scene = compat._base.Scene()
+        self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+        target = source
+        self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+        target = object()
+        self.assertIsNone(updaters.native_layout_replace_target(source, callback))
+
+    def test_each_authored_interval_captures_its_current_closed_identity(self):
+        source, target = self.fixture()
+        callback = lambda rect: rect.replace(target)
+        self.assertIs(updaters.native_layout_replace_target(source, callback), target)
+        _, target = self.fixture()
+        target._scene = source._scene
+        self.assertIs(updaters.native_layout_replace_target(source, callback), target)
+
+    def test_capture_does_not_invoke_custom_attribute_dispatch(self):
+        source, target = self.fixture()
+        class DynamicTarget(compat._base.Mobject):
+            def __getattribute__(self, name):
+                raise AssertionError("capture invoked user attribute code")
+        target = object.__new__(DynamicTarget)
+        callback = lambda rect: rect.replace(target)
+        self.assertIsNone(updaters.native_layout_replace_target(source, callback))

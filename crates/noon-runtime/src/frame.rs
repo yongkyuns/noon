@@ -228,6 +228,8 @@ pub struct EffectiveObjectProperties {
     pub presence: bool,
     pub reveal: f32,
     pub morph: f32,
+    /// Geometry layout without stroke/filter expansion. Visibility and picking
+    /// retain their separate conservative spatial-index bounds.
     pub bounds: Option<noon_core::Rect>,
     pub(super) bounds_basis: Option<EffectiveBoundsBasis>,
 }
@@ -281,23 +283,13 @@ impl EffectiveObjectProperties {
     }
 
     pub fn set_style(&mut self, style: Style) {
-        let spatial_change = self.style.stroke.is_some() != style.stroke.is_some()
-            || self.style.stroke_width != style.stroke_width
-            || self.style.stroke_width_mode != style.stroke_width_mode
-            || self.style.stroke_join != style.stroke_join
-            || self.style.stroke_cap != style.stroke_cap;
         self.style = style;
-        if self.bounds_basis.is_some() {
-            self.refresh_bounds();
-        } else if spatial_change {
-            self.bounds = None;
-        }
     }
 
     fn refresh_bounds(&mut self) {
         self.bounds = self
             .bounds_basis
-            .and_then(|basis| basis.world_bounds(self.transform, self.style));
+            .and_then(|basis| basis.world_bounds(self.transform));
     }
 }
 
@@ -344,7 +336,7 @@ mod effective_object_properties_tests {
     }
 
     #[test]
-    fn cached_path_bounds_are_invalidated_by_unreconstructable_spatial_changes() {
+    fn cached_path_layout_bounds_ignore_style_but_reject_unknown_affine_changes() {
         let mut properties = cached_path_properties();
         properties.set_transform(Transform2D {
             rotation: 0.25,
@@ -353,11 +345,12 @@ mod effective_object_properties_tests {
         assert_eq!(properties.bounds, None);
 
         let mut properties = cached_path_properties();
+        let layout = properties.bounds;
         properties.set_style(Style {
             stroke_width: properties.style.stroke_width + 1.0,
             ..properties.style
         });
-        assert_eq!(properties.bounds, None);
+        assert_eq!(properties.bounds, layout);
     }
 }
 
@@ -396,12 +389,8 @@ impl EffectiveBoundsBasis {
         }
     }
 
-    pub(super) fn world_bounds(
-        self,
-        transform: Transform2D,
-        style: Style,
-    ) -> Option<noon_core::Rect> {
-        let mut bounds = match self {
+    pub(super) fn world_bounds(self, transform: Transform2D) -> Option<noon_core::Rect> {
+        let bounds = match self {
             Self::Circle(radius) => GeometryRef::circle(radius).world_bounds(transform)?,
             Self::Rect(local) => {
                 let corners = [
@@ -413,14 +402,6 @@ impl EffectiveBoundsBasis {
                 noon_core::Rect::from_points(corners.map(|point| transform.transform_point(point)))?
             }
         };
-        if style.stroke.is_some() && style.stroke_width.is_finite() {
-            let scale = transform.scale.x.abs().max(transform.scale.y.abs());
-            let expansion = style.stroke_width.abs() * scale * 0.5;
-            bounds.min.x -= expansion;
-            bounds.min.y -= expansion;
-            bounds.max.x += expansion;
-            bounds.max.y += expansion;
-        }
         (bounds.min.x.is_finite()
             && bounds.min.y.is_finite()
             && bounds.max.x.is_finite()
