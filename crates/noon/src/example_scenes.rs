@@ -20,6 +20,7 @@ pub mod exact_property_tracks;
 pub mod family_affine;
 pub mod family_arrangement;
 pub mod family_grid;
+pub mod family_member_queries;
 pub mod family_paint;
 pub mod family_placement;
 pub mod family_replacement;

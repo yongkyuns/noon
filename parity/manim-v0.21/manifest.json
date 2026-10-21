@@ -1682,6 +1682,19 @@
         0.625
       ],
       "notes": "Held own root points distinguish ordinary Group drawing intent from VGroup, preserve overlaid children, and prove live clear/repopulate frames. Shared Rust native/direct-WASM example is example_scenes::family_root_points; broader arbitrary hooks remain unqualified."
+    },
+    {
+      "id": "family-member-queries",
+      "scene": "FamilyMemberQueries",
+      "source": "parity/manim-v0.21/core-examples/family_member_queries.py",
+      "reference_frame_rate": 8,
+      "expected_duration": 0.75,
+      "sample_times": [
+        0.125,
+        0.375,
+        0.625
+      ],
+      "notes": "Captured iteration and slicing survive membership changes; current indexing and the point-bearing ordinary Group prefix select the next held frames. The typed example_scenes::family_member_queries program runs on native and direct Rust/WASM; Python invokes equivalent shared operations."
     }
   ],
   "sample_fractions": [

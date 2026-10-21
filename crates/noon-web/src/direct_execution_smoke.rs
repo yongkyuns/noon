@@ -364,6 +364,15 @@ pub async fn create_direct_family_root_points_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Member query selections use the same native Rust continuation on the web.
+#[wasm_bindgen(js_name = createDirectFamilyMemberQueriesSmokeRenderer)]
+pub async fn create_direct_family_member_queries_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_member_queries::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Row/column grid placement uses the shared family transaction planner.
 #[wasm_bindgen(js_name = createDirectFamilyGridSmokeRenderer)]
 pub async fn create_direct_family_grid_smoke_renderer(
