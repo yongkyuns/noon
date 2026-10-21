@@ -1505,10 +1505,10 @@ Detailed batches, dependencies and evidence belong in
 [#1879](https://github.com/yongkyuns/noon/issues/1879) and its linked owners;
 this overview is not another implementation checklist.
 
-| Workstream | Remaining outcome and owner |
+| Workstream | Current qualification and owner |
 | --- | --- |
-| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Keep their unchanged source and qualify effective state, timing/replay and raster/depth/compositing under the analytic-camera and explicit-font rules above. Preserve the original sampled-clock and host-font observations separately; neither adjusted Noon examples nor an explicit profile establish unrestricted exact Manim parity. #254 records dispositions; #1879 owns unfinished qualification. |
-| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. It also owns the unresolved exact camera implementations recorded in #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
+| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE originals and their dispositions. #1879 records their selected analytic-camera/explicit-font state and raster qualification, including #2252's original zoom replay. Preserve the original sampled-clock and host-font observations separately; a declared profile does not establish unrestricted exact Manim parity. Callback replay classification remains explicit. |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Camera qualification remains separate from these material profiles; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
 | Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
 | Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The five spatial workloads have separate functional and Mac measurement evidence; the fixed Product Gate anchor measures five general gallery workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
@@ -1519,16 +1519,20 @@ qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
 state and raster on both WebGPU and WebGL. The untouched static
 `ThreeDSurfacePlot` case is qualified for source, camera state, raster, seek and
 restart on both backends; this does not qualify animated surfaces or general
-transparency. The other four camera examples remain required under #1879 and
-need qualification against the analytic-camera and explicit-font rules above;
-this policy decision alone does not qualify them. #254 retains the original
+transparency. The other four original camera examples now have recorded state
+and raster qualification under the analytic-camera and explicit-font rules
+accepted in [#2247](https://github.com/yongkyuns/noon/pull/2247).
+[#2252](https://github.com/yongkyuns/noon/pull/2252) also qualifies deterministic
+historical replay of the untouched `MovingZoomedSceneAround` source through
+shared finite layout lowering and sparse inset lifecycle replay. These results
+do not make opaque callbacks replayable or establish unrestricted Manim parity.
+#254 retains the original
 per-case evidence and dispositions, including sampled camera handoff/endpoint
 differences and implicit-font appearance mismatches. Original captures are not
 rewritten or relabeled as exact parity.
-Straight-Line World-stroke and axes-label qualification can proceed beside
-physical-device pacing attribution. Independent
-geometry/vector-space batches need not wait for general transparency or all
-seven reference cases. Every promoted slice preserves the existing 2D output,
+Further World-stroke, axes-label and geometry/vector-space profiles can proceed
+independently of general transparency and physical-device pacing attribution.
+Every promoted slice preserves the existing 2D output,
 atomic publication, authored/effective distinction, retained-resource locality,
 ordered callback/replay contract and one presentation surface. Unsupported
 defaults/options remain explicit until implemented; silently removing guards or
