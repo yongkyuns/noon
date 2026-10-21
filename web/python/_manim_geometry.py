@@ -198,7 +198,7 @@ class ApplyMethod:
 
         builder = (
             _animate._AlignedGroupAnimationBuilder(source)
-            if isinstance(source, _compat.Group)
+            if isinstance(source, (_compat.Group, _compat.VGroup))
             else _animate._AlignedAnimationBuilder(source)
         )
         target_method = getattr(builder.target, name)

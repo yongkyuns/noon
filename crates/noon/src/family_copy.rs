@@ -178,6 +178,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             is_family,
             members,
             family_z,
+            draw_enabled,
             family_color,
             family_style,
             family_background_stroke_color,
@@ -192,16 +193,19 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family(presentation) => (
+                SemanticNodeKind::Family(_) => (
                     true,
                     node.members_iter().collect::<Vec<_>>(),
-                    Some(presentation.presentation.z_index),
-                    Some(presentation.own_color),
-                    Some(presentation.own_style.clone()),
-                    Some(presentation.own_background_stroke_color),
-                    Some(presentation.own_background_stroke_width),
-                    Some(presentation.own_background_stroke_opacity),
-                    Some(presentation.own_sheen_direction),
+                    Some(node.presentation().expect("family presentation").z_index),
+                    node.presentation()
+                        .expect("family presentation")
+                        .draw_enabled,
+                    node.family_color(),
+                    node.family_style().cloned(),
+                    node.family_background_stroke_color(),
+                    node.family_background_stroke_width(),
+                    node.family_background_stroke_opacity(),
+                    node.sheen_direction(),
                     node.graph_declaration().cloned(),
                     node.updating_suspended(),
                 ),
@@ -209,6 +213,9 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                     false,
                     node.members_iter().collect::<Vec<_>>(),
                     None,
+                    node.presentation()
+                        .expect("object presentation")
+                        .draw_enabled,
                     None,
                     None,
                     None,
@@ -241,18 +248,30 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         }
         queue.extend(members.iter().rev().copied());
         edges.push((id, members));
-        let creation = if is_family {
-            SemanticNodeCreation::family()
-        } else {
+        let has_content = !is_family
+            || store
+                .borrow()
+                .node(id)
+                .is_some_and(|node| node.semantic_object_state().is_some());
+        let state = if has_content {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
             let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
             }
-            SemanticNodeCreation::object(state)
+            Some(state)
+        } else {
+            None
+        };
+        let creation = match (is_family, state) {
+            (true, Some(state)) => SemanticNodeCreation::family_with_content(state),
+            (true, None) => SemanticNodeCreation::family(),
+            (false, Some(state)) => SemanticNodeCreation::object(state),
+            (false, None) => unreachable!("validated object owns a payload"),
         };
         let pending = transaction.create_node(creation);
+        transaction.set_draw_enabled(pending, draw_enabled);
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }

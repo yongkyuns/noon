@@ -120,6 +120,8 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Whether this object can draw; its query geometry remains available.
+    pub draw_enabled: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
     pub glow: Option<Arc<CompiledGlow>>,
     pub id: ObjectId,
@@ -239,6 +241,7 @@ impl CompiledObject {
         base_style: Style,
     ) -> Self {
         Self {
+            draw_enabled: true,
             id,
             content: content.into(),
             text_bounds: None,
@@ -1859,6 +1862,9 @@ impl CompiledScene {
             ExecutionPatch::SetZIndex { object, value } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_z_index != *value),
+            ExecutionPatch::SetDrawEnabled { object, enabled } => self
+                .object_index(*object)
+                .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
             ExecutionPatch::SetStyle { object, style } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_style != *style),
@@ -2047,6 +2053,12 @@ impl CompiledScene {
                     destination,
                 );
                 self.reposition_painter_row(index);
+            }
+            ExecutionPatch::SetDrawEnabled { object, enabled } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                self.objects[index as usize].draw_enabled = *enabled;
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 let index = self

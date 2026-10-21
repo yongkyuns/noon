@@ -130,6 +130,8 @@ pub enum SemanticNodeCreation {
         source_identity: Option<SourceIdentity>,
     },
     Family {
+        /// Optional ordinary root payload; membership remains on this same node.
+        state: Option<Box<SemanticObjectState>>,
         source_identity: Option<SourceIdentity>,
     },
     Signal {
@@ -168,6 +170,15 @@ impl SemanticNodeCreation {
 
     pub const fn family() -> Self {
         Self::Family {
+            state: None,
+            source_identity: None,
+        }
+    }
+
+    /// Create a family and its full owned payload as one semantic identity.
+    pub fn family_with_content(state: SemanticObjectState) -> Self {
+        Self::Family {
+            state: Some(Box::new(state)),
             source_identity: None,
         }
     }
@@ -201,6 +212,7 @@ impl SemanticNodeCreation {
             }
             | Self::Family {
                 source_identity: source,
+                ..
             } => *source = Some(source_identity),
             Self::Signal { .. } | Self::Effect { .. } => {}
         }
@@ -215,7 +227,9 @@ impl SemanticNodeCreation {
             | Self::PendingPathObject {
                 source_identity, ..
             }
-            | Self::Family { source_identity } => source_identity.as_ref(),
+            | Self::Family {
+                source_identity, ..
+            } => source_identity.as_ref(),
             Self::Signal { .. } | Self::Effect { .. } => None,
         }
     }
@@ -259,7 +273,10 @@ pub(super) fn preflight_add_node(
             }
             return Ok(());
         }
-        SemanticNodeCreation::Object { state, .. } => {
+        SemanticNodeCreation::Object { state, .. }
+        | SemanticNodeCreation::Family {
+            state: Some(state), ..
+        } => {
             if !state.transform.translation.is_finite()
                 || !state.transform.scale.is_finite()
                 || !state.transform.is_valid()
@@ -326,7 +343,7 @@ pub(super) fn preflight_add_node(
                 }
             }
         }
-        SemanticNodeCreation::Family { .. }
+        SemanticNodeCreation::Family { state: None, .. }
         | SemanticNodeCreation::Signal { .. }
         | SemanticNodeCreation::Effect { .. } => {}
     }
@@ -376,9 +393,16 @@ pub(super) fn commit_add_node(
         SemanticNodeCreation::PendingPathObject { .. } => {
             unreachable!("prepared path declarations materialize before semantic commit")
         }
-        SemanticNodeCreation::Family { source_identity } => {
-            (store.insert_family(), source_identity)
-        }
+        SemanticNodeCreation::Family {
+            state,
+            source_identity,
+        } => (
+            match state {
+                Some(state) => store.insert_family_with_content(*state),
+                None => store.insert_family(),
+            },
+            source_identity,
+        ),
         SemanticNodeCreation::Signal { state } => (store.insert_semantic_signal_state(state), None),
         SemanticNodeCreation::Effect {
             owner,

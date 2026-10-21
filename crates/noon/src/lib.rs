@@ -94,6 +94,7 @@ pub mod effects {
         EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
     };
 }
+mod drawing;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
@@ -110,6 +111,7 @@ mod family_grid;
 mod family_layout;
 #[cfg(test)]
 mod family_layout_migration_tests;
+mod family_points;
 mod family_queries;
 mod family_style;
 #[cfg(test)]

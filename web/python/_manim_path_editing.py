@@ -681,9 +681,15 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     if array:
         from pyodide.ffi import to_js
         values = [to_js(values)]
-    handle = _handle_for(value)
+    from _manim_compat import _is_shared_family
+    shared_family = _is_shared_family(value)
+    handle = value._semantic_family_handle if shared_family else _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
+    if shared_family:
+        if method not in ("setPoints", "clearPoints"):
+            raise NotImplementedError("this family root path edit requires shared Rust support")
+        live_method = "liveSetFamilyPoints" if method == "setPoints" else "liveClearFamilyPoints"
     context = _live_mutation_context(value) or _live_constructor_context("path")
     if context is None:
         engine_call(
@@ -741,12 +747,12 @@ def insert_n_curves(value, n):
 
 
 def change_anchor_mode(value, mode):
-    from _manim_compat import Group
+    from _manim_compat import Group, VGroup
     from _manim_updaters import canonical_callback_phase_active
     assert mode in ["jagged", "smooth"], 'mode must be either "jagged" or "smooth"'
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
-    family = isinstance(value, Group)
+    family = isinstance(value, (Group, VGroup))
     handle = getattr(value, "_semantic_family_handle", None) if family else _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
@@ -761,12 +767,12 @@ def change_anchor_mode(value, mode):
 
 
 def reverse_points(value):
-    from _manim_compat import Group
+    from _manim_compat import Group, VGroup
     from _manim_updaters import canonical_callback_phase_active
 
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
-    family = isinstance(value, Group)
+    family = isinstance(value, (Group, VGroup))
     handle = (
         getattr(value, "_semantic_family_handle", None)
         if family
@@ -800,7 +806,7 @@ def reverse_points(value):
 
 def repeat_points(value, count):
     import operator
-    from _manim_compat import Group
+    from _manim_compat import Group, VGroup
     from _manim_updaters import canonical_callback_phase_active
 
     if canonical_callback_phase_active():
@@ -820,7 +826,7 @@ def repeat_points(value, count):
     if repeat_count > 0xFFFFFFFF:
         raise OverflowError("Python int too large to convert to C unsigned int")
 
-    family = isinstance(value, Group)
+    family = isinstance(value, (Group, VGroup))
     handle = (
         getattr(value, "_semantic_family_handle", None)
         if family

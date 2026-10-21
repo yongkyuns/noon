@@ -484,6 +484,7 @@ fn validate_mutations(
                 | SemanticMutation::SetFamilyColor { .. }
                 | SemanticMutation::SetFamilyStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
+                | SemanticMutation::SetDrawEnabled { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
                 | SemanticMutation::SetTableLayout { .. }
@@ -551,6 +552,18 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
 
     for mutation in prepared.candidate_mutations() {
         match mutation {
+            SemanticMutation::ReplaceContent { object, .. } => {
+                if let Some(id) = object.existing() {
+                    if reachability.is_reachable(id)
+                        && !reachability.is_object_reachable(id)
+                        && !prepared.node_is_removed(id)
+                        && prepared.object_state(*object).is_ok()
+                        && seen_entries.insert(*object)
+                    {
+                        possible_entry_refs.push(*object);
+                    }
+                }
+            }
             SemanticMutation::AddMember { family, member } => {
                 let Some(family) = family.existing() else {
                     continue;
@@ -1063,7 +1076,7 @@ fn collect_existing_exit_leaves(
         SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
     })?;
     match semantic.kind() {
-        SemanticNodeKind::AuthoringObject => {
+        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_) => {
             let state = semantic.semantic_object_state();
             if state.is_some_and(|state| {
                 matches!(
@@ -1089,7 +1102,6 @@ fn collect_existing_exit_leaves(
                 leaves.push(node);
             }
         }
-        SemanticNodeKind::Family(_) => {}
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
         | SemanticNodeKind::Effect(_) => {}
@@ -1157,6 +1169,7 @@ fn lower_prepared_entry(
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
+    compiled.draw_enabled = state.draw_enabled();
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     Ok(PreparedEntry {
         object,
@@ -1171,6 +1184,7 @@ struct PublicationDomains {
     style: bool,
     content: bool,
     z_index: bool,
+    draw_enabled: bool,
     numeric: bool,
     semantic_transform: bool,
     spatial_state: bool,
@@ -1239,6 +1253,11 @@ fn lower_semantic_publication(
                 }
             }
             SemanticMutation::ReplaceTextPresentationBaseline { .. } => {}
+            SemanticMutation::SetDrawEnabled { node, .. } => {
+                if let Some(object) = node.existing() {
+                    domains.entry(object).or_default().draw_enabled = true;
+                }
+            }
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().z_index = true;
@@ -1249,11 +1268,13 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().style = true;
                 }
             }
-            // Family color is authored metadata on a non-rendered root. It
-            // commits coherently but has no renderable object value projection.
-            SemanticMutation::SetFamilyColor { .. }
-            | SemanticMutation::SetFamilyStyle { .. }
-            | SemanticMutation::SetSheenDirection { .. }
+            SemanticMutation::SetFamilyColor { node, .. }
+            | SemanticMutation::SetFamilyStyle { node, .. } => {
+                if let Some(object) = node.existing() {
+                    domains.entry(object).or_default().style = true;
+                }
+            }
+            SemanticMutation::SetSheenDirection { .. }
             | SemanticMutation::SetBarMetadata { .. }
             | SemanticMutation::SetAngleValue { .. }
             | SemanticMutation::UpdateEffect { .. } => {}
@@ -1305,6 +1326,12 @@ fn lower_semantic_publication(
                     prepared.store(),
                     &mut resource_additions,
                 )?,
+            });
+        }
+        if flags.draw_enabled {
+            mutations.push(ExecutionPatch::SetDrawEnabled {
+                object,
+                enabled: state.draw_enabled(),
             });
         }
         if flags.z_index {

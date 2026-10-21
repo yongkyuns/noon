@@ -2460,6 +2460,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -2471,6 +2472,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -2485,6 +2487,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -2517,6 +2520,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -2535,6 +2539,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,

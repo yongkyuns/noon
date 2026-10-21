@@ -105,6 +105,7 @@ fn primitive_capture(
     let frame = FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
+            draw_enabled: true,
             glow: None,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(geometry),

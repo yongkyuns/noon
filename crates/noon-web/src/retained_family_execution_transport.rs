@@ -884,6 +884,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,
@@ -914,6 +915,7 @@ mod tests {
             camera: Camera2DState::default(),
             inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
+                draw_enabled: true,
                 slot: TransportSlotId {
                     slot: 0,
                     generation: 0,
@@ -946,6 +948,7 @@ mod tests {
 
     fn geometry_plan() -> RetainedFamilyAnimationPlan {
         let object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

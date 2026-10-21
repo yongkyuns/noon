@@ -29,6 +29,8 @@ on:
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
+      - "scripts/manim-family-*"
+      - "fixtures/manim-v0.21/family-*"
       - "scripts/painter-order-browser-smoke.mjs"
       - "scripts/manim-shape-matcher-current-bounds.mjs"
       - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"

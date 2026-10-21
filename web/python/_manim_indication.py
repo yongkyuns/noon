@@ -20,7 +20,7 @@ class ShowPassingFlash:
         time_width: float = 0.1,
         **kwargs: Any,
     ) -> None:
-        if isinstance(mobject, _compat.Group):
+        if isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError(
                 "ShowPassingFlash family semantics remain partial"
             )

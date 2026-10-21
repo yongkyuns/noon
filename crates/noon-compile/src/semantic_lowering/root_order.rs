@@ -8,8 +8,8 @@ use std::{
 };
 
 use noon_core::{
-    PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId, SemanticNodeKind,
-    SemanticStore, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId, SemanticStore,
+    SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
 
 use super::{
@@ -276,16 +276,25 @@ impl<'a, 'store> OrderView<'a, 'store> {
     }
 
     fn is_object(&self, node: Node) -> Result<bool, SemanticPublicationLoweringError> {
-        match node.existing() {
-            Some(id) => Ok(matches!(
+        // Preserve the ordinary-object classification and instrumented local lookup.
+        // A family may additionally acquire an owned payload in this held batch.
+        if let Some(id) = node.existing() {
+            if matches!(
                 node_for_root_order(self.prepared.store(), id)?.kind(),
-                SemanticNodeKind::AuthoringObject
-            )),
-            None => match self.prepared.object_state(node) {
-                Ok(_) => Ok(true),
-                Err(SemanticTransactionReadError::NotObject(_)) => Ok(false),
-                Err(error) => Err(error.into()),
-            },
+                noon_core::SemanticNodeKind::AuthoringObject
+            ) {
+                return Ok(true);
+            }
+        }
+        match self.prepared.object_state(node) {
+            Ok(_) => Ok(true),
+            Err(
+                SemanticTransactionReadError::NotObject(_)
+                | SemanticTransactionReadError::Existing(
+                    noon_core::SemanticSceneOperationError::NotSemanticObject(_),
+                ),
+            ) => Ok(false),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -495,8 +504,22 @@ pub fn prepare_semantic_root_order(
     }
     let mut view = OrderView::new(prepared);
     let mut targets = Vec::new();
+    let mut affected = HashSet::new();
     for mutation in prepared.candidate_mutations() {
         match *mutation {
+            SemanticMutation::ReplaceContent { object, .. } => {
+                if object.existing().is_some_and(|id| {
+                    prepared
+                        .store()
+                        .node(id)
+                        .is_some_and(|node| node.semantic_object_state().is_none())
+                }) && prepared.object_state(object).is_ok()
+                {
+                    // Only this new root needs ordering; its children already occupy
+                    // their stable slots. Successor discovery follows the first path.
+                    affected.insert(object);
+                }
+            }
             SemanticMutation::AddMember { family, member } => {
                 view.family_mut(family)?.insert_before(member, None);
                 view.parents.entry(member).or_default().insert(family, true);
@@ -527,7 +550,6 @@ pub fn prepare_semantic_root_order(
             _ => {}
         }
     }
-    let mut affected = HashSet::new();
     let mut seen = HashSet::new();
     for target in targets {
         view.collect_leaves(target, &mut seen, &mut affected)?;

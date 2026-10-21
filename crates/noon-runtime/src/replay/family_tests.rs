@@ -233,3 +233,38 @@ fn invalid_family_patch_does_not_poison_an_existing_replay_scope() {
     assert!(runtime.replay_retention_valid());
     runtime.seal_replay().unwrap();
 }
+
+#[test]
+fn drawing_eligibility_replays_without_mutating_query_geometry_or_spatial_bounds() {
+    let compiled = CompiledScene::compile_objects(vec![object()], &[]).unwrap();
+    let mut runtime = SceneInstance::new(compiled);
+    runtime
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    runtime.advance_to(1.0).unwrap();
+    runtime.take_frame_changes();
+    runtime.take_spatial_changes();
+    let before = runtime.frame().objects[0].clone();
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetDrawEnabled {
+            object: object().id,
+            enabled: false,
+        })
+        .unwrap();
+    assert!(runtime.frame().is_present(0));
+    assert!(!runtime.frame().is_drawable(0));
+    assert_eq!(runtime.frame().objects[0].content, before.content);
+    assert_eq!(runtime.frame().objects[0].style, before.style);
+    assert!(runtime.take_spatial_changes().is_empty());
+    assert_eq!(runtime.take_frame_changes().object_indices(), &[0]);
+    runtime.advance_to(2.0).unwrap();
+    runtime.seal_replay().unwrap();
+    runtime.seek(0.5).unwrap();
+    assert!(runtime.frame().is_drawable(0));
+    runtime.seek(1.5).unwrap();
+    assert!(!runtime.frame().is_drawable(0));
+    assert!(runtime.frame().is_present(0));
+    let mut expected = before;
+    expected.draw_enabled = false;
+    assert_eq!(runtime.frame().objects[0], expected);
+}

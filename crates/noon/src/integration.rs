@@ -61,6 +61,7 @@ pub use crate::execution_session::{
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
+pub use crate::family_points::{publish_clear_family_points, publish_family_points};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fade, effective_style_with_fade_to,
     effective_style_with_fill, effective_style_with_fill_color, effective_style_with_fill_opacity,
@@ -131,8 +132,26 @@ pub fn publish_family_creation_with_color(
     z_index: f64,
     color: crate::Color,
 ) -> Result<crate::MobjectFamily, crate::AuthoringError> {
-    let (transaction, family) =
-        crate::family_authoring::family_creation_color_transaction(store, members, z_index, color)?;
+    publish_family_creation_with_presentation(store, root, execution, members, z_index, color, true)
+}
+
+/// Publish all constructor metadata in the ordinary family membership transaction.
+pub fn publish_family_creation_with_presentation(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    members: &[crate::MobjectTarget<'_>],
+    z_index: f64,
+    color: crate::Color,
+    draw_enabled: bool,
+) -> Result<crate::MobjectFamily, crate::AuthoringError> {
+    let (transaction, family) = crate::family_authoring::family_creation_presentation_transaction(
+        store,
+        members,
+        z_index,
+        color,
+        draw_enabled,
+    )?;
     let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)?;
     let node = result
         .resolve(family)

@@ -233,7 +233,7 @@ def _shape_matcher_buff(buff: object) -> tuple[float, float]:
 def _shape_matcher_target(target: object):
     if not isinstance(target, _base.Mobject):
         raise TypeError("shape matcher target must be a Mobject")
-    if isinstance(target, _compat.Group):
+    if isinstance(target, (_compat.Group, _compat.VGroup)):
         if not _shared._is_shared_family(target):
             raise NotImplementedError(
                 "shape matcher Group/VGroup targets require shared semantic family bounds"

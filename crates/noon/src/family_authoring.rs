@@ -471,14 +471,15 @@ pub(crate) fn family_creation_transaction(
     ),
     AuthoringError,
 > {
-    family_creation_color_transaction(store, members, z_index, crate::Color::WHITE)
+    family_creation_presentation_transaction(store, members, z_index, crate::Color::WHITE, true)
 }
 
-pub(crate) fn family_creation_color_transaction(
+pub(crate) fn family_creation_presentation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
     members: &[MobjectTarget<'_>],
     z_index: f64,
     color: crate::Color,
+    draw_enabled: bool,
 ) -> Result<
     (
         SemanticMutationTransaction,
@@ -491,6 +492,9 @@ pub(crate) fn family_creation_color_transaction(
     }
     let mut transaction = SemanticMutationTransaction::new();
     let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+    if !draw_enabled {
+        transaction.set_draw_enabled(family, false);
+    }
     if color != crate::Color::WHITE {
         transaction.set_family_color(family, color);
     }
@@ -769,8 +773,24 @@ impl MobjectFamily {
         z_index: f64,
         color: crate::Color,
     ) -> Result<Self, AuthoringError> {
-        let (transaction, family) =
-            family_creation_color_transaction(&store, members, z_index, color)?;
+        Self::create_with_presentation(store, members, z_index, color, true)
+    }
+
+    /// Construct root paint, priority and drawing eligibility with membership atomically.
+    pub fn create_with_presentation(
+        store: Rc<RefCell<SemanticStore>>,
+        members: &[MobjectTarget<'_>],
+        z_index: f64,
+        color: crate::Color,
+        draw_enabled: bool,
+    ) -> Result<Self, AuthoringError> {
+        let (transaction, family) = family_creation_presentation_transaction(
+            &store,
+            members,
+            z_index,
+            color,
+            draw_enabled,
+        )?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;

@@ -10,6 +10,23 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_constructor_drawing_intent_follows_public_vector_inheritance(self):
+        class Generic(compat.Group):
+            pass
+        class Vector(compat.VGroup):
+            pass
+        for cls, draws in ((compat.Group, False), (compat.VGroup, True), (Generic, False), (Vector, True)):
+            for live in (False, True):
+                context = Mock() if live else None
+                with patch.object(handles, "_create_family_handle") as create, \
+                     patch.object(handles, "_new_membership_batch", return_value=Mock()), \
+                     patch.object(handles, "_live_constructor_context", return_value=context):
+                    family = cls()
+                operation = context.liveCreateFamily if live else create
+                self.assertEqual(operation.call_args.args[1:], (0.0, draws))
+                if live:
+                    self.assertIs(family._canonical_live_target_context, context)
+
     def test_generic_group_opacity_is_deprecated_metadata_without_paint_dispatch(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])
         group._semantic_family_handle = Mock()
@@ -38,20 +55,20 @@ class SharedFamilyPaintTests(unittest.TestCase):
             expected = (compat._base.GREEN.red, compat._base.GREEN.green,
                         compat._base.GREEN.blue, compat._base.GREEN.alpha)
             if context is None:
-                self.assertEqual(create.call_args.args[1:], (0.0, *expected))
+                self.assertEqual(create.call_args.args[1:], (0.0, False, *expected))
                 handle.setOwnColor.assert_not_called()
             else:
                 context.liveCreateFamily.assert_not_called()
-                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected))
+                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected, False))
 
     def test_omitted_constructor_color_is_white_but_explicit_none_is_black(self):
         with patch.object(handles, "_create_family_handle") as create, \
              patch.object(handles, "_new_membership_batch", return_value=Mock()), \
              patch.object(handles, "_live_constructor_context", return_value=None):
             compat.Group()
-            self.assertEqual(create.call_args.args[1:], (0.0,))
+            self.assertEqual(create.call_args.args[1:], (0.0, False))
             compat.Group(color=None)
-            self.assertEqual(create.call_args.args[1:], (0.0, 0.0, 0.0, 0.0, 1.0))
+            self.assertEqual(create.call_args.args[1:], (0.0, False, 0.0, 0.0, 0.0, 1.0))
 
     def test_invalid_constructor_color_rejects_before_family_allocation(self):
         with patch.object(handles, "_create_family_handle") as create, \

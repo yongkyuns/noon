@@ -295,18 +295,45 @@ impl<'a> TransactionNodeCatalog<'a> {
     }
 
     /// Called only after validating an authoring node, including pending tokens.
+    pub(super) fn draw_enabled(&self, node: SemanticTransactionNodeRef) -> Option<bool> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)?
+                .presentation()
+                .map(|p| p.draw_enabled),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Some(state.draw_enabled()),
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Family { state: None, .. }
+                    | SemanticNodeCreation::PendingPathObject { .. },
+                ) => Some(true),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn family_z_index(&self, node: SemanticTransactionNodeRef) -> Option<f64> {
         match node {
             SemanticTransactionNodeRef::Existing(node) => {
                 match self.store.node(node).expect("validated node").kind() {
-                    SemanticNodeKind::Family(presentation) => {
-                        Some(presentation.presentation.z_index)
-                    }
+                    SemanticNodeKind::Family(_) => self
+                        .store
+                        .node(node)
+                        .and_then(|node| node.presentation())
+                        .map(|presentation| presentation.z_index),
                     _ => None,
                 }
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => {
+                    Some(state.as_ref().map_or(0.0, |state| state.z_index()))
+                }
                 _ => None,
             },
         }
@@ -319,9 +346,12 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .node(node)
                 .and_then(crate::SemanticNode::family_color),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::Color::WHITE)
-                }
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => Some(
+                    state
+                        .as_ref()
+                        .and_then(|state| state.style.family_color())
+                        .unwrap_or(crate::Color::WHITE),
+                ),
                 _ => None,
             },
         }
@@ -338,59 +368,12 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .and_then(crate::SemanticNode::family_style)
                 .cloned(),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => {
+                    Some(state.as_ref().map_or_else(
+                        || crate::SemanticStyle::manim_family_root(crate::Color::WHITE),
+                        |state| state.style.clone(),
+                    ))
                 }
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_opacity(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<f64> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_opacity),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(1.0),
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_color(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<crate::Color> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_color),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::Color::BLACK)
-                }
-                _ => None,
-            },
-        }
-    }
-
-    pub(super) fn family_background_stroke_width(
-        &self,
-        node: SemanticTransactionNodeRef,
-    ) -> Option<f64> {
-        match node {
-            SemanticTransactionNodeRef::Existing(node) => self
-                .store
-                .node(node)
-                .and_then(crate::SemanticNode::family_background_stroke_width),
-            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
                 _ => None,
             },
         }
@@ -406,15 +389,18 @@ impl<'a> TransactionNodeCatalog<'a> {
                 .node(node)
                 .and_then(crate::SemanticNode::sheen_direction),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Object { state, .. }) => {
-                    Some(state.sheen_direction)
-                }
+                PendingSemanticNode::Creation(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Some(state.sheen_direction),
                 PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject {
                     ..
                 })
-                | PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
-                    Some(crate::SemanticSheenDirection::DEFAULT)
-                }
+                | PendingSemanticNode::Creation(SemanticNodeCreation::Family {
+                    state: None, ..
+                }) => Some(crate::SemanticSheenDirection::DEFAULT),
                 _ => None,
             },
         }
@@ -560,6 +546,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                     self.pending[&token],
                     PendingSemanticNode::Creation(
                         SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::Family { state: Some(_), .. }
                             | SemanticNodeCreation::PendingPathObject { .. }
                     )
                 ) {
@@ -717,6 +704,40 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn stage_owned_object_state(
+        &self,
+        staged: &mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+        order: &mut Vec<SemanticTransactionNodeRef>,
+        node: SemanticTransactionNodeRef,
+    ) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = staged.entry(node) {
+            if let SemanticTransactionNodeRef::Existing(id) = node {
+                if let Ok(state) = self.store.semantic_object_state_checked(id) {
+                    entry.insert(state.clone());
+                    order.push(node);
+                }
+            }
+        }
+    }
+
+    pub(super) fn initial_family_content_state(
+        &self,
+        node: SemanticTransactionNodeRef,
+        content: crate::SemanticObjectContent,
+    ) -> Option<SemanticObjectState> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                self.store.node(node)?.initial_family_object_state(content)
+            }
+            SemanticTransactionNodeRef::Pending(token) => match self.pending.get(&token)? {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family {
+                    state: None, ..
+                }) => Some(crate::SemanticFamilyPresentation::default().with_content(content)),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn staged_object_state<'b>(
         &self,
         staged: &'b mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
@@ -732,12 +753,15 @@ impl<'a> TransactionNodeCatalog<'a> {
                     .map_err(|error| SemanticMutationTransactionError::Object { index, error })?
                     .clone(),
                 SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Object {
-                        state, ..
-                    }) => (**state).clone(),
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { state, .. }
+                        | SemanticNodeCreation::Family {
+                            state: Some(state), ..
+                        },
+                    ) => (**state).clone(),
                     PendingSemanticNode::Creation(
                         SemanticNodeCreation::PendingPathObject { .. }
-                        | SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Effect { .. }
                         | SemanticNodeCreation::Signal { .. },
                     )
@@ -827,6 +851,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::SheenDirection(object)
         | SemanticMutationKey::UpdaterSuspension(object)
         | SemanticMutationKey::ZIndex(object)
+        | SemanticMutationKey::DrawEnabled(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
             SemanticTransactionNodeRef::Pending(token) => Some(token),
@@ -872,7 +897,8 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
         }
-        SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
+        SemanticMutationKey::DrawEnabled(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
         | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target))
         | SemanticMutationKey::SpatialCompositionDomain(SemanticTransactionNodeRef::Existing(
             target,

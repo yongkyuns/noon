@@ -43,7 +43,7 @@ class Rotate:
         about_edge: object | None = None,
         **kwargs: Any,
     ) -> None:
-        if isinstance(mobject, _compat.Group):
+        if isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError(
                 "Rotate(Group/VGroup) requires retained family pivot motion and is not yet supported"
             )
@@ -90,7 +90,7 @@ class Rotating(Rotate):
         rate_func: object = _rate_functions.linear,
         **kwargs: Any,
     ) -> None:
-        if isinstance(mobject, _compat.Group):
+        if isinstance(mobject, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError(
                 "Rotating(Group/VGroup) requires retained family pivot motion and is not yet supported"
             )
@@ -136,7 +136,7 @@ class FocusOn:
         run_time: float = 2.0,
         **kwargs: Any,
     ) -> None:
-        if isinstance(focus_point, _compat.Group):
+        if isinstance(focus_point, (_compat.Group, _compat.VGroup)):
             raise NotImplementedError(
                 "FocusOn(Group/VGroup) requires retained family center semantics and is not yet supported"
             )

@@ -251,6 +251,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -262,6 +263,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -295,6 +297,7 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -306,6 +309,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -332,6 +336,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -343,6 +348,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -434,6 +440,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(resource).unwrap();
         let object = FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

@@ -137,7 +137,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
         self.ns = {
             '__name__': __name__, 'dataclass': dataclass,
             '_base': SimpleNamespace(Scene=object, Mobject=Mobject),
-            '_compat': SimpleNamespace(Group=Group, _leaf_mobjects=leaves),
+            '_compat': SimpleNamespace(Group=Group, VGroup=type('VGroup', (), {}), _leaf_mobjects=leaves),
             '_semantic_handles': SimpleNamespace(
                 _is_shared_family=lambda value: isinstance(value, Group)
                 and getattr(value, '_semantic_family_handle', None) is not None,

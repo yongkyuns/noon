@@ -93,6 +93,7 @@ impl CompiledScene {
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
             | ExecutionPatch::SetGlow { object, .. } => {
                 rows.insert(index(*object)?);
