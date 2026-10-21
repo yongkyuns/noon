@@ -125,10 +125,8 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         let presented = await present();
         let sample;
         if (presented && playback === "live") {
-          const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
-          const times = [...new Set([0, ...boundaries.filter(time => time < sampleTime), sampleTime])]
-            .sort((a, b) => a - b);
-          for (const time of times) sample = await sampleDirectProgram(renderer, time);
+          const { sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
+          sample = await sampleDirectProgramThrough(renderer, sampleTime, boundaries);
         } else if (presented && sampleTime > 0) {
           renderer.seekDirect(sampleTime);
           presented = await present();
