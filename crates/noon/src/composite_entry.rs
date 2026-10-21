@@ -80,6 +80,7 @@ impl CompositeEntry {
     pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
         self.measured_bounds(false)
     }
+    #[cfg(any(feature = "native-text", feature = "latex"))]
     pub(crate) fn boundary_bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
         self.measured_bounds(true)
     }
@@ -126,7 +127,7 @@ pub(crate) fn capture_entries_with(
     capture_entries(store, entries, false, &mut capture_state)
 }
 
-#[cfg(any(feature = "native-text", feature = "latex", test))]
+#[cfg(any(feature = "native-text", feature = "latex"))]
 pub(crate) fn capture_entries_with_aliases(
     store: &Rc<RefCell<SemanticStore>>,
     entries: &[MobjectTarget<'_>],

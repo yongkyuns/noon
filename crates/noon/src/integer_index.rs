@@ -6,6 +6,7 @@
 /// cancel during a query before the result is checked against its actual span.
 pub type IntegerIndex = num_bigint::BigInt;
 
+#[cfg(any(feature = "native-text", feature = "latex", test))]
 pub(crate) fn normalize_index(index: IntegerIndex, length: usize) -> Option<usize> {
     let index = if index.sign() == num_bigint::Sign::Minus {
         index + length

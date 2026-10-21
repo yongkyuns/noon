@@ -327,6 +327,7 @@ impl<K: Copy + Ord> FamilyArrangePlan<K> {
             }
         }
         Ok(ArrangementPlacement {
+            #[cfg(any(feature = "native-text", feature = "latex"))]
             bounds: self.bounds,
             deltas,
         })
@@ -336,9 +337,11 @@ impl<K: Copy + Ord> FamilyArrangePlan<K> {
 /// Final request-local placement, shared by family operations and composites.
 /// It can be appended to the caller's existing publication transaction.
 pub(crate) struct ArrangementPlacement<K> {
+    #[cfg(any(feature = "native-text", feature = "latex"))]
     bounds: BTreeMap<K, ArrangementBounds>,
     pub(crate) deltas: BTreeMap<K, (f64, f64)>,
 }
+#[cfg(any(feature = "native-text", feature = "latex"))]
 impl<K: Copy + Ord> ArrangementPlacement<K> {
     pub(crate) fn bounds(&self, ids: &[K], dimensions: bool) -> Option<Bounds2D64> {
         aggregate_bounds(&self.bounds, &self.deltas, ids, dimensions)
