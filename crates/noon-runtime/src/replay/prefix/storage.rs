@@ -45,8 +45,8 @@ impl PrefixReader {
 }
 impl SceneInstance {
     /// Materialize only previously reserved tombstone rows, upon a requested
-    /// seek, never during append. Actual membership/content is selected by the
-    /// ordinary historical revision exchange before any renderer publication.
+    /// seek or forward advance, never during append. Actual membership/content is
+    /// selected by historical revision exchange before any renderer publication.
     pub(super) fn extend_prefix_frame_storage(&mut self) {
         while self.frame.objects.len() < self.compiled.objects().len() {
             let object = &self.compiled.objects()[self.frame.objects.len()];

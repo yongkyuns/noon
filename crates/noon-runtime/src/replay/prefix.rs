@@ -2,8 +2,12 @@
 //! One execution bootstrap is followed by changed-payload batches, not snapshots.
 //! The reader accepts future revisions without seeking to the producer frontier.
 use super::{ReplayError, ReplayLimits, ReplayStats, Revision};
-use crate::{EvaluationError, FrameState, RendererPublication, RuntimeIdentity, SceneInstance};
+use crate::{
+    EvaluationError, FrameState, PreparedTransientAnimation, RendererPublication, RuntimeIdentity,
+    SceneInstance,
+};
 use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
+use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
 use std::sync::Arc;
 
 mod storage;
@@ -25,6 +29,7 @@ pub enum PrefixError {
         object_slots: usize,
     },
     Resources(CompiledResourceError),
+    Interaction(String),
 }
 impl std::fmt::Display for PrefixError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -102,6 +107,7 @@ impl PrefixBatch {
 }
 
 /// A derived historical reader, with no mutable/source/runtime escape hatch.
+/// Presentation-only interaction uses the existing runtime without editing history.
 /// The interval is [start, frontier). Source can still mutate at the frontier's
 /// exact timestamp. Terminal endpoint publication is a separate future contract.
 #[derive(Debug)]
@@ -127,6 +133,33 @@ impl PrefixReader {
     }
 
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
+        self.validate_time(time)?;
+        self.runtime.extend_prefix_frame_storage();
+        self.runtime.seek(time)?;
+        Ok(self.runtime.frame())
+    }
+
+    /// Advance a ready historical interval without treating every frame as a seek.
+    /// Within one execution revision, disjoint session effects keep running;
+    /// authored-driver conflicts and historical revision changes retain precedence.
+    /// Use `seek` explicitly to rewind or cancel those effects.
+    /// Invalid or unavailable times leave the displayed frame and effects intact.
+    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
+        self.validate_time(time)?;
+        let current = self.runtime.frame().time;
+        if time < current {
+            return Err(EvaluationError::NonMonotonicPreparedAdvance {
+                current,
+                requested: time,
+            }
+            .into());
+        }
+        self.runtime.extend_prefix_frame_storage();
+        self.runtime.advance_to(time)?;
+        Ok(self.runtime.frame())
+    }
+
+    fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
         if !time.is_finite() || time < self.start || time >= self.frontier {
             return Err(PrefixError::OutsideRange {
                 time,
@@ -134,9 +167,72 @@ impl PrefixReader {
                 end_exclusive: self.frontier,
             });
         }
-        self.runtime.extend_prefix_frame_storage();
-        self.runtime.seek(time)?;
-        Ok(self.runtime.frame())
+        Ok(())
+    }
+
+    /// Prepare the existing bounded Indicate effect against the displayed past,
+    /// independently of the producer's current membership or authored bindings.
+    /// Only filled analytic circles and rectangles are supported; the prefix
+    /// itself already excludes reactive drivers. Unsupported targets are rejected
+    /// before preparing or changing any effect.
+    /// Newly appended future slots are not interaction targets until displayed.
+    pub fn prepare_click_indicate(
+        &self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        let row = self
+            .runtime
+            .frame_index_for_object(object)
+            .filter(|&index| {
+                self.runtime.object_slot_is_live(index)
+                    && self.runtime.frame().presences.get(index) == Some(&true)
+            })
+            .and_then(|index| self.runtime.frame().objects.get(index))
+            .filter(|row| row.draw_enabled)
+            .ok_or_else(|| {
+                PrefixError::Interaction(
+                    "interaction target is not live in the displayed prefix".into(),
+                )
+            })?;
+        // SceneInstance preparation normally follows semantic binding admission.
+        // This direct reader API must preserve that bounded target domain itself.
+        if row.style.fill.is_none()
+            || !matches!(
+                row.content.geometry(),
+                Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+            )
+        {
+            return Err(PrefixError::Interaction(
+                "prefix Indicate requires a filled analytic circle or rectangle".into(),
+            ));
+        }
+        self.runtime
+            .prepare_click_indicate(object, binding)
+            .map_err(PrefixError::Interaction)
+    }
+
+    /// Admit only a prepared effect belonging to this reader and its displayed
+    /// historical state. This does not publish a source or replay revision.
+    pub fn start_transient_animation(
+        &mut self,
+        prepared: PreparedTransientAnimation,
+    ) -> Result<(), PrefixError> {
+        self.runtime
+            .start_transient_animation(prepared)
+            .map_err(PrefixError::Interaction)
+    }
+
+    /// Advance session effects using platform monotonic seconds, including while
+    /// authored playback is paused. No authored time or retained history changes.
+    pub fn advance_interactions(&mut self, wall_time: f64) -> Result<(), PrefixError> {
+        self.runtime
+            .advance_interactions(wall_time)
+            .map_err(PrefixError::Interaction)
+    }
+
+    pub fn interactions_active(&self) -> bool {
+        self.runtime.interactions_active()
     }
 
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {

@@ -716,6 +716,18 @@ admission. It is disabled by default and does not change gallery
 presentation or establish physical-device performance. Implementation and
 qualification remain in #2211; this is not another scene or rendering authority.
 
+The reader distinguishes monotonic forward playback from an explicit seek.
+Direct, typed presentation effects use the existing Runtime's bounded Indicate
+admission against the displayed historical target, not the producer's current
+membership. Effects advance on session time while authored time may stay paused;
+they do not modify retained history or source semantics. Appending future history
+preserves the displayed effect. Forward playback within one execution revision
+preserves disjoint effects, while authored channel conflicts, a crossed execution
+revision, or an explicit seek supersede them under the existing runtime policy.
+This does not admit automatic pointer dispatch or historical authored bindings;
+those require time-qualified identity and binding metadata in the same execution
+history. General injected animations and causal edits require separate admission.
+
 ### Identity generations, revisions, versions and sequences
 
 Identity validity, authored/execution revisioning, effective publication, external event ordering, and GPU lifetime are distinct domains. They must not collapse into one ambiguous global generation counter:
