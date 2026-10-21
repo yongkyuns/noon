@@ -6,6 +6,6 @@ await qualifyPairedAuthoring({
     id: ["owned", "cleared", "restored"][index],
     file: "manim_parity_family_root_drawing.py", scene: "FamilyRootDrawing",
     factory: "createDirectFamilyRootPointsSmokeRenderer",
-    duration: 0.75, sampleTime, objectCount: 4,
+    duration: 0.75, sampleTime,
   })),
 });
