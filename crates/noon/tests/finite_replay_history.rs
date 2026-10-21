@@ -284,6 +284,17 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
     );
     scene.live(&mut session).apply(retarget).unwrap();
     record(&mut session);
+    for (time, enabled) in [(5.25, false), (5.75, true)] {
+        session.advance_to(time).unwrap();
+        let mut drawing = noon_core::SemanticMutationTransaction::new();
+        drawing.set_draw_enabled(view.display().node_id(), enabled);
+        scene.live(&mut session).apply(drawing).unwrap();
+        assert_eq!(
+            session.inset_2d_views().unwrap().len(),
+            usize::from(enabled)
+        );
+        record(&mut session);
+    }
     session.advance_to(6.0).unwrap();
     let mut clear = noon_core::SemanticMutationTransaction::new();
     clear.clear_inset_2d_view(view.display().node_id());
@@ -316,7 +327,7 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
     }
     session.seek(6.5).unwrap();
     session.take_frame_changes();
-    session.seek(5.5).unwrap();
+    session.seek(5.9).unwrap();
     assert!(
         !session.take_frame_changes().is_empty(),
         "a relation-only seek must wake presentation"

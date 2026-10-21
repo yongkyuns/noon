@@ -460,6 +460,71 @@ mod tests {
     }
 
     #[test]
+    fn childless_geometry_owning_family_does_not_widen_the_leaf_layout_profile() {
+        use crate::execution_session::SemanticCompositionRequest as SemanticRequest;
+        let mut scene = Scene::new();
+        let source = scene.rectangle(6.0, 1.0).unwrap();
+        let target = scene.rectangle(6.0, 1.0).unwrap();
+        let end = scene.rectangle(6.0, 1.0).unwrap();
+        let family = scene.family(&[]).unwrap();
+        let mut content = noon_core::SemanticMutationTransaction::new();
+        content.replace_content(
+            family.node_id(),
+            noon_core::StoredGeometry::Rectangle {
+                size: noon_core::Vec2::new(6.0, 1.0),
+            },
+        );
+        scene.apply_semantic_transaction(content).unwrap();
+        scene
+            .add_many(&[(&source).into(), (&target).into(), (&family).into()])
+            .unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(session.execution_object_id(family.node_id()).is_some());
+        let store = scene.integration_store().borrow();
+        let request = |source, target, end| SemanticRequest::Composition {
+            kind: noon_core::SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                SemanticRequest::TransformTo {
+                    source: target,
+                    target_state: end,
+                    interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                    complete_priority: false,
+                    options: AnimationOptions::new().run_time(1.0),
+                },
+                SemanticRequest::LayoutReplaceInterval {
+                    target: source,
+                    layout_target: target,
+                    fallback: noon_core::HostCallbackId::new(19),
+                    options: AnimationOptions::new().run_time(1.0),
+                },
+            ],
+            options: AnimationOptions::new(),
+        };
+        let ordinary = [source.node_id(), target.node_id(), end.node_id()];
+        assert!(session
+            .specialize_layout_replace(
+                &store,
+                &request(ordinary[0], ordinary[1], ordinary[2]),
+                AnimationOptions::new()
+            )
+            .is_some());
+        for position in 0..3 {
+            let mut ids = ordinary;
+            ids[position] = family.node_id();
+            assert!(
+                session
+                    .specialize_layout_replace(
+                        &store,
+                        &request(ids[0], ids[1], ids[2]),
+                        AnimationOptions::new()
+                    )
+                    .is_none(),
+                "family at position {position} must keep the host callback"
+            );
+        }
+    }
+
+    #[test]
     fn native_click_bindings_keep_the_callback_interval_instead_of_frozen_layout() {
         for bind_source in [false, true] {
             let mut fixture = Fixture::with_setup(

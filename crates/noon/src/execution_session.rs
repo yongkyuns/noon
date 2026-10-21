@@ -1309,7 +1309,7 @@ impl ExecutionSession {
             .filter(|(display, _)| {
                 self.runtime
                     .frame_index_for_object(*display)
-                    .is_some_and(|index| self.runtime.frame().is_present(index))
+                    .is_some_and(|index| self.runtime.frame().is_drawable(index))
             })
             .map(|(display_id, binding)| {
                 let camera_object = self.runtime.effective_object(binding.camera_frame).ok_or(

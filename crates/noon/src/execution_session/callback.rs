@@ -2354,6 +2354,16 @@ impl crate::ExecutionSession {
             }
         }
         let (end, driver_options) = driver?;
+        // A family may own geometry without children. That does not make it a
+        // leaf: family layout/transform semantics remain outside this profile.
+        if [source, target, end].into_iter().any(|node| {
+            !matches!(
+                store.node(node).map(|node| node.kind()),
+                Some(noon_core::SemanticNodeKind::AuthoringObject)
+            )
+        }) {
+            return None;
+        }
         if !bounded(driver_options)
             || driver_options.run_time.unwrap_or(1.0) <= 0.0
             || driver_options.run_time.unwrap_or(1.0) != interval.run_time.unwrap_or(1.0)
