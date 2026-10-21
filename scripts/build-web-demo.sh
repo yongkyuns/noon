@@ -84,7 +84,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-family-iteration-reference.test.mjs
   node --test scripts/manim-family-slices-reference.test.mjs
   node --test scripts/manim-object-queries-reference.test.mjs
-node --test scripts/manim-query-hooks-reference.test.mjs
+  node --test scripts/manim-query-hooks-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
   node --check scripts/table-group-checks.mjs
