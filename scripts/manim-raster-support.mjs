@@ -1,5 +1,62 @@
 import { isDeepStrictEqual } from "node:util";
 
+// A reference manifest owns its process-local default; ambient shell state must
+// not silently change the font used by either semantic or PNG reference runs.
+export function rasterReferenceEnvironment(reference, environment = process.env) {
+  const selected = { ...environment };
+  delete selected.NOON_MANIM_REFERENCE_TEXT_FONT;
+  delete selected.NOON_MANIM_REFERENCE_PANGO_VERSION;
+  if (reference.manimpango_version !== undefined) {
+    if (typeof reference.manimpango_version !== "string"
+        || !/^\d+\.\d+\.\d+$/.test(reference.manimpango_version)) {
+      throw new Error("reference.manimpango_version must name an exact release");
+    }
+    selected.NOON_MANIM_REFERENCE_PANGO_VERSION = reference.manimpango_version;
+  }
+  if (reference.text_font !== undefined) {
+    if (typeof reference.text_font !== "string" || !reference.text_font
+        || reference.text_font.trim() !== reference.text_font) {
+      throw new Error("reference.text_font must name an explicit font family");
+    }
+    selected.NOON_MANIM_REFERENCE_TEXT_FONT = reference.text_font;
+  }
+  if (reference.pango_backend !== undefined) {
+    if (!["fc", "coretext", "win32"].includes(reference.pango_backend)) {
+      throw new Error("reference.pango_backend must select fc, coretext or win32");
+    }
+    selected.PANGOCAIRO_BACKEND = reference.pango_backend;
+  }
+  return selected;
+}
+
+// Select a separately rendered authored-angle reference. Its non-angle fields
+// must come from the original frame, never a patched scene or a new clock.
+export function authoredCameraReference(fixture, sample, semanticFixture) {
+  const checkpoints = fixture.authored_camera_checkpoints;
+  if (checkpoints === undefined) return null;
+  const captures = semanticFixture.authored_camera_samples;
+  if (fixture.camera_profile_observation !== true || !Array.isArray(checkpoints)
+      || checkpoints.length === 0 || !Array.isArray(captures)
+      || captures.length !== checkpoints.length
+      || !isDeepStrictEqual(checkpoints.map(row => row.time), fixture.sample_times)
+      || !isDeepStrictEqual(captures.map(row => row.time), fixture.sample_times)) {
+    throw new Error("authored camera reference requires complete ordered checkpoint coverage");
+  }
+  const index = checkpoints.findIndex(row => row.time === sample.requestedTime);
+  const checkpoint = checkpoints[index];
+  const capture = captures[index];
+  if (!checkpoint || !capture || !Number.isFinite(checkpoint.phi) || !Number.isFinite(checkpoint.theta)
+      || !Number.isFinite(capture.sampled_time)
+      || Math.abs(capture.sampled_time - sample.materializedTime) > 1e-9
+      || !isDeepStrictEqual(capture.sampled_manim_camera_3d, sample.camera3dOracle)
+      || !isDeepStrictEqual(capture.camera_3d,
+        { ...sample.camera3dOracle, phi: checkpoint.phi, theta: checkpoint.theta })
+      || typeof capture.path !== "string" || !/^[a-f0-9]{64}$/.test(capture.sha256)) {
+    throw new Error("authored camera reference disagrees with its checkpoint or original Manim frame");
+  }
+  return capture;
+}
+
 // Select actual reference frames, never fabricated timestamps. Explicit times
 // are for contract boundaries; fraction-based sampling remains the default.
 export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
@@ -544,20 +601,20 @@ export function effective3DCameraProfile(debugFrame) {
   return actual;
 }
 
-/** Compare one exact Manim 3D semantic frame to one Noon debug frame. */
+/** Compare a recorded 3D reference profile to one Noon debug frame. */
 export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
   const actual = effective3DCameraProfile(debugFrame);
   if (!expectedCamera3d || typeof expectedCamera3d !== "object") {
-    throw new Error("camera profile: missing exact Manim camera_3d observation");
+    throw new Error("camera profile: missing camera_3d reference observation");
   }
   for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
     const value = expectedCamera3d[field];
-    if (field === "frame_center") requireFiniteVector(value, 3, `Manim camera ${field}`);
+    if (field === "frame_center") requireFiniteVector(value, 3, `reference camera ${field}`);
     else if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`Manim camera ${field}: expected a finite number`);
+      throw new Error(`reference camera ${field}: expected a finite number`);
     }
   }
-  requireFiniteVector(expectedCamera3d.light_source, 3, "Manim camera light_source");
+  requireFiniteVector(expectedCamera3d.light_source, 3, "reference camera light_source");
   const lightRows = debugFrame.objects.filter(row => row.present && row.spatial?.point_light === true);
   let actualLight;
   if (lightRows.length === 0) {

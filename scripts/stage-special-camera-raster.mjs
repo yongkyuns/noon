@@ -35,6 +35,34 @@ export const PINNED_CAMERA_CASES = Object.freeze([
   ["ThreeDCameraIllusionRotation", Math.PI / 2, [0, 0.5, 1, 47 / 30, Math.PI / 2], true],
   ["ThreeDSurfacePlot", 0, [0], true],
 ]);
+
+// Independent authored-time checkpoints for the unchanged, camera-only scenes.
+// Rotation: theta0 + .1*t to 1s, then Manim's smooth return to theta0 at 2s.
+// Illusion: phi0 + .1*(cos(2*t)-1), theta0 + .2*sin(2*t).
+// These are reference inputs, never an alternate runtime/interpolator. The
+// original sampled Manim states and PNGs remain separate observations.
+export const AUTHORED_CAMERA_CHECKPOINTS = Object.freeze({
+  ThreeDCameraRotation: [
+    [0, 1.3089969389957472, 0.5235987755982988],
+    [0.5, 1.3089969389957472, 0.5735987755982989],
+    [29 / 30, 1.3089969389957472, 0.6202654422649655],
+    [1, 1.3089969389957472, 0.6235987755982988],
+    [31 / 30, 1.3089969389957472, 0.6233329059037589],
+    [1.5, 1.3089969389957472, 0.5735987755982989],
+    [59 / 30, 1.3089969389957472, 0.5238646452928387],
+    [2, 1.3089969389957472, 0.5235987755982988],
+    [61 / 30, 1.3089969389957472, 0.5235987755982988],
+    [2.5, 1.3089969389957472, 0.5235987755982988],
+    [3, 1.3089969389957472, 0.5235987755982988],
+  ],
+  ThreeDCameraIllusionRotation: [
+    [0, 1.3089969389957472, 0.5235987755982988],
+    [0.5, 1.2630271695825612, 0.6918929725598781],
+    [1, 1.167382255341033, 0.7054582609634352],
+    [47 / 30, 1.1090003497949126, 0.5252506208689597],
+    [Math.PI / 2, 1.1089969389957473, 0.5235987755982988],
+  ],
+});
 const digest = value => createHash("sha256").update(value).digest("hex");
 const CLASS_AST = "import ast,sys; m=ast.parse(sys.stdin.read()); " +
   "assert len(m.body)==1 and isinstance(m.body[0],ast.ClassDef) and m.body[0].name==sys.argv[1]";
@@ -76,7 +104,10 @@ function assertModuleClassMatches(source, module, sceneName) {
   assert.equal(result.status, 0, sceneName + ": generated module changed pinned class AST: " + result.stderr);
 }
 
-export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, outputDirectory }) {
+export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, outputDirectory,
+  referenceProfile = "original-manim" }) {
+  assert.ok(["original-manim", "portable-authored"].includes(referenceProfile),
+    "unknown camera reference profile: " + referenceProfile);
   assert.equal(digest(rst), PINNED_DOCS_SHA256, "pinned Manim examples.rst digest drift");
   const stageRoot = path.resolve(outputDirectory);
   const temporaryRoot = path.resolve(tmpdir());
@@ -102,17 +133,25 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
       expected_duration: duration,
       sample_times: sampleTimes,
       camera_profile_observation: cameraProfileObservation,
+      ...(referenceProfile === "portable-authored" && AUTHORED_CAMERA_CHECKPOINTS[scene]
+        ? { authored_camera_checkpoints: AUTHORED_CAMERA_CHECKPOINTS[scene].map(
+          ([time, phi, theta]) => ({ time, phi, theta })) } : {}),
       ...(scene === "MovingZoomedSceneAround" ? { inset_camera_observation: true } : {}),
-      notes: "Exact pinned Manim source staged for observation. Unsupported Noon capabilities remain failures; no source compensation or parity claim.",
+      notes: referenceProfile === "portable-authored"
+        ? "Exact pinned source with explicit font and authored-camera reference inputs. Original sampled Manim observations retained separately; no unrestricted parity claim."
+        : "Exact pinned Manim source staged for observation. Unsupported Noon capabilities remain failures; no source compensation or parity claim.",
     });
   }
-  const staged = { ...baseline, reference: { ...baseline.reference, source: fixtures[0].source }, fixtures };
+  const staged = { ...baseline, reference: { ...baseline.reference, source: fixtures[0].source,
+    ...(referenceProfile === "portable-authored"
+      ? { text_font: "DejaVu Sans Mono", pango_backend: "fc", manimpango_version: "0.6.1" } : {}) }, fixtures };
   const manifestPath = path.join(stageRoot, "manifest.json");
   await writeFile(manifestPath, JSON.stringify(staged, null, 2) + "\n");
   await writeFile(path.join(stageRoot, "source-provenance.json"), JSON.stringify({
     upstream: PINNED_DOCS_URL,
     commit: PINNED_DOCS_COMMIT,
     docsSha256: PINNED_DOCS_SHA256,
+    referenceProfile,
     fixtures: sources,
     status: "staged-only; no raster qualification claimed",
   }, null, 2) + "\n");
@@ -121,12 +160,15 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
 
 async function main() {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const referenceProfile = process.env.NOON_CAMERA_REFERENCE_PROFILE ?? "original-manim";
   const response = await fetch(PINNED_DOCS_URL);
   assert.equal(response.status, 200, "pinned docs download failed: " + response.status);
   const staged = await stageSpecialCameraRasterManifest({
     rst: await response.text(),
     repositoryRoot,
-    outputDirectory: path.join(tmpdir(), "noon-phase-d-finish", "exact-camera-stage"),
+    outputDirectory: path.join(tmpdir(), "noon-phase-d-finish",
+      referenceProfile === "original-manim" ? "exact-camera-stage" : "portable-authored-camera-stage"),
+    referenceProfile,
   });
   console.log("Staged " + staged.fixtures.length + " exact-source fixtures: " + staged.manifestPath);
   console.log("Next: NOON_MANIM_RASTER_MANIFEST=" + staged.manifestPath + " " +

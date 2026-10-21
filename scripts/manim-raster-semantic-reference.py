@@ -51,11 +51,15 @@ class NullFileWriter:
 
 
 class SemanticRenderer(CairoRenderer):
-    def __init__(self, camera_class: type[Camera] = Camera) -> None:
+    def __init__(self, camera_class: type[Camera] = Camera, *,
+                 camera_checkpoints=(), checkpoint_root: Path | None = None) -> None:
         self.frames: list[dict[str, Any]] = []
         self.frozen_intervals: list[dict[str, Any]] = []
         self._active_scene = None
         self.logical_time = 0.0
+        self.camera_checkpoints = camera_checkpoints
+        self.checkpoint_root = checkpoint_root
+        self.authored_camera_samples: list[dict[str, Any]] = []
         super().__init__(file_writer_class=NullFileWriter, camera_class=camera_class)
 
     def play(self, scene, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -78,6 +82,7 @@ class SemanticRenderer(CairoRenderer):
         self.frames.append(
             _scene_state(scene, len(self.frames), self.logical_time + float(time), float(time))
         )
+        self.capture_camera_checkpoints(scene, self.logical_time + float(time))
         self.time += 1.0 / float(config.frame_rate)
 
     def freeze_current_frame(self, duration: float) -> None:
@@ -94,7 +99,65 @@ class SemanticRenderer(CairoRenderer):
             "start_time": start,
             "end_time": start + float(duration),
         })
+        self.capture_camera_checkpoints(self._active_scene, start, start + float(duration))
         self.time += float(duration)
+
+    def capture_camera_checkpoints(self, scene, start: float, end: float | None = None) -> None:
+        for index, checkpoint in enumerate(self.camera_checkpoints):
+            time = checkpoint["time"]
+            selected = (start <= time < end) if end is not None else math.isclose(
+                start, time, rel_tol=0.0, abs_tol=1e-9)
+            if not selected:
+                continue
+            if any(sample["time"] == time for sample in self.authored_camera_samples):
+                raise RuntimeError(f"authored camera checkpoint captured twice at {time}")
+            if not isinstance(scene, ThreeDScene) or self.checkpoint_root is None:
+                raise ValueError("authored camera checkpoints require a 3D scene and PNG output root")
+            camera = self.camera
+            sampled = _three_d_camera_state(camera)
+            target = {**sampled, "phi": checkpoint["phi"], "theta": checkpoint["theta"]}
+            output = self.checkpoint_root / f"checkpoint-{index:04d}.png"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                camera.set_phi(target["phi"])
+                camera.set_theta(target["theta"])
+                # Explicit reference projection only. Do not advance updaters,
+                # rewrite the Manim clock, or alter the original scene class.
+                CairoRenderer.update_frame(self, scene)
+                camera.get_image().save(output, format="PNG")
+            finally:
+                camera.set_phi(sampled["phi"])
+                camera.set_theta(sampled["theta"])
+            if _three_d_camera_state(camera) != sampled:
+                raise RuntimeError("authored reference capture changed the sampled Manim camera")
+            self.authored_camera_samples.append({
+                "time": time, "sampled_time": start, "camera_3d": target,
+                "sampled_manim_camera_3d": sampled, "path": str(output.resolve()),
+                "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+                "capture": "explicit phi/theta checkpoint projected by pinned Cairo; sampled camera restored",
+            })
+
+
+def _camera_checkpoints(fixture: dict[str, Any]) -> list[dict[str, float]]:
+    checkpoints = fixture.get("authored_camera_checkpoints", [])
+    if not isinstance(checkpoints, list):
+        raise ValueError("authored_camera_checkpoints must be an array")
+    for checkpoint in checkpoints:
+        if not isinstance(checkpoint, dict) or set(checkpoint) != {"time", "phi", "theta"}:
+            raise ValueError("authored camera checkpoints require exactly time, phi and theta")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in checkpoint.values()):
+            raise ValueError("authored camera checkpoint values must be finite numbers")
+    if "authored_camera_checkpoints" in fixture:
+        times = [checkpoint["time"] for checkpoint in checkpoints]
+        if not times or times != fixture.get("sample_times") or any(
+            time < 0 or time > fixture["expected_duration"]
+            or (index > 0 and time <= times[index - 1]) for index, time in enumerate(times)
+        ):
+            raise ValueError("authored camera checkpoints must cover every ordered sample time exactly")
+        if fixture.get("camera_profile_observation") is not True:
+            raise ValueError("authored camera checkpoints require camera_profile_observation")
+    return checkpoints
 
 
 def _scalar(value: Any) -> float:
@@ -265,13 +328,18 @@ def _render_fixture(
         else MovingCamera if issubclass(scene_class, MovingCameraScene)
         else Camera
     )
-    renderer = SemanticRenderer(camera_class=camera_class)
+    camera_checkpoints = _camera_checkpoints(fixture)
+    if camera_checkpoints and terminal_png_root is None:
+        raise ValueError("authored camera checkpoints require PNG output")
+    renderer = SemanticRenderer(camera_class=camera_class, camera_checkpoints=camera_checkpoints,
+        checkpoint_root=(terminal_png_root / fixture["id"] if camera_checkpoints else None))
     scene = scene_class(renderer=renderer)
     terminal_png = None
     scene.setup()
     try:
         scene.construct()
         terminal_state = _scene_state(scene, len(renderer.frames), renderer.logical_time, 0.0)
+        renderer.capture_camera_checkpoints(scene, renderer.logical_time)
         endpoint_requested = any(
             math.isclose(float(time), renderer.logical_time, rel_tol=0.0, abs_tol=1e-9)
             for time in fixture.get("sample_times", [])
@@ -310,6 +378,11 @@ def _render_fixture(
             )
         previous_time = time
 
+    if sorted(sample["time"] for sample in renderer.authored_camera_samples) != [
+        checkpoint["time"] for checkpoint in camera_checkpoints
+    ]:
+        raise RuntimeError(f"{fixture['id']}: authored camera checkpoint coverage is incomplete")
+
     return {
         "id": fixture["id"],
         "scene": fixture["scene"],
@@ -320,6 +393,7 @@ def _render_fixture(
         "frozen_intervals": renderer.frozen_intervals,
         "terminal_state": terminal_state,
         "terminal_png": terminal_png,
+        **({"authored_camera_samples": renderer.authored_camera_samples} if camera_checkpoints else {}),
     }
 
 
@@ -331,6 +405,7 @@ def main() -> int:
     args = parser.parse_args()
 
     import manim
+    import manimpango
 
     if manim.__version__ != PINNED_MANIM_VERSION:
         raise SystemExit(
@@ -373,6 +448,7 @@ def main() -> int:
 
     payload = {
         "manim_version": manim.__version__,
+        "manimpango_version": manimpango.__version__,
         "frame_rate": float(reference["frame_rate"]),
         "fixtures": fixtures,
     }
