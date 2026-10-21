@@ -25,7 +25,7 @@ class ExactFontTests(unittest.TestCase):
 
     def run_font_registration(self, environment, available_fonts):
         manim = SimpleNamespace(logger=mock.Mock(), Text=mock.Mock(), MarkupText=mock.Mock())
-        pango = SimpleNamespace(list_fonts=lambda: available_fonts)
+        pango = SimpleNamespace(list_fonts=lambda: available_fonts, __version__="0.6.1")
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.dict(
             sys.modules, {"manim": manim, "manimpango": pango}
         ):
@@ -47,6 +47,11 @@ class ExactFontTests(unittest.TestCase):
     def test_unavailable_explicit_default_fails_before_rendering(self):
         with self.assertRaisesRegex(RuntimeError, "reference default font is unavailable"):
             self.run_font_registration({"NOON_MANIM_REFERENCE_TEXT_FONT": "Missing"}, [])
+
+    def test_reference_provider_version_is_checked_before_rendering(self):
+        self.run_font_registration({"NOON_MANIM_REFERENCE_PANGO_VERSION": "0.6.1"}, [])
+        with self.assertRaisesRegex(RuntimeError, "expected ManimPango 0.7.0, found 0.6.1"):
+            self.run_font_registration({"NOON_MANIM_REFERENCE_PANGO_VERSION": "0.7.0"}, [])
 
     def test_blank_or_padded_default_does_not_silently_select_a_fallback(self):
         for family in ["", " ", " DejaVu Sans Mono"]:

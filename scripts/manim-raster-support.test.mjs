@@ -42,6 +42,16 @@ test("explicit Pango backend overrides ambient backend without changing original
   }
 });
 
+test("reference provider version is explicit and cannot inherit an ambient pin", () => {
+  const environment = { NOON_MANIM_REFERENCE_PANGO_VERSION: "0.7.0" };
+  assert.equal(rasterReferenceEnvironment({}, environment).NOON_MANIM_REFERENCE_PANGO_VERSION, undefined);
+  assert.equal(rasterReferenceEnvironment({ manimpango_version: "0.6.1" }, environment)
+    .NOON_MANIM_REFERENCE_PANGO_VERSION, "0.6.1");
+  for (const manimpango_version of [null, 1, "", "latest", "0.6", " 0.6.1"]) {
+    assert.throws(() => rasterReferenceEnvironment({ manimpango_version }, {}), /exact release/);
+  }
+});
+
 function authoredCameraInputs() {
   const camera = { phi: 0.7, theta: -0.2, gamma: 0, zoom: 1, frame_center: [0, 0, 0] };
   const fixture = { sample_times: [1], camera_profile_observation: true,

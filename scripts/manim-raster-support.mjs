@@ -5,6 +5,14 @@ import { isDeepStrictEqual } from "node:util";
 export function rasterReferenceEnvironment(reference, environment = process.env) {
   const selected = { ...environment };
   delete selected.NOON_MANIM_REFERENCE_TEXT_FONT;
+  delete selected.NOON_MANIM_REFERENCE_PANGO_VERSION;
+  if (reference.manimpango_version !== undefined) {
+    if (typeof reference.manimpango_version !== "string"
+        || !/^\d+\.\d+\.\d+$/.test(reference.manimpango_version)) {
+      throw new Error("reference.manimpango_version must name an exact release");
+    }
+    selected.NOON_MANIM_REFERENCE_PANGO_VERSION = reference.manimpango_version;
+  }
   if (reference.text_font !== undefined) {
     if (typeof reference.text_font !== "string" || !reference.text_font
         || reference.text_font.trim() !== reference.text_font) {

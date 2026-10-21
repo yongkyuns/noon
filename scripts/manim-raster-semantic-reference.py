@@ -405,6 +405,7 @@ def main() -> int:
     args = parser.parse_args()
 
     import manim
+    import manimpango
 
     if manim.__version__ != PINNED_MANIM_VERSION:
         raise SystemExit(
@@ -447,6 +448,7 @@ def main() -> int:
 
     payload = {
         "manim_version": manim.__version__,
+        "manimpango_version": manimpango.__version__,
         "frame_rate": float(reference["frame_rate"]),
         "fixtures": fixtures,
     }

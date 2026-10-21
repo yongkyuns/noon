@@ -18,6 +18,10 @@ to match Noon's portable Cairo/FreeType metrics. Register the matching font file
 `FONTCONFIG_FILE` may restrict font discovery to the supplied assets; the report
 records its path/hash. This requires Pango's fontconfig backend, with no fallback
 to another metrics profile.
+It also pins `manimpango_version: "0.6.1"`, matching the canonical CI oracle.
+ManimPango 0.7 explicitly disables glyph-position rounding; selecting the same
+font/backend alone does not establish matching placement. A mismatched provider
+version fails before rendering; semantic evidence also records the actual version.
 For the two camera-only motion examples, `authored_camera_checkpoints` supplies
 independent absolute phi/theta values at every sample. Pinned Cairo projects the
 original scene at those angles and restores its sampled camera immediately.
