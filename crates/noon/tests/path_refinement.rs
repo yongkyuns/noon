@@ -28,7 +28,12 @@ fn queries_promote_primitives_and_capture_transformed_controls_once() {
     let world = object.path_query().unwrap();
     assert_eq!(world.first_handles(), [(4., 3.)]);
     assert_eq!(world.second_handles(), [(6., 3.)]);
-    assert_eq!(world.anchors(), [(2., -1.), (8., -1.), (12., 0.)]);
+    assert!(matches!(
+        world.anchors(),
+        Err(noon::AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::UnpairedAnchors { starts: 2, ends: 1 }
+        ))
+    ));
     assert_eq!(local.first_handles(), [(2., 4.)]);
     object.reverse_direction().unwrap();
     assert_eq!(world.start_anchors(), [(2., -1.), (12., 0.)]);
@@ -36,7 +41,7 @@ fn queries_promote_primitives_and_capture_transformed_controls_once() {
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
         .unwrap();
     assert_eq!(empty.path_query().unwrap().curve_count(), 0);
-    assert!(empty.path_query().unwrap().anchors().is_empty());
+    assert!(empty.path_query().unwrap().anchors().unwrap().is_empty());
     assert!(empty.path_query().unwrap().curve_points(0).is_err());
 }
 

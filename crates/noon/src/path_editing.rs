@@ -8,6 +8,13 @@ use noon_core::{
 use std::{cell::RefCell, rc::Rc};
 pub(crate) use transaction::PreparedPathEdits;
 
+fn promote_points(points: &[Vec2]) -> Vec<(f64, f64)> {
+    points
+        .iter()
+        .map(|point| (point.x as f64, point.y as f64))
+        .collect()
+}
+
 /// Validate that one running Scene root may admit immutable path resources.
 ///
 /// Callers that must preserve fail-closed ordering can invoke this before
@@ -285,9 +292,9 @@ fn prepare_family_reverse_points(
 }
 
 fn reverse_point_order(path: &VectorPath) -> Result<VectorPath, AuthoringError> {
-    let mut points = manim_points_for_path(path)?;
+    let mut points = manim_points_f64_for_path(path)?;
     points.reverse();
-    let mut reversed = VectorPath::from_manim_points(points);
+    let mut reversed = VectorPath::from_manim_points_f64(points);
     if let Some(target) = path.morph_target() {
         reversed = reversed.with_morph_target(reverse_point_order(target)?);
     }
@@ -296,7 +303,7 @@ fn reverse_point_order(path: &VectorPath) -> Result<VectorPath, AuthoringError> 
 
 /// Repeat the raw point array as Manim's `apply_over_attr_arrays(repeated)` does.
 fn repeat_point_array(path: &VectorPath, count: usize) -> Result<VectorPath, AuthoringError> {
-    let points = manim_points_for_path(path)?;
+    let points = manim_points_f64_for_path(path)?;
     let total = points
         .len()
         .checked_mul(count)
@@ -308,7 +315,7 @@ fn repeat_point_array(path: &VectorPath, count: usize) -> Result<VectorPath, Aut
     for _ in 0..count {
         repeated.extend_from_slice(&points);
     }
-    let mut result = VectorPath::from_manim_points(repeated);
+    let mut result = VectorPath::from_manim_points_f64(repeated);
     if let Some(target) = path.morph_target() {
         result = result.with_morph_target(repeat_point_array(target, count)?);
     }
@@ -503,15 +510,31 @@ impl crate::Scene {
     }
 
     pub fn set_points(&mut self, object: &Mobject, points: &[Vec2]) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::RawPoints(points))
-        })
+        self.set_points_f64(object, &promote_points(points))
     }
 
     pub fn append_points(
         &mut self,
         object: &Mobject,
         points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.append_points_f64(object, &promote_points(points))
+    }
+
+    pub fn set_points_f64(
+        &mut self,
+        object: &Mobject,
+        points: &[(f64, f64)],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::RawPoints(points))
+        })
+    }
+
+    pub fn append_points_f64(
+        &mut self,
+        object: &Mobject,
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(
@@ -1011,8 +1034,8 @@ pub(crate) fn path_is_unchanged(
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
     Clear,
-    RawPoints(&'a [Vec2]),
-    AppendRawPoints(&'a [Vec2]),
+    RawPoints(&'a [(f64, f64)]),
+    AppendRawPoints(&'a [(f64, f64)]),
     Corners(&'a [Vec2]),
     CornersWithSamples {
         points: &'a [Vec2],
@@ -1106,36 +1129,25 @@ impl PathEdit<'_> {
             )
             .map(Some);
         }
-        if let Self::RawPoints(points) = self {
+        if let Self::RawPoints(points) | Self::AppendRawPoints(points) = &self {
             if points
                 .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+                .any(|&(x, y)| !(x as f32).is_finite() || !(y as f32).is_finite())
             {
                 return Err(AuthoringError::NonFiniteGeometry);
             }
-            return Ok(Some(VectorPath::from_manim_points(points.to_vec())));
+        }
+        if let Self::RawPoints(points) = self {
+            return Ok(Some(VectorPath::from_manim_points_f64(points.to_vec())));
         }
         if let Self::AppendRawPoints(points) = self {
             if points.is_empty() {
                 return Ok(None);
             }
-            if points
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
             let path = world_path(store, state)?;
-            let mut raw_points = crate::path_queries::PathQuery::prepare(
-                &path,
-                noon_core::SemanticTransform2_5D::default(),
-            )?
-            .points()?
-            .into_iter()
-            .map(|(x, y)| Vec2::new(x as f32, y as f32))
-            .collect::<Vec<_>>();
+            let mut raw_points = manim_points_f64_for_path(&path)?;
             raw_points.extend_from_slice(points);
-            return Ok(Some(VectorPath::from_manim_points(raw_points)));
+            return Ok(Some(VectorPath::from_manim_points_f64(raw_points)));
         }
         if matches!(&self, Self::ScaleHandles(factor) if *factor == 1.0) {
             return Ok(None);
@@ -1453,17 +1465,21 @@ impl PathEdit<'_> {
     }
 }
 
-pub(crate) fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError> {
+pub(crate) fn manim_points_f64_for_path(
+    path: &VectorPath,
+) -> Result<Vec<(f64, f64)>, AuthoringError> {
     if let Some(points) = path.manim_points() {
         return Ok(points.to_vec());
     }
-    Ok(
-        crate::path_queries::PathQuery::prepare(path, noon_core::SemanticTransform2_5D::default())?
-            .points()?
-            .into_iter()
-            .map(|(x, y)| Vec2::new(x as f32, y as f32))
-            .collect(),
-    )
+    crate::path_queries::PathQuery::prepare(path, noon_core::SemanticTransform2_5D::default())?
+        .points()
+}
+
+pub(crate) fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, AuthoringError> {
+    Ok(manim_points_f64_for_path(path)?
+        .into_iter()
+        .map(|(x, y)| Vec2::new(x as f32, y as f32))
+        .collect())
 }
 
 fn close_path_with_stride(
@@ -1742,26 +1758,20 @@ pub(crate) fn world_path(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<VectorPath, AuthoringError> {
-    let checked = |name, value| {
-        crate::semantic_mobject::authoring_render_f64(name, value).map(|value| value as f32)
-    };
     let transform = state
         .transform
         .as_planar()
         .ok_or(AuthoringError::NonFiniteObjectState)?;
-    let transform = noon_core::Transform2D {
-        translation: Vec2::new(
-            checked("path translation x", transform.translation.x)?,
-            checked("path translation y", transform.translation.y)?,
-        ),
-        scale: Vec2::new(
-            checked("path scale x", transform.scale.x)?,
-            checked("path scale y", transform.scale.y)?,
-        ),
-        rotation: checked("path rotation", transform.rotation_z)?,
-    };
-    let path = crate::path_queries::content_path(store, state.content)?.transformed(transform);
-    Ok(path)
+    for (name, value) in [
+        ("path translation x", transform.translation.x),
+        ("path translation y", transform.translation.y),
+        ("path scale x", transform.scale.x),
+        ("path scale y", transform.scale.y),
+        ("path rotation", transform.rotation_z),
+    ] {
+        crate::semantic_mobject::authoring_render_f64(name, value)?;
+    }
+    Ok(crate::path_queries::content_path(store, state.content)?.transformed_semantic(transform))
 }
 
 /// Scale each cubic handle around its associated anchor, promoting lines and
@@ -1772,98 +1782,26 @@ fn scale_handle_distances(path: &VectorPath, factor: f64) -> Result<VectorPath, 
     if !factor.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }
-    let factor = factor as f32;
-    if !factor.is_finite() {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
     if factor == 1.0 {
         return Ok(path.clone());
     }
-
-    let mut result = VectorPath::new();
-    let mut current = None;
-    let mut subpath_start = None;
-    for command in path.commands().iter().copied() {
-        match command {
-            noon_core::PathCommand::MoveTo { to } => {
-                result = result.move_to(to);
-                current = Some(to);
-                subpath_start = Some(to);
-            }
-            noon_core::PathCommand::LineTo { to } => {
-                if let Some(from) = current {
-                    let delta = to - from;
-                    let handle1 = from + delta * (1.0 / 3.0);
-                    let handle2 = from + delta * (2.0 / 3.0);
-                    result = result.cubic_to(
-                        scale_control(from, handle1, factor),
-                        scale_control(to, handle2, factor),
-                        to,
-                    );
-                } else {
-                    result = result.line_to(to);
-                }
-                current = Some(to);
-            }
-            noon_core::PathCommand::QuadraticTo { control, to } => {
-                if let Some(from) = current {
-                    let handle1 = from + (control - from) * (2.0 / 3.0);
-                    let handle2 = to + (control - to) * (2.0 / 3.0);
-                    result = result.cubic_to(
-                        scale_control(from, handle1, factor),
-                        scale_control(to, handle2, factor),
-                        to,
-                    );
-                } else {
-                    result = result.quadratic_to(control, to);
-                }
-                current = Some(to);
-            }
-            noon_core::PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => {
-                if let Some(from) = current {
-                    result = result.cubic_to(
-                        scale_control(from, control1, factor),
-                        scale_control(to, control2, factor),
-                        to,
-                    );
-                } else {
-                    result = result.cubic_to(control1, control2, to);
-                }
-                current = Some(to);
-            }
-            noon_core::PathCommand::Close => {
-                if let (Some(from), Some(to)) = (current, subpath_start) {
-                    if from != to {
-                        let delta = to - from;
-                        let handle1 = from + delta * (1.0 / 3.0);
-                        let handle2 = from + delta * (2.0 / 3.0);
-                        result = result.cubic_to(
-                            scale_control(from, handle1, factor),
-                            scale_control(to, handle2, factor),
-                            to,
-                        );
-                    }
-                }
-                result = result.close();
-                current = subpath_start;
-            }
+    let mut points = manim_points_f64_for_path(path)?;
+    for curve in points.as_chunks_mut::<4>().0 {
+        for (anchor, handle) in [(0, 1), (3, 2)] {
+            curve[handle] = (
+                curve[anchor].0 + (curve[handle].0 - curve[anchor].0) * factor,
+                curve[anchor].1 + (curve[handle].1 - curve[anchor].1) * factor,
+            );
         }
     }
+    let mut result = VectorPath::from_manim_points_f64(points);
     if let Some(target) = path.morph_target() {
-        result = result.with_morph_target(scale_handle_distances(target, f64::from(factor))?);
+        result = result.with_morph_target(scale_handle_distances(target, factor)?);
     }
     if !result.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }
     Ok(result)
-}
-
-fn scale_control(anchor: Vec2, handle: Vec2, factor: f32) -> Vec2 {
-    anchor + (handle - anchor) * factor
 }
 
 pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringError> {
@@ -1991,11 +1929,22 @@ impl Mobject {
 
     /// Replace this path with the exact Manim-style world-space point array.
     pub fn set_points(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
-        self.edit_path(PathEdit::RawPoints(points))
+        self.set_points_f64(&promote_points(points))
     }
 
     /// Append to the exact Manim-style world-space point array.
     pub fn append_points(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.append_points_f64(&promote_points(points))
+    }
+
+    /// Replace raw world-space points at semantic precision, including an
+    /// incomplete cubic tail. Renderer coordinates are lowered explicitly.
+    pub fn set_points_f64(&mut self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::RawPoints(points))
+    }
+
+    /// Append raw coordinates without lowering the existing or incoming array.
+    pub fn append_points_f64(&mut self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::AppendRawPoints(points))
     }
 

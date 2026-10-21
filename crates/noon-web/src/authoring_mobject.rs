@@ -1292,6 +1292,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = vectorBoundaryPoints)]
+        pub fn vector_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .vector_boundary_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = mergedPoints)]
         pub fn merged_points(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;
@@ -2307,12 +2316,8 @@ mod wasm {
                 .flat_map(|(x, y)| [x, y])
                 .collect()
         }
-        pub fn anchors(&self) -> Vec<f64> {
-            self.value
-                .anchors()
-                .into_iter()
-                .flat_map(|(x, y)| [x, y])
-                .collect()
+        pub fn anchors(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.anchors().map(flat_points).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = pointFromProportion)]
@@ -2995,14 +3000,14 @@ mod wasm {
         /// Replace raw world-space points through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPoints)]
         pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.set_points(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle.set_points_f64(&points).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = appendPoints)]
         pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.append_points(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle.append_points_f64(&points).map_err(js_error)
         }
 
         /// Replace world-space corners through the shared semantic transaction.

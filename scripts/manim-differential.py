@@ -2680,6 +2680,29 @@ def _family_point_count_probe(api, scene=None):
     }
 
 
+def _vector_family_boundaries(api, scene=None):
+    rectangle = api.Rectangle(width=2, height=1).shift(api.LEFT * 2 + api.UP)
+    circle = api.Circle(radius=0.8).stretch(1.5, 0).shift(api.RIGHT * 3 - api.UP)
+    family = api.VGroup(api.VGroup(rectangle, circle), rectangle)
+    if scene is not None:
+        scene.add(rectangle, circle)
+
+    def observe():
+        return [_point_observation(point)
+                for point in family.get_points_defining_boundary()]
+
+    before = observe()
+    rectangle.shift(api.RIGHT * 2)
+    after = observe()
+    circle.get_anchors = lambda: [api.RIGHT * 9 + api.UP * 8]
+    custom_anchors = observe()
+    rectangle.n_points_per_cubic_curve = 2
+    custom_stride = observe()
+    empty = api.VGroup().get_points_defining_boundary()
+    return {"before": before, "after": after, "custom_anchors": custom_anchors,
+            "custom_stride": custom_stride, "empty_shape": list(empty.shape)}
+
+
 def _mobject_own_point_counts(api, scene=None):
     objects = [
         ("empty", api.Mobject()),
@@ -2700,6 +2723,88 @@ def _mobject_own_point_counts(api, scene=None):
         }
         for name, value in objects
     }
+
+
+def _raw_point_precision(api, scene=None):
+    delta = 2.0 ** -40
+    x, y = 1.0 + delta, -2.0 - 2.0 * delta
+    value = api.VMobject().set_points([
+        (x, y, 0.0), (x + 0.25, y + 0.5, 0.0),
+        (x + 0.5, y - 0.25, 0.0), (x + 1.0, y, 0.0),
+    ])
+    if scene is not None:
+        scene.add(value)
+
+    def observe(obj):
+        # Project planar components explicitly: array shape/dtype is a separate
+        # open contract. Hex values make sub-f32 differences observable.
+        return [[float(p[0]).hex(), float(p[1]).hex()]
+                for p in obj.get_all_points()]
+
+    result = {"initial": observe(value),
+              "start": [float(p).hex() for p in value.get_start()[:2]],
+              "forward_zero": [float(p).hex() for p in value.point_from_proportion(0.0)[:2]]}
+    value.scale_handle_to_anchor_distances(0.5)
+    result["scaled_handles"] = observe(value)
+    value.shift((2.0 ** -42, -0.5, 0.0))
+    result["shifted"] = observe(value)
+    value.append_points([(3.0 + 2.0 ** -39, 4.0, 0.0)])
+    result["appended"] = observe(value)
+    value.reverse_points()
+    result["reversed"] = observe(value)
+    value.repeat(2)
+    result["repeated"] = observe(value)
+    result["copy"] = observe(value.copy())
+    short = api.VMobject().set_points([(1.0 + i * delta, 2.0, 0.0) for i in range(4)])
+    if scene is not None:
+        scene.add(short)
+    result["short_curve"] = {
+        "points": observe(short),
+        "half": [float(p).hex() for p in short.point_from_proportion(0.5)[:2]],
+        # Normalize by the curve size: the normal scalar comparison budget
+        # remains meaningful below one renderer-coordinate ULP.
+        "length_in_deltas": float(short.get_arc_length()) / delta,
+    }
+    return result
+
+
+def _raw_point_layout(api, scene=None):
+    delta = 2.0 ** -40
+    result = []
+
+    def rows(points):
+        return [[float(p[0]).hex(), float(p[1]).hex()] for p in points]
+
+    def observed(function, convert):
+        try:
+            return convert(function())
+        except ValueError as error:
+            return {"exception": "ValueError", "message": str(error)}
+
+    for count in range(10):
+        value = api.VMobject().set_points([(1.0 + i * delta, i * delta, 0.0) for i in range(count)])
+        if scene is not None:
+            scene.add(value)
+        family = api.VGroup(value)
+        result.append({
+            "count": count,
+            "width": float(value.width).hex(),
+            "height": float(value.height).hex(),
+            "family_dimensions": [float(family.width).hex(), float(family.height).hex()],
+            "center": observed(value.get_center, lambda point: [float(p).hex() for p in point[:2]]),
+            "critical": observed(lambda: value.get_critical_point((1, 0, 0)), lambda point: [float(p).hex() for p in point[:2]]),
+            "anchors": observed(value.get_anchors, lambda points: {"type": type(points).__name__, "points": rows(points)}),
+            "columns": [rows(column) for column in value.get_anchors_and_handles()],
+        })
+    single = api.VMobject().set_points([(1.0 + delta, -delta, 0.0)])
+    if scene is not None:
+        scene.add(single)
+    singleton = []
+    for stride in (4, 0, -2, 3.5, None):
+        single.n_points_per_cubic_curve = stride
+        anchors = single.get_anchors()
+        singleton.append({"type": type(anchors).__name__, "points": rows(anchors)})
+    return {"prefixes": result, "singleton_strides": singleton}
 
 
 def _cubic_tuple_groups(api):
@@ -6059,11 +6164,26 @@ FIXTURES = [
     Fixture("family_point_counts_live",
             lambda: _noon_live_scene_probe(lambda scene: _family_point_count_probe(noon, scene)),
             lambda: _family_point_count_probe(manim)),
+    Fixture("vector_family_boundaries", lambda: _vector_family_boundaries(noon),
+            lambda: _vector_family_boundaries(manim), 2e-6),
+    Fixture("vector_family_boundaries_live",
+            lambda: _noon_live_scene_probe(lambda scene: _vector_family_boundaries(noon, scene)),
+            lambda: _vector_family_boundaries(manim), 2e-6),
     Fixture("mobject_own_point_counts", lambda: _mobject_own_point_counts(noon),
             lambda: _mobject_own_point_counts(manim), 0.0),
     Fixture("mobject_own_point_counts_live",
             lambda: _noon_live_scene_probe(lambda scene: _mobject_own_point_counts(noon, scene)),
             lambda: _mobject_own_point_counts(manim), 0.0),
+    Fixture("raw_point_precision", lambda: _raw_point_precision(noon),
+            lambda: _raw_point_precision(manim), 1e-6),
+    Fixture("raw_point_precision_live",
+            lambda: _noon_live_scene_probe(lambda scene: _raw_point_precision(noon, scene)),
+            lambda: _raw_point_precision(manim), 1e-6),
+    Fixture("raw_point_layout", lambda: _raw_point_layout(noon),
+            lambda: _raw_point_layout(manim), 0.0),
+    Fixture("raw_point_layout_live",
+            lambda: _noon_live_scene_probe(lambda scene: _raw_point_layout(noon, scene)),
+            lambda: _raw_point_layout(manim), 0.0),
     Fixture("cubic_tuple_groups", lambda: _cubic_tuple_groups(noon), lambda: _cubic_tuple_groups(manim)),
     Fixture("proportion_from_point", lambda: _proportion_from_point(noon), lambda: _proportion_from_point(manim)),
     Fixture("inverse_endpoint_parameters", lambda: _inverse_endpoint_parameters(noon),

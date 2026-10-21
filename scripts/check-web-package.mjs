@@ -50,6 +50,8 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringVectorPath",
   "proportionFromPointForRanges(",
   "queryMobjectPointCount(",
+  "vectorBoundaryPoints(",
+  "queryFamilyVectorBoundaryPoints(",
   "get pointCount()",
   "createManimGeometry(",
   "beginUnderline(",
@@ -98,6 +100,7 @@ const expectedJavascriptSurface = [
   "liveAddLineToWithSamples(",
   "export class WasmMobjectLayoutObservation",
   "queryMobjectLayout(",
+  "queryMobjectDimension(",
   "queryMobjectPointReductionTree(",
   "wasmauthoringmobjecthandle_pointReductionTree(",
   "resumeExecutionPlayer(",
@@ -312,6 +315,7 @@ const expectedTypeSurface = [
   "liveAlignFamilyToMobject(",
   "liveAlignFamilyToFamily(",
   "queryMobjectLayout(handle: WasmAuthoringMobjectHandle): WasmMobjectLayoutObservation",
+  "queryMobjectDimension(handle: WasmAuthoringMobjectHandle, dimension: number): number",
   "queryMobjectPointReductionTree(handle: WasmAuthoringMobjectHandle): Array<any>",
   "manimLineEndpoints(): WasmManimLineEndpoints",
   "manimColor(): WasmManimColor",
@@ -439,6 +443,7 @@ const expectedTypeSurface = [
   "localPathQuery(): WasmPathQuery",
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
   "queryMobjectPointCount(handle: WasmAuthoringMobjectHandle): number",
+  "queryFamilyVectorBoundaryPoints(handle: WasmAuthoringFamilyHandle): Float64Array",
   "pointFromProportion(alpha: number): Float64Array",
   "proportionFromPointForRanges(ranges: Uint32Array, x: number, y: number, z: number): number | undefined",
   "liveCopyFamily(source: WasmAuthoringFamilyHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
@@ -696,6 +701,9 @@ function classDeclaration(name) {
   return declarations.slice(start, next < 0 ? undefined : next);
 }
 const geometryOptionsDeclaration = classDeclaration("WasmManimGeometryOptions");
+if (!classDeclaration("WasmAuthoringFamilyHandle").includes("vectorBoundaryPoints(): Float64Array;")) {
+  throw new Error("WASM family declaration is missing its shared vector-boundary observation");
+}
 if (!classDeclaration("WasmAuthoringMobjectHandle").includes("readonly pointCount: number;")) {
   throw new Error("WASM Mobject declaration is missing its own-point scalar observation");
 }

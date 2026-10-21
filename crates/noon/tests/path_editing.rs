@@ -130,7 +130,10 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
                 &mut execution,
                 noon::integration::BorrowedPathEdit::RawPoints {
                     object: &object,
-                    points: &initial,
+                    points: &initial
+                        .iter()
+                        .map(|p| (p.x as f64, p.y as f64))
+                        .collect::<Vec<_>>(),
                 },
             )
             .unwrap();
@@ -160,7 +163,10 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
                 &mut execution,
                 noon::integration::BorrowedPathEdit::AppendRawPoints {
                     object: &object,
-                    points: &appended,
+                    points: &appended
+                        .iter()
+                        .map(|p| (p.x as f64, p.y as f64))
+                        .collect::<Vec<_>>(),
                 },
             )
             .unwrap();

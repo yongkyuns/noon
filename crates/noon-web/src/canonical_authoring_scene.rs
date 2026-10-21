@@ -902,6 +902,21 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_dimension(
+        &mut self,
+        handle: &noon::Mobject,
+        dimension: noon::LayoutDimension,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
+            |player, handle| {
+                player.live_layout_dimension_length(&noon::LayoutAnchor::from(handle), dimension)
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&mut self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
         self.mobject_observation(
             handle,
@@ -1096,11 +1111,16 @@ impl CanonicalAuthoringScene {
         target.all_points().map_err(AuthoringFailure::from)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn family_point_reduction_tree(
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_observation<T>(
         &mut self,
         family: &noon::MobjectFamily,
-    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        authored: impl FnOnce(noon::MobjectTarget<'_>) -> Result<T, noon::AuthoringError>,
+        effective: impl FnOnce(
+            &mut crate::SemanticExecutionPlayer,
+            noon::MobjectTarget<'_>,
+        ) -> Result<T, AuthoringFailure>,
+    ) -> Result<T, AuthoringFailure> {
         if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
@@ -1110,12 +1130,34 @@ impl CanonicalAuthoringScene {
             .map_err(AuthoringFailure::from)?;
         if !self.returned_player_is_stale() {
             if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_point_reduction_tree(target);
+                return effective(player, target);
             }
         }
-        target
-            .point_reduction_tree()
-            .map_err(AuthoringFailure::from)
+        authored(target).map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_point_reduction_tree(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.point_reduction_tree(),
+            crate::SemanticExecutionPlayer::live_effective_point_reduction_tree,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_vector_boundary_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.vector_boundary_points(),
+            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points,
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -7264,6 +7306,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectDimension)]
+        pub fn query_mobject_dimension(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dimension: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_dimension(
+                    handle.semantic_mobject(),
+                    dimension.try_into().map_err(typed_js_error)?,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLayout)]
         pub fn query_mobject_layout(
             &mut self,
@@ -7309,6 +7365,17 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             self.inner
                 .family_all_points(&handle.semantic_family()?)
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyVectorBoundaryPoints)]
+        pub fn query_family_vector_boundary_points(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_vector_boundary_points(&handle.semantic_family()?)
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(typed_js_error)
         }
@@ -8372,7 +8439,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8386,7 +8453,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -14153,6 +14220,75 @@ mod tests {
             )
             .is_err());
         assert!(context.player_ownership.is_unstarted());
+    }
+
+    #[test]
+    fn vector_family_points_use_live_leaves_without_requiring_root_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let family = context.scene.family(&[(&circle).into()]).unwrap();
+        let empty = context.scene.family(&[]).unwrap();
+        let authored = context.family_vector_boundary_points(&family).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        assert!(!context.identities.contains_key(&family.node_id()));
+        let animation = context
+            .declare_live_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        {
+            let player = context.live_player(2.0).unwrap();
+            player.live_play_animation(&animation).unwrap();
+            player.live_advance_segment_to(1.0).unwrap();
+        }
+        let observed = context.family_vector_boundary_points(&family).unwrap();
+        assert_eq!(observed.len(), authored.len());
+        for (actual, expected) in observed.into_iter().zip(authored) {
+            assert!((actual.0 - expected.0 - 2.0).abs() < 1e-6);
+            assert!((actual.1 - expected.1 + 1.0).abs() < 1e-6);
+        }
+        assert!(context
+            .family_vector_boundary_points(&empty)
+            .unwrap()
+            .is_empty());
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.family(&[]).unwrap();
+        assert!(context.family_vector_boundary_points(&foreign).is_err());
+        let player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context.family_vector_boundary_points(&family).is_err());
+        assert!(context.family_vector_boundary_points(&empty).is_err());
+        drop(player);
+    }
+
+    #[test]
+    fn incomplete_path_dimensions_validate_the_owner_without_querying_anchors() {
+        use noon::LayoutDimension::{Height, Width};
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context
+            .scene
+            .path(
+                noon_core::VectorPath::from_manim_points_f64(vec![(1.0, -2.0), (4.0, 5.0)]),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.bind_mobject(ObjectId::new(0), &object).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        context.live_player(1.0).unwrap();
+        assert!(context.mobject_layout(&object).is_err());
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
     }
 
     #[test]

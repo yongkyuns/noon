@@ -322,6 +322,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                         raise RuntimeError("live execution session is running in the semantic engine")
                     return EffectiveLayout()
 
+                def queryMobjectDimension(self, queried, dimension):
+                    self.queries.append(queried)
+                    if self.transferred:
+                        raise RuntimeError("live execution session is running in the semantic engine")
+                    return (6.0, 4.0)[dimension]
+
             context = CanonicalContext()
             scene._canonical_authoring_context = context
             assert square.get_center() == (2.5, -1.5)

@@ -80,9 +80,9 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
     assert_eq!(tree.flattened_points(), expected_points);
     let expected_anchors = parent
         .path_query()?
-        .anchors()
+        .anchors()?
         .into_iter()
-        .chain(child.path_query()?.anchors())
+        .chain(child.path_query()?.anchors()?)
         .collect::<Vec<_>>();
     assert_eq!(target.vector_boundary_points()?, expected_anchors);
     assert_eq!(

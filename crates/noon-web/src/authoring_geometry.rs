@@ -446,6 +446,22 @@ pub(crate) fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
     Ok(Vec2::new(value.x as f32, value.y as f32))
 }
 
+pub(crate) fn points_f64(values: &[f64]) -> Result<Vec<(f64, f64)>, JsValue> {
+    if values.len() % 2 != 0 {
+        return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+            values.len(),
+        )));
+    }
+    values
+        .chunks_exact(2)
+        .map(|pair| {
+            noon::integration::authoring_xy_f64(pair[0], pair[1])
+                .map(|point| (point.x, point.y))
+                .map_err(js_error)
+        })
+        .collect()
+}
+
 pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
     if values.len() % 2 != 0 {
         return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(

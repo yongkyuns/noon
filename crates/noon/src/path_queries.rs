@@ -24,8 +24,8 @@ pub struct PathQuery {
     /// an unfinished subpath and the next MoveTo.
     manim_points: Vec<(f64, f64)>,
     transform: SemanticTransform2_5D,
-    endpoints: Option<(noon_core::Vec2, noon_core::Vec2)>,
-    unfinished_anchor: Option<noon_core::Vec2>,
+    endpoints: Option<((f64, f64), (f64, f64))>,
+    unfinished_anchor: Option<(f64, f64)>,
 }
 
 /// A recursive snapshot of owned planar points in Manim family order.
@@ -71,23 +71,27 @@ impl PathQuery {
             };
         let raw_points = path.manim_points();
         let manim_points = match raw_points {
-            Some(points) => points
-                .iter()
-                .map(|point| (f64::from(point.x), f64::from(point.y)))
-                .collect(),
+            Some(points) => points.to_vec(),
             None => manim_points(path, plan.as_ref())?,
         };
         let endpoints = raw_points
             .and_then(|points| points.first().zip(points.last()))
             .map(|(first, last)| (*first, *last))
-            .or_else(|| path.endpoints());
+            .or_else(|| {
+                path.endpoints()
+                    .map(|(a, b)| ((a.x as f64, a.y as f64), (b.x as f64, b.y as f64)))
+            });
         Ok(Self {
             manim_points,
             plan,
             transform,
             endpoints,
             unfinished_anchor: match path.commands().last() {
-                Some(noon_core::PathCommand::MoveTo { to }) => Some(*to),
+                Some(noon_core::PathCommand::MoveTo { to }) => Some(
+                    raw_points
+                        .and_then(|points| points.get(points.len() / 4 * 4).copied())
+                        .unwrap_or((to.x as f64, to.y as f64)),
+                ),
                 _ => None,
             },
         })
@@ -199,10 +203,17 @@ impl PathQuery {
             return Ok(Vec::new());
         }
         let mut pieces = Vec::with_capacity(sample_points - 1);
-        let denominator = (sample_points - 1) as f64;
+        let step = 1.0 / (sample_points - 1) as f64;
         let mut previous = evaluate_bezier_points(&controls, 0.0);
         for sample in 1..sample_points {
-            let current = evaluate_bezier_points(&controls, sample as f64 / denominator);
+            let current = evaluate_bezier_points(
+                &controls,
+                if sample + 1 == sample_points {
+                    1.0
+                } else {
+                    sample as f64 * step
+                },
+            );
             pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
             previous = current;
         }
@@ -242,9 +253,13 @@ impl PathQuery {
         }
         let mut pieces = Vec::with_capacity(sample_points - 1);
         let mut previous = controls[0];
-        let denominator = (sample_points - 1) as f64;
+        let step = 1.0 / (sample_points - 1) as f64;
         for sample in 1..sample_points {
-            let t = sample as f64 / denominator;
+            let t = if sample + 1 == sample_points {
+                1.0
+            } else {
+                sample as f64 * step
+            };
             let current = evaluate_cubic(controls, t);
             pieces.push((current.0 - previous.0).hypot(current.1 - previous.1));
             previous = current;
@@ -265,15 +280,12 @@ impl PathQuery {
     }
 
     fn curve_column(&self, column: usize) -> Vec<(f64, f64)> {
-        let mut points = (0..self.curve_count())
-            .map(|index| self.curve_points(index).expect("known curve index")[column])
-            .collect::<Vec<_>>();
-        if column == 0 {
-            if let Some(point) = self.unfinished_anchor {
-                points.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
-            }
-        }
-        points
+        self.manim_points
+            .iter()
+            .skip(column)
+            .step_by(4)
+            .map(|&(x, y)| self.transform_point(x, y))
+            .collect()
     }
 
     pub fn start_anchors(&self) -> Vec<(f64, f64)> {
@@ -336,25 +348,25 @@ impl PathQuery {
         self.curve_column(3)
     }
 
-    /// Start anchors, first handles, second handles and end anchors. An
-    /// unfinished subpath contributes only to the start-anchor column.
+    /// Start anchors, first handles, second handles and end anchors. Each
+    /// column retains its raw stride slice, including incomplete controls.
     pub fn anchors_and_handles(&self) -> [Vec<(f64, f64)>; 4] {
         std::array::from_fn(|column| self.curve_column(column))
     }
 
-    /// Ordered start/end anchors, followed by any unfinished starting anchor.
-    pub fn anchors(&self) -> Vec<(f64, f64)> {
-        let mut anchors = Vec::with_capacity(
-            self.curve_count() * 2 + usize::from(self.unfinished_anchor.is_some()),
-        );
-        for index in 0..self.curve_count() {
-            let points = self.curve_points(index).expect("known curve index");
-            anchors.extend([points[0], points[3]]);
-        }
-        if let Some(point) = self.unfinished_anchor {
-            anchors.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
-        }
-        anchors
+    /// Manim's ordered start/end anchors. A singleton remains one anchor;
+    /// unmatched rows fail rather than inventing a boundary for a pending curve.
+    pub fn anchors(&self) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        noon_geometry::manim_anchor_indices(self.manim_points.len())
+            .map_err(AuthoringError::PathQuery)
+            .map(|indices| {
+                indices
+                    .map(|index| {
+                        let (x, y) = self.manim_points[index];
+                        self.transform_point(x, y)
+                    })
+                    .collect()
+            })
     }
 
     /// ManimCE's flattened cubic point array, including any padded subpaths.
@@ -409,7 +421,7 @@ impl PathQuery {
             run.extend(points);
         }
         if let Some(point) = self.unfinished_anchor {
-            let point = self.transform_point(f64::from(point.x), f64::from(point.y));
+            let point = self.transform_point(point.0, point.1);
             if run.last().is_some_and(|last| points_coincide(*last, point)) {
                 run.push(point);
             }
@@ -502,7 +514,7 @@ impl PathQuery {
             .endpoints
             .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
         let point = if end { last } else { first };
-        Ok(self.transform_point(f64::from(point.x), f64::from(point.y)))
+        Ok(self.transform_point(point.0, point.1))
     }
 
     /// Ten samples per curve by default, matching Manim's path query measure.
@@ -565,17 +577,11 @@ pub(crate) fn points_coincide(left: (f64, f64), right: (f64, f64)) -> bool {
 }
 
 fn evaluate_cubic(controls: [(f64, f64); 4], t: f64) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * u * controls[0].0
-            + 3.0 * u * u * t * controls[1].0
-            + 3.0 * u * t * t * controls[2].0
-            + t * t * t * controls[3].0,
-        u * u * u * controls[0].1
-            + 3.0 * u * u * t * controls[1].1
-            + 3.0 * u * t * t * controls[2].1
-            + t * t * t * controls[3].1,
-    )
+    let point = noon_geometry::cubic_bezier_point_f64(
+        controls.map(|(x, y)| noon_core::SemanticVec3::new(x, y, 0.0)),
+        t,
+    );
+    (point.x, point.y)
 }
 
 fn evaluate_bezier_points(controls: &[(f64, f64)], t: f64) -> (f64, f64) {
@@ -1008,7 +1014,7 @@ impl FamilyPointObservation {
     fn points(self, query: &PathQuery) -> Result<Vec<(f64, f64)>, AuthoringError> {
         match self {
             Self::RecursivePoints => query.points(),
-            Self::VectorBoundary => Ok(query.anchors()),
+            Self::VectorBoundary => query.anchors(),
         }
     }
 }
@@ -1205,6 +1211,9 @@ pub fn effective_point_reduction_tree(
         return Err(AuthoringError::ForeignStore);
     }
     target.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
     let topology = {
         let semantics = store.borrow();
         point_reduction_topology(&semantics, target.node_id())?
@@ -1256,6 +1265,9 @@ fn effective_point_observation(
         return Err(AuthoringError::ForeignStore);
     }
     target.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
     let occurrences = observation.nodes(&store.borrow(), target.node_id())?;
     let mut result = Vec::new();
     for id in occurrences {

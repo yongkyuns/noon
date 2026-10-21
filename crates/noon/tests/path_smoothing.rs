@@ -16,7 +16,7 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         source.shift(2., 3.).unwrap();
         let before = source.state().unwrap();
         let id = source.node_id();
-        let anchors = source.path_query().unwrap().anchors();
+        let anchors = source.path_query().unwrap().anchors().unwrap();
         let copy = source.copy_handle().unwrap();
         let copy_before = copy.state().unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -36,7 +36,7 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         }
         assert_eq!(source.node_id(), id);
         assert_eq!(source.state().unwrap().style, before.style);
-        assert_eq!(source.path_query().unwrap().anchors(), anchors);
+        assert_eq!(source.path_query().unwrap().anchors().unwrap(), anchors);
         assert_eq!(copy.state().unwrap(), copy_before);
         assert_ne!(source.state().unwrap().content, before.content);
         if live_mode {

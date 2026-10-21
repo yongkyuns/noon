@@ -194,7 +194,7 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
-def _bound_layout_observation(value: _base.Mobject):
+def _bound_layout_observation(value: _base.Mobject, method="queryMobjectLayout", *arguments):
     """Ask the owning Rust context for one coherent ordinary live observation."""
 
     if (
@@ -206,8 +206,8 @@ def _bound_layout_observation(value: _base.Mobject):
     if handle is None:
         return None
     context = getattr(value._scene, "_canonical_authoring_context", None)
-    query = getattr(context, "queryMobjectLayout", None)
-    return None if query is None else engine_call(query, handle)
+    query = getattr(context, method, None)
+    return None if query is None else engine_call(query, handle, *arguments)
 
 
 _CONSTRUCTOR_MISSING = object()
@@ -739,28 +739,28 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     return _critical(self, axis)
 
 
-def _width(self: _base.Mobject) -> float:
+def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
+    """Read Rust content extents without asking for vector boundary anchors."""
     if _is_shared_family(self):
-        return float(_group_layout_observation(self).width)
-    observed = _bound_layout_observation(self)
+        anchor = _layout_anchor(self)
+        if anchor is None:
+            raise RuntimeError("family layout requires a current shared Rust semantic handle")
+        return float(_dimension_fit_extent(anchor, _group_live_layout_context(self), dimension))
+    observed = _bound_layout_observation(self, "queryMobjectDimension", dimension)
     if observed is not None:
-        return float(observed.width)
+        return float(observed)
     handle = _handle_for(self)
     if handle is not None:
-        return float(handle.width)
+        return float(handle.width if dimension == 0 else handle.height)
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+
+
+def _width(self: _base.Mobject) -> float:
+    return _layout_dimension(self, 0)
 
 
 def _height(self: _base.Mobject) -> float:
-    if _is_shared_family(self):
-        return float(_group_layout_observation(self).height)
-    observed = _bound_layout_observation(self)
-    if observed is not None:
-        return float(observed.height)
-    handle = _handle_for(self)
-    if handle is not None:
-        return float(handle.height)
-    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+    return _layout_dimension(self, 1)
 
 
 def _set_width_property(self: _base.Mobject, width: float) -> None:
@@ -2820,6 +2820,10 @@ def _boundary_point_observation(
     )
 
 
+def _vector_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "VectorBoundaryPoints")
+
+
 def _path_boundary_points_observation(value: _base.Mobject):
     return _point_query_observation(value, "PathBoundaryPoints")
 
@@ -2991,16 +2995,21 @@ def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
     if handle is None:
         raise RuntimeError("get_family requires a shared Rust semantic handle")
     keys = [str(key) for key in engine_call(handle.familyKeys)]
+    selected = set(keys)
     wrappers = {}
     pending = [self]
     while pending:
         wrapper = pending.pop()
         key = _family_wrapper_key(wrapper)
-        if key in wrappers:
+        if key not in selected or key in wrappers:
             continue
         wrappers[key] = wrapper
         if _is_shared_family(wrapper):
             pending.extend(wrapper.submobjects)
+        else:
+            pending.extend(member for member_key, member in
+                           getattr(wrapper, "_semantic_member_wrappers", {}).items()
+                           if str(member_key) in selected)
     try:
         return [wrappers[key] for key in keys]
     except KeyError as error:
