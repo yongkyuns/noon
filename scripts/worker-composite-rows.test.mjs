@@ -22,11 +22,17 @@ class WasmCompositeRows {
     this.rows.at(-1).push({ kind: "family", entry });
   }
 }
-const start = workerSource.indexOf("  const compositeRows = (rows) => {");
+const start = workerSource.indexOf("  const isFamilyHandle = (handle) =>");
 const end = workerSource.indexOf("\n  self.noonTableOptions =", start);
 assert.ok(start >= 0 && end > start, "exercise the production worker table-entry boundary");
+const host = {};
 const compositeRows = vm.runInNewContext(workerSource.slice(start, end) + "\ncompositeRows;", {
-  WasmCompositeRows, WasmAuthoringFamilyHandle,
+  WasmCompositeRows, WasmAuthoringFamilyHandle, self: host,
+});
+
+test("Python and JavaScript share the same typed handle-kind probe", () => {
+  assert.equal(host.noonIsAuthoringFamilyHandle(new WasmAuthoringMobjectHandle(2)), false);
+  assert.equal(host.noonIsAuthoringFamilyHandle(new WasmAuthoringFamilyHandle(0)), true);
 });
 
 test("ordinary objects remain object entries after gaining member queries", () => {

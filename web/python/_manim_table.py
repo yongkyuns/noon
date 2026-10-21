@@ -16,6 +16,11 @@ from _manim_semantic_handles import (
 )
 
 try:
+    from js import noonIsAuthoringFamilyHandle as _is_family_handle
+except ImportError:
+    _is_family_handle = None
+
+try:
     from js import noonCreateAuthoringTableHandle as _create_table
     from js import noonCreateAuthoringMathTableHandle as _create_math_table
     from js import noonCreateAuthoringIntegerTableHandle as _create_integer_table
@@ -318,7 +323,7 @@ class Table(_compat.VGroup):
         if wrapper is not None:
             return wrapper
         context = getattr(self, "_canonical_live_target_context", None)
-        if hasattr(handle, "memberKeys"):
+        if engine_call(_is_family_handle, handle):
             wrapper = object.__new__(_compat.VGroup)
             _attach_shared_family(wrapper, handle, context)
         else:
