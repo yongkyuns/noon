@@ -77,6 +77,7 @@ impl CompositeEntry {
     pub(crate) fn leaves(&self) -> &[(Mobject, SemanticObjectState)] {
         &self.leaves
     }
+    #[cfg(any(feature = "latex", test))]
     pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
         self.measured_bounds(false)
     }
@@ -118,7 +119,7 @@ impl CompositeEntry {
 /// The shared topology and overlap check, parameterized by the ownership-aware
 /// state capture boundary.  Table and matrix admission use their owning Scene
 /// or LiveSession here so Scene-owned execution observes effective placement.
-#[cfg(any(feature = "native-text", feature = "latex", test))]
+#[cfg(any(feature = "latex", test))]
 pub(crate) fn capture_entries_with(
     store: &Rc<RefCell<SemanticStore>>,
     entries: &[MobjectTarget<'_>],
