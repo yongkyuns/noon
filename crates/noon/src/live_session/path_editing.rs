@@ -2,6 +2,34 @@ use super::*;
 use crate::path_editing::publish_running_path_edits;
 
 impl LiveSession<'_> {
+    /// Replace a family's own raw points through this coherent live publication.
+    /// Its identity, children, style and drawing intent remain authoritative.
+    pub fn set_family_points_f64(
+        &mut self,
+        family: &MobjectFamily,
+        points: &[(f64, f64)],
+    ) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_family_points(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            points,
+        )?;
+        Ok(())
+    }
+
+    /// Clear only a family's own points, retaining its children and identity.
+    pub fn clear_family_points(&mut self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_clear_family_points(
+            self.store,
+            self.root,
+            self.session,
+            family,
+        )?;
+        Ok(())
+    }
+
     /// Apply a pointwise matrix through the same coherent path-edit publication
     /// used by cold authoring. Detached live target editors therefore remain
     /// runtime-local until their later Transform activation consumes them.

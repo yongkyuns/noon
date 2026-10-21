@@ -519,34 +519,6 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
-    /// Replace a family's own raw points through this coherent live publication.
-    /// Its identity, children, style and drawing intent remain authoritative.
-    pub fn set_family_points_f64(
-        &mut self,
-        family: &MobjectFamily,
-        points: &[(f64, f64)],
-    ) -> Result<(), LiveSessionError> {
-        crate::family_points::publish_family_points(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            points,
-        )?;
-        Ok(())
-    }
-
-    /// Clear only a family's own points, retaining its children and identity.
-    pub fn clear_family_points(&mut self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
-        crate::family_points::publish_clear_family_points(
-            self.store,
-            self.root,
-            self.session,
-            family,
-        )?;
-        Ok(())
-    }
-
     /// Configure the semantic objects that may acquire the session-owned
     /// translation-drag lease. The platform still supplies only typed pointer
     /// occurrences; it never chooses an object identity per event.
