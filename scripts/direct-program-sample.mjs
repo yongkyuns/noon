@@ -1,4 +1,17 @@
 // External browser qualification helper over the normal direct host clock.
+export async function sampleDirectProgramThrough(renderer, time, boundaries = []) {
+  const current = renderer.time();
+  if (!Number.isFinite(time) || time < current) {
+    throw new Error("live program samples require a finite monotonic time");
+  }
+  const times = [...new Set([
+    ...boundaries.filter(boundary => boundary > current && boundary < time), time,
+  ])].sort((a, b) => a - b);
+  let sample;
+  for (const checkpoint of times) sample = await sampleDirectProgram(renderer, checkpoint);
+  return sample;
+}
+
 export async function sampleDirectProgram(renderer, time) {
   let wallTimeMs = time * 1000;
   if (time > 0) renderer.advanceDirectRealtime(wallTimeMs);

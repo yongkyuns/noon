@@ -1105,21 +1105,23 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Publish one atomic batch of direct family additions.
-    pub fn add_family_members(
+    pub fn add_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
+        let family = family.into();
         self.edit_family_members(family, members, true)
     }
 
     /// Move the unique incoming direct members to the front of one live family.
-    pub fn prepend_family_members(
+    pub fn prepend_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<(), LiveSessionError> {
-        self.require_family(family)?;
+        let family = family.into();
+        self.require_membership_root(family)?;
         let transaction = crate::family_authoring::family_prepend_transaction(family, members)
             .map_err(LiveSessionError::from)?;
         if !transaction.mutations().is_empty() {
@@ -1129,13 +1131,14 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Insert or reposition one direct family member through one live commit.
-    pub fn insert_family_member(
+    pub fn insert_family_member<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         index: usize,
         member: MobjectTarget<'_>,
     ) -> Result<(), LiveSessionError> {
-        self.require_family(family)?;
+        let family = family.into();
+        self.require_membership_root(family)?;
         let transaction = crate::family_authoring::family_insert_transaction(family, index, member)
             .map_err(LiveSessionError::from)?;
         if !transaction.mutations().is_empty() {
@@ -1159,21 +1162,22 @@ impl<'a> LiveSession<'a> {
         Ok(())
     }
 
-    pub fn remove_family_members(
+    pub fn remove_family_members<'root>(
         &mut self,
-        family: &MobjectFamily,
+        family: impl Into<MobjectTarget<'root>>,
         members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
+        let family = family.into();
         self.edit_family_members(family, members, false)
     }
 
     fn edit_family_members(
         &mut self,
-        family: &MobjectFamily,
+        family: MobjectTarget<'_>,
         members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, LiveSessionError> {
-        self.require_family(family)?;
+        self.require_membership_root(family)?;
         let (transaction, changed) =
             crate::family_authoring::family_membership_transaction(family, members, adding)
                 .map_err(LiveSessionError::from)?;
@@ -3627,6 +3631,25 @@ impl<'a> LiveSession<'a> {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(Into::into)
+    }
+
+    fn require_membership_root(&self, root: MobjectTarget<'_>) -> Result<(), LiveSessionError> {
+        match root {
+            MobjectTarget::Object(object) => self.require_mobject(object),
+            MobjectTarget::Family(family) => self.require_family(family),
+        }
+    }
+
+    /// Replace an object or family's children through one coherent live publication.
+    pub fn replace_members(
+        &mut self,
+        root: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<(), LiveSessionError> {
+        self.require_membership_root(root)?;
+        let transaction = crate::object_membership::replace_members_transaction(root, members)?;
+        self.apply(transaction)?;
+        Ok(())
     }
 
     pub(crate) fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {

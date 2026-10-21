@@ -80,12 +80,14 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/shared-authoring-smoke.mjs
   node --check scripts/shared-authoring-pyodide-contract.mjs
   node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/object-membership-qualification.mjs
   node --test scripts/manim-family-points-reference.test.mjs
   node --check scripts/family-root-points-qualification.mjs
   node --check scripts/family-member-queries-qualification.mjs
   node --test scripts/manim-family-iteration-reference.test.mjs
   node --test scripts/manim-family-slices-reference.test.mjs
   node --test scripts/manim-object-queries-reference.test.mjs
+  node --test scripts/manim-object-members-reference.test.mjs
   node --test scripts/manim-query-hooks-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
@@ -108,6 +110,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/pr-risk-classifier.mjs
   node --test scripts/build-runtime-identity.test.mjs
   node --test scripts/pyodide-resource-cache.test.mjs
+  node --test scripts/direct-program-sample.test.mjs
   node --test scripts/playground-cold-start-memory.test.mjs
   node --test scripts/webgpu-device-capture.test.mjs
   node --test scripts/manim-raster-support.test.mjs

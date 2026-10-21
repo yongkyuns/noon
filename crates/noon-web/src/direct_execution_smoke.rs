@@ -1108,6 +1108,15 @@ pub async fn create_direct_style_operations_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Public ordinary-object edits/copies use the same native scene and renderer.
+#[wasm_bindgen(js_name = createDirectObjectMembershipQueriesRenderer)]
+pub async fn create_direct_object_membership_queries_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::object_membership_queries::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Shared authored/live membership ordering reaches the normal direct renderer.
 #[wasm_bindgen(js_name = createDirectFamilyMembershipOrderSmokeRenderer)]
 pub async fn create_direct_family_membership_order_smoke_renderer(

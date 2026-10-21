@@ -830,6 +830,26 @@
       }
     },
     {
+      "id": "object-membership-copy-worker",
+      "scene": "ObjectMembers",
+      "source": "parity/manim-v0.21/core-examples/object_membership_copy.py",
+      "noon_source": "web/python/examples/manim_parity_object_members.py",
+      "expected_duration": 0.5,
+      "sample_times": [
+        0.125,
+        0.375,
+        0.5
+      ],
+      "stop_at_source_completion": true,
+      "notes": "Ordinary-object live membership before and after replacement/copy, plus the original completed endpoint. The same Rust continuation feeds native and direct Rust/WASM rendering. The public Python source differs from canonical CE only in import and async/wait syntax. Broader arbitrary structural seek/replay remains a separate obligation.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      },
+      "reference_frame_rate": 8
+    },
+    {
       "id": "family-membership-order",
       "scene": "OrdinaryFamilyMembershipOrder",
       "source": "parity/manim-v0.21/core-examples/family_membership_order.py",
