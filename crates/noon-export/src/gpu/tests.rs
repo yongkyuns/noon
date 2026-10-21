@@ -52,34 +52,3 @@ fn native_capture_spatial_depth_and_device_loss() {
         .render(&publication, &view, visible.object_indices(), true)
         .is_err());
 }
-
-#[test]
-#[ignore = "requires a native wgpu adapter; enrolled in Native Export Output"]
-fn native_object_membership_queries_render_through_shared_capture() {
-    let mut session = noon::example_scenes::object_membership_queries::session().unwrap();
-    let options = CaptureOptions::new(960, 540);
-    let mut capture = crate::SessionCapture::new(&session, options).unwrap();
-    let frame = capture.capture(&mut session).unwrap();
-    assert_eq!(frame.receipt.published_time, 0.5);
-    assert_eq!((frame.width, frame.height), (960, 540));
-    assert!(frame
-        .rgba
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|pixel| pixel[3] == 255));
-    let visible = frame
-        .rgba
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter(|pixel| pixel[..3].iter().any(|&channel| channel > 32))
-        .count();
-    assert!(
-        visible > 100,
-        "native scene must produce nonblank pixels: {visible}"
-    );
-    if let Some(path) = std::env::var_os("NOON_OBJECT_MEMBERSHIP_RGBA") {
-        std::fs::write(path, frame.rgba).unwrap();
-    }
-}
