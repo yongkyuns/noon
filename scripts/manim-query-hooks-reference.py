@@ -8,8 +8,9 @@ from pathlib import Path
 import manim as m
 
 KINDS = ("Mobject", "VMobject", "Circle", "Square", "VectorizedPoint", "Group", "VGroup")
-HOOKS = ("split_returns", "split_raises", "has_points_false", "has_points_true", "has_points_raises")
-OPERATIONS = ("length", "split", "iteration", "index")
+HOOKS = ("split_returns", "split_raises", "has_points_false", "has_points_true", "has_points_raises",
+         "get_num_points_zero", "get_num_points_nonzero", "get_num_points_raises")
+OPERATIONS = ("length", "split", "iteration", "index", "has_points", "has_no_points", "get_num_points")
 
 
 def main():
@@ -27,22 +28,24 @@ def main():
     observe = namespace["observe_query_hook"]
     cases = [observe(m, {"class": kind, "ownPoints": own, "hook": hook, "operation": operation})
              for kind in KINDS for own in (0, 4) for hook in HOOKS for operation in OPERATIONS]
-    assert len(cases) == 280
+    assert len(cases) == 784
     for row in cases:
         spec = row["spec"]
         if spec["hook"].startswith("split_") and spec["operation"] != "split":
             assert row["events"] == [], row
         if spec["hook"].startswith("has_points_") and spec["operation"] == "split":
             assert row["events"] == [], row
+        if spec["hook"].startswith("get_num_points_") and spec["operation"] != "get_num_points":
+            assert row["events"] == [], row
     result = {"schemaVersion": 1, "manimVersion": m.__version__,
-              "scope": "Public own0/4 queries across seven classes: split override never influences inherited len/iteration/index; intrinsic split bypasses has_points overrides; predicate events and errors remain visible in inherited len/iteration/index.",
+              "scope": "Public own0/4 queries across seven classes: split override never influences inherited len/iteration/index; intrinsic split bypasses has_points overrides; predicate events and errors remain visible in inherited len/iteration/index; intrinsic point predicates ignore get_num_points overrides.",
               "generatorSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "probeSha256": hashlib.sha256(source.encode()).hexdigest(),
               "methodSourceSha256": {name: hashlib.sha256(inspect.getsource(getattr(m.Mobject, name)).encode()).hexdigest()
                                      for name in ("__len__", "__iter__", "__getitem__", "split", "has_points", "has_no_points")},
               "cases": cases}
     args.output.write_text(json.dumps(result, indent=2) + "\n")
-    print("Observed 280 pinned query-hook controls")
+    print("Observed 784 pinned query-hook controls")
 
 
 if __name__ == "__main__":

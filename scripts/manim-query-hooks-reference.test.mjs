@@ -7,7 +7,7 @@ const fixture = JSON.parse(await readFile(new URL("../fixtures/manim-v0.21/query
 
 test("query-hook observations retain the exact pinned generator and public probe", async () => {
   assert.equal(fixture.manimVersion, "0.21.0");
-  assert.equal(fixture.cases.length, 280);
+  assert.equal(fixture.cases.length, 784);
   for (const [path, hash] of [["./manim-query-hooks-reference.py", fixture.generatorSha256],
     ["../web/python/examples/manim_parity_query_hooks.py", fixture.probeSha256]]) {
     assert.equal(createHash("sha256").update(await readFile(new URL(path, import.meta.url))).digest("hex"), hash);
@@ -26,6 +26,9 @@ test("inherited queries keep split and point-predicate callbacks independent", (
       assert.deepEqual(row.events, [], JSON.stringify(row.spec));
     }
     if (row.spec.hook.startsWith("has_points_") && row.spec.operation === "split") {
+      assert.deepEqual(row.events, [], JSON.stringify(row.spec));
+    }
+    if (row.spec.hook.startsWith("get_num_points_") && row.spec.operation !== "get_num_points") {
       assert.deepEqual(row.events, [], JSON.stringify(row.spec));
     }
   }

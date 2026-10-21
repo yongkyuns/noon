@@ -21,9 +21,13 @@ def observe_query_hook(module, spec):
             raise LookupError("query hook")
         if hook == "split_returns":
             return [root]
+        if hook.startswith("get_num_points_"):
+            return 0 if hook == "get_num_points_zero" else 7
         return hook.endswith("true")
 
-    setattr(root, "split" if hook.startswith("split_") else "has_points", callback)
+    target = ("split" if hook.startswith("split_") else
+              "get_num_points" if hook.startswith("get_num_points_") else "has_points")
+    setattr(root, target, callback)
     try:
         operation = spec["operation"]
         if operation == "length":
@@ -34,6 +38,8 @@ def observe_query_hook(module, spec):
             result = [names[id(value)] for value in root]
         elif operation == "index":
             result = names[id(root[0])]
+        elif operation in ("has_points", "has_no_points", "get_num_points"):
+            result = getattr(root, operation)()
         else:
             raise AssertionError(operation)
     except Exception as error:

@@ -768,7 +768,8 @@ class Mobject:
         return self.arrange(*args, **kwargs)
 
     def has_points(self) -> bool:
-        return self.get_num_points() > 0
+        from _manim_path_queries import point_count
+        return point_count(self) > 0
 
     def has_no_points(self) -> bool:
         return not self.has_points()
