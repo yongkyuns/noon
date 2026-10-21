@@ -47,6 +47,8 @@ const examples = [
   { name: "Polynomial rate functions", factory: "createDirectPolynomialRatesRenderer", objectCount: 5, duration: 1 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Public object membership/copy", factory: "createDirectObjectMembershipQueriesRenderer",
+    objectCount: 6, initialObjectCount: 3, duration: 0.5, playback: "live", boundaries: [0.25] },
   { name: "Object membership", factory: "createDirectObjectMembershipSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },
@@ -274,7 +276,7 @@ function sampleTimes(latestEnd) {
 }
 
 async function loadDirectFixture(page, example) {
-  return page.evaluate(async ({ factory, args = [] }) => {
+  return page.evaluate(async ({ factory, args = [], playback, boundaries = [] }) => {
     const wasm = await import("./pkg/noon_web.js");
     window.qualifiedRenderer?.free();
     document.querySelector("#qualified-scene")?.remove();
@@ -287,6 +289,8 @@ async function loadDirectFixture(page, example) {
     const renderer = await wasm[factory](canvas.transferControlToOffscreen(), ...args);
     renderer.resize(960, 540);
     window.qualifiedRenderer = renderer;
+    window.qualifiedFixture = { playback, boundaries };
+    if (playback === "live") renderer.advanceDirectRealtime(0);
     // Drain the initial resource/frame publication before the first seek. The
     // host must present every pending publication before advancing its session.
     let presented = false;
@@ -302,7 +306,13 @@ async function loadDirectFixture(page, example) {
 async function renderAndCapture(page, time, screenshotPath) {
   const metrics = await page.evaluate(async (sceneTime) => {
     const renderer = window.qualifiedRenderer;
-    const pending = renderer.seekDirect(sceneTime);
+    const fixture = window.qualifiedFixture;
+    let sample;
+    if (fixture.playback === "live") {
+      const { sampleDirectProgramThrough } = await import("../scripts/direct-program-sample.mjs");
+      sample = await sampleDirectProgramThrough(renderer, sceneTime, fixture.boundaries);
+    }
+    const pending = fixture.playback === "live" ? false : renderer.seekDirect(sceneTime);
     if (pending) {
       let presented = false;
       for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -317,6 +327,8 @@ async function renderAndCapture(page, time, screenshotPath) {
       objectCount: renderer.objectCount(),
       drawCalls: renderer.lastDrawCalls(),
       instances: renderer.lastInstancesDrawn(),
+      cadence: sample?.cadence,
+      delayMs: sample?.delayMs,
     };
   }, time);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
@@ -750,7 +762,6 @@ try {
     "100k locality proof did not preserve all synthetic locality samples");
 
   for (const [index, example] of examples.entries()) {
-    const expectedObjects = example.objectCount;
     const latestEnd = example.duration;
     const loaded = await loadDirectFixture(page, example);
     assert.equal(loaded.backend, expectedRendererBackend, `${example.name}: renderer backend`);
@@ -761,9 +772,19 @@ try {
         artifactName(index, example.name, checkpointIndex + 1),
       );
       const { metrics, screenshot } = await renderAndCapture(page, time, screenshotPath);
+      const heldTime = example.playback === "live"
+        ? Math.max(0, ...example.boundaries.filter(boundary => boundary <= time),
+          ...(time === latestEnd ? [latestEnd] : []))
+        : time;
+      const expectedObjects = example.playback === "live" && heldTime === 0
+        ? example.initialObjectCount : example.objectCount;
       assert.equal(metrics.error, null, `${example.name}: browser runtime error`);
       assert.equal(metrics.objectCount, expectedObjects, `${example.name}: object count drifted`);
-      assert.ok(Math.abs(metrics.time - time) < 1e-6, `${example.name}: deterministic seek time drifted`);
+      assert.ok(Math.abs(metrics.time - heldTime) < 1e-6, `${example.name}: presented time drifted`);
+      if (example.playback === "live" && time < latestEnd) {
+        assert.equal(metrics.cadence, "timer", `${example.name}: quiet wait scheduling`);
+        assert.ok(metrics.delayMs > 0, `${example.name}: quiet wait deadline`);
+      }
       assert.ok(metrics.drawCalls > 0, `${example.name}: renderer emitted no draw calls at t=${time}`);
       assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 

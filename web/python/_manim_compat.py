@@ -143,6 +143,9 @@ def _manim_point3(point):
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def _assert_valid_submobjects(self, submobjects):
+        return self._assert_valid_submobjects_internal(submobjects, VMobject)
+
     n_points_per_cubic_curve = 4
     tolerance_for_point_equality = 1e-6
 
@@ -1091,6 +1094,11 @@ class _FamilyMethods:
         from _manim_semantic_handles import _group_members
         return _group_members(self)
 
+    @submobjects.setter
+    def submobjects(self, members):
+        from _manim_semantic_handles import _replace_submobjects
+        _replace_submobjects(self, members)
+
     @property
     def id(self) -> int:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
@@ -1603,7 +1611,9 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         clone = object.__new__(type(value))
         memo[id(value)] = clone
         pairs.append((value, clone))
-        if _is_shared_family(value):
+        # Only wrapper identities/metadata are traversed. Rust supplies the
+        # children and copies their canonical graph once, including aliases.
+        if _is_shared_family(value) or getattr(value, "_semantic_member_wrappers", None):
             family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 

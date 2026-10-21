@@ -44,6 +44,7 @@ pub mod moving_zoomed_scene_around;
 #[cfg(feature = "latex")]
 pub mod numeric_decimal;
 pub mod object_membership;
+pub mod object_membership_queries;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;

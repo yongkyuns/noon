@@ -7,8 +7,8 @@ from noon import Mobject
 
 class AlignDataTests(unittest.TestCase):
     def test_align_data_orders_point_family_and_recursive_alignment(self):
-        own = object.__new__(Mobject)
-        other = object.__new__(Mobject)
+        own = SimpleNamespace()
+        other = SimpleNamespace()
         events = []
         child = SimpleNamespace(
             align_data=lambda value: events.append(("child", value))
@@ -32,8 +32,8 @@ class AlignDataTests(unittest.TestCase):
         )
 
     def test_skip_point_alignment_skips_only_the_current_level(self):
-        own = object.__new__(Mobject)
-        other = object.__new__(Mobject)
+        own = SimpleNamespace()
+        other = SimpleNamespace()
         child = SimpleNamespace(align_data=Mock())
         other_child = object()
         own.submobjects = [child]
@@ -50,8 +50,8 @@ class AlignDataTests(unittest.TestCase):
         child.align_data.assert_called_once_with(other_child)
 
     def test_null_point_alignment_rejects_leaf_to_family_promotion(self):
-        own = object.__new__(Mobject)
-        other = object.__new__(Mobject)
+        own = SimpleNamespace()
+        other = SimpleNamespace()
         own.has_points = Mock(return_value=False)
         other.has_points = Mock(return_value=True)
 
@@ -73,8 +73,8 @@ class AlignDataTests(unittest.TestCase):
         own.align_points.assert_not_called()
 
     def test_null_point_alignment_is_a_noop_when_point_ownership_matches(self):
-        own = object.__new__(Mobject)
-        other = object.__new__(Mobject)
+        own = SimpleNamespace()
+        other = SimpleNamespace()
         own.has_points = Mock(return_value=False)
         other.has_points = Mock(return_value=False)
 
