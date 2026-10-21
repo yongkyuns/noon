@@ -146,7 +146,7 @@ export function parsePlaywrightWebKitProcesses(output, executablePath) {
 
 /** Collect only failure evidence, never retry a failed browser cell. */
 export function createNativeWebKitEvidence({ enabled = false, executablePath, artifacts,
-  startedAtMs = Date.now(), now = () => Date.now(),
+  prefix = "matrix-failure", startedAtMs = Date.now(), now = () => Date.now(),
   readProcessTable = async () => (await promisify(execFile)("/bin/ps", ["-axo", "pid=,comm="], {
     timeout: 5000, maxBuffer: 1024 * 1024,
   })).stdout,
@@ -171,7 +171,7 @@ export function createNativeWebKitEvidence({ enabled = false, executablePath, ar
     try {
       return await collect({
         directories: [path.join(homedir(), "Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"],
-        pids: [...observed], startedAtMs, endedAtMs: now(), artifacts, prefix: "matrix-failure",
+        pids: [...observed], startedAtMs, endedAtMs: now(), artifacts, prefix,
       });
     } catch (error) {
       return { reports: [], errors: [{ message: short(String(error)) }] };

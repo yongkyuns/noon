@@ -984,7 +984,33 @@ impl From<LiveSessionError> for AuthoringFailure {
             E::Advance(cause) => Self::caused_by("live.advance", message, cause.into()),
             E::Completion(cause) => Self::caused_by("live.completion", message, cause.into()),
             E::Publication(cause) => Self::caused_by("live.publication", message, cause.into()),
+            E::Activation(cause) => Self::caused_by("live.activation", message, cause.into()),
             other => Self::unclassified("live.unclassified", &other),
+        }
+    }
+}
+
+impl From<noon::ExecutionSessionAnimationError> for AuthoringFailure {
+    fn from(error: noon::ExecutionSessionAnimationError) -> Self {
+        use noon::ExecutionSessionAnimationError as E;
+        let code = match &error {
+            E::TextGlyph(noon_compile::TextGlyphLoweringError::ConflictingObjectDrivers {
+                ..
+            })
+            | E::PreparedAnimation(
+                noon_compile::PreparedSemanticAnimationLoweringError::TextGlyph(
+                    noon_compile::TextGlyphLoweringError::ConflictingObjectDrivers { .. },
+                ),
+            ) => "animation.conflicting_object_drivers",
+            E::CreateTarget {
+                error: noon::ExecutionSessionCreateError::DuplicateTarget,
+                ..
+            } => "animation.duplicate_create_target",
+            _ => return Self::unclassified("animation.unclassified", &error),
+        };
+        Self {
+            category: "invalid_input",
+            ..Self::unclassified(code, &error)
         }
     }
 }
@@ -1092,6 +1118,68 @@ mod tests {
             error.message,
             "Too few rows and columns to fit all submobjetcs."
         );
+    }
+
+    #[test]
+    fn conflicting_text_drivers_are_typed_input_errors_with_original_sources() {
+        let first = noon_core::SemanticTransactionNodeRef::Existing(SemanticNodeId::new(7, 0));
+        let second = noon_core::SemanticTransactionNodeRef::Existing(SemanticNodeId::new(8, 0));
+        let error =
+            LiveSessionError::Activation(noon::ExecutionSessionAnimationError::PreparedAnimation(
+                noon_compile::PreparedSemanticAnimationLoweringError::TextGlyph(
+                    noon_compile::TextGlyphLoweringError::ConflictingObjectDrivers {
+                        target: noon_core::ObjectId::new(9),
+                        first,
+                        second,
+                    },
+                ),
+            ));
+        let message = error.to_string();
+        let source_messages = |error: &dyn std::error::Error| {
+            let mut source = error.source();
+            let mut messages = Vec::new();
+            while let Some(cause) = source {
+                messages.push(cause.to_string());
+                source = cause.source();
+            }
+            messages
+        };
+        let original_sources = source_messages(&error);
+        assert!(!original_sources.is_empty());
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "live.activation");
+        assert_eq!(
+            failure.cause.as_ref().unwrap().code,
+            "animation.conflicting_object_drivers"
+        );
+        assert_eq!(failure.message, message);
+        assert_eq!(source_messages(&failure), original_sources);
+
+        let untyped = LiveSessionError::Animation("ConflictingObjectDrivers".into());
+        assert_eq!(AuthoringFailure::from(untyped).category, "unclassified");
+    }
+
+    #[test]
+    fn duplicate_create_is_input_but_unclassified_activation_stays_unclassified() {
+        let error =
+            LiveSessionError::Activation(noon::ExecutionSessionAnimationError::CreateTarget {
+                target: SemanticNodeId::new(9, 0),
+                error: noon::ExecutionSessionCreateError::DuplicateTarget,
+            });
+        let message = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.message, message);
+        assert_eq!(failure.code, "live.activation");
+        assert_eq!(
+            failure.cause.as_ref().unwrap().code,
+            "animation.duplicate_create_target"
+        );
+        let unknown = noon::ExecutionSessionAnimationError::InvalidComposition(
+            "parallel Create targets must be distinct".into(),
+        );
+        assert_eq!(AuthoringFailure::from(unknown).category, "unclassified");
     }
 
     #[test]
