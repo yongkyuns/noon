@@ -412,6 +412,11 @@ impl std::fmt::Display for PreparedComputeCommitError {
 impl std::error::Error for PreparedComputeCommitError {}
 
 impl ComputeState {
+    /// Current instantiated signal count, including inputs enrolled after lowering.
+    pub fn signal_count(&self) -> usize {
+        self.values.len()
+    }
+
     pub fn value(&self, signal: SignalId) -> Option<&ReactiveValue> {
         let index = self.program.reference.signal_indices.get(&signal)?;
         self.values.get(*index)
