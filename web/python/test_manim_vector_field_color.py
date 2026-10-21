@@ -89,7 +89,7 @@ class ManimArrowVectorFieldColorTests(unittest.TestCase):
             fake_js.noonAuthoringGeometryOptions = EmptyGeometryOptions
             fake_js.noonAuthoringVectorPath = lambda: None
             fake_js.noonCreateAuthoringGeometryHandle = lambda value: value
-            fake_js.noonCreateAuthoringFamilyHandle = lambda batch, z: None
+            fake_js.noonCreateAuthoringFamilyHandle = lambda batch, z, draw_enabled, *color: None
             fake_js.noonAuthoringMembershipBatch = lambda kind: None
             sys.modules["js"] = fake_js
 

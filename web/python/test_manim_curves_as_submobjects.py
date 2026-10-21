@@ -69,7 +69,7 @@ class CurvesAsSubmobjectsTests(unittest.TestCase):
         second = Part("second", 4, 3.0)
         value = CurvesAsSubmobjects.__new__(CurvesAsSubmobjects)
 
-        with patch.object(Group, "submobjects", new_callable=PropertyMock) as children:
+        with patch.object(CurvesAsSubmobjects, "submobjects", new_callable=PropertyMock) as children:
             children.return_value = [first, empty, second]
             self.assertEqual(value.point_from_proportion(0.25), ("first", 1.0))
             self.assertEqual(value.point_from_proportion(0.5), ("second", 1.0 / 3.0))
@@ -81,7 +81,7 @@ class CurvesAsSubmobjectsTests(unittest.TestCase):
 
     def test_point_from_proportion_preserves_range_and_empty_family_errors(self):
         value = CurvesAsSubmobjects.__new__(CurvesAsSubmobjects)
-        with patch.object(Group, "submobjects", new_callable=PropertyMock) as children:
+        with patch.object(CurvesAsSubmobjects, "submobjects", new_callable=PropertyMock) as children:
             children.return_value = []
             with self.assertRaisesRegex(ValueError, "^Alpha -0.1 not between 0 and 1\\.$"):
                 value.point_from_proportion(-0.1)

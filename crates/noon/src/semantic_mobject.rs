@@ -1269,6 +1269,9 @@ pub(crate) fn stage_state_changes(
     if previous.content != next.content {
         transaction.replace_content(target, next.content);
     }
+    if previous.draw_enabled() != next.draw_enabled() {
+        transaction.set_draw_enabled(target, next.draw_enabled());
+    }
     if previous.transform != next.transform {
         transaction.set_object_transform(target, next.transform);
     }

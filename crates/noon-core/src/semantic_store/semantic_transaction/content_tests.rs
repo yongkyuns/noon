@@ -173,7 +173,7 @@ fn stale_late_content_target_rolls_back_earlier_mutations() {
 }
 
 #[test]
-fn unchanged_content_is_a_noop_and_wrong_target_fails_closed() {
+fn unchanged_content_is_a_noop_and_stateless_target_fails_closed() {
     let mut store = SemanticStore::new();
     let target = object(&mut store, 1.0);
     let content = store.semantic_object_state_checked(target).unwrap().content;
@@ -183,7 +183,7 @@ fn unchanged_content_is_a_noop_and_wrong_target_fails_closed() {
     assert!(result.impacts().is_empty());
     assert_eq!(store.last_mutation_stats().slots_written, 0);
 
-    let family = store.insert_family();
+    let family = store.insert_authoring_object();
     let mut wrong_target = SemanticMutationTransaction::new();
     wrong_target.replace_content(family, rectangle(2.0, 2.0));
     assert_eq!(

@@ -1047,7 +1047,7 @@ def _set_group_metadata(group, name, value):
     return group
 
 
-class Group(Mobject):
+class _FamilyMethods:
     """Python identities and ergonomics over a shared Rust semantic family."""
 
     def set_color_by_gradient(self, *colors):
@@ -1309,48 +1309,42 @@ class Group(Mobject):
         return _group_get_color(self)
 
 
-class VGroup(Group):
+def _with_family_methods(cls):
+    """Share wrapper ergonomics while preserving the public Manim class bases."""
+    for name, value in vars(_FamilyMethods).items():
+        if name not in vars(cls) and (
+            callable(value) or isinstance(value, (property, staticmethod, classmethod))
+        ):
+            setattr(cls, name, value)
+    return cls
+
+
+@_with_family_methods
+class Group(Mobject):
+    """Manim base-Mobject family with shared Rust membership."""
+
+    def set_points(self, value):
+        import warnings
+        warnings.warn(
+            "This method is not guaranteed to stay around. Please prefer "
+            "setting the attribute normally or with Mobject.set().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from _manim_path_editing import set_points
+        return set_points(self, value)
+
+
+@_with_family_methods
+class VGroup(VMobject):
+    # Vector paint overrides the generic family wrapper methods installed below.
     match_style = VMobject.match_style
-    interpolate = VMobject.interpolate
-    interpolate_color = VMobject.interpolate_color
-    # The family wrapper reuses vector-class geometry queries without duplicating them.
-    # Paint getters stay on VMobject until the family root has authoritative own-style state.
-    cap_style = VMobject.cap_style
-    shade_in_3d = VMobject.shade_in_3d
-    get_group_class = VMobject.get_group_class
-    get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
-    get_points_defining_boundary = VMobject.get_points_defining_boundary
-    get_gradient_start_and_end_points = VMobject.get_gradient_start_and_end_points
-    get_background_image = VMobject.get_background_image
-    get_sheen_factor = VMobject.get_sheen_factor
-    generate_rgbas_array = VMobject.generate_rgbas_array
-    update_rgbas_array = VMobject.update_rgbas_array
-    get_sheen_direction = VMobject.get_sheen_direction
-    set_background_stroke = VMobject.set_background_stroke
-    set_cap_style = VMobject.set_cap_style
-    set_shade_in_3d = VMobject.set_shade_in_3d
-    color_using_background_image = VMobject.color_using_background_image
-    match_background_image = VMobject.match_background_image
-    set_sheen_direction = VMobject.set_sheen_direction
-    rotate_sheen_direction = VMobject.rotate_sheen_direction
-    set_sheen = VMobject.set_sheen
-    get_style = VMobject.get_style
     set_style = VMobject.set_style
-    init_colors = VMobject.init_colors
-    get_fill_color = VMobject.get_fill_color
-    get_fill_rgbas = VMobject.get_fill_rgbas
-    get_fill_colors = VMobject.get_fill_colors
-    get_fill_opacities = VMobject.get_fill_opacities
-    get_stroke_color = VMobject.get_stroke_color
-    get_stroke_rgbas = VMobject.get_stroke_rgbas
-    get_stroke_colors = VMobject.get_stroke_colors
-    get_stroke_opacities = VMobject.get_stroke_opacities
-    get_stroke_width = VMobject.get_stroke_width
 
     def __init__(self, *mobjects, z_index=0, color=_base.WHITE, shade_in_3d=False):
         if shade_in_3d is not False:
             raise NotImplementedError("3D-shaded vector rendering is not supported")
-        super().__init__(*mobjects, z_index=z_index, color=color)
+        _FamilyMethods.__init__(self, *mobjects, z_index=z_index, color=color)
 
     def get_point_mobject(self, center=None):
         if center is None:

@@ -8,6 +8,21 @@ use noon_core::{
 use std::{cell::RefCell, rc::Rc};
 pub(crate) use transaction::PreparedPathEdits;
 
+pub(crate) fn raw_points_path(points: &[(f64, f64)]) -> Result<VectorPath, AuthoringError> {
+    validate_raw_points(points)?;
+    Ok(VectorPath::from_manim_points_f64(points.to_vec()))
+}
+
+fn validate_raw_points(points: &[(f64, f64)]) -> Result<(), AuthoringError> {
+    if points
+        .iter()
+        .any(|&(x, y)| !(x as f32).is_finite() || !(y as f32).is_finite())
+    {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(())
+}
+
 fn promote_points(points: &[Vec2]) -> Vec<(f64, f64)> {
     points
         .iter()
@@ -1129,18 +1144,11 @@ impl PathEdit<'_> {
             )
             .map(Some);
         }
-        if let Self::RawPoints(points) | Self::AppendRawPoints(points) = &self {
-            if points
-                .iter()
-                .any(|&(x, y)| !(x as f32).is_finite() || !(y as f32).is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-        }
         if let Self::RawPoints(points) = self {
-            return Ok(Some(VectorPath::from_manim_points_f64(points.to_vec())));
+            return raw_points_path(points).map(Some);
         }
         if let Self::AppendRawPoints(points) = self {
+            validate_raw_points(points)?;
             if points.is_empty() {
                 return Ok(None);
             }

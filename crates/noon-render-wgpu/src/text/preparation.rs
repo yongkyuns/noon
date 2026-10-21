@@ -445,13 +445,13 @@ impl RetainedTextQuadPreparer {
             };
             match self.object_states.get(index).and_then(Option::as_ref) {
                 None => {
-                    if frame.is_present(index) && object.text().is_some() {
+                    if frame.is_drawable(index) && object.text().is_some() {
                         return Ok(false);
                     }
                 }
                 Some(state) => {
                     if object.id != state.id
-                        || !frame.is_present(index)
+                        || !frame.is_drawable(index)
                         || object.text() != Some(state.text)
                         || object.transform.scale != state.transform.scale
                         || object.transform.rotation != state.transform.rotation
@@ -741,7 +741,7 @@ impl RetainedTextQuadPreparer {
         self.stats = RetainedTextPrepareStats::default();
 
         for (object_slot, object) in frame.objects.iter().enumerate() {
-            if !frame.is_present(object_slot) {
+            if !frame.is_drawable(object_slot) {
                 continue;
             }
             let Some(text_handle) = object.text() else {
@@ -1244,6 +1244,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,
@@ -1270,6 +1271,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -1281,6 +1283,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,

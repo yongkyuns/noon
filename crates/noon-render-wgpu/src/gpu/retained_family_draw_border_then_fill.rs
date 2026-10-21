@@ -267,6 +267,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -287,6 +288,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,
@@ -397,6 +399,7 @@ mod tests {
         let family_id = store.insert_family();
         store.add_member(family_id, leaf).unwrap();
         let object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -418,6 +421,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,

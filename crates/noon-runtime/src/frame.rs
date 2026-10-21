@@ -10,6 +10,8 @@ use crate::release_render_transform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    /// Effective root drawing eligibility, independent from paint and presence.
+    pub draw_enabled: bool,
     /// Current persistent leaf effect, published with this row and its frame epoch.
     pub glow: Option<Arc<noon_compile::CompiledGlow>>,
     pub z_index: f64,
@@ -84,6 +86,7 @@ mod spatial_render_routing_tests {
 
     fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
         FrameObjectState {
+            draw_enabled: true,
             glow: None,
             z_index: 0.0,
             id: ObjectId::new(1),
@@ -154,6 +157,11 @@ pub struct FrameState {
 impl FrameState {
     pub fn is_present(&self, object_index: usize) -> bool {
         self.presences[object_index]
+    }
+
+    /// Renderer eligibility leaves semantic/runtime presence and bounds intact.
+    pub fn is_drawable(&self, object_index: usize) -> bool {
+        self.is_present(object_index) && self.objects[object_index].draw_enabled
     }
 
     pub fn appearance(&self, object_index: usize) -> f32 {

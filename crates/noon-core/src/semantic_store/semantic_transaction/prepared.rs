@@ -614,6 +614,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .candidate_mutations()
             .filter_map(|mutation| match mutation {
                 SemanticMutation::SetZIndex { node: object, .. }
+                | SemanticMutation::SetDrawEnabled { node: object, .. }
+                | SemanticMutation::SetFamilyColor { node: object, .. }
+                | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
                 | SemanticMutation::SetClickIndicate { object, .. }
@@ -707,10 +710,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .semantic_object_state_checked(object)
                 .map_err(SemanticTransactionReadError::Existing),
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
-                Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
+                Some(
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+                ) => Ok(state),
                 Some(
                     SemanticNodeCreation::PendingPathObject { .. }
-                    | SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Family { state: None, .. }
                     | SemanticNodeCreation::Effect { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotObject(object)),
@@ -792,7 +800,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Ok(self.pending_geometry_path(object)?.conservative_bounds())
     }
 
-    /// Observe staged own color on an existing or pending non-rendered family.
+    /// Observe proposed family paint selection, using its stored fallback when absent.
     pub fn family_color(
         &self,
         node: impl Into<SemanticTransactionNodeRef>,
@@ -812,6 +820,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => {}
         }
+        if let Some(color) = self.family_style(node)?.family_color() {
+            return Ok(color);
+        }
         if let Some(color) = self.preflight.staged_family_colors.get(&node) {
             return Ok(*color);
         }
@@ -820,17 +831,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .store
                 .node(id)
                 .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?
-                .family_color()
+                .family_fallback_color()
                 .ok_or(SemanticTransactionReadError::NotFamily(node)),
-            SemanticTransactionNodeRef::Pending(token)
-                if matches!(
-                    self.pending_creation(token),
-                    Some(SemanticNodeCreation::Family { .. })
-                ) =>
-            {
-                Ok(crate::Color::WHITE)
-            }
-            _ => Err(SemanticTransactionReadError::NotFamily(node)),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
+                Some(SemanticNodeCreation::Family {
+                    state,
+                    fallback_color,
+                    ..
+                }) => Ok(fallback_color
+                    .or_else(|| state.as_ref().and_then(|state| state.style.family_color()))
+                    .unwrap_or(crate::Color::WHITE)),
+                _ => Err(SemanticTransactionReadError::NotFamily(node)),
+            },
         }
     }
 
@@ -854,6 +866,21 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => {}
         }
+        let is_family = match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .is_some_and(|node| matches!(node.kind(), crate::SemanticNodeKind::Family(_))),
+            SemanticTransactionNodeRef::Pending(token) => matches!(
+                self.pending_creation(token),
+                Some(SemanticNodeCreation::Family { .. })
+            ),
+        };
+        if is_family {
+            if let Some(state) = self.preflight.staged_objects.get(&node) {
+                return Ok(state.style.clone());
+            }
+        }
         if let Some(style) = self.preflight.staged_family_styles.get(&node) {
             return Ok(style.clone());
         }
@@ -874,6 +901,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Ok(crate::SemanticStyle::manim_family_root(crate::Color::WHITE))
             }
             _ => Err(SemanticTransactionReadError::NotFamily(node)),
+        }
+    }
+
+    /// Read proposed root drawing eligibility without manufacturing object content.
+    pub fn draw_enabled(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<bool, SemanticTransactionReadError> {
+        let node = node.into();
+        // The z-index query validates lifetime and authoring capabilities for the
+        // same presentation, including unmaterialized and pending family roots.
+        self.z_index(node)?;
+        if let Some(enabled) = self.preflight.staged_drawing.get(&node) {
+            return Ok(*enabled);
+        }
+        if let Ok(state) = self.object_state(node) {
+            return Ok(state.draw_enabled());
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .and_then(|node| node.presentation())
+                .map(|p| p.draw_enabled)
+                .ok_or(SemanticTransactionReadError::NotObject(node)),
+            SemanticTransactionNodeRef::Pending(_) => Ok(true),
         }
     }
 
@@ -902,16 +955,21 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
         match node {
             SemanticTransactionNodeRef::Existing(id) => {
-                if let Some(crate::SemanticNodeKind::Family(presentation)) =
+                if let Some(crate::SemanticNodeKind::Family(_)) =
                     self.store.node(id).map(|node| node.kind())
                 {
-                    return Ok(presentation.presentation.z_index);
+                    return Ok(self
+                        .store
+                        .node(id)
+                        .and_then(|node| node.presentation())
+                        .expect("family presentation")
+                        .z_index);
                 }
             }
             SemanticTransactionNodeRef::Pending(token)
                 if matches!(
                     self.pending_creation(token),
-                    Some(SemanticNodeCreation::Family { .. })
+                    Some(SemanticNodeCreation::Family { state: None, .. })
                 ) =>
             {
                 return Ok(0.0);
@@ -939,12 +997,20 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let SemanticTransactionNodeRef::Pending(token) = object else {
             return Ok(state);
         };
+        if matches!(
+            self.pending_creation(token),
+            Some(SemanticNodeCreation::Family { state: None, .. })
+        ) {
+            return Ok(state);
+        }
         let mut insertion_order = self.store.next_insertion_order();
         for mutation in self.transaction.mutations() {
             let SemanticMutation::AddNode {
                 token: candidate,
                 creation:
-                    SemanticNodeCreation::Object { .. } | SemanticNodeCreation::PendingPathObject { .. },
+                    SemanticNodeCreation::Object { .. }
+                    | SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Family { state: Some(_), .. },
             } = mutation
             else {
                 continue;
@@ -1601,6 +1667,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_updating_suspended(suspended);
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::UpdaterSuspension { target: node });
+                }
+                SemanticMutation::SetDrawEnabled { node, enabled } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted authoring node")
+                        .set_draw_enabled(enabled);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::DrawEnabled { node });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);

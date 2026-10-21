@@ -9,6 +9,14 @@ import playwright from "playwright";
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const familyClassQueriesSource = await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_family_class_queries.py"),
+  "utf8",
+);
+const familyRootPointsSource = await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_family_root_points.py"),
+  "utf8",
+);
 const uncreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
   "utf8",
@@ -294,7 +302,8 @@ class GroupMembershipLive(Scene):
         assert int(pair._semantic_family_handle.memberCount) == 2
 
         assert isinstance(pair, Mobject)
-        assert isinstance(pair, Group)
+        assert isinstance(pair, VMobject)
+        assert not isinstance(pair, Group)
         self.add(pair)
         assert len(self.mobjects) == 1 and self.mobjects[0] is pair
 
@@ -569,6 +578,11 @@ for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
     assert value.get_group_class() is group
     assert value.get_mobject_type_class() is base
     assert cls.get_mobject_type_class() is base
+assert Group.__bases__ == (Mobject,)
+assert VGroup.__bases__ == (VMobject,)
+assert VGroup.__mro__ == (VGroup, VMobject, Mobject, object)
+assert isinstance(object.__new__(VGroup), VMobject)
+assert not isinstance(object.__new__(VGroup), Group)
 from pathlib import Path
 import tempfile
 import os
@@ -1006,17 +1020,19 @@ result = Scene()
       plainTextLifecycleSource,
       mixedFamilyOrdinarySource,
       mixedFamilyOrdinaryEditedSource,
+      familyClassQueriesSource,
+      familyRootPointsSource,
     ],
   );
   assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5],
+    [2, 2, 1, 1.5, 0.4, 0.75],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3],
+    [2, 0, 2, 3, 2, 4],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

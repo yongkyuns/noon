@@ -17,6 +17,15 @@ class ClassQueries(unittest.TestCase):
             self.assertIs(instance.get_mobject_type_class(), base)
             self.assertIs(cls.get_mobject_type_class(), base)
 
+    def test_public_bases_and_instance_relationships_match_manim(self):
+        self.assertEqual(noon.Group.__bases__, (noon.Mobject,))
+        self.assertEqual(noon.VGroup.__bases__, (noon.VMobject,))
+        self.assertEqual(noon.VGroup.__mro__, (noon.VGroup, noon.VMobject, noon.Mobject, object))
+        self.assertIsInstance(object.__new__(noon.VGroup), noon.VMobject)
+        self.assertNotIsInstance(object.__new__(noon.VGroup), noon.Group)
+        self.assertNotIsInstance(object.__new__(noon.Group), noon.VMobject)
+        self.assertIs(noon.Group.add, noon.VGroup.add)
+
     def test_subclass_inheritance_and_override_use_python_dispatch(self):
         class Custom(noon.VGroup):
             pass

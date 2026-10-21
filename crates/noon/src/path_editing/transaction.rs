@@ -6,6 +6,7 @@ pub(crate) struct PreparedPathEdits {
     states: Vec<(SemanticNodeId, SemanticObjectState, SemanticObjectState)>,
     paths: Vec<VectorPath>,
     property_edits: Vec<(SemanticNodeId, SemanticObjectState, SemanticObjectState)>,
+    initial_families: Vec<SemanticNodeId>,
     transaction: SemanticMutationTransaction,
 }
 
@@ -18,6 +19,7 @@ impl PreparedPathEdits {
             states: Vec::new(),
             paths: Vec::new(),
             property_edits: Vec::new(),
+            initial_families: Vec::new(),
             transaction: SemanticMutationTransaction::new(),
         };
         for (node, captured, path) in replacements {
@@ -49,6 +51,7 @@ impl PreparedPathEdits {
             states: Vec::new(),
             paths: Vec::new(),
             property_edits: Vec::new(),
+            initial_families: Vec::new(),
             transaction: SemanticMutationTransaction::new(),
         };
         for (node, after, path) in replacements {
@@ -70,12 +73,37 @@ impl PreparedPathEdits {
         self
     }
 
+    /// Admit first root paths in the same resource/publication transaction as
+    /// existing-object edits. Core materialization retains root presentation.
+    pub(crate) fn with_initial_family_paths(
+        mut self,
+        store: &SemanticStore,
+        paths: impl IntoIterator<Item = (SemanticNodeId, VectorPath)>,
+    ) -> Result<Self, AuthoringError> {
+        for (node, path) in paths {
+            let family = store.semantic_family_checked(node)?;
+            if family.semantic_object_state().is_some() {
+                return Err(crate::UnsupportedAuthoringOperation::PathEditContent.into());
+            }
+            if !path.is_finite() {
+                return Err(AuthoringError::PathQuery(
+                    noon_geometry::PathProportionError::InvalidMetric,
+                ));
+            }
+            self.initial_families.push(node);
+            self.paths.push(path);
+        }
+        Ok(self)
+    }
+
     pub(crate) fn creates_resources(&self) -> bool {
         !self.paths.is_empty()
     }
 
     pub(crate) fn has_changes(&self) -> bool {
-        !self.states.is_empty() || !self.property_edits.is_empty()
+        !self.states.is_empty()
+            || !self.property_edits.is_empty()
+            || !self.initial_families.is_empty()
     }
 
     pub(crate) fn publish<T, E>(
@@ -88,6 +116,7 @@ impl PreparedPathEdits {
     {
         store.with_geometry_paths(self.paths, |store, handles| {
             let mut transaction = self.transaction;
+            let (existing_handles, initial_handles) = handles.split_at(self.states.len());
             for (node, before, after) in self.property_edits {
                 crate::semantic_mobject::stage_state_changes(
                     &mut transaction,
@@ -96,7 +125,8 @@ impl PreparedPathEdits {
                     &after,
                 );
             }
-            for ((node, before, mut after), handle) in self.states.into_iter().zip(handles) {
+            for ((node, before, mut after), handle) in self.states.into_iter().zip(existing_handles)
+            {
                 after.content = StoredGeometry::Resource(*handle).into();
                 crate::semantic_mobject::stage_state_changes(
                     &mut transaction,
@@ -104,6 +134,9 @@ impl PreparedPathEdits {
                     &before,
                     &after,
                 );
+            }
+            for (node, handle) in self.initial_families.into_iter().zip(initial_handles) {
+                transaction.replace_content(node, StoredGeometry::Resource(*handle));
             }
             publish(store, transaction)
         })

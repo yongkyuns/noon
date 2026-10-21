@@ -471,6 +471,29 @@ impl Scene {
             .expect("committed family token resolves to one semantic identity");
         MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
+    /// Construct complete root presentation through this Scene's mutation route.
+    pub fn family_with_presentation(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+        z_index: f64,
+        color: crate::Color,
+        draw_enabled: bool,
+    ) -> Result<MobjectFamily, crate::AuthoringError> {
+        let (transaction, family) =
+            crate::family_authoring::family_creation_presentation_transaction(
+                &self.store,
+                members,
+                z_index,
+                color,
+                draw_enabled,
+            )?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        MobjectFamily::from_node(
+            Rc::clone(&self.store),
+            result.resolve(family).expect("committed family token"),
+        )
+    }
+
     /// Create and scope a scalar input signal through this Scene's durable
     /// authoring route.
     ///

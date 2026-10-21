@@ -367,8 +367,8 @@ pub struct SemanticNode {
     kind: SemanticNodeKind,
     /// Authoritative authored object payload for target semantic objects.
     ///
-    /// `None` is valid for families, signals, animations, and the temporary
-    /// state-less frontend identity seam only.
+    /// `None` is valid for unrendered families, signals, animations, and the
+    /// temporary state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
     scene_membership: SemanticSceneMembership,
@@ -437,64 +437,133 @@ impl SemanticNode {
         self.object_state.as_mut()
     }
 
-    /// Authored painter metadata on an object or a non-rendered family root.
+    /// Authored painter metadata, shared by unrendered and point-owning roots.
     pub fn presentation(&self) -> Option<SemanticPresentation> {
+        if let Some(state) = &self.object_state {
+            return Some(state.presentation());
+        }
         match &self.kind {
-            SemanticNodeKind::Family(state) => Some(state.presentation),
-            _ => self
-                .object_state
-                .as_ref()
-                .map(SemanticObjectState::presentation),
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.presentation)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn initial_family_object_state(
+        &self,
+        content: SemanticObjectContent,
+    ) -> Option<SemanticObjectState> {
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.with_content(content))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn materialize_family_content(&mut self, content: SemanticObjectContent) {
+        let state = self
+            .initial_family_object_state(content)
+            .expect("preflighted unrendered family");
+        let fallback_color = self.family_color().expect("family color");
+        self.kind = SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color });
+        self.object_state = Some(state);
+    }
+
+    pub(crate) fn set_draw_enabled(&mut self, enabled: bool) {
+        if let Some(state) = &mut self.object_state {
+            state.set_draw_enabled(enabled);
+        } else if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) =
+            &mut self.kind
+        {
+            state.presentation.draw_enabled = enabled;
+        } else {
+            unreachable!("validated authoring node");
         }
     }
 
     pub(crate) fn set_z_index(&mut self, value: f64) {
-        match &mut self.kind {
-            SemanticNodeKind::Family(state) => state.presentation.z_index = value,
-            _ => self
-                .object_state
-                .as_mut()
-                .expect("validated authoring node")
-                .set_z_index(value),
+        if let Some(state) = &mut self.object_state {
+            state.set_z_index(value);
+        } else if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) =
+            &mut self.kind
+        {
+            state.presentation.z_index = value;
+        } else {
+            unreachable!("validated authoring node");
+        }
+    }
+
+    /// Stored family fallback, independent from the root's currently selected paint.
+    pub fn family_fallback_color(&self) -> Option<crate::Color> {
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.own_color)
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color }) => {
+                Some(*fallback_color)
+            }
+            _ => None,
         }
     }
 
     pub fn family_color(&self) -> Option<crate::Color> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(state.own_color),
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.own_color)
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color }) => {
+                Some(
+                    self.object_state
+                        .as_ref()
+                        .expect("content-owning family state")
+                        .style
+                        .family_color()
+                        .unwrap_or(*fallback_color),
+                )
+            }
             _ => None,
         }
     }
     pub fn family_style(&self) -> Option<&SemanticStyle> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(&state.own_style),
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(&state.own_style)
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { .. }) => Some(
+                &self
+                    .object_state
+                    .as_ref()
+                    .expect("content-owning family state")
+                    .style,
+            ),
             _ => None,
         }
     }
     pub fn family_background_stroke_opacity(&self) -> Option<f64> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_opacity),
-            _ => None,
-        }
+        self.family_style()
+            .map(|style| style.background_stroke_opacity)
     }
     pub fn family_background_stroke_color(&self) -> Option<crate::Color> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_color),
-            _ => None,
-        }
+        self.family_style()
+            .map(|style| match style.background_stroke {
+                Some(SemanticPaint::Solid(color)) => color,
+                _ => crate::Color::BLACK,
+            })
     }
     pub fn family_background_stroke_width(&self) -> Option<f64> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(state.own_background_stroke_width),
-            _ => None,
-        }
+        self.family_style()
+            .map(|style| style.background_stroke_width)
     }
     pub fn sheen_direction(&self) -> Option<crate::SemanticSheenDirection> {
-        match self.kind() {
-            SemanticNodeKind::Family(state) => Some(state.own_sheen_direction),
-            SemanticNodeKind::AuthoringObject => self
-                .semantic_object_state()
-                .map(|state| state.sheen_direction),
+        if let Some(state) = &self.object_state {
+            return Some(state.sheen_direction);
+        }
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.own_sheen_direction)
+            }
             _ => None,
         }
     }
@@ -506,20 +575,40 @@ impl SemanticNode {
         self.updating_suspended = suspended;
     }
     pub(crate) fn set_family_color(&mut self, color: crate::Color) {
-        let SemanticNodeKind::Family(state) = &mut self.kind else {
-            unreachable!("preflighted family color");
-        };
-        state.own_color = color;
-        state.own_style.set_family_color(color);
+        match &mut self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                state.own_color = color;
+                state.own_style.set_family_color(color);
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color }) => {
+                *fallback_color = color;
+                self.object_state
+                    .as_mut()
+                    .expect("content-owning family state")
+                    .style
+                    .set_family_color(color);
+            }
+            _ => unreachable!("preflighted family color"),
+        }
     }
     pub(crate) fn set_family_style(&mut self, style: SemanticStyle) {
-        let SemanticNodeKind::Family(state) = &mut self.kind else {
-            unreachable!("preflighted family style");
-        };
-        let color = style.family_color();
-        state.own_style = style;
-        if let Some(color) = color {
-            state.own_color = color;
+        match &mut self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                if let Some(color) = style.family_color() {
+                    state.own_color = color;
+                }
+                state.own_style = style;
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color }) => {
+                if let Some(color) = style.family_color() {
+                    *fallback_color = color;
+                }
+                self.object_state
+                    .as_mut()
+                    .expect("content-owning family state")
+                    .style = style;
+            }
+            _ => unreachable!("preflighted family style"),
         }
     }
     pub(crate) fn set_family_background_stroke_style(
@@ -528,30 +617,39 @@ impl SemanticNode {
         width: Option<f64>,
         opacity: Option<f64>,
     ) {
-        let SemanticNodeKind::Family(state) = &mut self.kind else {
-            unreachable!("preflighted family background stroke style");
+        let style = match &mut self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                &mut state.own_style
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { .. }) => {
+                &mut self
+                    .object_state
+                    .as_mut()
+                    .expect("content-owning family state")
+                    .style
+            }
+            _ => unreachable!("preflighted family background stroke style"),
         };
         if let Some(color) = color {
-            state.own_background_stroke_color = color;
+            style.background_stroke = Some(SemanticPaint::Solid(color));
         }
         if let Some(width) = width {
-            state.own_background_stroke_width = width;
+            style.background_stroke_width = width;
         }
         if let Some(opacity) = opacity {
-            state.own_background_stroke_opacity = opacity;
+            style.background_stroke_opacity = opacity;
         }
     }
 
     pub(crate) fn set_sheen_direction(&mut self, direction: crate::SemanticSheenDirection) {
-        match &mut self.kind {
-            SemanticNodeKind::Family(state) => state.own_sheen_direction = direction,
-            SemanticNodeKind::AuthoringObject => {
-                self.object_state
-                    .as_mut()
-                    .expect("preflighted authoring object")
-                    .sheen_direction = direction;
-            }
-            _ => unreachable!("preflighted authoring node"),
+        if let Some(state) = &mut self.object_state {
+            state.sheen_direction = direction;
+        } else if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) =
+            &mut self.kind
+        {
+            state.own_sheen_direction = direction;
+        } else {
+            unreachable!("preflighted authoring node");
         }
     }
 
@@ -1060,6 +1158,24 @@ impl SemanticStore {
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
         self.insert_kind(SemanticNodeKind::Family(SemanticFamilyState::default()))
+    }
+
+    /// Allocate one content-owning family through the same object resource and
+    /// insertion-order machinery, without allocating a separate geometry child.
+    pub fn insert_family_with_content(&mut self, state: SemanticObjectState) -> SemanticNodeId {
+        let fallback_color = state.style.family_color().unwrap_or(crate::Color::WHITE);
+        self.insert_family_with_content_and_fallback(state, fallback_color)
+    }
+
+    pub(crate) fn insert_family_with_content_and_fallback(
+        &mut self,
+        state: SemanticObjectState,
+        fallback_color: crate::Color,
+    ) -> SemanticNodeId {
+        let id = self.insert_semantic_object(state);
+        self.node_mut(id).expect("new family node exists").kind =
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color });
+        id
     }
 
     pub(crate) fn insert_semantic_signal_state(

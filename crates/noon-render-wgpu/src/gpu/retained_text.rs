@@ -1718,7 +1718,7 @@ impl RetainedFramePreparer {
                             .map(|item| (rank, item))
                     });
                 let new = frame.objects.get(index).and_then(|object| {
-                    (frame.is_present(index) && object.content.image().is_some()).then(|| {
+                    (frame.is_drawable(index) && object.content.image().is_some()).then(|| {
                         let rank = self.painter_ranks.get(index).copied().unwrap_or(index);
                         (
                             rank,
@@ -2217,7 +2217,7 @@ impl RetainedFramePreparer {
                     && !self.fast_text_only.get(index).copied().unwrap_or(false);
             }
             if object.text().is_some() {
-                return frame.is_present(index)
+                return frame.is_drawable(index)
                     && self.fast_text_only.get(index).copied().unwrap_or(false);
             }
             // Spatial rows are prepared by the 3D renderer and deliberately have
@@ -2231,7 +2231,7 @@ impl RetainedFramePreparer {
                 return false;
             };
             let rendered_geometry = frame.render_geometry(index).or_else(|| object.geometry());
-            frame.is_present(index)
+            frame.is_drawable(index)
                 && self
                     .scratch
                     .objects
@@ -2690,7 +2690,7 @@ impl RetainedFramePreparer {
                 geometry_only = false;
                 continue;
             }
-            if !frame.is_present(object_index) {
+            if !frame.is_drawable(object_index) {
                 geometry_only = false;
                 continue;
             }
@@ -2802,6 +2802,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -4558,6 +4559,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        draw_enabled: true,
                         glow: None,
                         spatial: None,
                         z_index: 0.0,
@@ -4569,6 +4571,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        draw_enabled: true,
                         glow: None,
                         spatial: None,
                         z_index: 0.0,
@@ -4610,6 +4613,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        draw_enabled: true,
                         glow: None,
                         spatial: None,
                         z_index: 0.0,
@@ -4621,6 +4625,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        draw_enabled: true,
                         glow: None,
                         spatial: None,
                         z_index: 0.0,
@@ -4933,6 +4938,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,
@@ -5591,6 +5597,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

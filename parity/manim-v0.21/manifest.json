@@ -1654,7 +1654,20 @@
       "expected_duration": 0.2,
       "notes": "Two transformed planar paths are mapped to new endpoint pairs; the unchanged raster policy checks shared Rust scale/rotation/translation output."
     },
-    {"id": "circle-surround-upstream", "scene": "CircleSurround", "source": "parity/manim-v0.21/upstream-examples/circle_surround.py", "expected_duration": 0.0, "expected_object_count": 6, "sample_times": [0.0], "notes": "Literal pinned ManimCE v0.21.0 Circle.surround example (arc.py:681), body SHA256 48f896925a56c1a2f44d5c57be5894662faadba8b52e34cb2aef9ed3f8431260. Import-only substitution; original Triangle, Line, Square, buffers, Groups and arrangement. Uses unchanged global raster limits. Current-head semantic/raster qualification remains required."}
+    {"id": "circle-surround-upstream", "scene": "CircleSurround", "source": "parity/manim-v0.21/upstream-examples/circle_surround.py", "expected_duration": 0.0, "expected_object_count": 6, "sample_times": [0.0], "notes": "Literal pinned ManimCE v0.21.0 Circle.surround example (arc.py:681), body SHA256 48f896925a56c1a2f44d5c57be5894662faadba8b52e34cb2aef9ed3f8431260. Import-only substitution; original Triangle, Line, Square, buffers, Groups and arrangement. Uses unchanged global raster limits. Current-head semantic/raster qualification remains required."},
+    {
+      "id": "family-root-drawing",
+      "scene": "FamilyRootDrawing",
+      "source": "parity/manim-v0.21/core-examples/family_root_drawing.py",
+      "reference_frame_rate": 8,
+      "expected_duration": 0.75,
+      "sample_times": [
+        0.125,
+        0.375,
+        0.625
+      ],
+      "notes": "Held own root points distinguish ordinary Group drawing intent from VGroup, preserve overlaid children, and prove live clear/repopulate frames. Shared Rust native/direct-WASM example is example_scenes::family_root_points; broader arbitrary hooks remain unqualified."
+    }
   ],
   "sample_fractions": [
     0.0,

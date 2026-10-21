@@ -810,6 +810,7 @@ impl SceneInstance {
                 | ExecutionPatch::SetTransform { .. }
                 | ExecutionPatch::SetSemanticTransform { .. }
                 | ExecutionPatch::SetSpatialState { .. }
+                | ExecutionPatch::SetDrawEnabled { .. }
                 | ExecutionPatch::SetStyle { .. }
                 | ExecutionPatch::SetGlow { .. }
         ) {
@@ -1164,6 +1165,7 @@ impl SceneInstance {
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
             | ExecutionPatch::SetGlow { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
@@ -1246,6 +1248,9 @@ impl SceneInstance {
                     ],
                 );
             }
+            ExecutionPatch::SetDrawEnabled { enabled, .. } => {
+                self.frame.objects[index].draw_enabled = *enabled;
+            }
             ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(
@@ -1261,8 +1266,11 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
-        if matches!(patch, ExecutionPatch::SetGlow { .. }) {
-            if self.frame.objects[index].glow != before.glow {
+        if matches!(
+            patch,
+            ExecutionPatch::SetGlow { .. } | ExecutionPatch::SetDrawEnabled { .. }
+        ) {
+            if self.frame.objects[index] != before {
                 self.changes.insert(index);
             }
         } else {
@@ -1755,6 +1763,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            draw_enabled: object.draw_enabled,
             glow: object.glow.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
@@ -1924,6 +1933,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        draw_enabled: object.draw_enabled,
         glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
@@ -1966,6 +1976,7 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        draw_enabled: object.draw_enabled,
         glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,

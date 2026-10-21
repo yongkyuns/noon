@@ -12,6 +12,46 @@ impl MobjectFamily {
             .map_err(Into::into)
     }
 
+    /// Count the root (only when it owns points) plus its direct members.
+    pub fn split_count(&self) -> Result<usize, AuthoringError> {
+        Ok(self.member_count()? + usize::from(self.get_num_points()? != 0))
+    }
+
+    /// Read a normalized split index against current points and membership.
+    /// A host may normalize against an earlier count and mutate the root before
+    /// this read. The current own-point predicate decides whether rank zero is self.
+    pub fn split_at(&self, index: usize) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+        if self.get_num_points()? != 0 {
+            if index == 0 {
+                return Ok(Some(CompositeEntryHandle::Family(self.clone())));
+            }
+            self.member_at(index - 1)
+        } else {
+            self.member_at(index)
+        }
+    }
+
+    /// Snapshot self inclusion and direct members without allocating semantic nodes.
+    pub fn split_members(&self) -> Result<Vec<CompositeEntryHandle>, AuthoringError> {
+        let include_self = self.get_num_points()? != 0;
+        let ids = self
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(self.node_id())?
+            .members();
+        let mut members = Vec::with_capacity(ids.len() + usize::from(include_self));
+        if include_self {
+            members.push(CompositeEntryHandle::Family(self.clone()));
+        }
+        for id in ids {
+            members.push(CompositeEntryHandle::from_node(
+                Rc::clone(self.integration_store()),
+                id,
+            )?);
+        }
+        Ok(members)
+    }
+
     /// Read one current direct member through the shared rank index.
     ///
     /// This does not normalize negative indices or capture sibling membership.

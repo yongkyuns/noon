@@ -602,12 +602,18 @@ mod wasm {
             green: f64,
             blue: f64,
             alpha: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
             let color = super::family_color(true, red, green, blue, alpha)
                 .map_err(js_error)?
                 .expect("required family color");
             batch
-                .create_family_with_color(Rc::clone(&self.semantics), z_index, color)
+                .create_family(
+                    Rc::clone(&self.semantics),
+                    z_index,
+                    color,
+                    draw_enabled.unwrap_or(true),
+                )
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -617,9 +623,15 @@ mod wasm {
             &self,
             batch: crate::WasmSceneMembershipBatch,
             z_index: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
             batch
-                .create_family(Rc::clone(&self.semantics), z_index)
+                .create_family(
+                    Rc::clone(&self.semantics),
+                    z_index,
+                    noon::Color::WHITE,
+                    draw_enabled.unwrap_or(true),
+                )
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -699,6 +711,13 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = alignPathPoints)]
+        pub fn align_path_points(&self, other: &WasmLayoutAnchor) -> Result<(), JsValue> {
+            self.anchor
+                .align_path_points(&other.anchor)
+                .map_err(js_error)
+        }
+
         pub fn scale(
             &self,
             scale_x: f64,
@@ -1224,6 +1243,29 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = setPoints)]
+        pub fn set_points(&self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.semantic_family()?
+                .set_points_f64(&points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(&self) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .clear_points()
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathQuery)]
+        pub fn path_query(&self) -> Result<crate::WasmPathQuery, JsValue> {
+            self.semantic_family()?
+                .own_path_query()
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = pointCount)]
         pub fn point_count(&self) -> Result<u32, JsValue> {
             let family = self.semantic_family()?;

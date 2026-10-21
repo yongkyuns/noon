@@ -178,6 +178,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             is_family,
             members,
             family_z,
+            draw_enabled,
             family_color,
             family_style,
             family_background_stroke_color,
@@ -192,16 +193,21 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family(presentation) => (
+                SemanticNodeKind::Family(_) => (
                     true,
                     node.members_iter().collect::<Vec<_>>(),
-                    Some(presentation.presentation.z_index),
-                    Some(presentation.own_color),
-                    Some(presentation.own_style.clone()),
-                    Some(presentation.own_background_stroke_color),
-                    Some(presentation.own_background_stroke_width),
-                    Some(presentation.own_background_stroke_opacity),
-                    Some(presentation.own_sheen_direction),
+                    Some(node.presentation().expect("family presentation").z_index),
+                    node.presentation()
+                        .expect("family presentation")
+                        .draw_enabled,
+                    // Visible paint may differ from the stored fallback. Copy the
+                    // authored fallback itself; the complete style is copied below.
+                    node.family_fallback_color(),
+                    node.family_style().cloned(),
+                    node.family_background_stroke_color(),
+                    node.family_background_stroke_width(),
+                    node.family_background_stroke_opacity(),
+                    node.sheen_direction(),
                     node.graph_declaration().cloned(),
                     node.updating_suspended(),
                 ),
@@ -209,6 +215,9 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                     false,
                     node.members_iter().collect::<Vec<_>>(),
                     None,
+                    node.presentation()
+                        .expect("object presentation")
+                        .draw_enabled,
                     None,
                     None,
                     None,
@@ -241,18 +250,33 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         }
         queue.extend(members.iter().rev().copied());
         edges.push((id, members));
-        let creation = if is_family {
-            SemanticNodeCreation::family()
-        } else {
+        let has_content = !is_family
+            || store
+                .borrow()
+                .node(id)
+                .is_some_and(|node| node.semantic_object_state().is_some());
+        let state = if has_content {
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
             let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
             }
-            SemanticNodeCreation::object(state)
+            Some(state)
+        } else {
+            None
+        };
+        let creation = match (is_family, state) {
+            (true, Some(state)) => SemanticNodeCreation::family_with_content_and_fallback(
+                state,
+                family_color.expect("family fallback was captured"),
+            ),
+            (true, None) => SemanticNodeCreation::family(),
+            (false, Some(state)) => SemanticNodeCreation::object(state),
+            (false, None) => unreachable!("validated object owns a payload"),
         };
         let pending = transaction.create_node(creation);
+        transaction.set_draw_enabled(pending, draw_enabled);
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }
@@ -260,7 +284,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }
-        if let Some(color) = family_color {
+        if let Some(color) = family_color.filter(|_| !has_content) {
             transaction.set_family_color(pending, color);
         }
         if let (
@@ -269,7 +293,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             Some(background_stroke_width),
             Some(background_stroke_opacity),
         ) = (
-            family_style,
+            family_style.filter(|_| !has_content),
             family_background_stroke_color,
             family_background_stroke_width,
             family_background_stroke_opacity,
@@ -430,4 +454,67 @@ fn authored_copy<R>(
     )?;
     let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
     pending.resolve(&result, from_node)
+}
+
+#[cfg(test)]
+mod owned_root_fallback_copy_tests {
+    use crate::{Color, MobjectFamily, Scene};
+
+    fn fallback(family: &MobjectFamily) -> Color {
+        let store = family.integration_store().borrow();
+        match store.node(family.node_id()).unwrap().kind() {
+            noon_core::SemanticNodeKind::Family(
+                noon_core::SemanticFamilyState::ContentOwning { fallback_color },
+            ) => *fallback_color,
+            kind => panic!("expected an owned family root, got {kind:?}"),
+        }
+    }
+
+    #[test]
+    fn authored_and_live_copies_preserve_fallback_independently_from_visible_paint() {
+        let mut scene = Scene::new();
+        let child = scene.square(0.2).unwrap();
+        let source = scene
+            .family_with_presentation(&[(&child).into()], 0.0, Color::RED, true)
+            .unwrap();
+        source
+            .set_points_f64(&[(0.0, 0.0), (0.1, 0.0), (0.2, 0.1), (0.3, 0.2)])
+            .unwrap();
+        source
+            .own_object()
+            .unwrap()
+            .unwrap()
+            .set_fill(0.0, 0.0, 1.0, 1.0)
+            .unwrap();
+        assert_eq!(fallback(&source), Color::RED);
+        assert_ne!(
+            scene
+                .integration_store()
+                .borrow()
+                .node(source.node_id())
+                .unwrap()
+                .family_color(),
+            Some(Color::RED)
+        );
+        let style = source.own_object().unwrap().unwrap().state().unwrap().style;
+        let authored = source.copy_family().unwrap().root().clone();
+        scene.add_many(&[(&source).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let live = scene
+            .live(&mut session)
+            .copy_family(&source)
+            .unwrap()
+            .root()
+            .clone();
+        for copied in [authored, live] {
+            assert_eq!(fallback(&copied), Color::RED);
+            assert_eq!(
+                copied.own_object().unwrap().unwrap().state().unwrap().style,
+                style
+            );
+            assert_eq!(copied.get_num_points().unwrap(), 4);
+            assert_eq!(copied.member_count().unwrap(), 1);
+        }
+        assert_eq!(fallback(&source), Color::RED);
+    }
 }

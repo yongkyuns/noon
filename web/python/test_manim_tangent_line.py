@@ -61,7 +61,7 @@ class ManimTangentLineFacadeTests(unittest.TestCase):
             fake_js.noonCreateAuthoringGeometryHandle = lambda options: (
                 calls.append(("publish",)) or FakeCreatedHandle()
             )
-            fake_js.noonCreateAuthoringFamilyHandle = lambda batch, z: None
+            fake_js.noonCreateAuthoringFamilyHandle = lambda batch, z, draw_enabled, *color: None
             fake_js.noonAuthoringMembershipBatch = lambda kind: None
             sys.modules["js"] = fake_js
 

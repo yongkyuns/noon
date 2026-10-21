@@ -130,6 +130,11 @@ pub enum SemanticNodeCreation {
         source_identity: Option<SourceIdentity>,
     },
     Family {
+        /// Optional ordinary root payload; membership remains on this same node.
+        state: Option<Box<SemanticObjectState>>,
+        /// A content-owning root may retain a fallback independent from its paint.
+        /// `None` derives the initial fallback from the payload's style.
+        fallback_color: Option<crate::Color>,
         source_identity: Option<SourceIdentity>,
     },
     Signal {
@@ -168,6 +173,29 @@ impl SemanticNodeCreation {
 
     pub const fn family() -> Self {
         Self::Family {
+            state: None,
+            fallback_color: None,
+            source_identity: None,
+        }
+    }
+
+    /// Create a family and its full owned payload as one semantic identity.
+    pub fn family_with_content(state: SemanticObjectState) -> Self {
+        Self::Family {
+            state: Some(Box::new(state)),
+            fallback_color: None,
+            source_identity: None,
+        }
+    }
+
+    /// Preserve both a complete root payload and its independently stored fallback.
+    pub fn family_with_content_and_fallback(
+        state: SemanticObjectState,
+        fallback_color: crate::Color,
+    ) -> Self {
+        Self::Family {
+            state: Some(Box::new(state)),
+            fallback_color: Some(fallback_color),
             source_identity: None,
         }
     }
@@ -201,6 +229,7 @@ impl SemanticNodeCreation {
             }
             | Self::Family {
                 source_identity: source,
+                ..
             } => *source = Some(source_identity),
             Self::Signal { .. } | Self::Effect { .. } => {}
         }
@@ -215,7 +244,9 @@ impl SemanticNodeCreation {
             | Self::PendingPathObject {
                 source_identity, ..
             }
-            | Self::Family { source_identity } => source_identity.as_ref(),
+            | Self::Family {
+                source_identity, ..
+            } => source_identity.as_ref(),
             Self::Signal { .. } | Self::Effect { .. } => None,
         }
     }
@@ -249,6 +280,21 @@ pub(super) fn preflight_add_node(
         }
     }
 
+    if let SemanticNodeCreation::Family {
+        state,
+        fallback_color: Some(color),
+        ..
+    } = creation
+    {
+        if state.is_none()
+            || ![color.red, color.green, color.blue, color.alpha]
+                .into_iter()
+                .all(f32::is_finite)
+        {
+            return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
+        }
+    }
+
     match creation {
         SemanticNodeCreation::PendingPathObject { state, .. } => {
             // Retained-path construction is intentionally the ordinary-object
@@ -259,7 +305,10 @@ pub(super) fn preflight_add_node(
             }
             return Ok(());
         }
-        SemanticNodeCreation::Object { state, .. } => {
+        SemanticNodeCreation::Object { state, .. }
+        | SemanticNodeCreation::Family {
+            state: Some(state), ..
+        } => {
             if !state.transform.translation.is_finite()
                 || !state.transform.scale.is_finite()
                 || !state.transform.is_valid()
@@ -326,7 +375,7 @@ pub(super) fn preflight_add_node(
                 }
             }
         }
-        SemanticNodeCreation::Family { .. }
+        SemanticNodeCreation::Family { state: None, .. }
         | SemanticNodeCreation::Signal { .. }
         | SemanticNodeCreation::Effect { .. } => {}
     }
@@ -376,9 +425,20 @@ pub(super) fn commit_add_node(
         SemanticNodeCreation::PendingPathObject { .. } => {
             unreachable!("prepared path declarations materialize before semantic commit")
         }
-        SemanticNodeCreation::Family { source_identity } => {
-            (store.insert_family(), source_identity)
-        }
+        SemanticNodeCreation::Family {
+            state,
+            fallback_color,
+            source_identity,
+        } => (
+            match (state, fallback_color) {
+                (Some(state), Some(color)) => {
+                    store.insert_family_with_content_and_fallback(*state, color)
+                }
+                (Some(state), None) => store.insert_family_with_content(*state),
+                (None, _) => store.insert_family(),
+            },
+            source_identity,
+        ),
         SemanticNodeCreation::Signal { state } => (store.insert_semantic_signal_state(state), None),
         SemanticNodeCreation::Effect {
             owner,

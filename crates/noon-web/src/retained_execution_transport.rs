@@ -23,7 +23,7 @@ pub(crate) mod incremental_render_resources;
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
 // V17 combines master's render-geometry retirement with exact, validated glow in the *genuine* execution/render worker
 // envelope. Older readers must reject rather than silently discard the halo.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 17;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 18;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -350,6 +350,7 @@ impl From<&ObjectContentRef> for TransportObjectContent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransportObjectState {
+    pub draw_enabled: bool,
     pub slot: TransportSlotId,
     pub order: u32,
     pub object: ObjectId,
@@ -1804,6 +1805,7 @@ fn transport_object(
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
+        draw_enabled: object.draw_enabled,
         slot: TransportSlotId {
             slot: slot_index,
             generation: 0,
@@ -2015,6 +2017,7 @@ fn frame_object(
         None => None,
     };
     Ok(FrameObjectState {
+        draw_enabled: object.draw_enabled,
         glow: object
             .glow
             .map(|value| {
@@ -2094,6 +2097,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -2105,6 +2109,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -2148,7 +2153,7 @@ mod tests {
         let snapshot = encoder
             .encode_snapshot_with_context(&frame, camera, context)
             .unwrap();
-        assert_eq!(snapshot.protocol_version, 17);
+        assert_eq!(snapshot.protocol_version, 18);
         assert_eq!(
             snapshot.objects[0].glow.unwrap().attachment,
             glow.attachment
@@ -3188,6 +3193,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -3308,6 +3314,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

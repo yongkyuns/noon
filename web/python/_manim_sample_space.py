@@ -275,7 +275,7 @@ class SampleSpace(_compat.Group):
         for ``1``; other values remain unsupported.
         """
         _partition_context(self)
-        if not isinstance(parts, _compat.Group):
+        if not isinstance(parts, (_compat.Group, _compat.VGroup)):
             raise TypeError("parts must be a SampleSpace partition family")
         if not isinstance(labels, list):
             raise TypeError("labels must be a list of strings or Mobjects")

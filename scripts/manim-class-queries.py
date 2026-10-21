@@ -44,6 +44,13 @@ def observations(classes):
         cls = classes[name]
         obj = object.__new__(cls)
         result.append([name, obj.get_group_class().__name__, obj.get_mobject_type_class().__name__, cls.get_mobject_type_class().__name__])
+    for name in ("Group", "VGroup"):
+        cls = classes[name]
+        value = object.__new__(cls)
+        result.append([name, "hierarchy", [base.__name__ for base in cls.__bases__],
+                       [base.__name__ for base in cls.__mro__],
+                       isinstance(value, classes["Group"]),
+                       isinstance(value, classes["VMobject"])])
     class Custom(classes["VGroup"]): pass
     result.append([object.__new__(Custom).get_group_class().__name__, Custom.get_mobject_type_class().__name__])
     class Override(Custom):

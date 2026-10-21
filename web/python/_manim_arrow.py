@@ -74,7 +74,7 @@ def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
 
 
 def _mobject_endpoint_handle(name: str, value: object):
-    if isinstance(value, _compat.Group):
+    if isinstance(value, (_compat.Group, _compat.VGroup)):
         raise NotImplementedError(
             f"{name} Group endpoints require shared family boundary-point semantics"
         )

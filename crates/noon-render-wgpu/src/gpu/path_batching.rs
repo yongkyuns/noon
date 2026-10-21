@@ -300,6 +300,7 @@ mod tests {
         let mut frame = FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 id: ObjectId::new(1),

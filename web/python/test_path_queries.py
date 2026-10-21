@@ -1,11 +1,12 @@
 import gc
 import inspect
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import _manim_compat as compat
 import _manim_path_queries as queries
 import _manim_semantic_handles as semantic_handles
-from _typed_geometry_test_support import identity_only_wrapper
+from _typed_geometry_test_support import identity_only_wrapper, empty_path_query
 
 
 def _path_observation(query):
@@ -491,7 +492,7 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         first = identity_only_wrapper(compat.VMobject)
         second = identity_only_wrapper(compat.VMobject)
         first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
@@ -516,8 +517,9 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         root = identity_only_wrapper(compat.VGroup)
-        root._semantic_family_handle = object()
+        root._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         nested = identity_only_wrapper(compat.VGroup)
+        nested._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         first = identity_only_wrapper(compat.VMobject)
         second = identity_only_wrapper(compat.VMobject)
         first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
@@ -540,7 +542,7 @@ class PathQueryTests(unittest.TestCase):
             self.skipTest("NumPy-only empty array shape check")
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         group.get_family = Mock(return_value=[group])
 
         boundary = group.get_points_defining_boundary()
@@ -553,7 +555,7 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         member = identity_only_wrapper(compat.VMobject)
         member.get_anchors = Mock(return_value=[noon.Vec2(1, 2), noon.Vec2(3, 4)])
         group.get_family = Mock(return_value=[group, member])

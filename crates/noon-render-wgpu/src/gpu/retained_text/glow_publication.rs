@@ -78,7 +78,7 @@ impl RetainedGlowPublication {
             self.sources.clear();
             for (index, row) in frame.objects.iter().enumerate() {
                 self.rows_examined += 1;
-                if row.glow.is_some() && frame.is_present(index) {
+                if row.glow.is_some() && frame.is_drawable(index) {
                     self.sources.insert(index, row.id);
                     self.dirty.insert(index);
                 }
@@ -89,7 +89,7 @@ impl RetainedGlowPublication {
                 let next = frame
                     .objects
                     .get(index)
-                    .filter(|row| row.glow.is_some() && frame.is_present(index))
+                    .filter(|row| row.glow.is_some() && frame.is_drawable(index))
                     .map(|row| row.id);
                 if let Some(object) = next {
                     self.sources.insert(index, object);
@@ -266,7 +266,7 @@ impl GpuRenderer {
                     .objects
                     .get(index)
                     .ok_or(GlowPrepareError::PublicationMismatch)?;
-                if row.id != object || !frame.is_present(index) || row.spatial.is_some() {
+                if row.id != object || !frame.is_drawable(index) || row.spatial.is_some() {
                     return Err(GlowPrepareError::PublicationMismatch);
                 }
                 let glow = row

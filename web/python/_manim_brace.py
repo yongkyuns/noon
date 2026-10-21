@@ -23,7 +23,7 @@ def _require_geometry_host(name: str) -> None:
 def _brace_target_handle(mobject: object):
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("Brace target must be a Mobject")
-    if isinstance(mobject, _compat.Group):
+    if isinstance(mobject, (_compat.Group, _compat.VGroup)):
         handle = getattr(mobject, "_semantic_family_handle", None)
     else:
         handle = _shared._handle_for(mobject)
