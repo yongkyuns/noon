@@ -22,6 +22,9 @@ pub enum SemanticCompiledSceneError {
     InvalidPresentation {
         node: SemanticNodeId,
     },
+    InvalidClickIndicate {
+        node: SemanticNodeId,
+    },
     UnsupportedSignalBindings {
         node: SemanticNodeId,
         count: usize,
@@ -49,6 +52,12 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::InvalidPresentation { node } => write!(
                 formatter,
                 "semantic object {}:{} contains a non-finite z-index",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidClickIndicate { node } => write!(
+                formatter,
+                "semantic object {}:{} requires a valid analytic click Indicate binding without signal drivers",
                 node.slot(),
                 node.generation()
             ),
@@ -181,8 +190,21 @@ fn materialize_semantic_projection(
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
         let (content, text_bounds) =
             lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        if (object.click_indicate.is_some() && !object.signal_bindings.is_empty())
+            || crate::validate_click_indicate_binding(
+                object.execution_id,
+                crate::is_click_indicate_target(&content),
+                object.click_indicate.as_deref(),
+            )
+            .is_err()
+        {
+            return Err(SemanticCompiledSceneError::InvalidClickIndicate {
+                node: object.semantic_id,
+            });
+        }
         objects.push(CompiledObject {
             draw_enabled: object.presentation.draw_enabled,
+            click_indicate: object.click_indicate.clone(),
             glow: object.glow.clone(),
             id: object.execution_id,
             content,
@@ -351,6 +373,10 @@ fn materialize_semantic_projection(
         family_order,
         family_ranks,
         live_object_count: objects.len(),
+        click_indicate_count: objects
+            .iter()
+            .filter(|object| object.click_indicate.is_some())
+            .count(),
         painter_ranks: painter_order.iter().copied().map(Some).collect(),
         painter_order,
         objects,

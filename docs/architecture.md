@@ -709,7 +709,8 @@ an implicit whole-scene relocation during append. It may be O(existing storage);
 ordinary suffix extraction/installation remains proportional to newly touched
 payloads and ordering neighbours. Resource/payload limits count entries, not bytes.
 An empty reactive runtime installed by semantic lowering is admissible; actual
-signals or bindings, including later enrollment, require their own history policy.
+signals or reactive bindings, including later enrollment, require their own history
+policy.
 Family channels, spatial/glow plans, reactive/native input, host callbacks,
 terminal endpoint publication and a realtime producer/player shell remain outside
 admission. It is disabled by default and does not change gallery
@@ -724,9 +725,20 @@ they do not modify retained history or source semantics. Appending future histor
 preserves the displayed effect. Forward playback within one execution revision
 preserves disjoint effects, while authored channel conflicts, a crossed execution
 revision, or an explicit seek supersede them under the existing runtime policy.
-This does not admit automatic pointer dispatch or historical authored bindings;
-those require time-qualified identity and binding metadata in the same execution
-history. General injected animations and causal edits require separate admission.
+
+Authored click-Indicate declarations are lowered into their existing compiled
+object rows and retained by ordinary reversible execution history. Preparing a
+bound action reads the declaration in the displayed revision, including its
+absence, replacement or removal. Binding-only publications retain one touched
+row without dirtying renderer-facing values. Shared session dispatch reads that
+same execution projection, with a maintained live-binding count for constant-time
+input interest; it keeps no producer-current binding map. Future appended rows
+remain inactive until their creation revision is displayed.
+
+The prefix reader exposes typed target-based preparation. Automatic pointer
+dispatch still requires time-qualified semantic identity and integration with
+the shared session's input and picking contracts. General injected animations
+and causal edits require separate admission.
 
 ### Identity generations, revisions, versions and sequences
 

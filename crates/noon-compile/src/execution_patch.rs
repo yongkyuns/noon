@@ -1,6 +1,6 @@
 use noon_core::{
-    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, SemanticTransform, Style,
-    TrackDefinition, TrackId, Transform2D,
+    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, SemanticClickIndicate,
+    SemanticTransform, Style, TrackDefinition, TrackId, Transform2D,
 };
 
 use crate::{
@@ -71,6 +71,12 @@ pub enum ExecutionPatch {
     SetDrawEnabled {
         object: ObjectId,
         enabled: bool,
+    },
+    /// Replace one authored click action without changing renderer-facing values.
+    /// The ordinary reversible row history retains its time-qualified declaration.
+    SetClickIndicate {
+        object: ObjectId,
+        binding: Option<SemanticClickIndicate>,
     },
     SetStyle {
         object: ObjectId,

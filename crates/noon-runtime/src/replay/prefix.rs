@@ -181,20 +181,7 @@ impl PrefixReader {
         object: ObjectId,
         binding: SemanticClickIndicate,
     ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
-        let row = self
-            .runtime
-            .frame_index_for_object(object)
-            .filter(|&index| {
-                self.runtime.object_slot_is_live(index)
-                    && self.runtime.frame().presences.get(index) == Some(&true)
-            })
-            .and_then(|index| self.runtime.frame().objects.get(index))
-            .filter(|row| row.draw_enabled)
-            .ok_or_else(|| {
-                PrefixError::Interaction(
-                    "interaction target is not live in the displayed prefix".into(),
-                )
-            })?;
+        let row = self.displayed_interaction_target(object)?;
         // SceneInstance preparation normally follows semantic binding admission.
         // This direct reader API must preserve that bounded target domain itself.
         if row.style.fill.is_none()
@@ -210,6 +197,40 @@ impl PrefixReader {
         self.runtime
             .prepare_click_indicate(object, binding)
             .map_err(PrefixError::Interaction)
+    }
+
+    /// Prepare the authored click action from the displayed historical revision.
+    /// A visible target with no binding returns `None`. Future binding changes do
+    /// not take effect until playback selects their revision. Pointer collection,
+    /// picking, and trigger synthesis remain owned by the common input session.
+    pub fn prepare_bound_click_indicate(
+        &self,
+        object: ObjectId,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        self.displayed_interaction_target(object)?;
+        let Some(binding) = self.runtime.click_indicate_binding(object) else {
+            return Ok(None);
+        };
+        self.prepare_click_indicate(object, binding)
+    }
+
+    fn displayed_interaction_target(
+        &self,
+        object: ObjectId,
+    ) -> Result<&crate::FrameObjectState, PrefixError> {
+        self.runtime
+            .frame_index_for_object(object)
+            .filter(|&index| {
+                self.runtime.object_slot_is_live(index)
+                    && self.runtime.frame().presences.get(index) == Some(&true)
+            })
+            .and_then(|index| self.runtime.frame().objects.get(index))
+            .filter(|row| row.draw_enabled)
+            .ok_or_else(|| {
+                PrefixError::Interaction(
+                    "interaction target is not live in the displayed prefix".into(),
+                )
+            })
     }
 
     /// Admit only a prepared effect belonging to this reader and its displayed

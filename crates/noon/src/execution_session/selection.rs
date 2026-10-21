@@ -236,7 +236,7 @@ impl ExecutionSession {
         let Some(max_movement) = prepared
             .state
             .max_movement
-            .or_else(|| (!self.interaction_bindings.is_empty()).then_some(4.0))
+            .or_else(|| self.runtime.has_click_indicate_bindings().then_some(4.0))
         else {
             return Ok(prepared);
         };

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
-    validate_transform, ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId,
-    TrackValues,
+    validate_transform, ObjectContentRef, ObjectId, Property, SemanticClickIndicate,
+    TrackDefinition, TrackId, TrackValues,
 };
 
 use crate::{
@@ -76,6 +76,8 @@ fn effective_track_interval(
 enum ObjectOverlay {
     Present {
         glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+        click_indicate: Option<SemanticClickIndicate>,
+        click_indicate_target: bool,
         index: u32,
         is_text: bool,
         spatial: Option<Box<crate::CompiledSpatialState>>,
@@ -157,6 +159,13 @@ impl PreflightOverlay {
                 id,
                 ObjectOverlay::Present {
                     glow,
+                    click_indicate: scene.objects[index as usize]
+                        .click_indicate
+                        .as_deref()
+                        .copied(),
+                    click_indicate_target: crate::is_click_indicate_target(
+                        &scene.objects[index as usize].content,
+                    ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     spatial: scene.objects[index as usize].spatial.clone(),
@@ -200,6 +209,13 @@ impl PreflightOverlay {
                 id,
                 ObjectOverlay::Present {
                     glow: scene.objects[index as usize].glow.clone(),
+                    click_indicate: scene.objects[index as usize]
+                        .click_indicate
+                        .as_deref()
+                        .copied(),
+                    click_indicate_target: crate::is_click_indicate_target(
+                        &scene.objects[index as usize].content,
+                    ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     spatial: spatial.map(Box::new),
@@ -217,6 +233,57 @@ impl PreflightOverlay {
                 self.seen_objects.insert(id);
                 Some(scene.objects[index as usize].text().is_some())
             }
+        }
+    }
+
+    fn click_indicate(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<(bool, Option<SemanticClickIndicate>)> {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present {
+                click_indicate,
+                click_indicate_target,
+                ..
+            }) => Some((*click_indicate_target, *click_indicate)),
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                let row = &scene.objects[index as usize];
+                Some((
+                    crate::is_click_indicate_target(&row.content),
+                    row.click_indicate.as_deref().copied(),
+                ))
+            }
+        }
+    }
+
+    fn set_click_indicate(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        binding: Option<SemanticClickIndicate>,
+    ) {
+        if let Some(ObjectOverlay::Present { click_indicate, .. }) = self.objects.get_mut(&id) {
+            *click_indicate = binding;
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            let row = &scene.objects[index as usize];
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    glow: row.glow.clone(),
+                    click_indicate: binding,
+                    click_indicate_target: crate::is_click_indicate_target(&row.content),
+                    index,
+                    is_text: row.text().is_some(),
+                    spatial: row.spatial.clone(),
+                },
+            );
         }
     }
 
@@ -362,6 +429,8 @@ pub(super) fn preflight_transaction_with_resources(
                     object.id,
                     ObjectOverlay::Present {
                         glow: object.glow.clone(),
+                        click_indicate: object.click_indicate.as_deref().copied(),
+                        click_indicate_target: crate::is_click_indicate_target(&object.content),
                         index,
                         is_text: object.text().is_some(),
                         spatial: object.spatial.clone(),
@@ -396,6 +465,14 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_execution_content(*object, content, *text_bounds)?;
+                let (_, click_indicate) = overlay
+                    .click_indicate(scene, *object)
+                    .expect("validated live object");
+                crate::validate_click_indicate_binding(
+                    *object,
+                    crate::is_click_indicate_target(content),
+                    click_indicate.as_ref(),
+                )?;
                 validate_execution_content_resource(
                     &scene.resources,
                     Some(additions),
@@ -422,6 +499,8 @@ pub(super) fn preflight_transaction_with_resources(
                     *object,
                     ObjectOverlay::Present {
                         glow,
+                        click_indicate,
+                        click_indicate_target: crate::is_click_indicate_target(content),
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
                         spatial: spatial.map(Box::new),
@@ -520,6 +599,13 @@ pub(super) fn preflight_transaction_with_resources(
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
+            }
+            ExecutionPatch::SetClickIndicate { object, binding } => {
+                let (analytic_target, _) = overlay
+                    .click_indicate(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                crate::validate_click_indicate_binding(*object, analytic_target, binding.as_ref())?;
+                overlay.set_click_indicate(scene, *object, *binding);
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {

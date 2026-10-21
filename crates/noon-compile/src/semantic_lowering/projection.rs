@@ -320,6 +320,7 @@ impl SemanticExecutionIndex {
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 semantic_id,
                 glow: state.glow,
+                click_indicate: state.click_indicate,
                 execution_id: self.ensure_object(semantic_id),
                 content: state.content,
                 base_transform: state.base_transform,
@@ -410,6 +411,8 @@ pub struct SemanticExecutionGraphEdgeDependency {
 pub struct SemanticExecutionObject {
     /// Same immutable definition and generational attachment as the compiled row.
     pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    /// Authored native action lowered with the object's time-qualified values.
+    pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
@@ -822,6 +825,7 @@ fn lower_graph_dependencies(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
     pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    pub(super) click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
     pub(super) base_style: Style,
@@ -1029,6 +1033,7 @@ pub(super) fn lower_object_state(
     };
     Ok(LoweredObjectState {
         glow: None,
+        click_indicate: state.click_indicate().map(std::sync::Arc::new),
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,

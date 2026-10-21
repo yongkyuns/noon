@@ -1171,6 +1171,7 @@ fn lower_prepared_entry(
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
     compiled.draw_enabled = state.draw_enabled();
+    compiled.click_indicate = lowered.click_indicate;
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     Ok(PreparedEntry {
         object,
@@ -1186,6 +1187,7 @@ struct PublicationDomains {
     content: bool,
     z_index: bool,
     draw_enabled: bool,
+    click_indicate: bool,
     numeric: bool,
     semantic_transform: bool,
     spatial_state: bool,
@@ -1259,6 +1261,11 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().draw_enabled = true;
                 }
             }
+            SemanticMutation::SetClickIndicate { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().click_indicate = true;
+                }
+            }
             SemanticMutation::SetZIndex { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().z_index = true;
@@ -1295,8 +1302,7 @@ fn lower_semantic_publication(
             | SemanticMutation::SetInset2DView { .. }
             | SemanticMutation::AddUpdater { .. }
             | SemanticMutation::RemoveUpdater { .. }
-            | SemanticMutation::ClearUpdaters { .. }
-            | SemanticMutation::SetClickIndicate { .. } => {}
+            | SemanticMutation::ClearUpdaters { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
@@ -1316,7 +1322,7 @@ fn lower_semantic_publication(
         // A style/content/domain edit must not leave an installed or newly staged
         // glow outside the same finite profile accepted at initial lowering.
         glow::lower_prepared_attachment(prepared, node.into())?;
-        // Object-owned interaction/metadata declarations have no render-value patch.
+        // Non-executable metadata declarations need no object-row patch.
         let Some(flags) = domains.get(&node) else {
             continue;
         };
@@ -1340,6 +1346,14 @@ fn lower_semantic_publication(
             mutations.push(ExecutionPatch::SetZIndex {
                 object,
                 value: state.z_index(),
+            });
+        }
+        // Release an action before changing its analytic content domain. Install
+        // a new action only after content reaches the proposed target domain.
+        if flags.click_indicate && state.click_indicate().is_none() {
+            mutations.push(ExecutionPatch::SetClickIndicate {
+                object,
+                binding: None,
             });
         }
         if flags.content {
@@ -1368,6 +1382,12 @@ fn lower_semantic_publication(
                 object,
                 content,
                 text_bounds,
+            });
+        }
+        if flags.click_indicate && state.click_indicate().is_some() {
+            mutations.push(ExecutionPatch::SetClickIndicate {
+                object,
+                binding: state.click_indicate(),
             });
         }
         if flags.transform || flags.semantic_transform || flags.spatial_state {

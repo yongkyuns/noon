@@ -80,6 +80,7 @@ on:
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
       - "crates/noon-runtime/src/replay.rs"
+      - "crates/noon-runtime/src/replay/**"
   workflow_dispatch:
 
 permissions:

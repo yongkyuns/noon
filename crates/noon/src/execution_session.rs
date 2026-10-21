@@ -833,7 +833,6 @@ pub struct ExecutionSession {
     last_native_event_sequence: Option<u64>,
     pointer_input: input::PointerInputState,
     pointer_selection: selection::PointerSelectionState,
-    interaction_bindings: interactions::InteractionBindings,
     translation_drag: translation_drag::TranslationDragState,
     inspection: inspection::SessionInspectionView,
     last_structural_publication: StructuralPublicationStats,
@@ -891,7 +890,6 @@ impl Clone for ExecutionSession {
             last_native_event_sequence: self.last_native_event_sequence,
             pointer_input: self.pointer_input.clone(),
             pointer_selection: self.pointer_selection.fresh(),
-            interaction_bindings: self.interaction_bindings.clone(),
             translation_drag: self.translation_drag.clone(),
             inspection: self.inspection,
             last_structural_publication: self.last_structural_publication,
@@ -961,7 +959,6 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
-        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -981,7 +978,6 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
-        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -1016,7 +1012,6 @@ impl ExecutionSession {
         let mut session =
             Self::from_lowered(store.identity(), execution_index, reachability, lowered);
         session.sync_inset_2d_view_bindings(store);
-        session.initialize_interaction_bindings(store);
         Ok(session)
     }
 
@@ -1066,7 +1061,6 @@ impl ExecutionSession {
             last_native_event_sequence: None,
             pointer_input: input::PointerInputState::default(),
             pointer_selection: selection::PointerSelectionState::default(),
-            interaction_bindings: Default::default(),
             translation_drag: Default::default(),
             inspection: inspection::SessionInspectionView::default(),
             last_structural_publication: StructuralPublicationStats::default(),

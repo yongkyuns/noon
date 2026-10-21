@@ -806,6 +806,12 @@ impl SceneInstance {
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
+        if matches!(patch, ExecutionPatch::SetClickIndicate { .. }) {
+            // Authored action metadata participates in ordinary execution history,
+            // but changing a binding does not change any rendered frame property.
+            self.compiled.apply_execution_patch(patch)?;
+            return Ok(&self.frame);
+        }
         if matches!(
             patch,
             ExecutionPatch::SetContent { .. }
