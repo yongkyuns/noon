@@ -784,7 +784,7 @@ for (const retired of [
 const objectStart = declarations.indexOf("export class WasmAuthoringMobjectHandle");
 const objectEnd = declarations.indexOf("export class ", objectStart + 1);
 const objectSurface = declarations.slice(objectStart, objectEnd < 0 ? undefined : objectEnd);
-for (const method of ["memberView(): WasmFamilyMemberView", "memberKeys(): string[]", "splitCount(include_self?: boolean | null): number", "splitAt(index: number, include_self?: boolean | null): any", "splitKeys(include_self?: boolean | null): string[]", "splitIterator(include_self?: boolean | null): WasmFamilyIterator", "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan"]) {
+for (const method of ["memberView(): WasmFamilyMemberView", "memberKeys(): string[]", "editMembership(batch: WasmSceneMembershipBatch): Uint8Array", "prependMembers(batch: WasmSceneMembershipBatch): void", "insertMember(index: number, batch: WasmSceneMembershipBatch): void", "replaceMembers(batch: WasmSceneMembershipBatch): void", "copyFamily(references: WasmSceneMembershipBatch): WasmFamilyCopy", "splitCount(include_self?: boolean | null): number", "splitAt(index: number, include_self?: boolean | null): any", "splitKeys(include_self?: boolean | null): string[]", "splitIterator(include_self?: boolean | null): WasmFamilyIterator", "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan"]) {
   if (objectStart < 0 || !objectSurface.includes(method)) throw new Error(`Object member-query ABI is missing ${method}`);
 }
 if (wasmStats.size === 0) {

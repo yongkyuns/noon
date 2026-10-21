@@ -703,6 +703,18 @@ impl Default for SemanticMutationTransaction {
 }
 
 impl SemanticMutationTransaction {
+    /// Build an ordered membership program, including remove/re-add of an edge.
+    ///
+    /// This reuses the same sparse ordered preflight as staged membership edits.
+    /// Identity, cycle and atomic-publication checks still apply. Duplicate
+    /// non-membership writes remain errors; `new()` retains strict edge uniqueness.
+    pub fn ordered_membership() -> Self {
+        Self {
+            allow_repeated_membership_mutations: true,
+            ..Self::default()
+        }
+    }
+
     /// Create an ordered named appearance attachment using the ordinary allocator.
     /// This initial semantic slice supports leaf owners only; renderer admission
     /// remains separately gated until effect lowering is available.

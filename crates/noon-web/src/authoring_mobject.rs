@@ -1155,19 +1155,26 @@ mod wasm {
     /// Derived typed lookup used only to reconstruct host wrapper identities.
     #[wasm_bindgen]
     pub struct WasmFamilyCopy {
-        copied: noon::FamilyCopy,
+        copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
     }
 
     impl WasmFamilyCopy {
+        pub(crate) fn from_object_copy(copied: noon::MobjectCopy) -> Self {
+            Self {
+                copied: copied.into_entry_copy(),
+            }
+        }
         pub(crate) fn from_copy(copied: noon::FamilyCopy) -> Self {
-            Self { copied }
+            Self {
+                copied: copied.into_entry_copy(),
+            }
         }
     }
 
     #[wasm_bindgen]
     impl WasmFamilyCopy {
-        pub fn root(&self) -> WasmAuthoringFamilyHandle {
-            WasmAuthoringFamilyHandle::from_semantic_family(self.copied.root().clone())
+        pub fn root(&self) -> JsValue {
+            crate::authoring_composite::entry_handle(self.copied.root().clone())
         }
 
         #[wasm_bindgen(js_name = mobjectFor)]
@@ -2280,7 +2287,7 @@ mod wasm {
             batch: crate::WasmSceneMembershipBatch,
         ) -> Result<Vec<u8>, JsValue> {
             batch
-                .edit_family(&self.semantic_family()?)
+                .edit_family((&self.semantic_family()?).into())
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(js_error)
         }
@@ -2313,6 +2320,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = replaceMembers)]
+        pub fn replace_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .replace_members(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = invertMembers)]
         pub fn invert_members(&self, recursive: bool) -> Result<(), JsValue> {
             self.semantic_family()?.invert(recursive).map_err(js_error)
@@ -3257,6 +3273,56 @@ mod wasm {
             self.handle
                 .slice_plan_with_self(query_point_inclusion((&self.handle).into(), include_self)?)
                 .map(|plan| WasmFamilySlicePlan { plan })
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = editMembership)]
+        pub fn edit_membership(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            batch
+                .edit_family((&self.handle).into())
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = prependMembers)]
+        pub fn prepend_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .prepend_many(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = insertMember)]
+        pub fn insert_member(
+            &self,
+            index: usize,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(js_error)?;
+            let [member] = members.as_slice() else {
+                return Err(js_error("insertion requires exactly one member"));
+            };
+            self.handle.insert_member(index, *member).map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = replaceMembers)]
+        pub fn replace_members(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .replace_members(&batch.copy_references().map_err(js_error)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.handle
+                .copy_with_references(&references.copy_references().map_err(js_error)?)
+                .map(WasmFamilyCopy::from_object_copy)
                 .map_err(js_error)
         }
         #[wasm_bindgen(js_name = cloneHandle)]

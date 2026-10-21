@@ -25,17 +25,14 @@ class ManimMobjectBackgroundRectangleTests(unittest.TestCase):
         )
         family.add_to_back.assert_called_once_with(background)
 
-    def test_bare_object_rejects_before_constructing_a_rectangle(self):
+    def test_ordinary_object_uses_the_shared_prepend_operation(self):
         mobject = object.__new__(noon.Mobject)
-
-        with patch("_manim_shared_geometry.BackgroundRectangle") as constructor:
-            with self.assertRaisesRegex(
-                NotImplementedError,
-                "add_background_rectangle requires a shared family object",
-            ):
-                mobject.add_background_rectangle(buff=0.25)
-
-        constructor.assert_not_called()
+        background = object()
+        with patch("_manim_shared_geometry.BackgroundRectangle", return_value=background) as constructor, patch("_manim_semantic_handles._group_add_to_back", return_value=mobject) as prepend:
+            self.assertIs(mobject.add_background_rectangle(buff=0.25), mobject)
+        self.assertIs(mobject.background_rectangle, background)
+        constructor.assert_called_once_with(mobject, color=None, fill_opacity=0.75, buff=0.25)
+        prepend.assert_called_once_with(mobject, background)
 
 
 if __name__ == "__main__":

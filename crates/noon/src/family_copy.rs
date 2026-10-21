@@ -28,6 +28,15 @@ pub type FamilyCopy = SemanticCopy<MobjectFamily>;
 pub type MobjectCopy = SemanticCopy<Mobject>;
 
 impl<R> SemanticCopy<R> {
+    /// Change only the typed root projection; retain the canonical copy identity map.
+    fn map_root<T>(self, map: impl FnOnce(R) -> T) -> SemanticCopy<T> {
+        SemanticCopy {
+            root: map(self.root),
+            store: self.store,
+            copied: self.copied,
+        }
+    }
+
     pub fn root(&self) -> &R {
         &self.root
     }
@@ -140,6 +149,19 @@ impl PendingSemanticCopy {
             store: self.store,
             copied,
         })
+    }
+}
+
+impl SemanticCopy<Mobject> {
+    /// Project this copied object's root into the common typed entry form.
+    pub fn into_entry_copy(self) -> SemanticCopy<crate::CompositeEntryHandle> {
+        self.map_root(crate::CompositeEntryHandle::Mobject)
+    }
+}
+impl SemanticCopy<MobjectFamily> {
+    /// Project this copied family's root into the common typed entry form.
+    pub fn into_entry_copy(self) -> SemanticCopy<crate::CompositeEntryHandle> {
+        self.map_root(crate::CompositeEntryHandle::Family)
     }
 }
 
