@@ -1,5 +1,6 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
   WasmAuthoringVectorPath,
@@ -353,12 +354,14 @@ async function initializePyodide() {
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
       : context.liveCreateDecimalNumber(...args));
   };
+  const isFamilyHandle = (handle) => handle instanceof WasmAuthoringFamilyHandle;
+  self.noonIsAuthoringFamilyHandle = isFamilyHandle;
   const compositeRows = (rows) => {
     const entries = new WasmCompositeRows();
     for (const row of rows) {
       entries.beginRow();
       for (const entry of row) {
-        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        if (isFamilyHandle(entry)) entries.appendFamilyEntry(entry);
         else entries.appendEntry(entry);
       }
     }

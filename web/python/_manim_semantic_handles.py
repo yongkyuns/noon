@@ -658,6 +658,7 @@ def _clone_mobject(
         "_semantic_handle",
         "_semantic_handle_fresh",
         "_canonical_live_target_context",
+        "_semantic_member_reference_scope",
     }
     # A callback registry belongs to its source occurrence. The detached target
     # carries only its opaque semantic handle, never copied callback ownership.
@@ -3005,23 +3006,216 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
+def _family_query_handle(root):
+    handle = getattr(root, "_semantic_family_handle", None)
+    if handle is None:
+        handle = _handle_for(root)
+    if handle is None:
+        raise RuntimeError("member queries require a shared Rust semantic handle")
+    return handle
+
+
+class _FamilyWrapperReferences:
+    """Host object references only; Rust selects membership and order."""
+    __slots__ = ("wrappers", "readers")
+
+    def __init__(self, wrappers):
+        self.wrappers = wrappers
+        self.readers = 0
+
+
+def _retain_group_wrapper_references(root):
+    if getattr(root, "_semantic_member_wrappers", None) is None:
+        root._semantic_member_wrappers = {}
+    scope = getattr(root, "_semantic_member_reference_scope", None)
+    if scope is None or scope.wrappers is not root._semantic_member_wrappers:
+        scope = _FamilyWrapperReferences(root._semantic_member_wrappers)
+        root._semantic_member_reference_scope = scope
+    scope.readers += 1
+    return scope
+
+
+def _fork_group_wrapper_references(root):
+    scope = getattr(root, "_semantic_member_reference_scope", None)
+    if scope is not None and scope.wrappers is root._semantic_member_wrappers and scope.readers:
+        # A native list replacement has committed. Preserve original host
+        # identities for retained old-list readers, without mirroring its order.
+        root._semantic_member_wrappers = dict(root._semantic_member_wrappers)
+        root._semantic_member_reference_scope = None
+
+
+def _group_point_inclusion(root, predicate="has_points"):
+    method = getattr(root, predicate)
+    default = getattr(_base.Mobject, predicate)
+    intrinsic = getattr(method, "__func__", None) is default
+    if predicate == "has_no_points":
+        intrinsic = intrinsic and getattr(root.has_points, "__func__", None) is _base.Mobject.has_points
+    if intrinsic:
+        return None
+    value = bool(method())
+    return not value if predicate == "has_no_points" else value
+
+
+def _group_wrapper_for_key(root, key, references=None):
+    if key == _family_wrapper_key(root):
+        return root
+    if references is not None and key in references:
+        return references[key]
+    try:
+        return root._semantic_member_wrappers[key]
+    except KeyError as error:
+        raise RuntimeError("shared family identity has no Python wrapper") from error
+
+
+def _free_family_query_handle(handle):
+    free = getattr(handle, "free", None)
+    if free is not None:
+        free()
+
+
+class _SharedFamilyIterator:
+    """Python iterator protocol and wrapper identities over a Rust cursor."""
+    __slots__ = ("_root", "_native", "_references")
+
+    def __init__(self, root):
+        self._root, self._native, self._references = root, None, None
+        inclusion = _group_point_inclusion(root)
+        refresh = getattr(root, "_refresh_semantic_members", None)
+        if refresh is not None:
+            refresh()
+        self._native = engine_call(_family_query_handle(root).splitIterator, inclusion)
+        self._references = _retain_group_wrapper_references(root)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._native is None:
+            raise StopIteration
+        try:
+            selected = engine_call(self._native.nextMember)
+            if _is_missing_handle(selected):
+                self.close()
+                raise StopIteration
+            try:
+                key = _shared_handle_key(selected)
+            finally:
+                _free_family_query_handle(selected)
+            root = self._root
+            references = self._references.wrappers
+            if key not in references and key != _family_wrapper_key(root):
+                refresh = getattr(root, "_refresh_semantic_members", None)
+                if refresh is not None:
+                    refresh()
+            return _group_wrapper_for_key(root, key, references)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        native, self._native = self._native, None
+        scope, self._references = self._references, None
+        self._root = None
+        if scope is not None:
+            scope.readers -= 1
+        if native is not None:
+            _free_family_query_handle(native)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def _group_iter(root):
+    return _SharedFamilyIterator(root)
+
+
+def _group_length(root):
+    return int(engine_call(_family_query_handle(root).splitCount, _group_point_inclusion(root)))
+
+
+def _group_split(root):
+    # CE split reads the intrinsic point array; unlike len/iteration/indexing,
+    # it does not invoke an overridden has_points predicate.
+    keys = engine_call(_family_query_handle(root).splitKeys, None)
+    refresh = getattr(root, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
+    return [_group_wrapper_for_key(root, str(key)) for key in keys]
+
+
 def _group_indexed_member(self: _compat.Group, index: object) -> object:
-    # Python owns its index protocol. Rust observes current membership only
-    # after __index__ finishes, using the already-normalized absolute rank.
+    # Python normalizes before invoking __index__; Rust then reads current
+    # root inclusion and current direct-member rank after that callback.
     normalized = range(len(self))[index]
-    handle = engine_call(self._semantic_family_handle.memberAt, normalized)
-    if _is_missing_handle(handle):
+    selected = engine_call(_family_query_handle(self).splitAt, normalized,
+                           _group_point_inclusion(self, "has_no_points"))
+    if _is_missing_handle(selected):
         raise IndexError("list index out of range")
-    key = _shared_handle_key(handle)
-    # Specialized wrappers refresh language metadata even for known identities.
-    # Ordinary Group/VGroup reads have no such hook or sibling traversal.
+    try:
+        key = _shared_handle_key(selected)
+    finally:
+        _free_family_query_handle(selected)
+    if key == _family_wrapper_key(self):
+        return self
     refresh = getattr(self, "_refresh_semantic_members", None)
     if refresh is not None:
         refresh()
+    return _group_wrapper_for_key(self, key)
+
+
+def _slice_operand(value):
+    if value is None:
+        return None
     try:
-        return self._semantic_member_wrappers[key]
-    except KeyError as error:
-        raise RuntimeError("shared family identity has no Python wrapper") from error
+        return operator.index(value)
+    except TypeError:
+        # Preserve user protocol errors; match Python's slice diagnostic only
+        # for a value with no index slot, without invoking it a second time.
+        mro = type.__getattribute__(type(value), "__mro__")
+        if not any("__index__" in type.__getattribute__(cls, "__dict__") for cls in mro):
+            raise TypeError("slice indices must be integers or None or have an __index__ method") from None
+        raise
+
+
+def _group_slice(root, value):
+    group_class = root.get_group_class()
+    inclusion = _group_point_inclusion(root, "has_no_points")
+    refresh = getattr(root, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
+    plan = engine_call(_family_query_handle(root).prepareSlice, inclusion)
+    scope = None
+    try:
+        if bool(plan.includesSelf):
+            normalized = value.indices(len(root))
+        else:
+            scope = _retain_group_wrapper_references(root)
+            # List slicing coerces step/start/stop before adjusting bounds to
+            # the captured list's length, which callbacks may have changed.
+            step = _slice_operand(value.step)
+            if step == 0:
+                raise ValueError("slice step cannot be zero")
+            start, stop = _slice_operand(value.start), _slice_operand(value.stop)
+            normalized = slice(start, stop, step).indices(int(plan.normalizationCount))
+        # Normalized ranks fit WASM's address space. A larger step has the same
+        # selection as this exact JS integer bound; Python coercion stays exact.
+        safe = (1 << 53) - 1
+        operands = [float(max(-safe, min(safe, part))) for part in normalized]
+        keys = engine_call(plan.selectNormalized, *operands)
+        if _is_missing_handle(keys):
+            raise IndexError("list index out of range")
+        if refresh is not None:
+            refresh()
+        references = None if scope is None else scope.wrappers
+        members = [_group_wrapper_for_key(root, str(key), references) for key in keys]
+    finally:
+        if scope is not None:
+            scope.readers -= 1
+        _free_family_query_handle(plan)
+    return group_class(*members)
 
 
 def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
@@ -3079,8 +3273,6 @@ def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, colo
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    if not mobjects:
-        return self
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
@@ -3088,6 +3280,7 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
         engine_call(context.liveEditFamilyMembership, family_handle, batch)
     else:
         engine_call(family_handle.editMembership, batch)
+    _fork_group_wrapper_references(self)
     for value in mobjects:
         self._semantic_member_wrappers[_family_wrapper_key(value)] = value
     return self
@@ -3135,8 +3328,6 @@ def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.G
 
 def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    if not mobjects:
-        return self
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
@@ -3153,6 +3344,7 @@ def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
             batch,
             operation="Mobject.add_to_back",
         )
+    _fork_group_wrapper_references(self)
     for value in mobjects:
         self._semantic_member_wrappers[_family_wrapper_key(value)] = value
     return self
@@ -3212,6 +3404,7 @@ def _group_add_n_more_submobjects(
             batch,
             operation="Mobject.add_n_more_submobjects",
         )
+    _fork_group_wrapper_references(self)
     for member in ordered:
         self._semantic_member_wrappers[_family_wrapper_key(member)] = member
     return None if empty_result else self
@@ -3333,6 +3526,8 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            # Reader ownership belongs to the source wrapper, not its copy.
+            "_semantic_member_reference_scope",
             "_table_query_wrappers",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle", "_code_handle",
             "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",

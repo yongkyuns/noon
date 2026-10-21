@@ -237,6 +237,20 @@ jobs:
           path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-root
           if-no-files-found: warn
           retention-days: 3
+      - name: Qualify captured and live member-query selections across Rust and Python
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 10
+        env:
+          NOON_FAMILY_QUERY_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-query
+        run: node scripts/family-member-queries-qualification.mjs
+      - name: Retain member-query held-frame evidence
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: family-query-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-query
+          if-no-files-found: warn
+          retention-days: 3
       - name: Test gallery click animation and idle restoration
         timeout-minutes: 5
         env:

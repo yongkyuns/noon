@@ -37,6 +37,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   done < <(find web -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print | sort)
 
   node --check scripts/build-python-worker.mjs
+  node --test scripts/worker-composite-rows.test.mjs
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
@@ -81,6 +82,11 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/paired-authoring-qualification.mjs
   node --test scripts/manim-family-points-reference.test.mjs
   node --check scripts/family-root-points-qualification.mjs
+  node --check scripts/family-member-queries-qualification.mjs
+  node --test scripts/manim-family-iteration-reference.test.mjs
+  node --test scripts/manim-family-slices-reference.test.mjs
+  node --test scripts/manim-object-queries-reference.test.mjs
+  node --test scripts/manim-query-hooks-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
   node --check scripts/table-group-checks.mjs
