@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "manimVersion": "0.21.0",
   "scope": "Ordinary-object add/remove/prepend, unique insertion, container replacement and alias-preserving copies. Raw list aliasing/mutation, duplicate direct occurrences and arbitrary equality/copy hooks remain separate requirements.",
-  "generatorSha256": "5b4a4807f93faa5c90171f8531bec7e2cee3352812a0df4692339c6788d8e21c",
+  "generatorSha256": "d0185ab4384ebaa7acd4cb5e2c08635d8493dbbded051540c276a85487a8b59a",
+  "observerSourceSha256": "f78d44a9d6b60cde993a41834912e0fc490de8722e1a931ac3a1c01e41d4c307",
   "methodSourceSha256": {
     "add": "77a94538fa0a931eeb9cf8977fde560d739c11d098d11b7cd62dee953134b8fd",
     "remove": "b57f7a7caadb6f17c0e9a2211a2b3ed39f43c48949238387901aba2ab78b4aa8",

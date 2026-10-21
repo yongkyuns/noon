@@ -5,6 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { browserArgs, resolveQualifiedBackend } from "./manim-raster-support.mjs";
+
+const requestedBackend = process.env.NOON_COMPAT_BACKEND;
+assert.ok(requestedBackend === undefined || ["webgpu", "webgl"].includes(requestedBackend),
+  "NOON_COMPAT_BACKEND must be webgpu or webgl");
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +33,12 @@ const objectQueriesSource = await readFile(
 const objectMembersSource = await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_object_members.py"), "utf8",
 );
+const objectMemberControlsFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/object-members.json"), "utf8"));
+const objectMemberControlsSource = `import json
+OBJECT_MEMBER_CASES = json.loads(${JSON.stringify(JSON.stringify(objectMemberControlsFixture.cases))})
+${await readFile(path.join(repoRoot, "scripts/manim_object_members_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_object_member_controls.py"), "utf8")}`;
 const queryHookFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/query-hooks.json"), "utf8"));
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
@@ -553,7 +564,7 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: ["--disable-dev-shm-usage"],
+    args: requestedBackend ? browserArgs(requestedBackend) : ["--disable-dev-shm-usage"],
   });
   const page = await browser.newPage();
   const errors = [];
@@ -1040,18 +1051,26 @@ result = Scene()
       familySlicesSource,
       objectQueriesSource,
       objectMembersSource,
+      objectMemberControlsSource,
       queryHooksSource,
     ],
   );
   assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
+  if (requestedBackend) {
+    const expected = requestedBackend === "webgpu" ? "WebGPU" : "WebGL2";
+    for (const result of sharedText.results) {
+      resolveQualifiedBackend(expected, result.metrics.backend);
+    }
+  }
+  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

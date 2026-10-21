@@ -6,6 +6,8 @@ const fixture=JSON.parse(readFileSync(new URL('../fixtures/manim-v0.21/object-me
 test('ordinary-object membership controls pin source, complete cases and retained prepend semantics',()=>{
  const source=readFileSync(new URL('./manim-object-members-reference.py',import.meta.url));
  assert.equal(fixture.generatorSha256,createHash('sha256').update(source).digest('hex'));
+ const observer=readFileSync(new URL('./manim_object_members_observation.py',import.meta.url));
+ assert.equal(fixture.observerSourceSha256,createHash('sha256').update(observer).digest('hex'));
  assert.equal(fixture.manimVersion,'0.21.0');assert.equal(fixture.schemaVersion,1);assert.equal(fixture.cases.length,50);
  const keys=new Set(fixture.cases.map(row=>JSON.stringify(row.spec)));assert.equal(keys.size,50);
  for(const kind of ['Mobject','VMobject','Circle','Square','VectorizedPoint'])for(const ownPoints of [0,4])for(const index of [-100,-1,0,1,100])assert.ok(keys.has(JSON.stringify({class:kind,ownPoints,index})));
