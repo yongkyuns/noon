@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authoredCameraReference,
   browserArgs,
   compareEffectiveFrames,
   compareEffective3DCamera,
@@ -9,12 +10,64 @@ import {
   classifyRendererGpuIdentity,
   dominantImageRgba,
   rasterFixtureSource,
+  rasterReferenceEnvironment,
   resolveQualifiedBackend,
   rendererGpuQualification,
   validateRendererGpuMode,
 } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("reference default font comes only from its recorded manifest", () => {
+  const environment = { RETAINED: "value", NOON_MANIM_REFERENCE_TEXT_FONT: "Ambient font" };
+  assert.deepEqual(rasterReferenceEnvironment({}, environment), { RETAINED: "value" });
+  assert.deepEqual(rasterReferenceEnvironment({ text_font: "DejaVu Sans Mono" }, environment), {
+    RETAINED: "value", NOON_MANIM_REFERENCE_TEXT_FONT: "DejaVu Sans Mono",
+  });
+  assert.equal(environment.NOON_MANIM_REFERENCE_TEXT_FONT, "Ambient font");
+});
+
+test("invalid reference font configuration fails before starting an oracle", () => {
+  for (const text_font of [null, 1, "", " ", " DejaVu Sans Mono", "DejaVu Sans Mono "]) {
+    assert.throws(() => rasterReferenceEnvironment({ text_font }, {}), /explicit font family/);
+  }
+});
+
+function authoredCameraInputs() {
+  const camera = { phi: 0.7, theta: -0.2, gamma: 0, zoom: 1, frame_center: [0, 0, 0] };
+  const fixture = { sample_times: [1], camera_profile_observation: true,
+    authored_camera_checkpoints: [{ time: 1, phi: 0.7, theta: -0.1 }] };
+  const sample = { requestedTime: 1, materializedTime: 1, camera3dOracle: camera };
+  const semantic = { authored_camera_samples: [{ time: 1, sampled_time: 1,
+    camera_3d: { ...camera, theta: -0.1 }, sampled_manim_camera_3d: camera,
+    path: "checkpoint.png", sha256: "a".repeat(64) }] };
+  return { fixture, sample, semantic };
+}
+
+test("authored camera target preserves original state and changes only explicit angles", () => {
+  const { fixture, sample, semantic } = authoredCameraInputs();
+  const before = structuredClone({ fixture, sample, semantic });
+  assert.equal(authoredCameraReference(fixture, sample, semantic), semantic.authored_camera_samples[0]);
+  assert.deepEqual({ fixture, sample, semantic }, before);
+  assert.equal(authoredCameraReference({}, sample, semantic), null);
+});
+
+test("authored camera reference rejects missing coverage, wrong time, or unrelated state changes", () => {
+  for (const mutate of [
+    input => { input.semantic.authored_camera_samples = []; },
+    input => { input.fixture.sample_times.push(2); },
+    input => { input.sample.requestedTime = 2; },
+    input => { input.semantic.authored_camera_samples[0].sampled_time = 0.99; },
+    input => { input.semantic.authored_camera_samples[0].camera_3d.zoom = 2; },
+    input => { input.semantic.authored_camera_samples[0].sampled_manim_camera_3d = {}; },
+    input => { input.semantic.authored_camera_samples[0].sha256 = "unverified"; },
+  ]) {
+    const input = authoredCameraInputs();
+    mutate(input);
+    assert.throws(() => authoredCameraReference(input.fixture, input.sample, input.semantic),
+      /authored camera reference/);
+  }
+});
 
 test("hardware WebGL disables Chromium WebGPU services without forcing software rendering", () => {
   const args = browserArgs("webgl", { gpuMode: "hardware" });

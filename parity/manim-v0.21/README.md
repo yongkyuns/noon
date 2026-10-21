@@ -8,6 +8,20 @@ The initial scenes correspond to the Manim Community v0.21.0 quickstart tutorial
 
 Do not use this directory for pedagogical Noon-specific adaptations. Those belong in the demo/tutorial corpus. A parity fixture is a compatibility oracle, not a showcase scene.
 
+The separately staged camera examples also support an explicit `portable-authored`
+reference profile: set `NOON_CAMERA_REFERENCE_PROFILE=portable-authored` when running
+`scripts/stage-special-camera-raster.mjs`. Class source/AST hashes and sample times
+remain unchanged. `reference.text_font` selects a process-local Manim Text/MarkupText
+default; explicit object fonts still win. Register the matching font files through
+`NOON_MANIM_REFERENCE_FONTS` and retain their hashes and backend metadata.
+For the two camera-only motion examples, `authored_camera_checkpoints` supplies
+independent absolute phi/theta values at every sample. Pinned Cairo projects the
+original scene at those angles and restores its sampled camera immediately.
+Reports distinguish this target from unrestricted Manim parity and retain the raw
+sampled camera states, PNGs, and differences. Numeric and raster limits are unchanged;
+missing checkpoints or unavailable fonts fail qualification. The default staging
+profile remains the original Manim observation.
+
 The full pinned directive inventory is extracted by `scripts/manim-reference-inventory.mjs` and locked under `compat/`. Public tutorial/reference enrollment remains in `web/python/examples/manim_tutorial_manifest.json`; the remaining directives have internal provenance/ownership records in `compat/manim-v0.21.0-reference-dispositions.json`. The coverage join rejects duplicate or stale identities and requires every directive to be represented. Pending `unqualified`, `blocked` and `deferred` records are not executable or parity-qualified claims. New exports require stale namespace blockers to be reconciled without automatically promoting behavior. Existing exact-camera qualification is retained separately in recorded case evidence until its canonical enrollment is reconciled.
 
 `paint-fade` covers ordinary leaf fades and recursive nested-family fades with

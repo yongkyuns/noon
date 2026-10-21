@@ -28,6 +28,18 @@ def register_fonts():
                 raise RuntimeError(f"could not register reference font: {path}")
     from manim import logger
     logger.addFilter(ExactFontFilter())
+    family = os.environ.get("NOON_MANIM_REFERENCE_TEXT_FONT")
+    if family is not None:
+        if not family or family != family.strip():
+            raise ValueError("NOON_MANIM_REFERENCE_TEXT_FONT must name an explicit font family")
+        import manimpango
+        if family not in manimpango.list_fonts():
+            raise RuntimeError(f"reference default font is unavailable: {family}")
+        from manim import MarkupText, Text
+        # Process-local reference configuration, shared by semantic and PNG runs.
+        # Original scene classes and explicit per-object font arguments stay intact.
+        Text.set_default(font=family)
+        MarkupText.set_default(font=family)
 
 
 def main():
