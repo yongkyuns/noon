@@ -1241,8 +1241,183 @@ mod wasm {
         }
     }
 
+    fn query_point_inclusion(
+        family: noon::MobjectTarget<'_>,
+        include: Option<bool>,
+    ) -> Result<bool, JsValue> {
+        match include {
+            Some(value) => Ok(value),
+            None => family
+                .get_num_points()
+                .map(|count| count != 0)
+                .map_err(typed_js_error),
+        }
+    }
+
+    fn family_entry_key(entry: noon::CompositeEntryHandle) -> String {
+        let node = match entry {
+            noon::CompositeEntryHandle::Mobject(value) => value.node_id(),
+            noon::CompositeEntryHandle::Family(value) => value.node_id(),
+        };
+        format!("{}:{}", node.slot(), node.generation())
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmFamilySlicePlan {
+        plan: noon::FamilySlicePlan,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilySlicePlan {
+        #[wasm_bindgen(getter, js_name = includesSelf)]
+        pub fn includes_self(&self) -> bool {
+            self.plan.includes_self()
+        }
+        #[wasm_bindgen(getter, js_name = normalizationCount)]
+        pub fn normalization_count(&self) -> Result<usize, JsValue> {
+            self.plan.normalization_count().map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = selectNormalized)]
+        pub fn select_normalized(
+            &self,
+            start: f64,
+            stop: f64,
+            step: f64,
+        ) -> Result<JsValue, JsValue> {
+            if [start, stop, step]
+                .iter()
+                .any(|value| !value.is_finite() || value.fract() != 0.)
+            {
+                return Err(typed_js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "authoring.invalid_slice_operand",
+                    "slice bounds and step must be finite integers",
+                )));
+            }
+            self.plan
+                .select_normalized(start as i64, stop as i64, step as i64)
+                .map(|entries| match entries {
+                    None => JsValue::NULL,
+                    Some(entries) => js_sys::Array::from_iter(
+                        entries
+                            .into_iter()
+                            .map(|entry| JsValue::from_str(&family_entry_key(entry))),
+                    )
+                    .into(),
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmFamilyIterator {
+        iterator: noon::FamilyIterator,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilyIterator {
+        #[wasm_bindgen(js_name = nextMember)]
+        pub fn next_member(&mut self) -> Result<JsValue, JsValue> {
+            self.iterator
+                .next()
+                .transpose()
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmFamilyMemberView {
+        view: noon::FamilyMemberView,
+    }
+    #[wasm_bindgen]
+    impl WasmFamilyMemberView {
+        #[wasm_bindgen(getter, js_name = memberCount)]
+        pub fn member_count(&self) -> Result<usize, JsValue> {
+            self.view.len().map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = memberAt)]
+        pub fn member_at(&self, index: usize) -> Result<JsValue, JsValue> {
+            self.view
+                .member_at(index)
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = prepareSlice)]
+        pub fn prepare_slice(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilySlicePlan, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .slice_plan_with_self(query_point_inclusion((&family).into(), include_self)?)
+                .map(|plan| WasmFamilySlicePlan { plan })
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitCount)]
+        pub fn split_count(&self, include_self: Option<bool>) -> Result<usize, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_count_with_self(query_point_inclusion((&family).into(), include_self)?)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitAt)]
+        pub fn split_at(
+            &self,
+            index: usize,
+            include_self: Option<bool>,
+        ) -> Result<JsValue, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_at_with_self(
+                    index,
+                    query_point_inclusion((&family).into(), include_self)?,
+                )
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitKeys)]
+        pub fn split_keys(&self, include_self: Option<bool>) -> Result<Vec<String>, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_members_with_self(query_point_inclusion((&family).into(), include_self)?)
+                .map(|entries| entries.into_iter().map(family_entry_key).collect())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = splitIterator)]
+        pub fn split_iterator(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilyIterator, JsValue> {
+            let family = self.semantic_family()?;
+            family
+                .split_iter_with_self(query_point_inclusion((&family).into(), include_self)?)
+                .map(|iterator| WasmFamilyIterator { iterator })
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = memberView)]
+        pub fn member_view(&self) -> Result<WasmFamilyMemberView, JsValue> {
+            self.semantic_family()?
+                .member_view()
+                .map(|view| WasmFamilyMemberView { view })
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = setPoints)]
         pub fn set_points(&self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
@@ -3018,6 +3193,78 @@ mod wasm {
         #[wasm_bindgen(js_name = familyKeys)]
         pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
             family_query_keys(noon::MobjectTarget::from(&self.handle))
+        }
+        #[wasm_bindgen(getter, js_name = memberCount)]
+        pub fn member_count(&self) -> Result<usize, JsValue> {
+            self.handle.member_count().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = memberKeys)]
+        pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.handle
+                .split_members_with_self(false)
+                .map(|entries| entries.into_iter().map(family_entry_key).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = memberView)]
+        pub fn member_view(&self) -> Result<WasmFamilyMemberView, JsValue> {
+            self.handle
+                .member_view()
+                .map(|view| WasmFamilyMemberView { view })
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = splitCount)]
+        pub fn split_count(&self, include_self: Option<bool>) -> Result<usize, JsValue> {
+            self.handle
+                .split_count_with_self(query_point_inclusion((&self.handle).into(), include_self)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = splitAt)]
+        pub fn split_at(
+            &self,
+            index: usize,
+            include_self: Option<bool>,
+        ) -> Result<JsValue, JsValue> {
+            self.handle
+                .split_at_with_self(
+                    index,
+                    query_point_inclusion((&self.handle).into(), include_self)?,
+                )
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = splitKeys)]
+        pub fn split_keys(&self, include_self: Option<bool>) -> Result<Vec<String>, JsValue> {
+            self.handle
+                .split_members_with_self(query_point_inclusion(
+                    (&self.handle).into(),
+                    include_self,
+                )?)
+                .map(|entries| entries.into_iter().map(family_entry_key).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = splitIterator)]
+        pub fn split_iterator(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilyIterator, JsValue> {
+            self.handle
+                .split_iter_with_self(query_point_inclusion((&self.handle).into(), include_self)?)
+                .map(|iterator| WasmFamilyIterator { iterator })
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = prepareSlice)]
+        pub fn prepare_slice(
+            &self,
+            include_self: Option<bool>,
+        ) -> Result<WasmFamilySlicePlan, JsValue> {
+            self.handle
+                .slice_plan_with_self(query_point_inclusion((&self.handle).into(), include_self)?)
+                .map(|plan| WasmFamilySlicePlan { plan })
+                .map_err(js_error)
         }
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {

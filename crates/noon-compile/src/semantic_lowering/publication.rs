@@ -485,6 +485,7 @@ fn validate_mutations(
                 | SemanticMutation::SetFamilyStyle { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetDrawEnabled { .. }
+                | SemanticMutation::ReplaceMemberContainer { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
                 | SemanticMutation::SetTableLayout { .. }
@@ -1287,6 +1288,7 @@ fn lower_semantic_publication(
             | SemanticMutation::AddScalarSignalTrack { .. }
             | SemanticMutation::SetScalarSignalAt { .. }
             | SemanticMutation::ScopeSignal { .. }
+            | SemanticMutation::ReplaceMemberContainer { .. }
             | SemanticMutation::SetForegroundMembers { .. }
             | SemanticMutation::SetGraphDeclaration { .. }
             | SemanticMutation::SetTableLayout { .. }

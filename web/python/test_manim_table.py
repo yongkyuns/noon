@@ -196,6 +196,7 @@ class TableFacadeTests(unittest.TestCase):
             return wrapper
 
         self.patches = [
+            patch.object(table, "_is_family_handle", side_effect=lambda handle: isinstance(handle, _Family), create=True),
             patch.object(table, "_create_table", side_effect=self.context.liveCreateTable),
             patch.object(table, "_create_table_with_labels", side_effect=self.context.liveCreateTableWithLabels),
             patch.object(table, "_create_decimal_table", side_effect=self.context.liveCreateDecimalTable),
@@ -215,6 +216,21 @@ class TableFacadeTests(unittest.TestCase):
     def tearDown(self):
         for patcher in reversed(self.patches):
             patcher.stop()
+
+    def test_query_wrapper_type_does_not_depend_on_member_query_capabilities(self):
+        value = table.Table([["a", "b"], ["c", "d"]])
+        raw = _Handle(201)
+        raw.memberKeys = lambda: []
+        wrapper = value._query_entry_wrapper(raw)
+        self.assertIsInstance(wrapper, table._compat.VMobject)
+        self.assertIs(wrapper._semantic_handle, raw)
+        self.assertFalse(hasattr(wrapper, "_semantic_family_handle"))
+        self.assertIs(value._query_entry_wrapper(raw), wrapper)
+
+        raw_family = _Family(202, [raw])
+        family = value._query_entry_wrapper(raw_family)
+        self.assertIs(family._semantic_family_handle, raw_family)
+        self.assertIs(value._query_entry_wrapper(raw_family), family)
 
     def test_entries_columns_and_cells_keep_the_shared_handle_contract(self):
         value = table.Table([["a", "b"], ["c", "d"]])

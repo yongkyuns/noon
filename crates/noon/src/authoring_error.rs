@@ -241,6 +241,8 @@ pub enum AuthoringError {
         family: noon_core::SemanticNodeId,
         index: isize,
     },
+    /// A slice step must be nonzero.
+    ZeroSliceStep,
     /// Explicit grid dimensions must be positive.
     InvalidGridDimensions {
         rows: Option<usize>,
@@ -341,6 +343,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidRenderNumber { name, .. } => {
                 write!(f, "{name} must be a finite f32-compatible number")
             }
+            Self::ZeroSliceStep => f.write_str("slice step cannot be zero"),
             Self::NonPositiveNumber { name, .. } => write!(f, "{name} must be positive"),
             Self::InvalidOpacity { name, .. } => write!(f, "{name} must be between 0 and 1"),
             Self::InvalidEllipseDimensions { .. } => {

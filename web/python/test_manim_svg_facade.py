@@ -29,6 +29,10 @@ class _FamilyHandle:
         return [f"{member.semanticSlot}:{member.semanticGeneration}" for member in self._members]
 
 
+from _typed_family_test_support import install_split_queries
+install_split_queries(_FamilyHandle, lambda self: self._members)
+
+
 class SvgFacadeTests(unittest.TestCase):
     def test_lazy_public_exports_bind_only_after_success(self):
         python_dir = Path(__file__).resolve().parent

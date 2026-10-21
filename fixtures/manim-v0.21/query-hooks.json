@@ -1,0 +1,9174 @@
+{
+  "schemaVersion": 1,
+  "manimVersion": "0.21.0",
+  "scope": "Public own0/4 queries across seven classes: split override never influences inherited len/iteration/index; intrinsic split bypasses has_points overrides; predicate events and errors remain visible in inherited len/iteration/index; intrinsic point predicates ignore get_num_points overrides.",
+  "generatorSha256": "c7abea3253274b46cd51981c1c48c524d0d54bb0458ec3ede819582bd655dc0e",
+  "probeSha256": "1685af579d69c45ee84f60bb09fdf7d19655f9c28306367946e74176230d94ed",
+  "methodSourceSha256": {
+    "__len__": "b4d9af9f920651fa6ac9ea0da2c5c38c9a46265cc94ade80b72c7397ce7377d0",
+    "__iter__": "2945980b1bd719ac1ef4f89009d72af1e98a61dbe7b50d3f857cf180b59dd51d",
+    "__getitem__": "b4f0ab284ffd34f6f90337d7c8f42ac964e877b8a0efd087fc98c0f8121ae7af",
+    "split": "d9fdf53261eb7068149f70eb24cfa6c7675b9a9234db9be1d538eaedd9fe78cd",
+    "has_points": "9e63061979e28f90ece4035d4290afcc73d995f8495041362ae94efd02d3dcf0",
+    "has_no_points": "ed433d9ae77260d84eebdfd6da3538b00181cb3166649b8361323b899a1063d5"
+  },
+  "cases": [
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Mobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VMobject",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Circle",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Square",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": []
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": {
+        "exception": "IndexError",
+        "message": "range object index out of range"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 1
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VectorizedPoint",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false",
+        "has_points_false"
+      ],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false",
+        "has_points_false"
+      ],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "Group",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false",
+        "has_points_false"
+      ],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 0,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "split"
+      },
+      "events": [
+        "split_returns"
+      ],
+      "result": [
+        "self"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_returns",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "split"
+      },
+      "events": [
+        "split_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "split_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": 2
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_false",
+        "has_points_false"
+      ],
+      "result": "a"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_false"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_false",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_true",
+        "has_points_true"
+      ],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_true"
+      ],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_true",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "length"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "iteration"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "index"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [
+        "has_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "has_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [],
+      "result": 4
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_zero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_zero"
+      ],
+      "result": 0
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_nonzero",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_nonzero"
+      ],
+      "result": 7
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "length"
+      },
+      "events": [],
+      "result": 3
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "split"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "iteration"
+      },
+      "events": [],
+      "result": [
+        "self",
+        "a",
+        "b"
+      ]
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "index"
+      },
+      "events": [],
+      "result": "self"
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_points"
+      },
+      "events": [],
+      "result": true
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "has_no_points"
+      },
+      "events": [],
+      "result": false
+    },
+    {
+      "spec": {
+        "class": "VGroup",
+        "ownPoints": 4,
+        "hook": "get_num_points_raises",
+        "operation": "get_num_points"
+      },
+      "events": [
+        "get_num_points_raises"
+      ],
+      "result": {
+        "exception": "LookupError",
+        "message": "query hook"
+      }
+    }
+  ]
+}

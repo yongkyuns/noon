@@ -33,6 +33,21 @@ impl PartialEq for CompositeEntryHandle {
 }
 
 impl CompositeEntryHandle {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        match self {
+            Self::Mobject(value) => value.integration_store(),
+            Self::Family(value) => value.integration_store(),
+        }
+    }
+    pub(crate) fn node_id(&self) -> SemanticNodeId {
+        self.as_target().node_id()
+    }
+    pub(crate) fn validate(&self) -> Result<(), AuthoringError> {
+        self.as_target().validate()
+    }
+    pub(crate) fn get_num_points(&self) -> Result<usize, AuthoringError> {
+        self.as_target().get_num_points()
+    }
     pub fn as_target(&self) -> MobjectTarget<'_> {
         match self {
             Self::Mobject(object) => object.into(),
