@@ -522,6 +522,9 @@ pub(crate) fn family_membership_transaction(
         .semantic_family_checked(family.node_id())
         .map_err(AuthoringError::from)?;
     let mut transaction = SemanticMutationTransaction::new();
+    if adding {
+        transaction.replace_member_container(family.node_id());
+    }
     let mut changed = vec![false; members.len()];
     for index in last_occurrences(members) {
         let id = members[index].node_id();
@@ -580,6 +583,7 @@ pub(crate) fn family_prepend_transaction(
     );
 
     let mut transaction = SemanticMutationTransaction::new();
+    transaction.replace_member_container(family.node_id());
     if desired == current {
         return Ok(transaction);
     }

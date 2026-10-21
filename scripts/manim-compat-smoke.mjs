@@ -17,6 +17,18 @@ const familyRootPointsSource = await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_family_root_points.py"),
   "utf8",
 );
+const familySlicesSource = await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_family_slices.py"),
+  "utf8",
+);
+const objectQueriesSource = await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_object_queries.py"),
+  "utf8",
+);
+const queryHookFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/query-hooks.json"), "utf8"));
+const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
+  path.join(repoRoot, "web/python/examples/manim_parity_query_hooks.py"), "utf8")}`;
 const uncreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
   "utf8",
@@ -1022,17 +1034,20 @@ result = Scene()
       mixedFamilyOrdinaryEditedSource,
       familyClassQueriesSource,
       familyRootPointsSource,
+      familySlicesSource,
+      objectQueriesSource,
+      queryHooksSource,
     ],
   );
   assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4],
+    [2, 0, 2, 3, 2, 4, 6, 5, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

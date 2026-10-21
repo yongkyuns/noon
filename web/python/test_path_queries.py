@@ -1341,13 +1341,22 @@ class PathQueryTests(unittest.TestCase):
         from unittest.mock import Mock
         import noon
 
-        root = Mock()
-        root.has_points.return_value = False
+        root = identity_only_wrapper(noon.Mobject)
+        root.has_points = Mock(return_value=False)
+        root.get_num_points = Mock(return_value=0)
+        root.get_family = Mock()
         leaf = Mock(get_num_points=Mock(return_value=4), submobjects=[])
         second_leaf = Mock(get_num_points=Mock(return_value=2), submobjects=[])
         empty = Mock(get_num_points=Mock(return_value=0), submobjects=[])
         nested = Mock(get_num_points=Mock(return_value=0), submobjects=[empty])
         root.submobjects = [nested, empty, leaf, second_leaf]
+        from types import SimpleNamespace
+        root._semantic_member_wrappers = dict(zip(("1:1", "2:1", "3:1", "4:1"), root.submobjects))
+        root._semantic_handle = SimpleNamespace(
+            semanticSlot=99, semanticGeneration=1,
+            splitKeys=Mock(return_value=list(root._semantic_member_wrappers)),
+        )
+        root._semantic_handle_fresh = True
 
         self.assertEqual(noon.Mobject.split(root), [nested, empty, leaf, second_leaf])
         self.assertEqual(noon.Mobject.nonempty_submobjects(root), [nested, leaf, second_leaf])
@@ -1357,7 +1366,11 @@ class PathQueryTests(unittest.TestCase):
         second_leaf.get_num_points.assert_called_once_with()
 
         root.has_points.return_value = True
+        self.assertEqual(noon.Mobject.split(root), [nested, empty, leaf, second_leaf])
+        root.has_points.assert_not_called()
+        root._semantic_handle.splitKeys.return_value = ["99:1", *root._semantic_member_wrappers]
         self.assertEqual(noon.Mobject.split(root), [root, nested, empty, leaf, second_leaf])
+        root._semantic_handle.splitKeys.assert_called_with(None)
 
         root.get_family.return_value = [root, nested, empty, leaf, second_leaf]
         root.get_num_points.return_value = 0
@@ -1365,14 +1378,19 @@ class PathQueryTests(unittest.TestCase):
 
     def test_empty_path_guards_keep_manim_caller_names(self):
         value = identity_only_wrapper(compat.VMobject)
-        value.get_num_points = Mock(return_value=0)
+        query = Mock(pointCount=0)
 
-        for method, caller in ((value.get_start, "get_start"), (value.get_end, "get_end")):
-            with self.subTest(method=caller), self.assertRaisesRegex(
-                Exception,
-                f"Cannot call Mobject.{caller} for a Mobject with no points",
-            ):
-                method()
+        with patch.object(queries, "_typed_manim_observation", side_effect=_path_observation(query)) as observe:
+            for method, caller in ((value.get_start, "get_start"), (value.get_end, "get_end")):
+                with self.subTest(method=caller), self.assertRaisesRegex(
+                    Exception,
+                    f"Cannot call Mobject.{caller} for a Mobject with no points",
+                ):
+                    method()
+        self.assertEqual(observe.call_count, 2)
+        query.start.assert_not_called()
+        query.end.assert_not_called()
+        query.free.assert_not_called()
 
     def test_base_point_count_queries_use_scalar_rust_observation(self):
         import noon

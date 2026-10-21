@@ -192,6 +192,9 @@ const expectedJavascriptSurface = [
   "liveWait(",
   "liveAdvanceSegmentTo(",
   "export class WasmDeclaredAnimationHandle",
+  "export class WasmFamilyIterator",
+  "export class WasmFamilySlicePlan",
+  "export class WasmFamilyMemberView",
   "export class WasmAuthoringFamilyHandle",
   "prepareSubsetDisplay(",
   "export class WasmAuthoringFamilyLayout",
@@ -432,10 +435,21 @@ const expectedTypeSurface = [
   "liveWait(",
   "liveAdvanceSegmentTo(",
   "export class WasmDeclaredAnimationHandle",
+  "export class WasmFamilyIterator",
+  "export class WasmFamilySlicePlan",
+  "export class WasmFamilyMemberView",
   "export class WasmAuthoringFamilyHandle",
   "prepareSubsetDisplay(): void",
   "export class WasmAuthoringFamilyLayout",
   "layout(): WasmAuthoringFamilyLayout",
+  "splitCount(include_self?: boolean | null): number",
+  "splitAt(index: number, include_self?: boolean | null): any",
+  "splitKeys(include_self?: boolean | null): string[]",
+  "splitIterator(include_self?: boolean | null): WasmFamilyIterator",
+  "nextMember(): any",
+  "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan",
+  "selectNormalized(start: number, stop: number, step: number): any",
+  "memberView(): WasmFamilyMemberView",
   "memberKeys(): string[]",
   "export class WasmFamilyCopy",
   "copyFamily(references: WasmSceneMembershipBatch): WasmFamilyCopy",
@@ -547,6 +561,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyAffineSmokeRenderer(",
     "export function createDirectFamilyPaintSmokeRenderer(",
     "export function createDirectFamilyRootPointsSmokeRenderer(",
+    "export function createDirectFamilyMemberQueriesSmokeRenderer(",
     "export function createDirectPlanarAffineSmokeRenderer(",
     "export function createDirectArcGeometrySmokeRenderer(",
     "export function createDirectTextSourcePartsSmokeRenderer(",
@@ -634,6 +649,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyRootPointsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyMemberQueriesSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPlanarAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectArcGeometrySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectTextSourcePartsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -769,6 +785,13 @@ for (const retired of [
   if (javascript.includes(retired) || declarations.includes(retired)) {
     throw new Error(`Deleted authoring API returned to the browser package: ${retired}`);
   }
+}
+// Check the owning class: family-only methods must not mask a stale object ABI.
+const objectStart = declarations.indexOf("export class WasmAuthoringMobjectHandle");
+const objectEnd = declarations.indexOf("export class ", objectStart + 1);
+const objectSurface = declarations.slice(objectStart, objectEnd < 0 ? undefined : objectEnd);
+for (const method of ["memberView(): WasmFamilyMemberView", "memberKeys(): string[]", "splitCount(include_self?: boolean | null): number", "splitAt(index: number, include_self?: boolean | null): any", "splitKeys(include_self?: boolean | null): string[]", "splitIterator(include_self?: boolean | null): WasmFamilyIterator", "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan"]) {
+  if (objectStart < 0 || !objectSurface.includes(method)) throw new Error(`Object member-query ABI is missing ${method}`);
 }
 if (wasmStats.size === 0) {
   throw new Error("Generated WebAssembly module is empty");

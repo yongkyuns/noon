@@ -26,6 +26,9 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
+mod family_member_view;
+pub use family_member_view::{SemanticMemberView, SemanticMemberViewError};
+
 mod family_member_order;
 use family_member_order::MemberOrderLink;
 
@@ -175,6 +178,7 @@ struct OrderedFamilyMembers {
     tail: Option<SemanticNodeId>,
     links: HashMap<SemanticNodeId, FamilyMemberLink>,
     order_root: Option<SemanticNodeId>,
+    observation: Option<std::sync::Arc<family_member_view::MemberContainer>>,
 }
 
 impl PartialEq for OrderedFamilyMembers {
@@ -864,6 +868,8 @@ impl Clone for SemanticStore {
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
+                // A cloned store has independent member-container lifetimes.
+                node.members.observation = None;
                 if let Some(state) = node.object_state.as_mut() {
                     match &mut state.content {
                         crate::SemanticObjectContent::Geometry(
