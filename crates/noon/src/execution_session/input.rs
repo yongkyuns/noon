@@ -259,7 +259,7 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        !self.interaction_bindings.is_empty()
+        self.runtime.has_click_indicate_bindings()
             || self.translation_drag.has_targets()
             || self.pointer_selection.enabled()
             || !self

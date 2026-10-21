@@ -94,6 +94,7 @@ impl CompiledScene {
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
+            | ExecutionPatch::SetClickIndicate { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
             | ExecutionPatch::SetGlow { object, .. } => {
                 rows.insert(index(*object)?);
@@ -218,10 +219,14 @@ impl CompiledScene {
                 }
             }
             let id = self.objects[index].id;
+            self.click_indicate_count -= usize::from(
+                self.objects[index].live && self.objects[index].click_indicate.is_some(),
+            );
             self.object_indices.remove(&id);
             self.retired_object_indices.remove(&id);
             self.live_object_count -= usize::from(self.objects[index].live);
             if let Some(object) = saved.object.take() {
+                self.click_indicate_count += usize::from(object.click_indicate.is_some());
                 self.objects[index] = object;
                 self.object_indices
                     .insert(self.objects[index].id, saved.index);

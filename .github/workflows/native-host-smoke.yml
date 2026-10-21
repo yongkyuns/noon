@@ -218,13 +218,17 @@ jobs:
               --test capture -- --include-ignored --nocapture --test-threads=1
           } 2>&1 | tee capture-proof/tests.log
 
-      - name: Qualify historical prefix interaction and restoration pixels
+      - name: Qualify historical prefix bindings, interactions, and restoration pixels
         run: |
-          set -o pipefail
-          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon --no-default-features \
-            --features prepared-prefix --test prepared_prefix_interactions \
+          set -euo pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-runtime --features prepared-prefix \
+            --test prefix_interactions --test prefix_bindings \
             -- --include-ignored --nocapture --test-threads=1 \
             2>&1 | tee capture-proof/prefix-interactions.log
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon --no-default-features \
+            --features prepared-prefix --test prepared_prefix_interactions --test prepared_prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee -a capture-proof/prefix-interactions.log
 
       - name: Check formatting and lint the native capture package
         run: |
