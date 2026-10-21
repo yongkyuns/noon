@@ -444,6 +444,8 @@ const expectedTypeSurface = [
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
   "queryMobjectPointCount(handle: WasmAuthoringMobjectHandle): number",
   "liveSetFamilyPoints(source: WasmAuthoringFamilyHandle, values: Float64Array): void",
+  "alignPathPoints(other: WasmLayoutAnchor): void",
+  "liveAlignRootPoints(left: WasmLayoutAnchor, right: WasmLayoutAnchor): void",
   "liveClearFamilyPoints(source: WasmAuthoringFamilyHandle): void",
   "queryFamilyVectorBoundaryPoints(handle: WasmAuthoringFamilyHandle): Float64Array",
   "pointFromProportion(alpha: number): Float64Array",

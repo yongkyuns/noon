@@ -882,6 +882,36 @@ class SmoothingDispatchTests(unittest.TestCase):
             resolve.assert_not_called()
 
 class AlignmentDispatchTests(unittest.TestCase):
+    def test_family_and_mixed_pairs_use_typed_roots_without_leaf_traversal(self):
+        for left_cls, right_cls in [
+            (compat.VGroup, compat.VGroup),
+            (compat.VGroup, compat.VMobject),
+            (compat.VMobject, compat.VGroup),
+        ]:
+            for live in (False, True):
+                with self.subTest(left=left_cls, right=right_cls, live=live):
+                    a, b = identity_only_wrapper(left_cls), identity_only_wrapper(right_cls)
+                    left, right = Mock(), Mock()
+                    for value, cls, handle in [(a, left_cls, left), (b, right_cls, right)]:
+                        if cls is compat.VGroup:
+                            value._semantic_family_handle = handle
+                    a.align_rgbas = Mock(return_value=a)
+                    context = Mock() if live else None
+                    with patch.object(editing, '_handle_for', side_effect=lambda value: left if value is a else right), \
+                         patch.object(editing, '_live_mutation_context', return_value=context), \
+                         patch.object(editing, '_live_constructor_context', return_value=None), \
+                         patch.object(compat, '_leaf_mobjects', side_effect=AssertionError('root-only operation')):
+                        self.assertIs(a.align_points(b), a)
+                    a.align_rgbas.assert_called_once_with(b)
+                    left.layoutAnchor.assert_called_once_with(None)
+                    right.layoutAnchor.assert_called_once_with(None)
+                    if live:
+                        context.liveAlignRootPoints.assert_called_once_with(
+                            left.layoutAnchor.return_value, right.layoutAnchor.return_value)
+                    else:
+                        left.layoutAnchor.return_value.alignPathPoints.assert_called_once_with(
+                            right.layoutAnchor.return_value)
+
     def test_align_rgbas_preserves_supported_solid_paint_profiles(self):
         a, b = [identity_only_wrapper(compat.VMobject) for _ in range(2)]
         a.get_fill_rgbas = Mock(return_value=[[1, 0, 0, 0.25]])

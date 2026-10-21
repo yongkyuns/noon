@@ -1,7 +1,23 @@
 use super::*;
-use crate::path_editing::publish_running_path_edits;
+use crate::{path_editing::publish_running_path_edits, LayoutAnchor};
 
 impl LiveSession<'_> {
+    /// Align root-owned paths, including first content on a family, atomically.
+    pub fn align_path_points(
+        &mut self,
+        left: &LayoutAnchor,
+        right: &LayoutAnchor,
+    ) -> Result<(), LiveSessionError> {
+        crate::path_alignment::publish_root_alignment(
+            self.store,
+            self.root,
+            self.session,
+            left,
+            right,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
     /// Replace a family's own raw points through this coherent live publication.
     /// Its identity, children, style and drawing intent remain authoritative.
     pub fn set_family_points_f64(

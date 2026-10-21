@@ -68,7 +68,7 @@ pub use crate::host_callbacks::{
     effective_style_with_paint_opacity, effective_style_with_stroke_color,
     rotate_effective_transform_about_point,
 };
-pub use crate::path_alignment::publish_alignment;
+pub use crate::path_alignment::{publish_alignment, publish_root_alignment};
 pub use crate::path_queries::{
     effective_all_points, effective_boundary_point, effective_center_of_mass,
     effective_extremum_along_dim, effective_length_over_dim, effective_mobject_point_count,

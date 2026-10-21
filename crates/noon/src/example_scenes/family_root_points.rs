@@ -1,12 +1,14 @@
 //! Own points, drawing intent and children stay on stable family roots.
 use crate::{
-    Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, LiveSessionError,
-    MobjectFamily, Scene,
+    Color, ContinuationStep, LayoutAnchor, LiveContinuation, LiveProgram, LiveSession,
+    LiveSessionError, Mobject, MobjectFamily, Scene,
 };
 
 pub struct FamilyRootPoints {
     group: MobjectFamily,
     vector: MobjectFamily,
+    alignment_peer: MobjectFamily,
+    alignment_leaf: Mobject,
     left_points: Vec<(f64, f64)>,
     right_points: Vec<(f64, f64)>,
     stage: u8,
@@ -25,16 +27,27 @@ impl LiveContinuation for FamilyRootPoints {
                 1 => {
                     live.clear_family_points(&self.group)?;
                     live.clear_family_points(&self.vector)?;
+                    live.align_path_points(
+                        &LayoutAnchor::from(&self.vector),
+                        &LayoutAnchor::from(&self.alignment_peer),
+                    )?;
                 }
                 2 => {
                     live.set_family_points_f64(&self.group, &self.left_points)?;
                     live.set_family_points_f64(&self.vector, &self.right_points)?;
+                    live.align_path_points(
+                        &LayoutAnchor::from(&self.vector),
+                        &LayoutAnchor::from(&self.alignment_leaf),
+                    )?;
                 }
                 _ => unreachable!("three held phases"),
             }
             let expected = if self.stage == 1 { 0 } else { 16 };
             assert_eq!(self.group.get_num_points()?, expected);
-            assert_eq!(self.vector.get_num_points()?, expected);
+            assert_eq!(
+                self.vector.get_num_points()?,
+                if self.stage == 1 { 0 } else { 32 }
+            );
             assert_eq!(self.group.member_count()?, 1);
             assert_eq!(self.vector.member_count()?, 1);
             self.stage += 1;
@@ -64,6 +77,9 @@ pub fn program() -> Result<LiveProgram<FamilyRootPoints>, String> {
         let right_points = right_square.path_query()?.points()?;
         let group = scene.family_with_presentation(&[(&left).into()], 0.0, Color::WHITE, false)?;
         let vector = scene.family_with_presentation(&[(&right).into()], 0.0, Color::WHITE, true)?;
+        let alignment_peer = scene.family_with_presentation(&[], 0.0, Color::WHITE, true)?;
+        let alignment_leaf = scene.circle(0.7)?;
+        LayoutAnchor::from(&vector).align_path_points(&LayoutAnchor::from(&alignment_peer))?;
         group.set_points_f64(&left_points)?;
         vector.set_points_f64(&right_points)?;
         let mut vector_root = vector
@@ -71,10 +87,13 @@ pub fn program() -> Result<LiveProgram<FamilyRootPoints>, String> {
             .ok_or_else(|| std::io::Error::other("materialized family has no own payload"))?;
         vector_root.set_fill(0.0, 0.0, 1.0, 1.0)?;
         vector_root.set_stroke_width(0.0)?;
+        LayoutAnchor::from(&vector).align_path_points(&LayoutAnchor::from(&alignment_leaf))?;
         scene.add_many(&[(&group).into(), (&vector).into()])?;
         Ok(scene.into_live_program(FamilyRootPoints {
             group,
             vector,
+            alignment_peer,
+            alignment_leaf,
             left_points,
             right_points,
             stage: 0,

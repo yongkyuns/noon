@@ -711,6 +711,13 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = alignPathPoints)]
+        pub fn align_path_points(&self, other: &WasmLayoutAnchor) -> Result<(), JsValue> {
+            self.anchor
+                .align_path_points(&other.anchor)
+                .map_err(js_error)
+        }
+
         pub fn scale(
             &self,
             scale_x: f64,

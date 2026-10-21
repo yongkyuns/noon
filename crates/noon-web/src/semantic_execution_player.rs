@@ -1231,6 +1231,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_root_points(
+        &mut self,
+        left: &noon::LayoutAnchor,
+        right: &noon::LayoutAnchor,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_path_points(left, right))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_pointwise_become_partial(
         &mut self,
         object: &noon::Mobject,

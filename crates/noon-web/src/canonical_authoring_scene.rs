@@ -9002,6 +9002,19 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAlignRootPoints)]
+        pub fn live_align_root_points(
+            &mut self,
+            left: &crate::WasmLayoutAnchor,
+            right: &crate::WasmLayoutAnchor,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_align_root_points(&left.anchor, &right.anchor)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
         pub fn live_pointwise_become_partial(
             &mut self,

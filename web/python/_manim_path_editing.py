@@ -853,13 +853,32 @@ def repeat_points(value, count):
 
 
 def align_points(value, other):
-    from _manim_compat import VMobject
+    from _manim_compat import VMobject, _is_shared_family
     from _manim_updaters import canonical_callback_phase_active
     if not isinstance(other, VMobject):
         raise TypeError("align_points requires a VMobject")
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
     value.align_rgbas(other)
+    family_pair = _is_shared_family(value) or _is_shared_family(other)
+    if family_pair:
+        def root_handle(root):
+            return (root._semantic_family_handle if _is_shared_family(root)
+                    else _handle_for(root))
+        left, right = root_handle(value), root_handle(other)
+        if left is None or right is None:
+            raise RuntimeError("path alignment requires shared semantic handles")
+        # Root anchors carry typed identities; no sibling traversal or Python
+        # point/layout calculation is needed for this shared operation.
+        left = engine_call(left.layoutAnchor, None)
+        right = engine_call(right.layoutAnchor, None)
+        context = (_live_mutation_context(value) or _live_mutation_context(other)
+                   or _live_constructor_context("path"))
+        if context is None:
+            engine_call(left.alignPathPoints, right, operation="VMobject.align_points")
+        else:
+            engine_call(context.liveAlignRootPoints, left, right, operation="VMobject.align_points")
+        return value
     handle, other_handle = _handle_for(value), _handle_for(other)
     if handle is None or other_handle is None:
         raise RuntimeError("path alignment requires shared semantic handles")

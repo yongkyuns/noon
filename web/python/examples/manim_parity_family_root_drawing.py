@@ -9,20 +9,25 @@ class FamilyRootDrawing(Scene):
         left_points = Square(1.2).shift(LEFT * 2).points.copy()
         right_points = Square(1.2).shift(RIGHT * 2).points.copy()
         group, vector = Group(left), VGroup(right)
+        alignment_peer, alignment_leaf = VGroup(), Circle(0.7)
+        vector.align_points(alignment_peer)
         group.set_points(left_points)
         vector.set_points(right_points)
         vector.set_fill("#0000ff", opacity=1, family=False)
         vector.set_stroke(width=0, family=False)
+        vector.align_points(alignment_leaf)
         self.add(group, vector)
-        assert group.get_num_points() == vector.get_num_points() == 16
+        assert group.get_num_points() == 16 and vector.get_num_points() == 32
         await self.wait(0.25)
-        group.clear_points()
-        vector.clear_points()
+        group.reset_points()
+        vector.reset_points()
+        vector.align_points(alignment_peer)
         assert group.get_num_points() == vector.get_num_points() == 0
         assert group.submobjects == [left] and vector.submobjects == [right]
         await self.wait(0.25)
         group.set_points(left_points)
         vector.set_points(right_points)
-        assert group.get_num_points() == vector.get_num_points() == 16
+        vector.align_points(alignment_leaf)
+        assert group.get_num_points() == 16 and vector.get_num_points() == 32
         assert group.submobjects == [left] and vector.submobjects == [right]
         await self.wait(0.25)
