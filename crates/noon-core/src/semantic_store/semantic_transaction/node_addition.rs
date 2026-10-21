@@ -132,6 +132,9 @@ pub enum SemanticNodeCreation {
     Family {
         /// Optional ordinary root payload; membership remains on this same node.
         state: Option<Box<SemanticObjectState>>,
+        /// A content-owning root may retain a fallback independent from its paint.
+        /// `None` derives the initial fallback from the payload's style.
+        fallback_color: Option<crate::Color>,
         source_identity: Option<SourceIdentity>,
     },
     Signal {
@@ -171,6 +174,7 @@ impl SemanticNodeCreation {
     pub const fn family() -> Self {
         Self::Family {
             state: None,
+            fallback_color: None,
             source_identity: None,
         }
     }
@@ -179,6 +183,19 @@ impl SemanticNodeCreation {
     pub fn family_with_content(state: SemanticObjectState) -> Self {
         Self::Family {
             state: Some(Box::new(state)),
+            fallback_color: None,
+            source_identity: None,
+        }
+    }
+
+    /// Preserve both a complete root payload and its independently stored fallback.
+    pub fn family_with_content_and_fallback(
+        state: SemanticObjectState,
+        fallback_color: crate::Color,
+    ) -> Self {
+        Self::Family {
+            state: Some(Box::new(state)),
+            fallback_color: Some(fallback_color),
             source_identity: None,
         }
     }
@@ -260,6 +277,21 @@ pub(super) fn preflight_add_node(
                 index,
                 error: SemanticStoreError::DuplicateSourceIdentity(source.clone()),
             });
+        }
+    }
+
+    if let SemanticNodeCreation::Family {
+        state,
+        fallback_color: Some(color),
+        ..
+    } = creation
+    {
+        if state.is_none()
+            || ![color.red, color.green, color.blue, color.alpha]
+                .into_iter()
+                .all(f32::is_finite)
+        {
+            return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
         }
     }
 
@@ -395,11 +427,15 @@ pub(super) fn commit_add_node(
         }
         SemanticNodeCreation::Family {
             state,
+            fallback_color,
             source_identity,
         } => (
-            match state {
-                Some(state) => store.insert_family_with_content(*state),
-                None => store.insert_family(),
+            match (state, fallback_color) {
+                (Some(state), Some(color)) => {
+                    store.insert_family_with_content_and_fallback(*state, color)
+                }
+                (Some(state), None) => store.insert_family_with_content(*state),
+                (None, _) => store.insert_family(),
             },
             source_identity,
         ),

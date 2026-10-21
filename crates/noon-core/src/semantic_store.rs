@@ -495,6 +495,19 @@ impl SemanticNode {
         }
     }
 
+    /// Stored family fallback, independent from the root's currently selected paint.
+    pub fn family_fallback_color(&self) -> Option<crate::Color> {
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
+                Some(state.own_color)
+            }
+            SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color }) => {
+                Some(*fallback_color)
+            }
+            _ => None,
+        }
+    }
+
     pub fn family_color(&self) -> Option<crate::Color> {
         match &self.kind {
             SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => {
@@ -1151,6 +1164,14 @@ impl SemanticStore {
     /// insertion-order machinery, without allocating a separate geometry child.
     pub fn insert_family_with_content(&mut self, state: SemanticObjectState) -> SemanticNodeId {
         let fallback_color = state.style.family_color().unwrap_or(crate::Color::WHITE);
+        self.insert_family_with_content_and_fallback(state, fallback_color)
+    }
+
+    pub(crate) fn insert_family_with_content_and_fallback(
+        &mut self,
+        state: SemanticObjectState,
+        fallback_color: crate::Color,
+    ) -> SemanticNodeId {
         let id = self.insert_semantic_object(state);
         self.node_mut(id).expect("new family node exists").kind =
             SemanticNodeKind::Family(SemanticFamilyState::ContentOwning { fallback_color });

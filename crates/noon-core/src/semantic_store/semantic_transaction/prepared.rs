@@ -800,7 +800,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Ok(self.pending_geometry_path(object)?.conservative_bounds())
     }
 
-    /// Observe staged own color on an existing or pending non-rendered family.
+    /// Observe proposed family paint selection, using its stored fallback when absent.
     pub fn family_color(
         &self,
         node: impl Into<SemanticTransactionNodeRef>,
@@ -831,17 +831,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .store
                 .node(id)
                 .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?
-                .family_color()
+                .family_fallback_color()
                 .ok_or(SemanticTransactionReadError::NotFamily(node)),
-            SemanticTransactionNodeRef::Pending(token)
-                if matches!(
-                    self.pending_creation(token),
-                    Some(SemanticNodeCreation::Family { .. })
-                ) =>
-            {
-                Ok(crate::Color::WHITE)
-            }
-            _ => Err(SemanticTransactionReadError::NotFamily(node)),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
+                Some(SemanticNodeCreation::Family {
+                    state,
+                    fallback_color,
+                    ..
+                }) => Ok(fallback_color
+                    .or_else(|| state.as_ref().and_then(|state| state.style.family_color()))
+                    .unwrap_or(crate::Color::WHITE)),
+                _ => Err(SemanticTransactionReadError::NotFamily(node)),
+            },
         }
     }
 

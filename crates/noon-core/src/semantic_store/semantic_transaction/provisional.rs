@@ -339,17 +339,23 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
-    pub(super) fn family_color(&self, node: SemanticTransactionNodeRef) -> Option<crate::Color> {
+    pub(super) fn family_fallback_color(
+        &self,
+        node: SemanticTransactionNodeRef,
+    ) -> Option<crate::Color> {
         match node {
             SemanticTransactionNodeRef::Existing(node) => self
                 .store
                 .node(node)
-                .and_then(crate::SemanticNode::family_color),
+                .and_then(crate::SemanticNode::family_fallback_color),
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                PendingSemanticNode::Creation(SemanticNodeCreation::Family { state, .. }) => Some(
-                    state
-                        .as_ref()
-                        .and_then(|state| state.style.family_color())
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family {
+                    state,
+                    fallback_color,
+                    ..
+                }) => Some(
+                    fallback_color
+                        .or_else(|| state.as_ref().and_then(|state| state.style.family_color()))
                         .unwrap_or(crate::Color::WHITE),
                 ),
                 _ => None,

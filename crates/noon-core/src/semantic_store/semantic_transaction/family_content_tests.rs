@@ -241,6 +241,99 @@ fn owned_family_creation_reserves_capacity_and_invalid_content_is_atomic() {
 }
 
 #[test]
+fn owned_family_creation_and_prepared_paint_removal_preserve_independent_fallback() {
+    for painted in [false, true] {
+        let mut store = SemanticStore::new();
+        let mut state = SemanticObjectState::new(content());
+        state.style = SemanticStyle::manim_family_root(Color::BLUE);
+        if !painted {
+            state.style.fill = None;
+            state.style.stroke = None;
+        }
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family_with_content_and_fallback(
+            state.clone(),
+            Color::RED,
+        ));
+        let prepared = tx.prepare(&mut store).unwrap();
+        let selected = if painted { Color::BLUE } else { Color::RED };
+        assert_eq!(prepared.family_color(root).unwrap(), selected);
+        assert_eq!(prepared.object_state(root).unwrap().style, state.style);
+        let root = prepared.commit().resolve(root).unwrap();
+        assert_eq!(store.node(root).unwrap().family_color(), Some(selected));
+        assert_eq!(
+            store.node(root).unwrap().family_fallback_color(),
+            Some(Color::RED)
+        );
+
+        let mut empty_paint = state.style;
+        empty_paint.fill = None;
+        empty_paint.stroke = None;
+        let mut tx = SemanticMutationTransaction::new();
+        tx.replace_style(root, empty_paint);
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert_eq!(prepared.family_color(root).unwrap(), Color::RED);
+        prepared.commit();
+        assert_eq!(store.node(root).unwrap().family_color(), Some(Color::RED));
+    }
+}
+
+#[test]
+fn family_setters_update_fallback_even_when_visible_paint_already_matches() {
+    for replace_style in [false, true] {
+        let mut store = SemanticStore::new();
+        let mut state = SemanticObjectState::new(content());
+        state.style = SemanticStyle::manim_family_root(Color::BLUE);
+        let mut tx = SemanticMutationTransaction::new();
+        let root = tx.create_node(SemanticNodeCreation::family_with_content_and_fallback(
+            state.clone(),
+            Color::RED,
+        ));
+        let root = tx.apply(&mut store).unwrap().resolve(root).unwrap();
+        let revision = store.scene_revision();
+        let mut tx = SemanticMutationTransaction::new();
+        if replace_style {
+            tx.set_family_style(root, state.style.clone());
+        } else {
+            tx.set_family_color(root, Color::BLUE);
+        }
+        tx.apply(&mut store).unwrap();
+        assert_ne!(store.scene_revision(), revision);
+        assert_eq!(
+            store.semantic_object_state_checked(root).unwrap().style,
+            state.style
+        );
+        assert_eq!(
+            store.node(root).unwrap().family_fallback_color(),
+            Some(Color::BLUE)
+        );
+    }
+}
+
+#[test]
+fn invalid_family_fallback_rejects_before_admitting_any_node() {
+    for creation in [
+        SemanticNodeCreation::family_with_content_and_fallback(
+            SemanticObjectState::new(content()),
+            Color::rgba(f32::NAN, 0.0, 0.0, 1.0),
+        ),
+        SemanticNodeCreation::Family {
+            state: None,
+            fallback_color: Some(Color::RED),
+            source_identity: None,
+        },
+    ] {
+        let mut store = SemanticStore::new();
+        let revision = store.scene_revision();
+        let mut tx = SemanticMutationTransaction::new();
+        tx.create_node(creation);
+        assert!(tx.apply(&mut store).is_err());
+        assert_eq!(store.len(), 0);
+        assert_eq!(store.scene_revision(), revision);
+    }
+}
+
+#[test]
 fn family_drawing_eligibility_survives_materialization_in_either_transaction_order() {
     for content_first in [false, true] {
         let mut store = SemanticStore::new();

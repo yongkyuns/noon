@@ -2956,11 +2956,12 @@ impl SemanticMutationTransaction {
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous_color = staged_objects
-                        .get(node)
-                        .and_then(|state| state.style.family_color())
-                        .or_else(|| staged_family_colors.get(node).copied())
-                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
+                    let previous_color =
+                        staged_family_colors.get(node).copied().unwrap_or_else(|| {
+                            catalog
+                                .family_fallback_color(*node)
+                                .expect("validated family")
+                        });
                     let previous_style = staged_objects
                         .get(node)
                         .map(|state| state.style.clone())
@@ -3010,11 +3011,12 @@ impl SemanticMutationTransaction {
                         .map(|state| state.style.clone())
                         .or_else(|| staged_family_styles.get(node).cloned())
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
-                    let previous_color = staged_objects
-                        .get(node)
-                        .and_then(|state| state.style.family_color())
-                        .or_else(|| staged_family_colors.get(node).copied())
-                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
+                    let previous_color =
+                        staged_family_colors.get(node).copied().unwrap_or_else(|| {
+                            catalog
+                                .family_fallback_color(*node)
+                                .expect("validated family")
+                        });
                     let next_color = style.family_color().unwrap_or(previous_color);
                     let mut next_style = style.clone();
                     if let Some(color) = background_stroke_color {

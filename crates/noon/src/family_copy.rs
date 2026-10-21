@@ -193,7 +193,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family(family_state) => (
+                SemanticNodeKind::Family(_) => (
                     true,
                     node.members_iter().collect::<Vec<_>>(),
                     Some(node.presentation().expect("family presentation").z_index),
@@ -202,12 +202,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                         .draw_enabled,
                     // Visible paint may differ from the stored fallback. Copy the
                     // authored fallback itself; the complete style is copied below.
-                    Some(match family_state {
-                        noon_core::SemanticFamilyState::Unrendered(state) => state.own_color,
-                        noon_core::SemanticFamilyState::ContentOwning { fallback_color } => {
-                            *fallback_color
-                        }
-                    }),
+                    node.family_fallback_color(),
                     node.family_style().cloned(),
                     node.family_background_stroke_color(),
                     node.family_background_stroke_width(),
@@ -272,7 +267,10 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             None
         };
         let creation = match (is_family, state) {
-            (true, Some(state)) => SemanticNodeCreation::family_with_content(state),
+            (true, Some(state)) => SemanticNodeCreation::family_with_content_and_fallback(
+                state,
+                family_color.expect("family fallback was captured"),
+            ),
             (true, None) => SemanticNodeCreation::family(),
             (false, Some(state)) => SemanticNodeCreation::object(state),
             (false, None) => unreachable!("validated object owns a payload"),
@@ -286,7 +284,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }
-        if let Some(color) = family_color {
+        if let Some(color) = family_color.filter(|_| !has_content) {
             transaction.set_family_color(pending, color);
         }
         if let (
@@ -295,7 +293,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
             Some(background_stroke_width),
             Some(background_stroke_opacity),
         ) = (
-            family_style,
+            family_style.filter(|_| !has_content),
             family_background_stroke_color,
             family_background_stroke_width,
             family_background_stroke_opacity,
