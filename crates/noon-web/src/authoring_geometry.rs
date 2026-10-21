@@ -442,8 +442,13 @@ pub struct WasmAuthoringVectorPath {
 }
 
 pub(crate) fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
+    let (x, y) = point_f64(x, y)?;
+    Ok(Vec2::new(x as f32, y as f32))
+}
+
+pub(crate) fn point_f64(x: f64, y: f64) -> Result<(f64, f64), JsValue> {
     let value = noon::integration::authoring_xy_f64(x, y).map_err(js_error)?;
-    Ok(Vec2::new(value.x as f32, value.y as f32))
+    Ok((value.x, value.y))
 }
 
 pub(crate) fn points_f64(values: &[f64]) -> Result<Vec<(f64, f64)>, JsValue> {

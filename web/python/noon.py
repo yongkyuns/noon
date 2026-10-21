@@ -973,8 +973,8 @@ class Mobject:
     def shift(self, direction: object) -> Mobject:
         return _callback_operations()._canonical_shift(self, direction)
 
-    def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
-        return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
+    def move_to(self, point_or_mobject: object, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_move_to(self, point_or_mobject, *args, **kwargs)
 
     def put_start_and_end_on(self, start: object, end: object) -> Self:
         from _manim_shared_geometry import _put_start_and_end_on

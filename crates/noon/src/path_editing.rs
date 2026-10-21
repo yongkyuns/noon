@@ -1,4 +1,5 @@
 //! Persistent vector edits publish new immutable content through one transaction.
+mod quadratic;
 mod transaction;
 use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
 use noon_core::{
@@ -23,11 +24,12 @@ fn validate_raw_points(points: &[(f64, f64)]) -> Result<(), AuthoringError> {
     Ok(())
 }
 
+pub(crate) fn promote_point(point: Vec2) -> (f64, f64) {
+    (f64::from(point.x), f64::from(point.y))
+}
+
 fn promote_points(points: &[Vec2]) -> Vec<(f64, f64)> {
-    points
-        .iter()
-        .map(|point| (point.x as f64, point.y as f64))
-        .collect()
+    points.iter().copied().map(promote_point).collect()
 }
 
 /// Validate that one running Scene root may admit immutable path resources.
@@ -715,13 +717,27 @@ impl crate::Scene {
         control: Vec2,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
+        self.add_quadratic_bezier_curve_to_f64(
+            object,
+            promote_point(control),
+            promote_point(anchor),
+        )
+    }
+
+    /// Append a quadratic while preserving semantic control-point precision.
+    pub fn add_quadratic_bezier_curve_to_f64(
+        &mut self,
+        object: &Mobject,
+        control: (f64, f64),
+        anchor: (f64, f64),
+    ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(
                 store,
                 root,
                 execution,
                 object,
-                PathEdit::Quadratic(control, anchor),
+                PathEdit::QuadraticWithStride(control, anchor, 4),
             )
         })
     }
@@ -1070,8 +1086,7 @@ pub(crate) enum PathEdit<'a> {
         bezier_t_values: &'a [f64; 4],
     },
     AppendCorners(&'a [Vec2]),
-    Quadratic(Vec2, Vec2),
-    QuadraticWithStride(Vec2, Vec2, i32),
+    QuadraticWithStride((f64, f64), (f64, f64), i32),
     Cubic(Vec2, Vec2, Vec2),
     CubicWithStride(Vec2, Vec2, Vec2, i32),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
@@ -1141,6 +1156,15 @@ impl PathEdit<'_> {
                 point,
                 stride,
                 bezier_t_values,
+            )
+            .map(Some);
+        }
+        if let Self::QuadraticWithStride(control, anchor, stride) = self {
+            return quadratic::append_quadratic_f64(
+                world_path(store, state)?,
+                control,
+                anchor,
+                stride,
             )
             .map(Some);
         }
@@ -1372,34 +1396,6 @@ impl PathEdit<'_> {
             ))?;
             let (control1, control2) = cubic_line_controls(start, to);
             path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
-        } else if let Self::Quadratic(control, to) = self {
-            if [control, to]
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
-                noon_geometry::PathProportionError::EmptyPath,
-            ))?;
-            let control1 = control * (2.0 / 3.0) + start / 3.0;
-            let control2 = control * (2.0 / 3.0) + to / 3.0;
-            path = append_manim_cubic_to_path(points, control1, control2, to)?;
-        } else if let Self::QuadraticWithStride(control, to, stride) = self {
-            if [control, to]
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
-                noon_geometry::PathProportionError::EmptyPath,
-            ))?;
-            let control1 = control * (2.0 / 3.0) + start / 3.0;
-            let control2 = control * (2.0 / 3.0) + to / 3.0;
-            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
         } else if let Self::Cubic(control1, control2, to) = self {
             if [control1, control2, to]
                 .iter()
@@ -1426,10 +1422,6 @@ impl PathEdit<'_> {
                 Self::Line(to) => path.open_last_subpath().line_to(to),
                 Self::LineWithStride(to, _) => path.open_last_subpath().line_to(to),
                 Self::LineWithSamples { point, .. } => path.open_last_subpath().line_to(point),
-                Self::Quadratic(control, to) => path.open_last_subpath().quadratic_to(control, to),
-                Self::QuadraticWithStride(control, to, _) => {
-                    path.open_last_subpath().quadratic_to(control, to)
-                }
                 Self::Cubic(c1, c2, to) => path.open_last_subpath().cubic_to(c1, c2, to),
                 Self::CubicWithStride(c1, c2, to, _) => {
                     path.open_last_subpath().cubic_to(c1, c2, to)
@@ -1440,7 +1432,8 @@ impl PathEdit<'_> {
                     // endpoint rounding and the closing join.
                     return close_path_with_stride(path, 4, 1e-6, &[0., 1. / 3., 2. / 3., 1.]);
                 }
-                Self::Corners(_)
+                Self::QuadraticWithStride(..)
+                | Self::Corners(_)
                 | Self::CornersWithSamples { .. }
                 | Self::SmoothCorners(_)
                 | Self::Clear
@@ -1618,11 +1611,25 @@ fn manim_remainder_is_one(point_count: usize, stride: i32) -> bool {
 }
 
 fn append_manim_cubic_to_path_with_stride(
-    mut points: Vec<Vec2>,
+    points: Vec<Vec2>,
     control1: Vec2,
     control2: Vec2,
     anchor: Vec2,
     stride: i32,
+) -> Result<VectorPath, AuthoringError> {
+    append_manim_cubic_points_with_stride(
+        points,
+        [control1, control2, anchor],
+        stride,
+        VectorPath::from_manim_points,
+    )
+}
+
+fn append_manim_cubic_points_with_stride<T: Copy>(
+    mut points: Vec<T>,
+    tail: [T; 3],
+    stride: i32,
+    build: impl FnOnce(Vec<T>) -> VectorPath,
 ) -> Result<VectorPath, AuthoringError> {
     let last = points.last().copied().ok_or(AuthoringError::PathQuery(
         noon_geometry::PathProportionError::EmptyPath,
@@ -1632,8 +1639,8 @@ fn append_manim_cubic_to_path_with_stride(
     if !manim_remainder_is_one(points.len(), stride) {
         points.push(last);
     }
-    points.extend([control1, control2, anchor]);
-    let path = VectorPath::from_manim_points(points);
+    points.extend(tail);
+    let path = build(points);
     if !path.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }
@@ -2035,12 +2042,34 @@ impl Mobject {
         control: Vec2,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
-        self.edit_path(PathEdit::Quadratic(control, anchor))
+        self.add_quadratic_bezier_curve_to_f64(promote_point(control), promote_point(anchor))
     }
     pub fn add_quadratic_bezier_curve_to_with_stride(
         &mut self,
         control: Vec2,
         anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.add_quadratic_bezier_curve_to_f64_with_stride(
+            promote_point(control),
+            promote_point(anchor),
+            stride,
+        )
+    }
+
+    /// Append a quadratic without lowering caller coordinates to renderer precision.
+    pub fn add_quadratic_bezier_curve_to_f64(
+        &mut self,
+        control: (f64, f64),
+        anchor: (f64, f64),
+    ) -> Result<(), AuthoringError> {
+        self.add_quadratic_bezier_curve_to_f64_with_stride(control, anchor, 4)
+    }
+
+    pub fn add_quadratic_bezier_curve_to_f64_with_stride(
+        &mut self,
+        control: (f64, f64),
+        anchor: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::QuadraticWithStride(control, anchor, stride))
