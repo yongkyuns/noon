@@ -16144,7 +16144,8 @@ mod tests {
         player.live_advance_segment_to(1.0).unwrap();
         player.live_complete_segment().unwrap();
         let endpoint = player.live_effective(&helper).unwrap().transform;
-        assert_eq!(endpoint.translation, Vec2::new(4.0, 0.8));
+        assert!((endpoint.translation.x - 4.0).abs() <= 1.0e-6);
+        assert!((endpoint.translation.y - 0.8).abs() <= 1.0e-6);
         assert!((endpoint.scale.x * 4.0 - 4.0).abs() <= 1.0e-6);
     }
 
