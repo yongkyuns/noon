@@ -166,7 +166,8 @@ impl SemanticStore {
         })
     }
 
-    pub(super) fn member_container_is_observed(&self, family: SemanticNodeId) -> bool {
+    /// Whether a retained reader currently observes this root's direct-member container.
+    pub fn member_container_is_observed(&self, family: SemanticNodeId) -> bool {
         self.node(family)
             .and_then(|node| node.members.observation.as_ref())
             .is_some_and(|view| view.is_observed())

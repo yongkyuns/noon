@@ -1349,11 +1349,12 @@ class PathQueryTests(unittest.TestCase):
         second_leaf = Mock(get_num_points=Mock(return_value=2), submobjects=[])
         empty = Mock(get_num_points=Mock(return_value=0), submobjects=[])
         nested = Mock(get_num_points=Mock(return_value=0), submobjects=[empty])
-        root.submobjects = [nested, empty, leaf, second_leaf]
+        members = [nested, empty, leaf, second_leaf]
         from types import SimpleNamespace
-        root._semantic_member_wrappers = dict(zip(("1:1", "2:1", "3:1", "4:1"), root.submobjects))
+        root._semantic_member_wrappers = dict(zip(("1:1", "2:1", "3:1", "4:1"), members))
         root._semantic_handle = SimpleNamespace(
             semanticSlot=99, semanticGeneration=1,
+            memberKeys=Mock(side_effect=lambda: list(root._semantic_member_wrappers)),
             splitKeys=Mock(side_effect=lambda include: (["99:1"] if include else []) + list(root._semantic_member_wrappers)),
         )
         root._semantic_handle_fresh = True
