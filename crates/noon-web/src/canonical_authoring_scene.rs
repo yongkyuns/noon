@@ -344,7 +344,7 @@ impl SceneMembershipBatch {
         .map_err(AuthoringFailure::from)
     }
 
-    fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, AuthoringFailure> {
+    fn edit_family(&self, family: noon::MobjectTarget<'_>) -> Result<Vec<bool>, AuthoringFailure> {
         let members = self.family_members()?;
         match self.kind {
             SceneMembershipBatchKind::Add => {
@@ -4211,7 +4211,7 @@ mod wasm {
 
         pub(crate) fn edit_family(
             &self,
-            family: &noon::MobjectFamily,
+            family: noon::MobjectTarget<'_>,
         ) -> Result<Vec<bool>, AuthoringFailure> {
             self.inner.edit_family(family)
         }
@@ -10016,7 +10016,7 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_edit_family_members(&family, &members, adding)
+                .live_edit_family_members((&family).into(), &members, adding)
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(typed_js_error)
         }
@@ -10040,7 +10040,7 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_prepend_family_members(&family, &members)
+                .live_prepend_family_members((&family).into(), &members)
                 .map_err(typed_js_error)
         }
 
@@ -10073,10 +10073,103 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_insert_family_member(&family, index, *member)
+                .live_insert_family_member((&family).into(), index, *member)
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveEditObjectMembership)]
+        pub fn live_edit_object_membership(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            let adding = match batch.kind {
+                SceneMembershipBatchKind::Add => true,
+                SceneMembershipBatchKind::Remove => false,
+                _ => return Err(typed_js_error("membership requires add or remove")),
+            };
+            let members = batch.family_members().map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_edit_family_members(handle.semantic_mobject().into(), &members, adding)
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = livePrependObjectMembers)]
+        pub fn live_prepend_object_members(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_prepend_family_members(handle.semantic_mobject().into(), &members)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveInsertObjectMember)]
+        pub fn live_insert_object_member(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            index: usize,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(typed_js_error)?;
+            let [member] = members.as_slice() else {
+                return Err(typed_js_error("insertion requires exactly one member"));
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_insert_family_member(handle.semantic_mobject().into(), index, *member)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveReplaceObjectMembers)]
+        pub fn live_replace_object_members(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let members = batch.copy_references().map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_replace_members(handle.semantic_mobject().into(), &members)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveReplaceFamilyMembers)]
+        pub fn live_replace_family_members(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let members = batch.copy_references().map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_replace_members((&family).into(), &members)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveCopyMobjectFamily)]
+        pub fn live_copy_mobject_family(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_copy_mobject_family(
+                    source.semantic_mobject(),
+                    &references.copy_references().map_err(typed_js_error)?,
+                )
+                .map(crate::WasmFamilyCopy::from_object_copy)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveInvertFamilyMembers)]
         pub fn live_invert_family_members(
             &mut self,
@@ -11279,7 +11372,7 @@ mod tests {
             .unwrap();
         let committed = scene.integration_store().borrow().scene_revision();
         assert_eq!(committed, revision.checked_next().unwrap());
-        assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
+        assert_eq!(batch.edit_family((&family).into()).unwrap(), vec![false]);
         batch.kind = SceneMembershipBatchKind::Remove;
         assert!(batch
             .create_family(
@@ -11289,10 +11382,10 @@ mod tests {
                 true
             )
             .is_err());
-        assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
+        assert_eq!(batch.edit_family((&family).into()).unwrap(), vec![true]);
         batch.kind = SceneMembershipBatchKind::Clear;
         let revision = scene.integration_store().borrow().scene_revision();
-        assert!(batch.edit_family(&family).is_err());
+        assert!(batch.edit_family((&family).into()).is_err());
         batch.bindings.push((ObjectId::new(1), object.clone()));
         assert!(batch.family_members().is_err());
         batch.bindings.clear();
@@ -12366,7 +12459,7 @@ mod tests {
             context
                 .active_live_player()
                 .unwrap()
-                .live_edit_family_members(&pair, &[(&right).into()], false)
+                .live_edit_family_members((&pair).into(), &[(&right).into()], false)
                 .unwrap(),
             vec![true]
         );
@@ -12374,7 +12467,7 @@ mod tests {
             context
                 .active_live_player()
                 .unwrap()
-                .live_edit_family_members(&pair, &[(&right).into(), (&right).into()], true)
+                .live_edit_family_members((&pair).into(), &[(&right).into(), (&right).into()], true)
                 .unwrap(),
             vec![false, true]
         );

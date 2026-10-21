@@ -335,3 +335,54 @@ fn family_edge_transaction_writes_only_affected_slots_with_large_unrelated_scene
     assert_eq!(store.last_mutation_stats().slots_written, 3);
     assert_eq!(result.impacts().len(), 2);
 }
+
+#[test]
+fn ordered_membership_readds_edges_after_freezing_the_removed_old_list() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let a = object(&mut store, 0.1);
+    let b = object(&mut store, 0.2);
+    store.add_member(family, a).unwrap();
+    store.add_member(family, b).unwrap();
+    let old = store.member_view(family).unwrap();
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::ordered_membership();
+    transaction
+        .remove_member(family, a)
+        .replace_member_container(family)
+        .add_member(family, a);
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(
+        prepared.family_members(family).unwrap(),
+        vec![b.into(), a.into()]
+    );
+    assert_eq!(old.len(prepared.store()).unwrap(), 2);
+    prepared.commit();
+    assert_eq!(old.len(&store).unwrap(), 1);
+    assert_eq!(old.member_at(&store, 0).unwrap(), Some(b));
+    assert_eq!(store.node(family).unwrap().members(), vec![b, a]);
+    assert_eq!(store.node(a).unwrap().parents(), &[family]);
+    assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+}
+
+#[test]
+fn rejected_ordered_membership_keeps_old_readers_and_edges_unchanged() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let a = object(&mut store, 0.1);
+    store.add_member(family, a).unwrap();
+    let old = store.member_view(family).unwrap();
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::ordered_membership();
+    transaction
+        .remove_member(family, a)
+        .replace_member_container(family)
+        .add_member(family, a)
+        .add_member(family, family);
+    assert!(transaction.apply(&mut store).is_err());
+    assert_eq!(old.len(&store).unwrap(), 1);
+    assert_eq!(old.member_at(&store, 0).unwrap(), Some(a));
+    assert_eq!(store.node(family).unwrap().members(), vec![a]);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}

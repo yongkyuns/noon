@@ -509,7 +509,7 @@ pub(crate) fn family_creation_presentation_transaction(
 
 /// Prepare a local direct-member batch, returning one decision per input target.
 pub(crate) fn family_membership_transaction(
-    family: &MobjectFamily,
+    family: MobjectTarget<'_>,
     members: &[MobjectTarget<'_>],
     adding: bool,
 ) -> Result<(SemanticMutationTransaction, Vec<bool>), AuthoringError> {
@@ -519,7 +519,7 @@ pub(crate) fn family_membership_transaction(
     }
     let store = family.integration_store().borrow();
     let node = store
-        .semantic_family_checked(family.node_id())
+        .semantic_authoring_node_checked(family.node_id())
         .map_err(AuthoringError::from)?;
     let mut transaction = SemanticMutationTransaction::new();
     if adding {
@@ -550,7 +550,7 @@ pub(crate) fn family_membership_transaction(
 /// in one semantic transaction. Existing child identities and parent edges are
 /// retained.
 pub(crate) fn family_prepend_transaction(
-    family: &MobjectFamily,
+    family: MobjectTarget<'_>,
     members: &[MobjectTarget<'_>],
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     family.validate()?;
@@ -558,10 +558,10 @@ pub(crate) fn family_prepend_transaction(
         member.require_store(family.integration_store())?;
     }
 
-    let (current, incoming) = {
+    let (current, incoming, observed) = {
         let store = family.integration_store().borrow();
         let node = store
-            .semantic_family_checked(family.node_id())
+            .semantic_authoring_node_checked(family.node_id())
             .map_err(AuthoringError::from)?;
         let current = node.members().to_vec();
         let mut seen = BTreeSet::new();
@@ -570,7 +570,11 @@ pub(crate) fn family_prepend_transaction(
             .map(MobjectTarget::node_id)
             .filter(|member| seen.insert(*member))
             .collect::<Vec<_>>();
-        (current, incoming)
+        (
+            current,
+            incoming,
+            store.member_container_is_observed(family.node_id()),
+        )
     };
 
     let incoming_set = incoming.iter().copied().collect::<BTreeSet<_>>();
@@ -582,15 +586,25 @@ pub(crate) fn family_prepend_transaction(
             .filter(|member| !incoming_set.contains(member)),
     );
 
-    let mut transaction = SemanticMutationTransaction::new();
-    transaction.replace_member_container(family.node_id());
-    if desired == current {
+    let current_set = current.iter().copied().collect::<BTreeSet<_>>();
+    let mut transaction = SemanticMutationTransaction::ordered_membership();
+    if !observed && desired == current {
         return Ok(transaction);
     }
-
-    let current_set = current.iter().copied().collect::<BTreeSet<_>>();
+    if observed {
+        // CE removes incoming children from the original list before replacing it.
+        // Retained iterators observe this even when the final order is unchanged.
+        for member in incoming
+            .iter()
+            .copied()
+            .filter(|member| current_set.contains(member))
+        {
+            transaction.remove_member(family.node_id(), member);
+        }
+        transaction.replace_member_container(family.node_id());
+    }
     for member in incoming.iter().copied() {
-        if !current_set.contains(&member) {
+        if observed || !current_set.contains(&member) {
             transaction.add_member(family.node_id(), member);
         }
     }
@@ -609,7 +623,7 @@ pub(crate) fn family_prepend_transaction(
 /// inserting an identity already present therefore moves that identity instead
 /// of creating a repeated direct edge.
 pub(crate) fn family_insert_transaction(
-    family: &MobjectFamily,
+    family: MobjectTarget<'_>,
     index: usize,
     member: MobjectTarget<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
@@ -619,7 +633,7 @@ pub(crate) fn family_insert_transaction(
     let (current, present) = {
         let store = family.integration_store().borrow();
         let node = store
-            .semantic_family_checked(family.node_id())
+            .semantic_authoring_node_checked(family.node_id())
             .map_err(AuthoringError::from)?;
         (
             node.members().to_vec(),
@@ -804,51 +818,6 @@ impl MobjectFamily {
         Self::from_node(store, node)
     }
 
-    /// Add one direct member, moving an existing member to the tail.
-    /// Returns whether membership was new; a false result can still reorder it.
-    pub fn add(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
-        Ok(self.add_many(&[member])?[0])
-    }
-
-    /// Remove one direct member without changing that member's semantic identity.
-    pub fn remove(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
-        Ok(self.remove_many(&[member])?[0])
-    }
-
-    /// Commit a whole direct-member addition before returning per-input decisions.
-    pub fn add_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
-        self.edit_members(members, true)
-    }
-
-    /// Move the unique incoming members to the front in first-occurrence order,
-    /// matching Manim's `Mobject.add_to_back` behavior.
-    pub fn prepend_many(&self, members: &[MobjectTarget<'_>]) -> Result<(), AuthoringError> {
-        let transaction = family_prepend_transaction(self, members)?;
-        if !transaction.mutations().is_empty() {
-            transaction
-                .apply(&mut self.store.borrow_mut())
-                .map_err(AuthoringError::from)?;
-        }
-        Ok(())
-    }
-
-    /// Insert one unique direct member at the requested family index.
-    /// Existing identities are repositioned because semantic families retain
-    /// one direct edge per identity.
-    pub fn insert_member(
-        &self,
-        index: usize,
-        member: MobjectTarget<'_>,
-    ) -> Result<(), AuthoringError> {
-        let transaction = family_insert_transaction(self, index, member)?;
-        if !transaction.mutations().is_empty() {
-            transaction
-                .apply(&mut self.store.borrow_mut())
-                .map_err(AuthoringError::from)?;
-        }
-        Ok(())
-    }
-
     /// Reverse this family's direct member order, optionally through nested
     /// families while preserving Manim's repeated-alias call parity.
     pub fn invert(&self, recursive: bool) -> Result<(), AuthoringError> {
@@ -859,22 +828,6 @@ impl MobjectFamily {
                 .map_err(AuthoringError::from)?;
         }
         Ok(())
-    }
-
-    pub fn remove_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
-        self.edit_members(members, false)
-    }
-
-    fn edit_members(
-        &self,
-        members: &[MobjectTarget<'_>],
-        adding: bool,
-    ) -> Result<Vec<bool>, AuthoringError> {
-        let (transaction, changed) = family_membership_transaction(self, members, adding)?;
-        transaction
-            .apply(&mut self.store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        Ok(changed)
     }
 
     pub fn from_node(
