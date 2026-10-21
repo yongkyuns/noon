@@ -1828,6 +1828,13 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(scope);
                     impacts.push(SemanticMutationImpact::SignalScoped { scope, signal });
                 }
+                SemanticMutation::ReplaceMemberContainer { family } => {
+                    let family = resolve_node_ref(family, &committed_nodes);
+                    store
+                        .replace_member_container(family)
+                        .expect("preflighted member container owner");
+                    written_slots.insert(family);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     let family = resolve_node_ref(family, &committed_nodes);
                     let member = resolve_node_ref(member, &committed_nodes);

@@ -299,6 +299,18 @@ class Mobject:
         from _manim_compat import Group
         return Group
 
+    def __iter__(self):
+        from _manim_semantic_handles import _group_iter
+        return _group_iter(self)
+
+    def __len__(self):
+        from _manim_semantic_handles import _group_length
+        return _group_length(self)
+
+    def __getitem__(self, value):
+        from _manim_semantic_handles import _group_indexed_member, _group_slice
+        return _group_slice(self, value) if isinstance(value, slice) else _group_indexed_member(self, value)
+
     def set(self, **kwargs: Any) -> Mobject:
         for attr, value in kwargs.items():
             setattr(self, attr, value)
@@ -603,8 +615,8 @@ class Mobject:
 
     def split(self) -> list[Mobject]:
         """Return this point-owning object, if any, followed by direct children."""
-        result = [self] if self.has_points() else []
-        return result + list(getattr(self, "submobjects", ()))
+        from _manim_semantic_handles import _group_split
+        return _group_split(self)
 
     def family_members_with_points(self) -> list[Mobject]:
         """Return point-owning family members in the shared family order."""

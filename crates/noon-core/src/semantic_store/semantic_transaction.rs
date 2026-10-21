@@ -225,6 +225,12 @@ pub enum SemanticMutation {
         scope: SemanticTransactionNodeRef,
         layout: SemanticTransactionTableLayout,
     },
+    /// Replace the observable direct-member list while retaining family identity.
+    /// Pair with ordinary edge mutations in this same transaction. In-place
+    /// removal/insertion/reorder does not replace a captured list.
+    ReplaceMemberContainer {
+        family: SemanticTransactionNodeRef,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -304,6 +310,7 @@ impl SemanticMutation {
             Self::SetTableLayout { scope, layout } => std::iter::once(*scope)
                 .chain(layout.node_references())
                 .collect(),
+            Self::ReplaceMemberContainer { family } => vec![*family],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -375,7 +382,8 @@ impl SemanticMutation {
             | Self::SetForegroundMembers { scope, .. }
             | Self::SetGraphDeclaration { scope, .. } => scope.existing(),
             Self::SetTableLayout { scope, .. } => scope.existing(),
-            Self::AddMember { family, .. }
+            Self::ReplaceMemberContainer { family }
+            | Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
             Self::AddNode { .. } | Self::AddAnimation { .. } => None,
@@ -446,6 +454,7 @@ impl SemanticMutation {
             | Self::ClearUpdaters { .. }
             | Self::ScopeSignal { .. }
             | Self::SetForegroundMembers { .. }
+            | Self::ReplaceMemberContainer { .. }
             | Self::SetGraphDeclaration { .. } => None,
             Self::SetTableLayout { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
@@ -1357,6 +1366,18 @@ impl SemanticMutationTransaction {
             scope: scope.into(),
             layout: layout.into(),
         });
+        self
+    }
+
+    /// Replace a direct-member container atomically with the following edge edits.
+    pub fn replace_member_container(
+        &mut self,
+        family: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceMemberContainer {
+                family: family.into(),
+            });
         self
     }
 
@@ -3417,6 +3438,14 @@ impl SemanticMutationTransaction {
                     };
                     changed.push(previous != Some(layout.clone()));
                     staged_table_layouts.insert(*scope, layout.clone());
+                }
+                SemanticMutation::ReplaceMemberContainer { family } => {
+                    catalog.ensure_membership_owner(*family, index)?;
+                    changed.push(
+                        family
+                            .existing()
+                            .is_some_and(|id| store.member_container_is_observed(id)),
+                    );
                 }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
