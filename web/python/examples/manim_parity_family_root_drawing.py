@@ -6,8 +6,8 @@ class FamilyRootDrawing(Scene):
     async def construct(self):
         left = Circle(0.2, fill_color="#ffff00", fill_opacity=1, stroke_width=0).shift(LEFT * 2)
         right = Circle(0.2, fill_color="#ffff00", fill_opacity=1, stroke_width=0).shift(RIGHT * 2)
-        left_points = Square(1.2).shift(LEFT * 2).points.copy()
-        right_points = Square(1.2).shift(RIGHT * 2).points.copy()
+        left_points = Square(1.2).shift(LEFT * 2).get_all_points().copy()
+        right_points = Square(1.2).shift(RIGHT * 2).get_all_points().copy()
         group, vector = Group(left), VGroup(right)
         alignment_peer, alignment_leaf = VGroup(), Circle(0.7)
         vector.align_points(alignment_peer)
