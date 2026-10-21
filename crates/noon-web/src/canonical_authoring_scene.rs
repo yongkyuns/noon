@@ -1925,7 +1925,7 @@ impl CanonicalAuthoringScene {
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         let end = self.activate_ordinary_mixed_composition(
             kind,
             children,
@@ -1934,12 +1934,8 @@ impl CanonicalAuthoringScene {
             false,
         )?;
         let player = self.active_live_player()?;
-        player
-            .live_advance_segment_to(end)
-            .map_err(|error| error.to_string())?;
-        player
-            .live_complete_segment()
-            .map_err(|error| error.to_string())?;
+        player.live_advance_segment_to(end)?;
+        player.live_complete_segment()?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".into())
@@ -1952,7 +1948,7 @@ impl CanonicalAuthoringScene {
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         self.activate_ordinary_mixed_composition(
             kind,
             children,
@@ -1970,7 +1966,7 @@ impl CanonicalAuthoringScene {
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
         allow_required_callbacks: bool,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
         let bootstrap_duration = self
             .live_handoff_duration()
@@ -11042,7 +11038,7 @@ mod tests {
     fn begin_request(
         context: &mut CanonicalAuthoringScene,
         child: OrdinaryCompositionChild,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         context.begin_ordinary_mixed_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,
             &[child],
@@ -11054,7 +11050,7 @@ mod tests {
     fn play_request(
         context: &mut CanonicalAuthoringScene,
         child: OrdinaryCompositionChild,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         context.ordinary_play_mixed_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,
             &[child],
@@ -13009,6 +13005,41 @@ mod tests {
                 .introducer(true),
         }];
 
+        let mut shifted = left.target_editor().unwrap();
+        shifted.shift(0.0, 1.0).unwrap();
+        let conflicting = [
+            write[0].clone(),
+            OrdinaryCompositionChild::TransformTo {
+                entering_id: Some(ObjectId::new(0)),
+                source: left.clone(),
+                target: shifted,
+                interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                complete_priority: false,
+                options: AnimationOptions::new(),
+            },
+        ];
+        let revision = context.scene.integration_store().borrow().scene_revision();
+        let error = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &conflicting,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "live.activation");
+        assert_eq!(
+            error.cause.as_ref().unwrap().code,
+            "animation.conflicting_object_drivers"
+        );
+        assert!(context.player_ownership.is_unstarted());
+        assert!(context.bindings.is_empty());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+
         assert_eq!(
             context
                 .ordinary_play_mixed_composition(
@@ -13839,7 +13870,9 @@ mod tests {
                 play,
             )
             .unwrap_err();
-        assert!(endpoint_only_error.contains("needs an asynchronous continuation"));
+        assert!(endpoint_only_error
+            .to_string()
+            .contains("needs an asynchronous continuation"));
         assert!(context.player_ownership.is_unstarted());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -14165,6 +14198,7 @@ mod tests {
                 play,
             )
             .unwrap_err()
+            .to_string()
             .contains("another authoring store"));
         assert!(context.player_ownership.is_unstarted());
 
@@ -15231,7 +15265,9 @@ mod tests {
             ),
         )
         .unwrap_err();
-        assert!(error.contains("cannot follow pre-execution canonical timing"));
+        assert!(error
+            .to_string()
+            .contains("cannot follow pre-execution canonical timing"));
         assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.authored_duration(), 2.0);
         assert_eq!(
@@ -15469,6 +15505,33 @@ mod tests {
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
+        let revision = context.scene.integration_store().borrow().scene_revision();
+        let duplicate = create_requests(&[
+            (ObjectId::new(0), circle.clone(), options),
+            (ObjectId::new(0), circle.clone(), options),
+        ]);
+        let error = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &duplicate,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "live.activation");
+        assert_eq!(
+            error.cause.as_ref().unwrap().code,
+            "animation.duplicate_create_target"
+        );
+        assert!(context.player_ownership.is_unstarted());
+        assert!(context.bindings.is_empty());
+        assert!(context.identities.is_empty());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+
         let end = context
             .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,

@@ -200,3 +200,33 @@ test("shared playback passes fixture preparation metadata through the canonical 
   assert.doesNotMatch(loadedSources[0], /await prepare_latex\(\)/);
   assert.match(loadedSources[1], /await prepare_latex\(\)/);
 });
+
+test("sparse host receives each endpoint once, including static and terminal-sampled scenes", async () => {
+  const functionStart = source.indexOf("async function qualifyFixture(");
+  const functionEnd = source.indexOf("\nconst results =", functionStart);
+  const qualify = new AsyncFunction(
+    "assert", "baseline", "reference", "path", "repoRoot", "manifest", "readFile", "rasterFixtureSource",
+    "resolveSharedPlaybackSamples", "page", "fixture", "baseUrl", "artifactRoot", "mkdir",
+    `${source.slice(functionStart, functionEnd)}\nreturn qualifyFixture(page, fixture, "webgpu");`);
+  for (const times of [[0], [0, 0.5], [0, 0.5, 1]]) {
+    const duration = times.length === 1 ? 0 : 1;
+    const fixture = { id: "endpoint", scene: "Endpoint", expected_duration: duration, source: "fixture.py" };
+    const baseline = { fixtures: [{ ...fixture, expectedDuration: duration, manim: { frameCount: 0 },
+      backends: { webgpu: { samples: [{}] } } }] };
+    const reference = { fixtures: [{ id: fixture.id, frame_count: 0, frames: [] }] };
+    const sampledMaps = [];
+    const stopAfterSampling = new Error("sample map observed");
+    const page = {
+      goto: async () => {}, waitForFunction: async () => {},
+      evaluate: async (_fn, argument) => {
+        if (argument?.times) { sampledMaps.push(argument.times); throw stopAfterSampling; }
+        if (argument?.source) return { kind: "semantic_execution", rendererBackend: "WebGPU" };
+        return true;
+      },
+    };
+    await assert.rejects(qualify(assert, baseline, reference, path, repoRoot, { reference: {} },
+      async () => "source", value => value, () => times.map(time => ({ time, label: String(time) })),
+      page, fixture, "http://example.test", "artifacts", async () => {}), stopAfterSampling);
+    assert.deepEqual(sampledMaps, [duration === 0 ? [0] : [0, 0.5, 1]]);
+  }
+});

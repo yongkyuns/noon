@@ -9,7 +9,7 @@ import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
   writeSpecialCameraObservations,
   assertFollowingSources, assertFollowingState, assertFollowingReports,
   assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
-import { CAMERA_SOURCE_HASHES, PINNED_CAMERA_CASES, extractPinnedScene, PINNED_DOCS_COMMIT,
+import { AUTHORED_CAMERA_CHECKPOINTS, CAMERA_SOURCE_HASHES, PINNED_CAMERA_CASES, extractPinnedScene, PINNED_DOCS_COMMIT,
   PINNED_DOCS_SHA256 } from "./stage-special-camera-raster.mjs";
 
 const paint = (red, green, blue) => ({ red, green, blue, alpha: 1 });
@@ -179,6 +179,24 @@ test("pinned 3D camera samples cover motion handoffs and exact endpoints", () =>
   const [, duration, illusionTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "ThreeDCameraIllusionRotation");
   assert.ok(illusionTimes.includes(Math.floor(duration * 30) / 30),
     "retain the last materialized Manim frame separately from exact completion");
+});
+
+test("authored camera inputs cover all original motion checkpoints including exact stop", () => {
+  assert.deepEqual(Object.keys(AUTHORED_CAMERA_CHECKPOINTS),
+    ["ThreeDCameraRotation", "ThreeDCameraIllusionRotation"]);
+  for (const [scene, checkpoints] of Object.entries(AUTHORED_CAMERA_CHECKPOINTS)) {
+    const [, , times] = PINNED_CAMERA_CASES.find(([name]) => name === scene);
+    assert.deepEqual(checkpoints.map(([time]) => time), times);
+    assert.ok(checkpoints.every(row => row.length === 3 && row.every(Number.isFinite)));
+  }
+  const rotation = AUTHORED_CAMERA_CHECKPOINTS.ThreeDCameraRotation;
+  assert.ok(Math.abs(rotation.find(([time]) => time === 1)[2] - rotation[0][2] - 0.1) < 1e-15);
+  assert.deepEqual(rotation.at(-1).slice(1), rotation[0].slice(1));
+  const illusion = AUTHORED_CAMERA_CHECKPOINTS.ThreeDCameraIllusionRotation;
+  assert.ok(Math.abs(illusion[0][1] - illusion.at(-1)[1] - 0.2) < 1e-15);
+  assert.equal(illusion.at(-1)[2], illusion[0][2]);
+  assert.notEqual(illusion.at(-2)[1], illusion.at(-1)[1],
+    "last materialized frame must remain distinct from exact completion");
 });
 
 for (const profile of ["fixed-frame", "ambient", "illusion", "light", "surface",
