@@ -2345,12 +2345,11 @@ impl crate::ExecutionSession {
                 if *node == source {
                     return None;
                 }
-                if *node == target {
-                    if *interpolation != noon_core::SemanticTransformInterpolation::Affine
-                        || driver.replace((*target_state, *options)).is_some()
-                    {
-                        return None;
-                    }
+                if *node == target
+                    && (*interpolation != noon_core::SemanticTransformInterpolation::Affine
+                        || driver.replace((*target_state, *options)).is_some())
+                {
+                    return None;
                 }
             }
         }

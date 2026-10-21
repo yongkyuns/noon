@@ -16107,6 +16107,48 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_layout_follower_reaches_native_tracks_without_a_callback_barrier() {
+        let mut context = CanonicalAuthoringScene::default();
+        let helper = context.scene.rectangle(4.0, 2.0).unwrap();
+        let display = context.scene.rectangle(2.0, 1.0).unwrap();
+        let mut end = display.target_editor().unwrap();
+        end.set_scale(2.0, 3.0).unwrap();
+        end.set_translation(4.0, 0.8).unwrap();
+        context.bind_mobject(ObjectId::new(1), &helper).unwrap();
+        context.bind_mobject(ObjectId::new(2), &display).unwrap();
+        let children = [
+            bound_transform_child(&display, end, AnimationOptions::new().run_time(1.0)),
+            OrdinaryCompositionChild::LayoutReplaceInterval {
+                target: helper.clone(),
+                layout_target: display,
+                fallback: HostCallbackId::new(3),
+                options: AnimationOptions::new().run_time(1.0),
+            },
+        ];
+        assert_eq!(
+            context
+                .begin_ordinary_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        let player = context.active_live_player().unwrap();
+        assert!(!player.has_required_callbacks());
+        player.live_advance_segment_to(0.5).unwrap();
+        let midpoint = player.live_effective(&helper).unwrap().transform;
+        assert!((midpoint.scale.x * 4.0 - 3.0).abs() <= 1.0e-6);
+        player.live_advance_segment_to(1.0).unwrap();
+        player.live_complete_segment().unwrap();
+        let endpoint = player.live_effective(&helper).unwrap().transform;
+        assert_eq!(endpoint.translation, Vec2::new(4.0, 0.8));
+        assert!((endpoint.scale.x * 4.0 - 4.0).abs() <= 1.0e-6);
+    }
+
+    #[test]
     fn ordinary_sequence_admits_move_path_and_finite_callback_interval() {
         let mut context = CanonicalAuthoringScene::default();
         let camera = context.create_camera_frame(ObjectId::new(45)).unwrap();
