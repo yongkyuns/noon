@@ -5,36 +5,33 @@ use crate::authoring_error::AuthoringFailure;
 impl SemanticExecutionPlayer {
     pub(crate) fn live_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| Ok(table.get_cell_in_live_session(live, row, column)))?
+        self.with_live_session(|live| Ok(selection.get_cell_in_live_session(live, column)))?
             .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_highlight_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(table.highlight_cell_in_live_session(live, row, column, color, opacity))
+            Ok(selection.highlight_cell_in_live_session(live, column, color, opacity))
         })?
         .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_get_highlighted_table_cell(
         &mut self,
-        table: &noon::Table,
-        row: usize,
-        column: usize,
+        selection: &noon::TableCellColumns,
+        column: noon::IntegerIndex,
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         self.with_live_session(|live| {
-            Ok(table.get_highlighted_cell_in_live_session(live, row, column, color, opacity))
+            Ok(selection.get_highlighted_cell_in_live_session(live, column, color, opacity))
         })?
         .map_err(AuthoringFailure::from)
     }
@@ -45,6 +42,28 @@ impl SemanticExecutionPlayer {
     ) -> Result<noon::Table, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(noon::Table::from_rows_in_live_session(live, rows, options))
+        })?
+        .map_err(AuthoringFailure::from)
+    }
+    pub(crate) fn live_create_table_with_labels<'a>(
+        &mut self,
+        rows: Vec<Vec<String>>,
+        row_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        column_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        top_left_entry: Option<noon::MobjectTarget<'a>>,
+        options: noon::TableOptions,
+    ) -> Result<noon::Table, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(
+                noon::Table::from_rows_with_composite_labels_in_live_session(
+                    live,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    top_left_entry,
+                    options,
+                ),
+            )
         })?
         .map_err(AuthoringFailure::from)
     }
@@ -79,18 +98,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         backend: &mut impl noon::LatexBackend,
         rows: Vec<Vec<f64>>,
+        format: noon::DecimalFormat,
         options: noon::TableOptions,
     ) -> Result<noon::DecimalTable, AuthoringFailure> {
         self.with_live_session(|live| {
             Ok(noon::DecimalTable::from_rows_in_live_session(
-                live,
-                backend,
-                rows,
-                noon::DecimalFormat {
-                    decimal_places: 1,
-                    ..Default::default()
-                },
-                options,
+                live, backend, rows, format, options,
             ))
         })?
         .map_err(AuthoringFailure::from)
@@ -104,6 +117,28 @@ impl SemanticExecutionPlayer {
             Ok(noon::MobjectTable::from_target_rows_in_live_session(
                 live, rows, options,
             ))
+        })?
+        .map_err(AuthoringFailure::from)
+    }
+    pub(crate) fn live_create_mobject_table_with_labels_and_top_left_entry<'a>(
+        &mut self,
+        rows: Vec<Vec<noon::MobjectTarget<'a>>>,
+        row_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        column_labels: Option<Vec<noon::MobjectTarget<'a>>>,
+        top_left_entry: Option<noon::MobjectTarget<'a>>,
+        options: noon::TableOptions,
+    ) -> Result<noon::MobjectTable, AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(
+                noon::MobjectTable::from_target_rows_with_optional_composite_labels_in_live_session(
+                    live,
+                    rows,
+                    row_labels,
+                    column_labels,
+                    top_left_entry,
+                    options,
+                ),
+            )
         })?
         .map_err(AuthoringFailure::from)
     }

@@ -7,7 +7,7 @@ use crate::{Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
 use std::rc::Rc;
 #[cfg(any(feature = "native-text", feature = "latex", test))]
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{cell::RefCell, collections::BTreeMap};
 
 /// An owned retained entry root returned by composite display families.
 ///
@@ -78,9 +78,23 @@ impl CompositeEntry {
         &self.leaves
     }
     pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
+        self.measured_bounds(false)
+    }
+    pub(crate) fn boundary_bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
+        self.measured_bounds(true)
+    }
+    fn measured_bounds(
+        &self,
+        anchors: bool,
+    ) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
         let mut result: Option<noon_core::Bounds2D64> = None;
         for (object, state) in &self.leaves {
-            if let Some(next) = crate::semantic_mobject::layout_for_content(
+            let measure = if anchors {
+                crate::semantic_mobject::boundary_for_content
+            } else {
+                crate::semantic_mobject::layout_for_content
+            };
+            if let Some(next) = measure(
                 &object.integration_store().borrow(),
                 state.content,
                 state
@@ -109,7 +123,26 @@ pub(crate) fn capture_entries_with(
     entries: &[MobjectTarget<'_>],
     mut capture_state: impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
 ) -> Result<Vec<CompositeEntry>, AuthoringError> {
-    let mut seen = BTreeSet::new();
+    capture_entries(store, entries, false, &mut capture_state)
+}
+
+#[cfg(any(feature = "native-text", feature = "latex", test))]
+pub(crate) fn capture_entries_with_aliases(
+    store: &Rc<RefCell<SemanticStore>>,
+    entries: &[MobjectTarget<'_>],
+    mut capture_state: impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
+) -> Result<Vec<CompositeEntry>, AuthoringError> {
+    capture_entries(store, entries, true, &mut capture_state)
+}
+
+#[cfg(any(feature = "native-text", feature = "latex", test))]
+fn capture_entries(
+    store: &Rc<RefCell<SemanticStore>>,
+    entries: &[MobjectTarget<'_>],
+    allow_aliases: bool,
+    capture_state: &mut impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
+) -> Result<Vec<CompositeEntry>, AuthoringError> {
+    let mut states = BTreeMap::<SemanticNodeId, SemanticObjectState>::new();
     entries
         .iter()
         .map(|entry| {
@@ -120,13 +153,20 @@ pub(crate) fn capture_entries_with(
                 .map_err(AuthoringError::from)?;
             let mut captured = Vec::with_capacity(leaves.len());
             for node in leaves {
-                if !seen.insert(node) {
+                if !allow_aliases && states.contains_key(&node) {
                     return Err(AuthoringError::Semantic(
                         noon_core::SemanticSceneOperationError::DuplicateMembershipTarget(node),
                     ));
                 }
                 let object = Mobject::from_node(Rc::clone(store), node)?;
-                let state = capture_state(&object)?;
+                let state = match states.get(&node) {
+                    Some(state) => state.clone(),
+                    None => {
+                        let state = capture_state(&object)?;
+                        states.insert(node, state.clone());
+                        state
+                    }
+                };
                 captured.push((object, state));
             }
             Ok(CompositeEntry {

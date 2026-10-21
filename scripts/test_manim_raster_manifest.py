@@ -302,6 +302,50 @@ class RasterManifestTests(unittest.TestCase):
             self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]),
                              [selected, selected, explicit])
 
+    def test_mobject_table_top_left_entry_fixture_is_enrolled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        matches = [
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "mobject-table-top-left-entry"
+        ]
+        self.assertEqual(len(matches), 1)
+        fixture = matches[0]
+        self.assertEqual(fixture["scene"], "MobjectTableTopLeftEntryExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertNotIn("raster_tolerance", fixture)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        self.assertIn("top_left_entry=Circle(radius=0.25)", source)
+        self.assertIn("row_labels=[", source)
+        self.assertIn("col_labels=[", source)
+
+    def test_plain_table_labels_fixture_is_enrolled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        matches = [fixture for fixture in manifest["fixtures"] if fixture["id"] == "table-labels"]
+        self.assertEqual(len(matches), 1)
+        fixture = matches[0]
+        self.assertEqual(fixture["scene"], "TableLabelsExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertEqual(fixture["noon_source"], "web/python/examples/table_labels.py")
+        self.assertNotIn("raster_tolerance", fixture)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        self.assertIn("table = Table(", source)
+        self.assertIn("row_labels=row_labels", source)
+        self.assertIn("col_labels=column_labels", source)
+        self.assertIn("top_left_entry=top_left_entry", source)
+
+    def test_decimal_table_format_fixture_has_pinned_and_noon_sources(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(item for item in manifest["fixtures"] if item["id"] == "decimal-table-format")
+        self.assertEqual(fixture["scene"], "DecimalTableFormatExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertTrue(fixture["requires_latex"])
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        noon_source = (ROOT / fixture["noon_source"]).read_text(encoding="utf-8")
+        for text in (source, noon_source):
+            self.assertIn("num_decimal_places", text)
+            self.assertIn("include_sign", text)
+            self.assertIn("group_with_commas", text)
+
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         matching = [
