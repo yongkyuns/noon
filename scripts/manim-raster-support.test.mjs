@@ -33,6 +33,15 @@ test("invalid reference font configuration fails before starting an oracle", () 
   }
 });
 
+test("explicit Pango backend overrides ambient backend without changing original observations", () => {
+  const environment = { PANGOCAIRO_BACKEND: "coretext" };
+  assert.equal(rasterReferenceEnvironment({}, environment).PANGOCAIRO_BACKEND, "coretext");
+  assert.equal(rasterReferenceEnvironment({ pango_backend: "fc" }, environment).PANGOCAIRO_BACKEND, "fc");
+  for (const pango_backend of [null, "", "auto", " fc", 1]) {
+    assert.throws(() => rasterReferenceEnvironment({ pango_backend }, environment), /pango_backend/);
+  }
+});
+
 function authoredCameraInputs() {
   const camera = { phi: 0.7, theta: -0.2, gamma: 0, zoom: 1, frame_center: [0, 0, 0] };
   const fixture = { sample_times: [1], camera_profile_observation: true,

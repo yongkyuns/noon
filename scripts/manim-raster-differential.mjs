@@ -33,6 +33,11 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
 const referenceEnvironment = rasterReferenceEnvironment(reference);
 const referenceFontPaths = JSON.parse(process.env.NOON_MANIM_REFERENCE_FONTS ?? "[]");
+const fontconfigFile = referenceEnvironment.FONTCONFIG_FILE;
+const referenceFontconfig = fontconfigFile ? {
+  path: path.resolve(fontconfigFile),
+  sha256: createHash("sha256").update(await readFile(fontconfigFile)).digest("hex"),
+} : null;
 assert.ok(Array.isArray(referenceFontPaths) && referenceFontPaths.every(value => typeof value === "string"),
   "NOON_MANIM_REFERENCE_FONTS must be a JSON array of font paths");
 // These are the explicit family used by the Text fixtures and Pango's generic
@@ -44,12 +49,13 @@ const referenceFonts = await Promise.all([
   ...referenceFontFamilies.map(async requestedFamily => {
     const result = spawnSync("fc-match", [
       "--format", "%{family[0]}\n%{style[0]}\n%{file}\n%{index}\n", requestedFamily,
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", env: referenceEnvironment });
     assert.equal(result.status, 0, `fc-match failed for ${requestedFamily}: ${result.stderr ?? ""}`);
     const [resolvedFamily, style, font, index] = result.stdout.trimEnd().split("\n");
     assert.ok(resolvedFamily && style && font && index !== undefined,
       `fc-match returned incomplete metadata for ${requestedFamily}`);
     return {
+      source: "fontconfig-probe",
       requestedFamily,
       resolvedFamily,
       style,
@@ -59,6 +65,7 @@ const referenceFonts = await Promise.all([
     };
   }),
   ...referenceFontPaths.map(async font => ({
+    source: "registered-reference-font",
     path: path.resolve(font),
     sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
   })),
@@ -864,6 +871,7 @@ function bboxDelta(referenceStats, actualStats) {
 async function compareAll(references, backendResults) {
   const report = {
     referenceFonts,
+    referenceFontconfig,
     reference,
     enforce,
     generatedAt: new Date().toISOString(),

@@ -12,8 +12,12 @@ The separately staged camera examples also support an explicit `portable-authore
 reference profile: set `NOON_CAMERA_REFERENCE_PROFILE=portable-authored` when running
 `scripts/stage-special-camera-raster.mjs`. Class source/AST hashes and sample times
 remain unchanged. `reference.text_font` selects a process-local Manim Text/MarkupText
-default; explicit object fonts still win. Register the matching font files through
-`NOON_MANIM_REFERENCE_FONTS` and retain their hashes and backend metadata.
+default; explicit object fonts still win. The profile selects `pango_backend: "fc"`
+to match Noon's portable Cairo/FreeType metrics. Register the matching font files through
+`NOON_MANIM_REFERENCE_FONTS` and retain their hashes and backend metadata. A custom
+`FONTCONFIG_FILE` may restrict font discovery to the supplied assets; the report
+records its path/hash. This requires Pango's fontconfig backend, with no fallback
+to another metrics profile.
 For the two camera-only motion examples, `authored_camera_checkpoints` supplies
 independent absolute phi/theta values at every sample. Pinned Cairo projects the
 original scene at those angles and restores its sampled camera immediately.

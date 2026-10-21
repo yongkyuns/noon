@@ -12,6 +12,12 @@ export function rasterReferenceEnvironment(reference, environment = process.env)
     }
     selected.NOON_MANIM_REFERENCE_TEXT_FONT = reference.text_font;
   }
+  if (reference.pango_backend !== undefined) {
+    if (!["fc", "coretext", "win32"].includes(reference.pango_backend)) {
+      throw new Error("reference.pango_backend must select fc, coretext or win32");
+    }
+    selected.PANGOCAIRO_BACKEND = reference.pango_backend;
+  }
   return selected;
 }
 

@@ -143,7 +143,8 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
     });
   }
   const staged = { ...baseline, reference: { ...baseline.reference, source: fixtures[0].source,
-    ...(referenceProfile === "portable-authored" ? { text_font: "DejaVu Sans Mono" } : {}) }, fixtures };
+    ...(referenceProfile === "portable-authored"
+      ? { text_font: "DejaVu Sans Mono", pango_backend: "fc" } : {}) }, fixtures };
   const manifestPath = path.join(stageRoot, "manifest.json");
   await writeFile(manifestPath, JSON.stringify(staged, null, 2) + "\n");
   await writeFile(path.join(stageRoot, "source-provenance.json"), JSON.stringify({
