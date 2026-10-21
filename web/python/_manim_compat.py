@@ -400,6 +400,15 @@ class VMobject(Mobject):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)
 
+    def insert_n_curves_to_point_list(self, n, points):
+        """Return subdivided caller-owned values without editing this object's path."""
+        import numpy as np
+        from _manim_user_vectors import bezier_remap
+        if len(points) == 1:
+            return np.repeat(points, self.n_points_per_cubic_curve * n, 0)
+        curves = self.get_cubic_bezier_tuples_from_points(points)
+        return bezier_remap(curves, len(curves) + n).reshape(-1, 3)
+
     def get_subcurve(self, a, b):
         from _manim_semantic_handles import _clone_mobject
         return _clone_mobject(self, subcurve=(float(a), float(b)))
