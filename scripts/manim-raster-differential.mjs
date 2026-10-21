@@ -682,10 +682,16 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       Math.abs(time - sample.requestedTime) <= 1e-9);
     assert.notEqual(captureFrameIndex, -1,
       `${fixture.id}: missing worker capture time ${sample.requestedTime}`);
+    const stopAtSourceCompletion = fixture.stop_at_source_completion === true && sample.terminalState;
     const metrics = await page.evaluate(
-      ({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes),
-      { frameIndex: captureFrameIndex, frameTimes },
+      ({ frameIndex, frameTimes, stopAtSourceCompletion }) =>
+        window.noonHostRaster.renderThrough(frameIndex, frameTimes, { stopAtSourceCompletion }),
+      { frameIndex: captureFrameIndex, frameTimes, stopAtSourceCompletion },
     );
+    if (stopAtSourceCompletion) {
+      assert.equal(metrics.sourceCompleted, true, `${fixture.id}: source endpoint completion`);
+      assert.equal(metrics.sourceState, "completed", `${fixture.id}: source endpoint state`);
+    }
     assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
     assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
     assert.equal(metrics.frameIndex, captureFrameIndex, `${fixture.id}: host materialized capture index`);

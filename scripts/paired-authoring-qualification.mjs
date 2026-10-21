@@ -56,15 +56,17 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           canvas.style.height = `${height}px`;
         }, fixture.canvasSize);
       }
-      const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries }) => {
+      const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries, stopAtSourceCompletion }) => {
         if (label === "python") {
           if (duration > 0) {
             const initial = await window.noonHostRaster.load(source, duration);
             if (!Number.isFinite(initial.time) || sampleTime < initial.time) {
               throw new Error(`paired sample ${sampleTime} precedes initial frame ${initial.time}`);
             }
-            const times = sampleTime > initial.time ? [initial.time, sampleTime] : [initial.time];
-            return window.noonHostRaster.renderThrough(times.length - 1, times);
+            const times = [...new Set([initial.time,
+              ...(stopAtSourceCompletion ? boundaries.filter(time => time > initial.time && time < sampleTime) : []),
+              sampleTime])].sort((a, b) => a - b);
+            return window.noonHostRaster.renderThrough(times.length - 1, times, { stopAtSourceCompletion });
           }
           const { PythonAuthoringClient } = await import("./authoring-client.js");
           const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
@@ -136,9 +138,15 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           cadence: sample?.cadence, delayMs: sample?.delayMs };
       }, { label, source: fixture.source, factory: fixture.factory, factoryArgs: fixture.factoryArgs ?? [],
         preparation: fixture.preparation, playback: fixture.playback, boundaries: fixture.boundaries ?? [],
-        duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0 });
+        duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0,
+        stopAtSourceCompletion: fixture.stopAtSourceCompletion === true });
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
+      if (label === "python" && fixture.stopAtSourceCompletion) {
+        assert.equal(metrics.sourceCompleted, true, `${fixture.id}: Python source must complete`);
+        assert.equal(metrics.sourceState, "completed", `${fixture.id}: Python completion state`);
+        assert.equal(metrics.authoredDuration, fixture.duration, `${fixture.id}: authored duration`);
+      }
       const expectedTime = label === "rust-wasm"
         ? fixture.directHeldSampleTime ?? fixture.sampleTime ?? 0 : fixture.sampleTime ?? 0;
       assert.ok(Math.abs(metrics.time - expectedTime) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${expectedTime}`);

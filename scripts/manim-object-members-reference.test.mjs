@@ -12,3 +12,11 @@ test('ordinary-object membership controls pin source, complete cases and retaine
  assert.deepEqual(Object.keys(fixture.methodSourceSha256).sort(),['add','remove','add_to_back','insert','copy','_assert_valid_submobjects_internal'].sort());
  for(const row of fixture.cases){assert.deepEqual(row.steps[3].capturedIterator,row.spec.ownPoints?['self']:[]);assert.equal(row.copy.aliasesPreserved,true);assert.equal(row.copy.sourceUnchanged,true);}
 });
+
+test('membership/copy Cairo source preserves the complete public Python example body',()=>{
+ const source=readFileSync(new URL('../web/python/examples/manim_parity_object_members.py',import.meta.url),'utf8');
+ const expected=source.replace('from noon import *','from manim import *')
+   .replace('async def construct(self):','def construct(self):').replaceAll('await self.wait(','self.wait(');
+ const canonical=readFileSync(new URL('../parity/manim-v0.21/core-examples/object_membership_copy.py',import.meta.url),'utf8');
+ assert.equal(canonical,expected,'only host import and async wait syntax may differ');
+});
