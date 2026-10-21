@@ -121,7 +121,7 @@ mod replacement_tests {
         if individual {
             FramePreparer::for_individual_path_draws()
         } else {
-            FramePreparer::new()
+            FramePreparer::new(&wgpu::Limits::default())
         }
     }
 

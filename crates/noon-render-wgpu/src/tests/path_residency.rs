@@ -451,7 +451,7 @@ fn explicit_residency_compaction_bounds_long_new_slot_churn() {
     const CHURN: usize = 2_500;
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let mut live_geometry = simple_path(0);
     let style = styled_object(0, live_geometry.clone()).style;
     let initial_request = PathMeshPreload {
@@ -528,7 +528,7 @@ fn large_live_root_set_compacts_same_slot_churn_at_a_fractional_history_budget()
     ];
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     preparer
         .preload_path_meshes(&device, &queue, &mut renderer, &requests)
         .unwrap();
@@ -596,7 +596,7 @@ fn large_scene_single_root_retirement_does_not_trigger_full_compaction() {
         .collect::<Vec<_>>();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     preparer
         .preload_path_meshes(&device, &queue, &mut renderer, &requests)
         .unwrap();
@@ -615,7 +615,7 @@ fn native_preload_rejects_nonfinite_specializations_atomically() {
         style: styled_object(0, geometry.clone()).style,
         transform: Transform2D::IDENTITY,
     };
-    let mut preparer = RetainedFramePreparer::new();
+    let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     preparer

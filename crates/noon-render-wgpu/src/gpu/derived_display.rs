@@ -136,10 +136,24 @@ fn upload_all<T: Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, values: &[T]) 
     bytes.len()
 }
 
-type ResolvedTransientAnchors = HashMap<
-    RenderPrimitive,
-    BTreeMap<(usize, noon_runtime::TransientAnchorSide), Vec<PreparedDerivedDisplaySlot>>,
->;
+#[derive(Default)]
+struct ResolvedTransientAnchors {
+    instances: HashMap<
+        RenderPrimitive,
+        BTreeMap<(usize, noon_runtime::TransientAnchorSide), Vec<PreparedDerivedDisplaySlot>>,
+    >,
+    // Packed paths retain source index spans, not an instance in a MegaPath
+    // draw. Key by each source start and side so After(A) precedes Before(B)
+    // even when A.end == B.start. End points remain exact mesh boundaries.
+    mega:
+        BTreeMap<(u32, noon_runtime::TransientAnchorSide), (u32, Vec<PreparedDerivedDisplaySlot>)>,
+}
+
+#[derive(Clone, Copy)]
+enum ResolvedTransientAnchor {
+    Instance(RenderPrimitive, usize),
+    MegaPath { start: u32, end: u32 },
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TransientResolutionStats {
@@ -163,8 +177,8 @@ fn resolve_transient_anchors(
     }
     stats.slot_index_entries = slots_by_occurrence.len();
 
-    let mut anchor_cache = HashMap::<u32, Option<(RenderPrimitive, usize)>>::new();
-    let mut resolved = ResolvedTransientAnchors::new();
+    let mut anchor_cache = HashMap::<u32, Option<ResolvedTransientAnchor>>::new();
+    let mut resolved = ResolvedTransientAnchors::default();
     for item in &derived.painter_items {
         let DisplayPainterItem::Derived { occurrence_index } = *item else {
             // Stable entries were emitted by the pre-locality implementation. The
@@ -180,22 +194,48 @@ fn resolve_transient_anchors(
             Entry::Vacant(entry) => {
                 stats.anchor_lookups += 1;
                 let observation = match stable.observe_object(slot.anchor_object_index as usize) {
-                    Ok(object) => Some((object.primitive, object.instance_index)),
+                    Ok(object) => Some(match object.primitive {
+                        RenderPrimitive::Path { batch } => {
+                            stable.mega_source_segment(batch).map_or(
+                                ResolvedTransientAnchor::Instance(
+                                    object.primitive,
+                                    object.instance_index,
+                                ),
+                                |(segment, _)| ResolvedTransientAnchor::MegaPath {
+                                    start: segment.start,
+                                    end: segment.end,
+                                },
+                            )
+                        }
+                        _ => ResolvedTransientAnchor::Instance(
+                            object.primitive,
+                            object.instance_index,
+                        ),
+                    }),
                     Err(PreparedGeometryObjectOutcome::Absent)
                     | Err(PreparedGeometryObjectOutcome::Unsupported(_)) => None,
                 };
                 *entry.insert(observation)
             }
         };
-        let Some((primitive, instance_index)) = anchor else {
+        let Some(anchor) = anchor else {
             continue;
         };
-        resolved
-            .entry(primitive)
-            .or_default()
-            .entry((instance_index, slot.anchor_side))
-            .or_default()
-            .push(slot);
+        match anchor {
+            ResolvedTransientAnchor::Instance(primitive, instance_index) => resolved
+                .instances
+                .entry(primitive)
+                .or_default()
+                .entry((instance_index, slot.anchor_side))
+                .or_default()
+                .push(slot),
+            ResolvedTransientAnchor::MegaPath { start, end } => resolved
+                .mega
+                .entry((start, slot.anchor_side))
+                .or_insert_with(|| (end, Vec::new()))
+                .1
+                .push(slot),
+        }
         stats.occurrences_resolved += 1;
     }
     (resolved, stats)
@@ -382,7 +422,17 @@ impl GpuRenderer {
         resolved: &ResolvedOrderedBatch,
         single_sample_analytics: bool,
     ) -> (DrawStats, usize) {
-        let Some(insertions) = anchors.get(&resolved.batch.primitive) else {
+        if resolved.mega.is_some() {
+            return self.draw_stable_mega_batch_with_transients(
+                pass,
+                stable,
+                derived,
+                anchors,
+                resolved,
+                single_sample_analytics,
+            );
+        }
+        let Some(insertions) = anchors.instances.get(&resolved.batch.primitive) else {
             return (
                 self.draw_resolved_ordered_batch(
                     pass,
@@ -444,6 +494,59 @@ impl GpuRenderer {
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }
+        (stats, inserted)
+    }
+
+    fn draw_stable_mega_batch_with_transients<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        stable: &PreparedFrame<'_>,
+        derived: &PreparedDerivedDisplay,
+        anchors: &ResolvedTransientAnchors,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+    ) -> (DrawStats, usize) {
+        use noon_runtime::TransientAnchorSide::{After, Before};
+
+        let mega = resolved.mega.as_ref().expect("resolved packed draw");
+        let mut cursor = mega.index_range.start;
+        let mut stats = DrawStats::default();
+        let mut inserted = 0;
+        let draw_segment = |range: std::ops::Range<u32>, pass: &mut wgpu::RenderPass<'a>| {
+            if range.is_empty() {
+                return DrawStats::default();
+            }
+            let mut segment = resolved.clone();
+            segment
+                .mega
+                .as_mut()
+                .expect("resolved packed draw")
+                .index_range = range;
+            self.draw_resolved_ordered_batch(
+                pass,
+                stable,
+                &segment,
+                single_sample_analytics,
+                &mut None,
+            )
+        };
+        for (&(start, side), (end, slots)) in anchors
+            .mega
+            .range((mega.index_range.start, Before)..(mega.index_range.end, Before))
+        {
+            assert!(
+                *end <= mega.index_range.end,
+                "packed source crosses painter batch"
+            );
+            let boundary = if side == After { *end } else { start };
+            stats += draw_segment(cursor..boundary, pass);
+            for &slot in slots {
+                stats += self.draw_transient_slot(pass, derived, slot, single_sample_analytics);
+                inserted += 1;
+            }
+            cursor = boundary;
+        }
+        stats += draw_segment(cursor..mega.index_range.end, pass);
         (stats, inserted)
     }
 
@@ -554,14 +657,31 @@ fn draw_analytic<'a>(
 mod tests {
     #[test]
     fn zero_contribution_hidden_transient_anchor_keeps_visible_before_and_after_effects() {
+        for packed_path in [false, true] {
+            hidden_transient_anchor_keeps_effects(packed_path);
+        }
+    }
+
+    fn hidden_transient_anchor_keeps_effects(packed_path: bool) {
         use noon_runtime::{FrameChanges, TransientAnchorSide};
+        let geometry = if packed_path {
+            GeometryRef::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, 0.0))
+                    .line_to(noon_core::Vec2::new(1.0, 0.0)),
+            )
+        } else {
+            GeometryRef::rectangle(14.222222, 8.0)
+        };
         let compiled = CompiledScene::compile_objects(
             vec![CompiledObject::new(
                 ObjectId::new(1),
-                GeometryRef::rectangle(14.222222, 8.0),
+                geometry,
                 Transform2D::IDENTITY,
                 Style {
                     opacity: 0.0,
+                    stroke: Some(noon_core::Color::WHITE),
+                    stroke_width: 0.2,
                     ..Style::default()
                 },
             )],
@@ -581,7 +701,7 @@ mod tests {
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
         let mut frame = publication.frame().clone();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&frame, publication.painter_order());
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -605,7 +725,8 @@ mod tests {
         for opacity in [0.0, 0.5, 1.0, 0.0] {
             frame.objects[0].style.opacity = opacity;
             let stable = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-            assert_eq!(stable.rectangles.len(), 1);
+            assert_eq!(stable.stats.mega_path_count, usize::from(packed_path));
+            assert_eq!(stable.rectangles.len(), usize::from(!packed_path));
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer.upload(&device, &queue, &stable);
             let draws = renderer.encode_with_transient_presentations(
@@ -678,7 +799,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 
@@ -828,7 +949,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 
@@ -839,6 +960,7 @@ mod tests {
         assert_eq!(stats.occurrences_resolved, COUNT as usize);
         assert_eq!(
             resolved
+                .instances
                 .get(&RenderPrimitive::Circle)
                 .and_then(
                     |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))
@@ -882,7 +1004,7 @@ mod tests {
             .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         let stable = preparer.prepare(publication.frame());
 
@@ -892,6 +1014,7 @@ mod tests {
         assert_eq!(stats.anchor_lookups, 2);
         assert_eq!(
             resolved
+                .instances
                 .get(&RenderPrimitive::Circle)
                 .and_then(
                     |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))
@@ -901,6 +1024,7 @@ mod tests {
         );
         assert_eq!(
             resolved
+                .instances
                 .get(&RenderPrimitive::Rectangle)
                 .and_then(
                     |by_instance| by_instance.get(&(0, noon_runtime::TransientAnchorSide::After))

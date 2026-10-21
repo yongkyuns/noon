@@ -47,7 +47,7 @@ pub(super) fn render_plain(
         )
         .unwrap(),
     );
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(frame);
     renderer.upload(device, queue, &prepared);
     let texture = target(device, size);
@@ -248,7 +248,7 @@ fn retained_painter_glow_pixels() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         renderer.upload(&device, &queue, &prepared);
         let texture = target(&device, VIEW);
@@ -408,7 +408,7 @@ fn semantic_static_glow_publication_pixels() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let texture = target(&device, VIEW);
         let view = texture.create_view(&Default::default());
         let request = PublishedAnalyticGlowRequest {

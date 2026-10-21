@@ -75,6 +75,40 @@ impl PathMeshAppendPlan {
 }
 
 impl FramePreparer {
+    /// Return `(logical_bytes, reserved_bytes)` for five CPU path data buffers:
+    /// original vertices, original indices, scalar instances, packed indices,
+    /// and packed per-vertex instances. The packed subset is included once.
+    ///
+    /// Reserved bytes use each Vec's actual capacity, including unused address
+    /// spans and high-water storage. This excludes mesh caches, IDs, draw/dirty
+    /// metadata, analytic buffers, renderer-owned compact-vertex scratch,
+    /// allocator overhead and all GPU allocations. It is not a process total.
+    /// This read is O(1), allocates nothing and never changes upload dirtiness.
+    pub fn path_cpu_buffer_bytes(&self) -> (u64, u64) {
+        [
+            cpu_vector_bytes(&self.path_vertices),
+            cpu_vector_bytes(&self.path_indices),
+            cpu_vector_bytes(&self.paths),
+            self.packed_path_cpu_buffer_bytes(),
+        ]
+        .into_iter()
+        .fold((0, 0), |(used, reserved), (next_used, next_reserved)| {
+            (used + next_used, reserved + next_reserved)
+        })
+    }
+
+    /// Return `(logical_bytes, reserved_bytes)` for the CPU packed-index and
+    /// repeated-attribute vectors only. These bytes are already included in
+    /// `path_cpu_buffer_bytes`; do not add both totals together.
+    ///
+    /// Clearing or hiding packed paths can set logical bytes to zero without
+    /// releasing reserved capacity. No compaction or shrink is performed here.
+    pub fn packed_path_cpu_buffer_bytes(&self) -> (u64, u64) {
+        let indices = cpu_vector_bytes(&self.mega_path_indices);
+        let instances = cpu_vector_bytes(&self.mega_path_vertex_instances);
+        (indices.0 + instances.0, indices.1 + instances.1)
+    }
+
     pub(crate) fn resident_path_mesh_count(&self) -> usize {
         self.resident_mesh_count
     }
@@ -306,6 +340,8 @@ impl FramePreparer {
             complete_submission: false,
             submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
+            mega_path_segments: &[],
+            mega_path_detached: &[],
             mega_path_offsets: &self.mega_path_offsets,
         }
     }
@@ -392,6 +428,14 @@ impl FramePreparer {
     }
 }
 
+fn cpu_vector_bytes<T>(values: &Vec<T>) -> (u64, u64) {
+    let stride = std::mem::size_of::<T>() as u64;
+    (
+        values.len() as u64 * stride,
+        values.capacity() as u64 * stride,
+    )
+}
+
 fn validate_request(request: &PathMeshPreload<'_>) -> Result<(), noon_geometry::GeometryError> {
     let transform = request.transform;
     let style = request.style;
@@ -470,6 +514,166 @@ fn checked_packed_end(start: usize, length: usize) -> Result<u32, noon_geometry:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cpu_path_accounting_counts_payload_and_reserved_storage_separately() {
+        use super::{FramePreparer, PathInstance, PathVertex};
+        use bytemuck::Zeroable;
+
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
+        assert_eq!(preparer.path_cpu_buffer_bytes(), (0, 0));
+        assert_eq!(preparer.packed_path_cpu_buffer_bytes(), (0, 0));
+        preparer.path_vertices.resize(2, PathVertex::zeroed());
+        preparer.path_indices.extend([0, 1, 0]);
+        preparer.paths.push(PathInstance::zeroed());
+        preparer.mega_path_indices.extend([0; 7]);
+        preparer
+            .mega_path_vertex_instances
+            .resize(4, PathInstance::zeroed());
+        preparer.path_vertices.reserve_exact(16);
+        preparer.path_indices.reserve_exact(16);
+        preparer.paths.reserve_exact(16);
+        preparer.mega_path_indices.reserve_exact(16);
+        preparer.mega_path_vertex_instances.reserve_exact(16);
+
+        let vertex_size = std::mem::size_of::<PathVertex>() as u64;
+        let index_size = std::mem::size_of::<u32>() as u64;
+        let instance_size = std::mem::size_of::<PathInstance>() as u64;
+        let expected_used = 2 * vertex_size + 10 * index_size + 5 * instance_size;
+        let packed_used = 7 * index_size + 4 * instance_size;
+        let packed_reserved = preparer.mega_path_indices.capacity() as u64 * index_size
+            + preparer.mega_path_vertex_instances.capacity() as u64 * instance_size;
+        let expected_reserved = preparer.path_vertices.capacity() as u64 * vertex_size
+            + preparer.path_indices.capacity() as u64 * index_size
+            + preparer.paths.capacity() as u64 * instance_size
+            + packed_reserved;
+        assert_eq!(
+            preparer.path_cpu_buffer_bytes(),
+            (expected_used, expected_reserved)
+        );
+        assert_eq!(
+            preparer.packed_path_cpu_buffer_bytes(),
+            (packed_used, packed_reserved)
+        );
+        assert!(expected_reserved > expected_used);
+
+        // Metadata capacity is explicitly outside this data-buffer snapshot.
+        preparer.path_batch_cache_indices.reserve_exact(256);
+        assert_eq!(
+            preparer.path_cpu_buffer_bytes(),
+            (expected_used, expected_reserved)
+        );
+        preparer.mega_path_indices.clear();
+        preparer.mega_path_vertex_instances.clear();
+        assert_eq!(
+            preparer.packed_path_cpu_buffer_bytes(),
+            (0, packed_reserved)
+        );
+        assert_eq!(
+            preparer.path_cpu_buffer_bytes(),
+            (expected_used - packed_used, expected_reserved)
+        );
+    }
+
+    #[test]
+    fn cpu_packed_capacity_survives_hide_reentry_and_optional_fallback() {
+        use super::{Color, FramePreparer, FrameState, GeometryRef, Style};
+        use super::{Transform2D, Vec2, VectorPath};
+        use noon_core::{ObjectContentRef, ObjectId};
+        use noon_runtime::{FrameChanges, FrameObjectState};
+
+        const COUNT: usize = 32;
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: (0..COUNT)
+                .map(|index| {
+                    let y = index as f32 * 0.02;
+                    let path = GeometryRef::path(
+                        VectorPath::new()
+                            .move_to(Vec2::new(-1.0, y))
+                            .line_to(Vec2::new(1.0 + y, y)),
+                    );
+                    FrameObjectState {
+                        glow: None,
+                        spatial: None,
+                        id: ObjectId::new(index as u64 + 1),
+                        z_index: 0.0,
+                        content: ObjectContentRef::Geometry(path),
+                        text_bounds: None,
+                        transform: Transform2D::IDENTITY,
+                        style: Style {
+                            fill: None,
+                            stroke: Some(Color::WHITE),
+                            stroke_width: 0.08,
+                            ..Style::default()
+                        },
+                        appearance: 1.0,
+                    }
+                })
+                .collect(),
+            presences: vec![true; COUNT],
+            reveals: vec![1.0; COUNT],
+            morphs: vec![0.0; COUNT],
+            render_geometries: vec![None; COUNT],
+            render_transforms: vec![None; COUNT],
+            family_animations: vec![],
+            family_animation_plan_indices: vec![],
+        };
+        let mut preparer = FramePreparer::for_mixed_retained_path_draws(&wgpu::Limits::default());
+        assert_eq!(preparer.prepare(&frame).stats.mega_path_count, COUNT);
+        let baseline = preparer.packed_path_cpu_buffer_bytes();
+        assert!(baseline.0 > 0 && baseline.1 >= baseline.0);
+
+        for _ in 0..3 {
+            frame.presences.fill(false);
+            assert_eq!(preparer.prepare(&frame).stats.mega_path_count, 0);
+            assert_eq!(preparer.packed_path_cpu_buffer_bytes(), (0, baseline.1));
+            frame.presences.fill(true);
+            assert_eq!(preparer.prepare(&frame).stats.mega_path_count, COUNT);
+            assert_eq!(preparer.packed_path_cpu_buffer_bytes(), baseline);
+            let totals = preparer.path_cpu_buffer_bytes();
+            assert!(totals.0 >= baseline.0 && totals.1 >= baseline.1);
+            let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+            assert_eq!(clean.stats.full_rebuilds, 0);
+            assert!(clean.mega_path_instance_dirty_ranges.is_empty());
+            assert!(clean.mega_path_index_dirty_ranges.is_empty());
+            assert!(clean.path_vertex_dirty_ranges.is_empty());
+            assert!(clean.path_index_dirty_ranges.is_empty());
+        }
+
+        // A rejected optional packed allocation does not retroactively free
+        // already retained CPU storage. Ordinary source paths remain present.
+        preparer.set_packed_path_buffer_limit_for_test(255);
+        let fallback = preparer.prepare(&frame);
+        assert_eq!(fallback.stats.mega_path_count, 0);
+        assert_eq!(fallback.paths.len(), COUNT);
+        assert_eq!(preparer.packed_path_cpu_buffer_bytes(), (0, baseline.1));
+        preparer.set_packed_path_buffer_limit_for_test(u64::MAX);
+        assert_eq!(preparer.prepare(&frame).stats.mega_path_count, COUNT);
+        assert_eq!(preparer.packed_path_cpu_buffer_bytes(), baseline);
+    }
+
+    #[test]
+    fn resident_upload_hides_stale_mixed_mega_draw_metadata() {
+        let mut preparer = super::FramePreparer::new(&wgpu::Limits::default());
+        preparer.mega_path_segments.push(Some(0..6));
+        preparer.mega_path_detached.push(false);
+        preparer.mega_path_indices.extend(0..6);
+        preparer.path_indices.extend(0..6);
+        preparer.path_index_dirty_ranges.push(0..6);
+        preparer.path_geometry_dirty = true;
+
+        let frame = preparer.resident_upload_frame(super::RenderStats::default());
+        assert!(frame.mega_path_segments.is_empty());
+        assert!(frame.mega_path_detached.is_empty());
+        assert!(frame.mega_path_indices.is_empty());
+        assert!(frame.mega_source_segment(0).is_none());
+        assert!(frame.ordered_render_batches().next().is_none());
+        assert_eq!(frame.path_indices, preparer.path_indices.as_slice());
+        assert_eq!(frame.path_index_dirty_ranges.len(), 1);
+        assert_eq!(frame.path_index_dirty_ranges.first(), Some(&(0..6)));
+        assert!(frame.path_geometry_dirty);
+    }
+
     #[test]
     fn oversized_preload_address_is_rejected_without_allocation() {
         assert!(super::checked_packed_end(u32::MAX as usize, 1).is_err());

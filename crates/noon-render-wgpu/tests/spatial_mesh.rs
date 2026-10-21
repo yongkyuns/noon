@@ -651,7 +651,7 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         let target = Target::new(&device);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut scene = cairo_surface_scene(false);
         let (initial, pixels) = render(
             &device,
@@ -866,7 +866,7 @@ fn cairo_path_world_up_shading_and_sheen_reuse_geometry_across_light_camera_and_
         let target = Target::new(&device);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut scene = cairo_path_scene();
         let (initial, pixels) = render(
             &device,
@@ -995,7 +995,7 @@ fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale(
             Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 2.0)).unwrap(),
         );
         let target = Target::new(&device);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (_, pixels) = render(
             &device,
             &queue,
@@ -1109,7 +1109,7 @@ fn cairo_path_miter_keeps_acute_tip_while_ordinary_path_keeps_its_limit() {
                 &device,
                 &queue,
                 &mut renderer,
-                &mut FramePreparer::new(),
+                &mut FramePreparer::new(&wgpu::Limits::default()),
                 &mut runtime,
                 &target,
             )
@@ -1279,7 +1279,7 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 8.0)).unwrap(),
         );
         let target = Target::new(&device);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut counts = Vec::new();
         let mut circle_widths = Vec::new();
         let mut circle_pixel_counts = Vec::new();
@@ -1660,7 +1660,7 @@ fn spatial_and_mixed_composition_write_gpu_timestamps_when_seeking() {
         ] {
             let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
             renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-            let mut preparer = FramePreparer::new();
+            let mut preparer = FramePreparer::new(&wgpu::Limits::default());
             for time in [0.0, 0.5, 1.5, 0.0] {
                 scene.seek(time).unwrap();
                 let (_, pixels) = render_with_query(
@@ -1703,7 +1703,7 @@ fn semantic_meshes_use_depth_projection_shared_residency_local_updates_and_atomi
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(10.0, 10.0)).unwrap(),
         );
-        let mut frame_preparer = FramePreparer::new();
+        let mut frame_preparer = FramePreparer::new(&wgpu::Limits::default());
         let (mut runtime, index, near_id, _, far_id) = build_scene(true, false, false);
 
         let (initial, pixels) = render(
@@ -1902,7 +1902,7 @@ fn native_publication_preparation_skips_spatial_rows_in_retained_vector_stream()
             Camera2D::new(Vec2::ZERO, Vec2::new(10.0, 10.0)).unwrap(),
         );
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
-        let mut retained = RetainedFramePreparer::new();
+        let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
         let (mut runtime, _, _, _, _) = build_scene(true, false, false);
         let publication = runtime.take_renderer_publication();
         let spatial = renderer
@@ -2016,7 +2016,7 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
         let target = Target::new(&device);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut frame_preparer = FramePreparer::new();
+        let mut frame_preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut lit = build_lighting_scene(SemanticSpatialMaterial::PointLit, 1, true);
 
         let (initial, pixels) = render(
@@ -2072,7 +2072,7 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
 
         let mut unlit_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         unlit_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut unlit_preparer = FramePreparer::new();
+        let mut unlit_preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut unlit = build_lighting_scene(SemanticSpatialMaterial::Unlit, 1, false);
         let (_, pixels) = render(
             &device,
@@ -2091,7 +2091,7 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
 
         let mut reverse_normal_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         reverse_normal_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut reverse_normal_preparer = FramePreparer::new();
+        let mut reverse_normal_preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut reverse_normal = build_lighting_scene_with_normal(
             SemanticSpatialMaterial::PointLit,
             1,
@@ -2122,7 +2122,7 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
         let zero_normal_color = Color::rgba(0.0, 0.0, 1.0, 1.0);
         let mut zero_normal_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         zero_normal_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut zero_normal_preparer = FramePreparer::new();
+        let mut zero_normal_preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut zero_normal = build_lighting_scene_with_normals(
             SemanticSpatialMaterial::PointLit,
             1,
@@ -2380,7 +2380,7 @@ fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
         renderer.set_camera(&queue, camera);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (mut scene, surface_object) =
             cairo_boundary_test_scene_with_straight_controls(false, false, false, true);
         scene
@@ -2544,7 +2544,7 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
                 &queue,
                 Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap(),
             );
-            let mut preparer = FramePreparer::new();
+            let mut preparer = FramePreparer::new(&wgpu::Limits::default());
             let (store, node) =
                 cairo_boundary_test_store(false, false, true, false, Some(control_y));
             let mut index = SemanticExecutionIndex::new();
@@ -2651,7 +2651,7 @@ fn cairo_concave_planar_proxy_preserves_sloped_depth() {
         let target = Target::new(&device);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (store, node) = cairo_boundary_test_store(true, false, true, false, Some(0.0));
         let mut index = SemanticExecutionIndex::new();
         let (compiled, _) = lower_semantic_execution(&store, &mut index)
@@ -2735,7 +2735,7 @@ fn adjacent_cairo_cells_blend_independent_pixel_coverage_without_reupload() {
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
         renderer.set_camera(&queue, camera);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (mut store, original) = cairo_boundary_test_store(false, false, false, true, None);
         let mut cell = store
             .semantic_object_state_checked(original)
@@ -2812,7 +2812,7 @@ fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion()
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
         renderer.set_camera(&queue, camera);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (mut scene, surface_object) = cairo_boundary_test_scene(false, false, false);
 
         let mut coverage_profiles = Vec::new();
@@ -2874,7 +2874,7 @@ fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion()
         let mut sloped_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         sloped_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         sloped_renderer.set_camera(&queue, camera);
-        let mut sloped_preparer = FramePreparer::new();
+        let mut sloped_preparer = FramePreparer::new(&wgpu::Limits::default());
         let (_, pixels) = render(
             &device,
             &queue,
@@ -2899,7 +2899,7 @@ fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion()
         let mut occlusion_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         occlusion_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         occlusion_renderer.set_camera(&queue, camera);
-        let mut occlusion_preparer = FramePreparer::new();
+        let mut occlusion_preparer = FramePreparer::new(&wgpu::Limits::default());
         let transform = SemanticWorldTransform3D::new(
             SemanticVec3::new(0.5 / 32.0, 0.0, 0.0),
             noon_core::SemanticRotation3D::IDENTITY,
@@ -2934,7 +2934,7 @@ fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion()
         let mut curved_renderer = GpuRenderer::new(&device, &queue, FORMAT);
         curved_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         curved_renderer.set_camera(&queue, camera);
-        let mut curved_preparer = FramePreparer::new();
+        let mut curved_preparer = FramePreparer::new(&wgpu::Limits::default());
         let (_, pixels) = render(
             &device,
             &queue,
@@ -3093,7 +3093,7 @@ fn many_shared_meshes_upload_only_the_changed_instance_and_batch_one_draw() {
         let target = Target::new(&device);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        let mut frame_preparer = FramePreparer::new();
+        let mut frame_preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut runtime = build_many_mesh_scene(600);
 
         let initial_publication = runtime.take_renderer_publication();
@@ -3165,7 +3165,7 @@ fn translucent_faces_sort_after_opaque_geometry_and_reorder_on_pose_changes() {
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         let target = Target::new(&device);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let (mut scene, index, near, _, far) = build_scene(false, false, false);
         for node in [near, far] {
             let object = index.execution_object_id(node).unwrap();

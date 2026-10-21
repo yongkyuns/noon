@@ -119,7 +119,7 @@ fn concave_fill_deforms_at_intermediate_progress_without_disappearing() {
     )
     .is_err());
     let interpolation = PreparedPathInterpolation::new(&source(), &target()).unwrap();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let mut coverages = Vec::new();
     for (step, progress) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().enumerate() {
         let frame = frame(progress, 0);
@@ -158,7 +158,7 @@ fn concave_fill_deforms_at_intermediate_progress_without_disappearing() {
 }
 #[test]
 fn complex_fill_sampling_is_local_bounded_and_idle_is_clean() {
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial = frame(0.0, 1200);
     let order = (0..1201).rev().collect::<Vec<u32>>();
     preparer.set_painter_order(&initial, &order);
@@ -187,12 +187,12 @@ fn complex_fill_sampling_is_local_bounded_and_idle_is_clean() {
 }
 #[test]
 fn cold_seek_and_forward_playback_realize_identical_filled_geometry() {
-    let mut warm = FramePreparer::new();
+    let mut warm = FramePreparer::new(&wgpu::Limits::default());
     warm.prepare(&frame(0.0, 0));
     warm.prepare_incremental(&frame(0.25, 0), &FrameChanges::objects(vec![0]));
     let middle = frame(0.5, 0);
     let actual = warm.prepare_incremental(&middle, &FrameChanges::objects(vec![0]));
-    let mut cold = FramePreparer::new();
+    let mut cold = FramePreparer::new(&wgpu::Limits::default());
     let expected = cold.prepare(&middle);
     for y in 0..40 {
         for x in 0..40 {

@@ -39,7 +39,7 @@ fn analytic_geometry_transform_dirties_only_one_instance_without_path_work() {
     )
     .unwrap();
     let mut instance = SceneInstance::new(compiled);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
     assert_eq!(initial.stats.geometry_cache_misses, 0);
@@ -102,7 +102,7 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
     ];
     let mut instance =
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial_changes = instance.take_frame_changes();
     preparer.prepare_incremental(instance.frame(), &initial_changes);
 
@@ -139,7 +139,7 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
         .collect();
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let static_before = instance.frame().objects[STATIC_INDEX].clone();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
     assert_eq!(initial.stats.geometry_cache_misses, 0);

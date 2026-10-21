@@ -437,6 +437,8 @@ impl RetainedFramePreparer {
                         continue;
                     };
 
+                    self.geometry.individual_path_objects.insert(scratch_id);
+
                     match state.mode {
                         noon_core::FamilyAnimationMode::Reveal => {
                             let scratch_index =
@@ -1124,7 +1126,7 @@ mod tests {
         };
         let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let active = std::collections::BTreeSet::from([0]);
         let mut row_ids = None;
         let mut outline_instances = None;
@@ -1347,7 +1349,7 @@ mod tests {
         let plans = [plan];
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let canonical_order = std::iter::once(ObjectId::new(10))

@@ -31,7 +31,7 @@ fn appearance_multiplies_semantic_opacity_in_packed_instances() {
     .expect("execution data compiles");
     let mut instance = SceneInstance::new(compiled);
     instance.seek(1.0).expect("valid time");
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(instance.frame());
 
     assert_eq!(instance.frame().objects[0].style.opacity, 0.4);

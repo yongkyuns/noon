@@ -45,7 +45,7 @@ fn active_analytic_reveal_meshes_survive_cache_pressure_on_full_rebuild() {
         render_transforms: vec![None; objects.len()],
         objects,
     };
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     preparer.set_path_mesh_cache_limit(1);
 
     let cold = preparer.prepare(&frame);

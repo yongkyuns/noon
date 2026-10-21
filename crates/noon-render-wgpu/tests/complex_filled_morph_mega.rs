@@ -120,7 +120,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
 
 #[test]
 fn sampled_fill_paint_does_not_dirty_unowned_mega_attributes() {
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial = mixed_frame(0.5, false);
     let prepared = preparer.prepare(&initial);
     assert_eq!(prepared.stats.unsupported_count, 0);
@@ -134,7 +134,7 @@ fn sampled_fill_paint_does_not_dirty_unowned_mega_attributes() {
 
 #[test]
 fn growing_sampled_fill_does_not_index_the_fixed_mega_attribute_buffer() {
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let initial = mixed_frame(0.0, true);
     let prepared = preparer.prepare(&initial);
     assert_eq!(prepared.stats.unsupported_count, 0);

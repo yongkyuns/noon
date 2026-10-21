@@ -142,7 +142,7 @@ fn primitive_capture(
         )
         .unwrap(),
     );
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     let prepared = preparer.prepare(&frame);
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());

@@ -87,13 +87,13 @@ fn renderer_packed_static_and_identity_morph_endpoints_match_for_every_style() {
         for cap in [StrokeCap::Round, StrokeCap::Butt, StrokeCap::Square] {
             let style = style(join, cap);
 
-            let mut static_preparer = FramePreparer::new();
+            let mut static_preparer = FramePreparer::new(&wgpu::Limits::default());
             let static_frame = frame(GeometryRef::path(source.clone()), style);
             let static_prepared = static_preparer.prepare(&static_frame);
             let expected = stroke_bounds(static_prepared.path_vertices, false);
 
             let morph = source.clone().with_morph_target(source.clone());
-            let mut morph_preparer = FramePreparer::new();
+            let mut morph_preparer = FramePreparer::new(&wgpu::Limits::default());
             let morph_frame = frame(GeometryRef::path(morph), style);
             let morph_prepared = morph_preparer.prepare(&morph_frame);
 

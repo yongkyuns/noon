@@ -255,7 +255,7 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
                 Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
             );
             let mut reused_text = reused.create_retained_text_state(&device, &queue);
-            let mut reused_preparer = RetainedFramePreparer::new();
+            let mut reused_preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
             reused_preparer.set_inset_views_active(true);
             for scale in [2.0, 1.5, 2.9, 2.9, 2.9, 1.2, 0.3, 0.3] {
                 let mut objects = vec![
@@ -361,7 +361,7 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
                 let mut fresh_text = fresh.create_retained_text_state(&device, &queue);
                 // Incremental upload ranges belong to their renderer lifetime.
                 // A fresh renderer needs a fresh preparation publication too.
-                let mut fresh_preparer = RetainedFramePreparer::new();
+                let mut fresh_preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
                 fresh_preparer.set_inset_views_active(true);
                 let fresh_prepared = fresh_preparer
                     .prepare(
@@ -457,7 +457,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
                 ..Style::default()
             },
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(scene.frame());
 
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -542,7 +542,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
                 ..Style::default()
             },
         );
-        let mut path_preparer = FramePreparer::new();
+        let mut path_preparer = FramePreparer::new(&wgpu::Limits::default());
         let path_prepared = path_preparer.prepare(path_scene.frame());
 
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -647,7 +647,7 @@ fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
             stroke_cap: noon_core::StrokeCap::Butt,
             ..Style::default()
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut render_line = |renderer: &mut GpuRenderer, start: Vec2, end: Vec2| {
             let scene = scene_with_geometry(GeometryRef::line(start, end), style);
             let prepared = preparer.prepare(scene.frame());
@@ -915,7 +915,7 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(2.0, 2.0)).unwrap(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut render = |prepared: &noon_render_wgpu::PreparedFrame<'_>| {
             renderer.upload(&device, &queue, prepared);
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -932,7 +932,7 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
         );
         let mut omitted = frame.clone();
         omitted.presences[0] = false;
-        let mut reference_preparer = FramePreparer::new();
+        let mut reference_preparer = FramePreparer::new(&wgpu::Limits::default());
         let (_, omitted_pixels) = render(&reference_preparer.prepare(&omitted));
         assert_eq!(
             hidden_pixels, omitted_pixels,
@@ -1008,7 +1008,7 @@ fn bitmap_pixels_are_independent_of_unrelated_vector_multisampling() {
             Camera2D::new(Vec2::new(0.3, -0.2), Vec2::new(8.0, 4.0)).unwrap(),
         );
         let mut text = renderer.create_retained_text_state(&device, &queue);
-        let mut preparer = RetainedFramePreparer::new();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         let texts = TextResourceArena::new();
         let fonts = FontResourceArena::new();
         let geometries = GeometryResourceArena::new();

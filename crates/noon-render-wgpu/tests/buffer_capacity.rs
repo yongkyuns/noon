@@ -10,7 +10,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 fn analytic_instance_buffer_grows_geometrically_only_at_capacity_boundary() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     let initial = circle_frame(1_000);
     let prepared = preparer.prepare(&initial);

@@ -385,6 +385,7 @@ impl RetainedFramePreparer {
             .objects
             .get_mut(scratch_slot)
             .ok_or(RetainedFamilyPrepareError::MissingScratchObject(object.id))?;
+        self.geometry.individual_path_objects.insert(scratch.id);
         scratch.transform = object.transform;
         scratch.style = draw_border_style(resolved_text_vector_style(object.style, vector), phase);
         scratch.appearance = object.appearance;
@@ -508,6 +509,9 @@ impl RetainedFramePreparer {
                 reveal,
                 0.0,
             );
+            self.geometry
+                .individual_path_objects
+                .insert(self.scratch.objects[scratch_slot].id);
             if stable_rows {
                 self.family_plan_scratch_slots
                     .entry(object_index)
@@ -779,7 +783,7 @@ mod draw_border_tests {
             retained: &retained,
             family_animations: &states,
         };
-        let mut preparer = RetainedFramePreparer::default();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .build_scratch_frame(
                 &retained,
@@ -812,7 +816,7 @@ mod draw_border_tests {
             retained: &retained,
             family_animations: &states,
         };
-        let mut preparer = RetainedFramePreparer::default();
+        let mut preparer = RetainedFramePreparer::new(&wgpu::Limits::default());
         preparer
             .build_scratch_frame(
                 &retained,

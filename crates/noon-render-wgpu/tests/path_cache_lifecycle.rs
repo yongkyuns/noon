@@ -39,7 +39,7 @@ fn path_cache_retains_recent_meshes_and_evicts_stale_entries() {
     let a = path(0.0);
     let b = path(10.0);
     let c = path(20.0);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     preparer.set_path_mesh_cache_limit(2);
 
     let scene_a = path_scene(std::slice::from_ref(&a));
@@ -78,7 +78,7 @@ fn path_cache_retains_recent_meshes_and_evicts_stale_entries() {
 fn active_frame_geometry_can_exceed_retention_budget_without_retessellation() {
     let a = path(0.0);
     let b = path(10.0);
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     preparer.set_path_mesh_cache_limit(1);
 
     let scene = path_scene(&[a.clone(), b.clone()]);
@@ -102,7 +102,7 @@ fn transient_path_churn_reaches_a_bounded_cache_plateau() {
     const EDIT_COUNT: usize = 1_000;
     const CACHE_LIMIT: usize = 32;
 
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
     let mut most_recent = None;
 
@@ -134,7 +134,7 @@ fn large_temporary_path_scene_does_not_remain_pinned_after_contraction() {
     const CACHE_LIMIT: usize = 16;
     const TEMPORARY_PATH_COUNT: usize = 128;
 
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
     preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
     let temporary_paths = (0..TEMPORARY_PATH_COUNT)
         .map(|index| path(index as f32 * 10.0))

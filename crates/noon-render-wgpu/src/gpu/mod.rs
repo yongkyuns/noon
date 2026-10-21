@@ -30,8 +30,9 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
-    PathVertex, PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
+    buffer_growth_capacity, CircleInstance, LineInstance, OrderedRenderBatch, PathBatch,
+    PathCoverage, PathInstance, PathVertex, PreparedDerivedDisplay, PreparedFrame,
+    RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -408,6 +409,47 @@ impl SecondaryViewport {
 pub struct UploadStats {
     pub bytes_uploaded: usize,
     pub buffer_reallocations: usize,
+}
+
+/// Sizes of the renderer's *current* geometry buffer handles, read from wgpu.
+///
+/// Includes each four-byte empty placeholder and any spare growth capacity.
+/// This excludes CPU vectors, mesh caches, text/images, textures, and older
+/// buffers still referenced by encoded or in-flight command submissions.
+/// It is not device VRAM usage, a process total, or a hard memory budget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GeometryBufferResidency {
+    pub circles: u64,
+    pub rectangles: u64,
+    pub lines: u64,
+    pub path_vertices: u64,
+    pub compact_path_vertices: u64,
+    pub path_indices: u64,
+    pub path_instances: u64,
+    pub mega_path_indices: u64,
+    pub mega_path_vertex_instances: u64,
+}
+
+impl GeometryBufferResidency {
+    pub fn packed_path_bytes(&self) -> u64 {
+        self.mega_path_indices + self.mega_path_vertex_instances
+    }
+
+    pub fn total_bytes(&self) -> u64 {
+        [
+            self.circles,
+            self.rectangles,
+            self.lines,
+            self.path_vertices,
+            self.compact_path_vertices,
+            self.path_indices,
+            self.path_instances,
+            self.mega_path_indices,
+            self.mega_path_vertex_instances,
+        ]
+        .into_iter()
+        .sum()
+    }
 }
 
 /// One actual `Queue::write_buffer` operation performed by an instrumented upload.
@@ -1087,19 +1129,35 @@ impl GpuRenderer {
             indices,
             wgpu::BufferUsages::INDEX,
         );
+        // A compaction frame has no packed draws. Retire prior high-water
+        // packed buffers together with the old geometry prefix, rather than
+        // leaving their allocations resident indefinitely after scene shrink.
+        // Stage replacements before mutating the renderer: previously encoded
+        // command buffers retain old GPU handles through wgpu's lifetimes.
+        let mega_path_index_buffer = empty_buffer(
+            device,
+            "Noon packed path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let mega_path_vertex_instance_buffer =
+            empty_instance_buffer(device, "Noon packed path vertex attributes");
         let bytes_uploaded = vertex_bytes_len + compact_vertex_bytes_len + index_bytes_len;
 
         self.path_vertex_buffer = path_vertex_buffer;
         self.compact_path_vertex_buffer = compact_path_vertex_buffer;
         self.path_index_buffer = path_index_buffer;
+        self.mega_path_index_buffer = mega_path_index_buffer;
+        self.mega_path_vertex_instance_buffer = mega_path_vertex_instance_buffer;
         self.compact_path_vertices = compact_vertices;
         self.path_vertex_capacity_bytes = vertex_bytes_len;
         self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
         self.path_index_capacity_bytes = index_bytes_len;
+        self.mega_path_index_capacity_bytes = 0;
+        self.mega_path_vertex_instance_capacity_bytes = 0;
 
         Ok(UploadStats {
             bytes_uploaded,
-            buffer_reallocations: 3,
+            buffer_reallocations: 5,
         })
     }
 
@@ -1922,6 +1980,48 @@ impl GpuRenderer {
         self.draw_ordered(pass, prepared, false)
     }
 
+    /// A constant-time read of actual wgpu buffer sizes for the nine stable
+    /// geometry lanes. No GPU submission, synchronization, or memory scan.
+    /// Old command-buffer generations are deliberately not counted here.
+    pub fn geometry_buffer_residency(&self) -> GeometryBufferResidency {
+        GeometryBufferResidency {
+            circles: self.circle_buffer.size(),
+            rectangles: self.rectangle_buffer.size(),
+            lines: self.line_buffer.size(),
+            path_vertices: self.path_vertex_buffer.size(),
+            compact_path_vertices: self.compact_path_vertex_buffer.size(),
+            path_indices: self.path_index_buffer.size(),
+            path_instances: self.path_instance_buffer.size(),
+            mega_path_indices: self.mega_path_index_buffer.size(),
+            mega_path_vertex_instances: self.mega_path_vertex_instance_buffer.size(),
+        }
+    }
+
+    /// Return `(logical_bytes, reserved_bytes)` for the CPU compact-vertex
+    /// upload mirror owned by this renderer. Reserved bytes use the Vec's
+    /// actual capacity, including retained high-water storage.
+    ///
+    /// This allocation is separate from the preparer's `path_cpu_buffer_bytes`
+    /// and from the GPU handles in `geometry_buffer_residency`. This is not
+    /// total CPU memory, physical VRAM, in-flight memory, or a resource budget.
+    /// The read is O(1), allocates nothing and does not upload, shrink or wait.
+    /// Ordinary empty uploads may retain capacity; explicit resident-buffer
+    /// replacement replaces this CPU mirror through the existing lifecycle.
+    ///
+    /// ```no_run
+    /// # fn example(renderer: &noon_render_wgpu::GpuRenderer) {
+    /// let (logical_bytes, reserved_bytes) = renderer.compact_path_cpu_buffer_bytes();
+    /// assert!(reserved_bytes >= logical_bytes);
+    /// # }
+    /// ```
+    pub fn compact_path_cpu_buffer_bytes(&self) -> (u64, u64) {
+        let stride = size_of::<CompactPathVertex>() as u64;
+        (
+            self.compact_path_vertices.len() as u64 * stride,
+            self.compact_path_vertices.capacity() as u64 * stride,
+        )
+    }
+
     pub const fn circle_capacity_bytes(&self) -> usize {
         self.circle_capacity_bytes
     }
@@ -2293,13 +2393,6 @@ fn ensure_capacity(
     )
 }
 
-fn buffer_growth_capacity(required_bytes: usize) -> usize {
-    required_bytes
-        .checked_next_power_of_two()
-        .unwrap_or(required_bytes)
-        .max(256)
-}
-
 fn validate_preload_allocation(
     buffer: &'static str,
     required: usize,
@@ -2449,6 +2542,130 @@ mod tests {
         assert_eq!(compact[0].surface, 9);
         assert_eq!(compact[1].surface, 1);
         assert_eq!(compact[2].surface, 9);
+    }
+
+    #[test]
+    fn compact_path_cpu_accounting_reports_actual_capacity_without_mutation() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        assert_eq!(renderer.compact_path_cpu_buffer_bytes(), (0, 0));
+        let gpu = renderer.geometry_buffer_residency();
+        assert_eq!(gpu.compact_path_vertices, 4);
+
+        renderer
+            .compact_path_vertices
+            .resize(3, CompactPathVertex::zeroed());
+        renderer.compact_path_vertices.reserve_exact(17);
+        let expected = (
+            std::mem::size_of_val(renderer.compact_path_vertices.as_slice()) as u64,
+            (renderer.compact_path_vertices.capacity() * size_of::<CompactPathVertex>()) as u64,
+        );
+        assert!(expected.1 > expected.0 && expected.0 > 0);
+        let pointer = renderer.compact_path_vertices.as_ptr();
+        let bytes = bytemuck::cast_slice::<_, u8>(&renderer.compact_path_vertices).to_vec();
+        for _ in 0..3 {
+            assert_eq!(renderer.compact_path_cpu_buffer_bytes(), expected);
+            assert_eq!(renderer.compact_path_vertices.as_ptr(), pointer);
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&renderer.compact_path_vertices),
+                bytes.as_slice()
+            );
+            assert_eq!(renderer.geometry_buffer_residency(), gpu);
+        }
+        renderer.compact_path_vertices.clear();
+        assert_eq!(renderer.compact_path_cpu_buffer_bytes(), (0, expected.1));
+        assert_eq!(renderer.geometry_buffer_residency(), gpu);
+    }
+
+    #[test]
+    fn compact_path_cpu_accounting_tracks_upload_reentry_and_compaction() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        let mut preparer = FramePreparer::new(&device.limits());
+        let mut frame = test_frame_with_path();
+        let empty_frame = test_frame();
+        let cold = preparer.prepare(&frame);
+        assert!(!cold.path_vertices.is_empty());
+        let used = (cold.path_vertices.len() * size_of::<CompactPathVertex>()) as u64;
+        renderer.upload(&device, &queue, &cold);
+        let baseline = renderer.compact_path_cpu_buffer_bytes();
+        assert_eq!(baseline.0, used);
+        assert!(baseline.1 >= used);
+        let pointer = renderer.compact_path_vertices.as_ptr();
+        let gpu_compact = renderer.geometry_buffer_residency().compact_path_vertices;
+
+        for cycle in 0..3 {
+            let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+            let idle = renderer.upload(&device, &queue, &clean);
+            assert_eq!((idle.bytes_uploaded, idle.buffer_reallocations), (0, 0));
+            assert_eq!(renderer.compact_path_cpu_buffer_bytes(), baseline);
+            assert_eq!(renderer.compact_path_vertices.as_ptr(), pointer);
+
+            frame.objects[0].transform.translation = Vec2::new(0.1 * (cycle + 1) as f32, 0.0);
+            let local = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+            assert!(local.path_vertex_dirty_ranges.is_empty());
+            let mut writes = Vec::new();
+            let upload = renderer.upload_with_trace(&device, &queue, &local, &mut writes);
+            assert_eq!(upload.buffer_reallocations, 0);
+            assert!(!writes
+                .iter()
+                .any(|write| write.buffer == "compact_path_vertex"));
+            assert_eq!(renderer.compact_path_cpu_buffer_bytes(), baseline);
+
+            // An ordinary scene without paths clears length, not retained capacity.
+            let hidden = preparer.prepare(&empty_frame);
+            assert!(hidden.path_vertices.is_empty());
+            renderer.upload(&device, &queue, &hidden);
+            assert_eq!(renderer.compact_path_cpu_buffer_bytes(), (0, baseline.1));
+            assert_eq!(renderer.compact_path_vertices.as_ptr(), pointer);
+            assert_eq!(
+                renderer.geometry_buffer_residency().compact_path_vertices,
+                gpu_compact
+            );
+
+            let visible = preparer.prepare(&frame);
+            renderer.upload(&device, &queue, &visible);
+            assert_eq!(renderer.compact_path_cpu_buffer_bytes(), baseline);
+            assert_eq!(renderer.compact_path_vertices.as_ptr(), pointer);
+        }
+
+        // Rejected replacement must not change either the CPU mirror or GPU handles.
+        let gpu_before = renderer.geometry_buffer_residency();
+        let nonempty = preparer.prepare(&frame);
+        assert_eq!(
+            renderer
+                .replace_preloaded_path_buffers(&device, &queue, &nonempty)
+                .unwrap_err(),
+            PathPreloadUploadError::NonEmptyDrawState,
+        );
+        assert_eq!(renderer.compact_path_cpu_buffer_bytes(), baseline);
+        assert_eq!(renderer.compact_path_vertices.as_ptr(), pointer);
+        assert_eq!(renderer.geometry_buffer_residency(), gpu_before);
+
+        // Explicit empty compaction installs a fresh empty CPU mirror. GPU
+        // placeholders remain; neither observation claims physical VRAM release.
+        let empty_preparer = FramePreparer::new(&device.limits());
+        let empty = empty_preparer.resident_upload_frame(crate::RenderStats::default());
+        let replacement = renderer
+            .replace_preloaded_path_buffers(&device, &queue, &empty)
+            .unwrap();
+        assert_eq!(replacement.bytes_uploaded, 0);
+        assert_eq!(renderer.compact_path_cpu_buffer_bytes(), (0, 0));
+        assert_eq!(
+            renderer.geometry_buffer_residency().compact_path_vertices,
+            4
+        );
+
+        preparer = FramePreparer::new(&device.limits());
+        let reentered = preparer.prepare(&frame);
+        assert!(renderer.upload(&device, &queue, &reentered).bytes_uploaded > 0);
+        let after = renderer.compact_path_cpu_buffer_bytes();
+        assert_eq!(after.0, used);
+        assert!(after.1 >= after.0);
+        let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let idle = renderer.upload(&device, &queue, &clean);
+        assert_eq!((idle.bytes_uploaded, idle.buffer_reallocations), (0, 0));
+        assert_eq!(renderer.compact_path_cpu_buffer_bytes(), after);
     }
 
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -2705,7 +2922,7 @@ mod tests {
         assert_eq!(renderer.viewport_size(), [64, 64]);
 
         let mut frame = test_frame();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
 
         let first_upload = renderer.upload(&device, &queue, &prepared);
@@ -2821,7 +3038,7 @@ mod tests {
         assert_eq!(renderer.target_format, WEBGL_FORMAT);
 
         let frame = test_frame();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         renderer.upload(&device, &queue, &prepared);
 
@@ -2860,7 +3077,7 @@ mod tests {
         renderer.set_viewport(&device, &queue, 64, 64);
 
         let frame = test_frame_with_path();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
         renderer.upload(&device, &queue, &prepared);
 
@@ -2912,7 +3129,7 @@ mod tests {
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
 
         let upload = renderer.upload(&device, &queue, &prepared);

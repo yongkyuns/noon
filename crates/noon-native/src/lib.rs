@@ -1009,6 +1009,7 @@ impl NativeGpu {
         renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 
         let text_state = renderer.create_retained_text_state(&device, &queue);
+        let preparer = RetainedFramePreparer::new(&device.limits());
         Ok(Self {
             instance,
             surface,
@@ -1016,7 +1017,7 @@ impl NativeGpu {
             queue,
             config,
             drawable: size.width > 0 && size.height > 0,
-            preparer: RetainedFramePreparer::new(),
+            preparer,
             text_state,
             renderer,
             overlay: OverlayGpuState::default(),

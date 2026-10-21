@@ -89,7 +89,7 @@ impl Surface {
         });
         Self {
             renderer,
-            preparer: RetainedFramePreparer::new(),
+            preparer: RetainedFramePreparer::new(&wgpu::Limits::default()),
             text,
             target,
         }

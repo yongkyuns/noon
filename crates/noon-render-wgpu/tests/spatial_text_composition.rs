@@ -264,7 +264,7 @@ fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
                 "the fixture draws a World path"
             );
             if !retained_pass {
-                let mut preparer = FramePreparer::new();
+                let mut preparer = FramePreparer::new(&wgpu::Limits::default());
                 let prepared = preparer.prepare(publication.frame());
                 renderer.upload(&device, &queue, &prepared);
                 let mut encoder = device.create_command_encoder(&Default::default());
@@ -272,7 +272,7 @@ fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
                 images.push(target.read(&device, &queue, encoder));
                 continue;
             }
-            let mut retained = RetainedFramePreparer::new();
+            let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
             let visible: Vec<_> = (0..publication.frame().objects.len()).collect();
             retained
                 .prepare_transient_presentations_visible(&publication, &visible)
@@ -477,7 +477,7 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                     &queue,
                     Camera2D::new(Vec2::ZERO, Vec2::new(authoring_width, 8.0)).unwrap(),
                 );
-                let mut retained = RetainedFramePreparer::new();
+                let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
                 let mut text_state = renderer.create_retained_text_state(&device, &queue);
                 let mut previous = None;
                 for pass in 0..2 {
@@ -764,7 +764,7 @@ fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
             &queue,
             Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 8.0)).unwrap(),
         );
-        let mut retained = RetainedFramePreparer::new();
+        let mut retained = RetainedFramePreparer::new(&wgpu::Limits::default());
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let (before, initial_upload) = render(
             &device,

@@ -40,6 +40,14 @@ const PATH_PROGRESS_MAX: u32 = 16_777_215;
 const PATH_BACKGROUND_STROKE_FLAG: u32 = 1 << 31;
 const DEFAULT_PATH_MESH_CACHE_LIMIT: usize = 256;
 
+/// Shared GPU buffer growth policy used by upload and optional packed admission.
+pub(crate) fn buffer_growth_capacity(required_bytes: usize) -> usize {
+    required_bytes
+        .checked_next_power_of_two()
+        .unwrap_or(required_bytes)
+        .max(256)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedTransform {
@@ -323,7 +331,31 @@ pub struct PreparedFrame<'a> {
     complete_submission: bool,
     submitted_source_slots: Option<&'a std::collections::HashSet<usize>>,
     zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
+    mega_path_segments: &'a [Option<Range<u32>>],
+    mega_path_detached: &'a [bool],
     mega_path_offsets: &'a [u32],
+}
+
+impl PreparedFrame<'_> {
+    /// A reusable consecutive unique-path segment; source path batches remain
+    /// individually addressable for effect capture, picking and local edits.
+    pub(crate) fn mega_source_segment(
+        &self,
+        batch_index: usize,
+    ) -> Option<(Range<u32>, PathCoverage)> {
+        let segment = self.mega_path_segments.get(batch_index)?.as_ref()?.clone();
+        if segment.is_empty()
+            || self
+                .mega_path_detached
+                .get(batch_index)
+                .copied()
+                .unwrap_or(true)
+        {
+            return None;
+        }
+        let coverage = self.path_batches.get(batch_index)?.coverage;
+        Some((segment, coverage))
+    }
 }
 
 /// Packed geometry state for one exact source-frame row.
@@ -636,7 +668,7 @@ struct PathGroup {
     instances: Vec<PathInstance>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FramePreparer {
     circle_ids: Vec<ObjectId>,
     circles: Vec<CircleInstance>,
@@ -653,6 +685,17 @@ pub struct FramePreparer {
     // Mixed text/geometry consumers emit their own individual path painter order;
     // they never consume the per-vertex instance stream used by packed path draws.
     individual_path_draws: bool,
+    // Mixed retained draws keep individual path/source identity but also prepare
+    // the renderer's existing packed unique-path draw stream when eligible.
+    mixed_mega_path_draws: bool,
+    // Immutable target capabilities, established before any frame preparation.
+    // Rejected optional packing preserves ordinary painter-ordered paths.
+    limits: wgpu::Limits,
+    // Renderer-derived rows whose active family operation requires one mutable
+    // instance record per member. Their source meshes stay retained; repeating
+    // the instance per vertex would turn a scalar reveal into a mesh-sized upload.
+    // Rebuilt with the mixed scratch generation, never a semantic authority.
+    individual_path_objects: std::collections::HashSet<ObjectId>,
     resident_vertex_count: usize,
     resident_index_count: usize,
     resident_mesh_count: usize,
@@ -726,17 +769,137 @@ pub struct FramePreparer {
 }
 
 impl FramePreparer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub(crate) fn for_individual_path_draws() -> Self {
+    /// Create preparation state with the target renderer's capabilities.
+    ///
+    /// GPU hosts supply `device.limits()` during initialization; CPU-only
+    /// preparation and tests supply explicit target limits. Limits are copied,
+    /// not a device handle. Recreate this state when changing the target device.
+    /// All ordinary preparation calls use these limits for optional packing.
+    /// Other GPU resources still have their own allocation constraints.
+    ///
+    /// ```no_run
+    /// # fn example(device: &wgpu::Device, frame: &noon_runtime::FrameState) {
+    /// let mut preparer = noon_render_wgpu::FramePreparer::new(&device.limits());
+    /// let _ = preparer.prepare(frame);
+    /// let _ = preparer.prepare_incremental(frame, &noon_runtime::FrameChanges::default());
+    /// # }
+    /// ```
+    ///
+    /// Construction without target capabilities is intentionally unavailable:
+    ///
+    /// ```compile_fail
+    /// let _ = noon_render_wgpu::FramePreparer::new();
+    /// ```
+    ///
+    /// ```compile_fail
+    /// let _: noon_render_wgpu::FramePreparer = Default::default();
+    /// ```
+    pub fn new(limits: &wgpu::Limits) -> Self {
         Self {
-            individual_path_draws: true,
-            ..Self::default()
+            circle_ids: Default::default(),
+            circles: Default::default(),
+            rectangle_ids: Default::default(),
+            rectangles: Default::default(),
+            line_ids: Default::default(),
+            lines: Default::default(),
+            path_ids: Default::default(),
+            paths: Default::default(),
+            path_vertices: Default::default(),
+            path_indices: Default::default(),
+            path_batches: Default::default(),
+            path_batch_vertex_ranges: Default::default(),
+            individual_path_draws: Default::default(),
+            mixed_mega_path_draws: Default::default(),
+            limits: limits.clone(),
+            individual_path_objects: Default::default(),
+            resident_vertex_count: Default::default(),
+            resident_index_count: Default::default(),
+            resident_mesh_count: Default::default(),
+            mega_path_indices: Default::default(),
+            mega_path_vertex_instances: Default::default(),
+            mega_path_batches: Default::default(),
+            mega_path_segments: Default::default(),
+            mega_path_offsets: Default::default(),
+            zero_contribution: Default::default(),
+            mega_path_detached: Default::default(),
+            render_batches: Default::default(),
+            render_chunks: Default::default(),
+            render_chunks_active: Default::default(),
+            render_order_batch_count: Default::default(),
+            render_order_mega_batch_count: Default::default(),
+            render_order_mega_path_count: Default::default(),
+            render_chunk_boundary_merges: Default::default(),
+            render_order_boundary_merge_count: Default::default(),
+            render_order_mega_boundary_merge_count: Default::default(),
+            visible_raw_render_batches: Default::default(),
+            visible_render_batches: Default::default(),
+            visible_mega_path_batches: Default::default(),
+            visible_projection_ready: Default::default(),
+            visible_projection_key: Default::default(),
+            visible_submission_slots: Default::default(),
+            visible_projection_stats: Default::default(),
+            painter_order_indices: Default::default(),
+            painter_order_positions: Default::default(),
+            painter_order_installed: Default::default(),
+            path_batch_cache_indices: Default::default(),
+            path_mesh_cache: Default::default(),
+            path_mesh_lookup: Default::default(),
+            sampled_path_mesh_lookup: Default::default(),
+            path_mesh_cache_limit: Default::default(),
+            path_mesh_clock: Default::default(),
+            path_mesh_cache_generation: Default::default(),
+            path_mesh_cache_prune_baseline: Default::default(),
+            packed_path_mesh_cache_generation: Default::default(),
+            transient_path_groups_packed: Default::default(),
+            unsupported: Default::default(),
+            slots: Default::default(),
+            slot_presences: Default::default(),
+            active_instance_count: Default::default(),
+            circle_dirty_ranges: Default::default(),
+            rectangle_dirty_ranges: Default::default(),
+            line_dirty_ranges: Default::default(),
+            path_dirty_ranges: Default::default(),
+            path_vertex_dirty_ranges: Default::default(),
+            path_index_dirty_ranges: Default::default(),
+            path_vertex_free_ranges: Default::default(),
+            path_index_free_ranges: Default::default(),
+            mega_path_instance_dirty_ranges: Default::default(),
+            mega_path_index_dirty_ranges: Default::default(),
+            mega_path_index_dirty: Default::default(),
+            path_geometry_dirty: Default::default(),
+            render_order_positions_visited: Default::default(),
+            render_order_chunks_rebuilt: Default::default(),
+            initialized: Default::default(),
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_individual_path_draws() -> Self {
+        Self {
+            individual_path_draws: true,
+            ..Self::new(&wgpu::Limits::default())
+        }
+    }
+
+    pub(crate) fn for_mixed_retained_path_draws(limits: &wgpu::Limits) -> Self {
+        Self {
+            individual_path_draws: true,
+            mixed_mega_path_draws: true,
+            ..Self::new(limits)
+        }
+    }
+
+    // Unit tests simulate pressure while retaining storage to audit capacity
+    // accounting. Shipping preparation limits are immutable after construction.
+    #[cfg(test)]
+    pub(crate) fn set_packed_path_buffer_limit_for_test(&mut self, limit: u64) {
+        if self.limits.max_buffer_size != limit {
+            self.limits.max_buffer_size = limit;
+            self.initialized = false;
+        }
+    }
+
+    /// Prepare geometry using the capabilities established at initialization.
     pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
         self.rebuild(frame)
     }
@@ -1279,7 +1442,7 @@ impl FramePreparer {
             coverage: path_coverage(&self.path_mesh_cache[cache_index].mesh),
         });
         self.path_batch_cache_indices.push(cache_index);
-        if !self.individual_path_draws {
+        if !self.individual_path_draws || self.mixed_mega_path_draws {
             self.mega_path_segments.push(None);
             self.mega_path_detached.push(false);
         }
@@ -1974,6 +2137,8 @@ impl FramePreparer {
             complete_submission: true,
             submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
+            mega_path_segments: &self.mega_path_segments,
+            mega_path_detached: &self.mega_path_detached,
             mega_path_offsets: &self.mega_path_offsets,
         }
     }
@@ -2080,8 +2245,9 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 34] {
+    fn capacities(&self) -> [usize; 35] {
         [
+            self.individual_path_objects.capacity(),
             self.circle_ids.capacity(),
             self.circles.capacity(),
             self.rectangle_ids.capacity(),
@@ -3157,7 +3323,7 @@ mod tests {
         path.style.stroke_width = 0.08;
         let mut initial = frame(vec![path.clone()]);
         initial.render_geometries[0] = Some(geometry.clone().into());
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let cold = preparer.prepare(&initial);
         assert_eq!(cold.stats.geometry_cache_misses, 1);
@@ -3206,7 +3372,7 @@ mod tests {
         initial.render_geometries[0] = Some(geometry.into());
         initial.render_transforms[0] = Some(Transform2D::IDENTITY);
 
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&initial);
 
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
@@ -3237,7 +3403,7 @@ mod tests {
         path.style.stroke = Some(Color::WHITE);
         path.style.stroke_width = 0.08;
         let initial = frame(vec![path]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let vertices = {
             let cold = preparer.prepare(&initial);
@@ -3261,7 +3427,7 @@ mod tests {
 
         let mut visible = initial;
         visible.objects[0].style.fill = Some(Color::WHITE);
-        let mut visible_preparer = FramePreparer::new();
+        let mut visible_preparer = FramePreparer::new(&wgpu::Limits::default());
         let filled = visible_preparer.prepare(&visible);
         assert_eq!(filled.stats.unsupported_count, 0);
         assert!(filled
@@ -3283,7 +3449,7 @@ mod tests {
         path.style.stroke = Some(Color::WHITE);
         path.style.stroke_width = 0.08;
         let initial = frame(vec![path]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let cold = preparer.prepare(&initial);
         assert_eq!(cold.stats.geometry_cache_misses, 1);
@@ -3310,7 +3476,7 @@ mod tests {
         path.style.stroke = Some(Color::BLACK);
         path.style.stroke_width = 0.08;
         let initial = frame(vec![path]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let (vertices, indices) = {
             let cold = preparer.prepare(&initial);
@@ -3773,7 +3939,7 @@ mod tests {
         first.style.stroke_width = 0.15;
         second.style = first.style;
         let frame = frame(vec![first, second]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -3801,7 +3967,7 @@ mod tests {
         state.style.stroke = Some(Color::WHITE);
         state.style.stroke_width = 0.2;
         let frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let prepared = preparer.prepare(&frame);
 
         let stroke_progresses: Vec<f32> = prepared
@@ -3825,7 +3991,7 @@ mod tests {
         state.style.stroke = Some(Color::BLACK);
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         assert_eq!(preparer.cached_path_mesh_count(), 1);
 
@@ -3856,7 +4022,7 @@ mod tests {
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
         frame.reveals[0] = 0.2;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let cold = preparer.prepare(&frame);
         assert_eq!(cold.paths.len(), 1);
         assert_eq!(cold.lines.len(), 1);
@@ -3889,7 +4055,7 @@ mod tests {
         state.style.stroke_width = 0.08;
         let mut frame = frame(vec![state]);
         frame.reveals[0] = 0.25;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let cold = preparer.prepare(&frame);
         assert_eq!(cold.circles.len(), 1);
@@ -3933,7 +4099,7 @@ mod tests {
         }
         let mut frame = frame(vec![circle, rectangle, line]);
         frame.reveals.fill(0.5);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.circles.len(), 1);
@@ -3978,7 +4144,7 @@ mod tests {
         state.style.stroke = Some(Color::WHITE);
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
 
         frame.morphs[0] = 0.6;
@@ -4018,7 +4184,7 @@ mod tests {
             })
             .collect();
         let mut frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.stats.instance_count, OBJECT_COUNT);
@@ -4063,7 +4229,7 @@ mod tests {
             .collect();
         let mut frame = frame(objects);
         frame.reveals.fill(0.25);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let cold = preparer.prepare(&frame);
         assert_eq!(cold.stats.geometry_cache_misses, 1);
@@ -4087,7 +4253,7 @@ mod tests {
             .map(|id| object(id, GeometryRef::circle(1.0)))
             .collect();
         let frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -4105,7 +4271,7 @@ mod tests {
         state.style.stroke_width = 0.04;
         state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
         let frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.circles[0].style.stroke_enabled, 3);
@@ -4122,7 +4288,7 @@ mod tests {
                 GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
             ),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let _ = preparer.prepare(&frame);
 
         frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
@@ -4149,7 +4315,7 @@ mod tests {
             object(51, GeometryRef::circle(1.0)),
             object(52, GeometryRef::rectangle(1.0, 1.0)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let _ = preparer.prepare(&frame);
 
         let prepared = preparer
@@ -4180,7 +4346,7 @@ mod tests {
         state.style.stroke_width = 0.04;
         state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
         let frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.paths[0].transform.translation, [5.0, -2.0]);
@@ -4210,7 +4376,7 @@ mod tests {
             ));
         }
         let frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -4240,7 +4406,7 @@ mod tests {
             ..Style::default()
         };
         let frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         let instance = prepared.circles[0];
@@ -4264,7 +4430,7 @@ mod tests {
                 .map(|id| object(id, GeometryRef::circle(1.0)))
                 .collect(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         assert!(preparer.prepare(&frame).stats.capacity_growths > 0);
         assert_eq!(preparer.prepare(&frame).stats.capacity_growths, 0);
@@ -4287,7 +4453,7 @@ mod tests {
             ..Style::default()
         };
         let frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
         let instance = prepared.lines[0];
@@ -4305,7 +4471,7 @@ mod tests {
     #[test]
     fn unsupported_geometry_is_reported_explicitly() {
         let frame = frame(vec![object(42, GeometryRef::External(GeometryId::new(3)))]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -4320,7 +4486,7 @@ mod tests {
             object(1, GeometryRef::circle(1.0)),
             object(2, GeometryRef::circle(2.0)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         assert_eq!(preparer.prepare(&frame).stats.instance_count, 2);
 
         frame.presences[0] = false;
@@ -4356,7 +4522,7 @@ mod tests {
             object(3, GeometryRef::circle(0.5)),
         ]);
         frame.presences[1] = false;
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&frame, &[2, 1, 0]);
         let initial = preparer.prepare(&frame);
         assert_eq!(initial.stats.instance_count, 2);
@@ -4404,7 +4570,7 @@ mod tests {
                 .map(|index| object(index as u64, GeometryRef::circle(1.0)))
                 .collect(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let initial_order = (0..INITIAL_OBJECTS as u32).collect::<Vec<_>>();
         preparer.set_painter_order(&frame, &initial_order);
         preparer.prepare(&frame);
@@ -4463,7 +4629,7 @@ mod tests {
             object(2, GeometryRef::path(retained_path)),
             object(3, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let initial = preparer.prepare(&frame);
         assert_eq!(initial.stats.geometry_cache_misses, 1);
         assert!(initial.path_geometry_dirty);
@@ -4497,7 +4663,7 @@ mod tests {
                 .map(|id| object(id, GeometryRef::circle(1.0)))
                 .collect(),
         );
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         assert_eq!(preparer.prepare(&frame).stats.instances_repacked, 100_000);
 
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
@@ -4514,7 +4680,7 @@ mod tests {
             object(2, GeometryRef::rectangle(2.0, 3.0)),
             object(3, GeometryRef::circle(4.0)),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         frame.objects[2].transform.translation = Vec2::new(3.0, 4.0);
 
@@ -4532,7 +4698,7 @@ mod tests {
     #[test]
     fn incompatible_incremental_layout_falls_back_to_full_rebuild() {
         let mut frame = frame(vec![object(1, GeometryRef::circle(1.0))]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         frame.objects[0].content =
             noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 3.0));
@@ -4565,7 +4731,7 @@ mod tests {
             })
             .collect();
         let frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let mut order = (0..OBJECT_COUNT as u32).collect::<Vec<_>>();
         preparer.set_painter_order(&frame, &order);
 
@@ -4626,7 +4792,7 @@ mod tests {
             })
             .collect();
         let mut frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
         let middle_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT / 2].clone();
@@ -4714,7 +4880,7 @@ mod tests {
         original.style.stroke = Some(Color::WHITE);
         original.style.stroke_width = 0.02;
         let mut frame = frame(vec![original.clone()]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         let old_vertex_count = preparer.path_vertices.len();
         let old_index_count = preparer.path_indices.len();
@@ -4769,7 +4935,7 @@ mod tests {
             })
             .collect();
         let frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -4799,7 +4965,7 @@ mod tests {
             state
         };
         let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.2)]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let total_vertex_instances = preparer.prepare(&frame).mega_path_vertex_instances.len();
 
         frame.objects[0].transform.translation = Vec2::new(1.25, -0.75);
@@ -4837,7 +5003,7 @@ mod tests {
             })
             .collect();
         let mut frame = frame(objects);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
         let last_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1].clone();
@@ -4998,7 +5164,7 @@ mod tests {
             make_path(2, 0.5),
             make_path(3, 1.0),
         ]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
 
         frame.objects[1].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
@@ -5149,7 +5315,7 @@ mod tests {
         last.style.stroke = Some(Color::WHITE);
         last.style.stroke_width = 0.02;
         let frame = frame(vec![first, middle, last]);
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
         let prepared = preparer.prepare(&frame);
 
@@ -5203,7 +5369,7 @@ mod structural_execution_delta_tests {
             render_geometries: vec![None; count],
             render_transforms: vec![None; count],
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let initial = preparer.prepare(&frame);
         assert_eq!(initial.stats.full_rebuilds, 1);
         frame.presences[10] = false;
@@ -5232,7 +5398,7 @@ mod structural_execution_delta_tests {
             render_geometries: vec![None; 3],
             render_transforms: vec![None; 3],
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
 
         frame.presences[0] = false;
@@ -5268,7 +5434,7 @@ mod structural_execution_delta_tests {
             render_geometries: vec![None; 4],
             render_transforms: vec![None; 4],
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.set_painter_order(&frame, &[0, 1, 2, 3]);
         preparer.prepare(&frame);
         preparer.set_painter_order_range(&frame, &[0, 2, 1, 3], 1..3);
@@ -5303,7 +5469,7 @@ mod structural_execution_delta_tests {
             render_geometries: vec![None; OBJECT_COUNT],
             render_transforms: vec![None; OBJECT_COUNT],
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         let last = u32::try_from(OBJECT_COUNT - 1).expect("test object count fits u32");
         preparer.set_painter_order(&frame, &[last]);
         let only_last = preparer.prepare(&frame);
@@ -5339,7 +5505,7 @@ mod structural_execution_delta_tests {
             render_geometries: vec![None; count],
             render_transforms: vec![None; count],
         };
-        let mut preparer = FramePreparer::new();
+        let mut preparer = FramePreparer::new(&wgpu::Limits::default());
         preparer.prepare(&frame);
         frame.objects.push(circle(count as u64));
         frame.presences.push(true);

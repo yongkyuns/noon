@@ -94,7 +94,7 @@ fn prepared_ids(instance: &mut SceneInstance, preparer: &mut FramePreparer, time
 #[test]
 fn renderer_tracks_transform_from_copy_visible_instance_phases() {
     let mut instance = copy_scene();
-    let mut preparer = FramePreparer::new();
+    let mut preparer = FramePreparer::new(&wgpu::Limits::default());
 
     assert_eq!(prepared_ids(&mut instance, &mut preparer, 0.5), vec![0]);
     assert_eq!(prepared_ids(&mut instance, &mut preparer, 1.0), vec![0, 2]);
