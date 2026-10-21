@@ -335,10 +335,12 @@ fn geometry_resource_slot(id: GeometryId) -> usize {
 }
 
 fn vector_path_retained_bytes(path: &VectorPath) -> usize {
-    // `VectorPath` owns a command Vec and may recursively own a morph target.
-    // Count command payload capacity approximately by logical length; allocator
-    // bookkeeping is deliberately excluded from deterministic instrumentation.
-    let own = size_of::<VectorPath>() + size_of_val(path.commands());
+    // Count owned commands and raw coordinates by logical length, including
+    // incomplete cubic tails. Morph targets own the same payload recursively;
+    // allocator capacity and bookkeeping are excluded from these statistics.
+    let own = size_of::<VectorPath>()
+        + size_of_val(path.commands())
+        + path.manim_points().map_or(0, size_of_val);
     own + path
         .morph_target()
         .map(vector_path_retained_bytes)
@@ -383,6 +385,64 @@ mod tests {
             path = path.line_to(Vec2::new(index as f32 * 0.01, (index % 7) as f32));
         }
         path
+    }
+
+    #[test]
+    fn raw_coordinate_retention_counts_singleton_incomplete_and_complete_arrays() {
+        for count in [0, 1, 2, 3, 4, 5, 7, 8, 9] {
+            let path = VectorPath::from_manim_points(vec![Vec2::new(1.0, 2.0); count]);
+            let expected = size_of::<VectorPath>()
+                + size_of_val(path.commands())
+                + path.manim_points().map_or(0, size_of_val);
+            let mut arena = GeometryResourceArena::new();
+            arena.insert_path(path);
+            assert_eq!(arena.stats().retained_bytes, expected, "{count} raw points");
+        }
+    }
+
+    #[test]
+    fn raw_coordinate_retention_includes_each_morph_payload_once() {
+        let target = VectorPath::from_manim_points(vec![Vec2::ZERO; 5]);
+        let source = VectorPath::from_manim_points(vec![Vec2::ZERO; 3]);
+        let expected = 2 * size_of::<VectorPath>()
+            + size_of_val(source.commands())
+            + size_of_val(source.manim_points().unwrap())
+            + size_of_val(target.commands())
+            + size_of_val(target.manim_points().unwrap());
+        let mut arena = GeometryResourceArena::new();
+        arena.insert_path(source.with_morph_target(target));
+        assert_eq!(arena.stats().retained_bytes, expected);
+    }
+
+    #[test]
+    fn raw_coordinate_retention_replacement_and_removal_preserve_unrelated_resources() {
+        let short = VectorPath::from_manim_points(vec![Vec2::ZERO]);
+        let long = VectorPath::from_manim_points(vec![Vec2::ZERO; 3]);
+        assert_eq!(short.commands(), long.commands());
+        let extra_raw_bytes = size_of_val(&long.manim_points().unwrap()[1..]);
+        assert!(extra_raw_bytes > 0);
+        let mut arena = GeometryResourceArena::new();
+        let unrelated = arena.insert_path(large_path(2));
+        let unrelated_stats = arena.stats();
+        let old = arena.insert_path(short);
+        let old_stats = arena.stats();
+        let new = arena
+            .replace(old.id, GeometryResource::VectorPath(Arc::new(long)))
+            .unwrap();
+        assert_eq!(
+            arena.stats().retained_bytes,
+            old_stats.retained_bytes + extra_raw_bytes
+        );
+        assert_eq!(
+            arena.stats().path_command_bytes,
+            old_stats.path_command_bytes
+        );
+        assert!(arena.get(old).is_none());
+        assert!(arena.get(new).is_some());
+        assert!(arena.get(unrelated).is_some());
+        arena.remove(new.id).unwrap();
+        assert_eq!(arena.stats(), unrelated_stats);
+        assert!(arena.get(unrelated).is_some());
     }
 
     #[test]
