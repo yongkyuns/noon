@@ -1,9 +1,9 @@
 """Caller-owned array protocol, independent of persistent scene mutation."""
 from pathlib import Path
 from types import SimpleNamespace
+from importlib.util import module_from_spec, spec_from_file_location
 import hashlib
 import json
-import sys
 import unittest
 import warnings
 
@@ -18,10 +18,10 @@ import _manim_namespace as namespace
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = json.loads((ROOT / 'fixtures/manim-v0.21/point-list-insertion.json').read_text())
 if np is not None:
-    sys.path.insert(0, str(ROOT / 'scripts'))
-    from manim_point_list_observation import (
-        assert_point_list_observation, observe_point_list, pinned_point_list_oracle,
-    )
+    observer_spec = spec_from_file_location(
+        'manim_point_list_observation', ROOT / 'scripts/manim_point_list_observation.py')
+    observation = module_from_spec(observer_spec)
+    observer_spec.loader.exec_module(observation)
 
 
 class PointListInsertionTests(unittest.TestCase):
@@ -30,10 +30,11 @@ class PointListInsertionTests(unittest.TestCase):
         witness = json.loads((ROOT / 'fixtures/manim-v0.21/point-list-insertion-oracle.json').read_text())
         self.assertEqual(witness['rawMethodSha256'], FIXTURE['methodSourceSha256'])
         self.assertEqual(np.dtype(int).name, 'int64', 'Original desktop fixture requires its captured integer platform')
-        oracle = pinned_point_list_oracle(witness)
+        oracle = observation.pinned_point_list_oracle(witness)
         for expected in FIXTURE['cases']:
             with self.subTest(spec=expected['spec']):
-                assert_point_list_observation(observe_point_list(oracle, expected['spec']), expected)
+                observation.assert_point_list_observation(
+                    observation.observe_point_list(oracle, expected['spec']), expected)
 
     @unittest.skipIf(np is None, 'NumPy runs in the pinned array-oracle lane')
     def test_observation_comparator_preserves_metadata_and_value_failures(self):
@@ -43,7 +44,7 @@ class PointListInsertionTests(unittest.TestCase):
                                         ('ownership', True, False),
                                         ('shape', [4, 3], [3, 4])]:
             with self.subTest(field=field), self.assertRaises(AssertionError):
-                assert_point_list_observation({field: actual}, {field: expected})
+                observation.assert_point_list_observation({field: actual}, {field: expected})
 
     def test_numpy_is_discovered_for_plain_list_arguments(self):
         self.assertEqual(namespace.required_packages(
