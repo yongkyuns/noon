@@ -45,7 +45,7 @@ fn native_family_root_points_preserve_drawing_children_and_restored_pixels() {
         let mut blue = [0; 2];
         let mut yellow = [0; 2];
         let mut white = 0;
-        for (offset, pixel) in frame.chunks_exact(4).enumerate() {
+        for (offset, pixel) in frame.as_chunks::<4>().0.iter().enumerate() {
             let half = usize::from(offset % 640 >= 320);
             blue[half] += usize::from(pixel[0] < 30 && pixel[1] < 30 && pixel[2] > 200);
             yellow[half] += usize::from(pixel[0] > 200 && pixel[1] > 200 && pixel[2] < 30);
