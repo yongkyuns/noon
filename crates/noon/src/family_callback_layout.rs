@@ -267,6 +267,17 @@ mod tests {
             stroke: f64,
             rotation: f64,
         ) -> Self {
+            Self::with_setup(native, reverse, end_scale, stroke, rotation, |_, _, _| {})
+        }
+
+        fn with_setup(
+            native: bool,
+            reverse: bool,
+            end_scale: (f64, f64),
+            stroke: f64,
+            rotation: f64,
+            setup: impl FnOnce(&mut Scene, &crate::Mobject, &crate::Mobject),
+        ) -> Self {
             let mut scene = Scene::new();
             let mut source = scene.rectangle(6.5, 1.5).unwrap();
             source.set_stroke_width(stroke).unwrap();
@@ -277,6 +288,7 @@ mod tests {
             target.set_translation(-2.0, 2.0).unwrap();
             scene.add(&source).unwrap();
             scene.add(&target).unwrap();
+            setup(&mut scene, &source, &target);
             let mut end = target.target_editor().unwrap();
             end.set_scale(end_scale.0, end_scale.1).unwrap();
             end.set_translation(3.0, -2.0).unwrap();
@@ -445,6 +457,67 @@ mod tests {
             }
             assert_eq!(native.calls.get(), 0);
         }
+    }
+
+    #[test]
+    fn native_click_bindings_keep_the_callback_interval_instead_of_frozen_layout() {
+        for bind_source in [false, true] {
+            let mut fixture = Fixture::with_setup(
+                true,
+                false,
+                (1.0, 3.0),
+                0.0,
+                0.0,
+                |scene, source, target| {
+                    let mut bound = if bind_source {
+                        source.clone()
+                    } else {
+                        target.clone()
+                    };
+                    bound.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+                    scene
+                        .on_click_indicate(
+                            &bound,
+                            crate::IndicateOptions::default(),
+                            AnimationOptions::new(),
+                        )
+                        .unwrap();
+                },
+            );
+            fixture.sample(0.471);
+            assert!(fixture.calls.get() > 0);
+            fixture.finish();
+            assert_eq!(
+                fixture.session.seal_replay(),
+                Err(noon_runtime::ReplayError::UnsupportedDomain)
+            );
+        }
+    }
+
+    #[test]
+    fn active_segment_publication_barrier_preserves_the_folded_content_assumption() {
+        let mut fixture = Fixture::new(true, false, (1.0, 3.0), 0.0, 0.0);
+        fixture.sample(0.471);
+        let frame = fixture.session.frame().clone();
+        let authored = fixture.source.state().unwrap();
+        let error = fixture
+            .scene
+            .live(&mut fixture.session)
+            .become_mobject(
+                &fixture.source,
+                &fixture.target,
+                crate::ManimBecomeOptions::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("active animation segment must be completed"),
+            "{error}"
+        );
+        assert_eq!(fixture.session.frame(), &frame);
+        assert_eq!(fixture.source.state().unwrap(), authored);
+        fixture.finish();
     }
 
     #[test]

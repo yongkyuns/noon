@@ -2366,12 +2366,15 @@ impl crate::ExecutionSession {
         if target_state.content != end_state.content {
             return None;
         }
+        // The segment publication barrier keeps authored content stable. Native
+        // click effects bypass that barrier, so their targets cannot be folded.
         let read = |node| {
             let state = store.semantic_object_state_checked(node).ok()?;
             if !self.reachability.is_object_reachable(node)
                 || state.spatial_properties().is_some()
                 || state.content.text().is_some()
                 || !state.signal_bindings().is_empty()
+                || state.click_indicate().is_some()
                 || store.node(node)?.members_iter().next().is_some()
                 || !store.semantic_updater_registrations(node).ok()?.is_empty()
                 || !store.animation_effect_snapshot(node).ok()?.is_empty()
