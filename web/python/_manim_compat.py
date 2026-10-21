@@ -317,9 +317,9 @@ class VMobject(Mobject):
         from _manim_path_editing import set_points
         return set_points(self, points)
 
-    def append_points(self, points):
+    def append_points(self, new_points):
         from _manim_path_editing import append_points
-        return append_points(self, points)
+        return append_points(self, new_points)
 
     def resize_points(self, new_length, resize_func=_resize_array):
         from _manim_path_editing import resize_points
@@ -351,13 +351,13 @@ class VMobject(Mobject):
         from _manim_path_editing import add_line_to
         return add_line_to(self, point)
 
-    def add_quadratic_bezier_curve_to(self, control, anchor):
+    def add_quadratic_bezier_curve_to(self, handle, anchor):
         from _manim_path_editing import add_quadratic_bezier_curve_to
-        return add_quadratic_bezier_curve_to(self, control, anchor)
+        return add_quadratic_bezier_curve_to(self, handle, anchor)
 
-    def add_cubic_bezier_curve_to(self, control1, control2, anchor):
+    def add_cubic_bezier_curve_to(self, handle1, handle2, anchor):
         from _manim_path_editing import add_cubic_bezier_curve_to
-        return add_cubic_bezier_curve_to(self, control1, control2, anchor)
+        return add_cubic_bezier_curve_to(self, handle1, handle2, anchor)
 
     def add_smooth_curve_to(self, *points):
         from _manim_path_editing import add_smooth_curve_to
@@ -388,9 +388,9 @@ class VMobject(Mobject):
         from _manim_path_editing import set_anchors_and_handles
         return set_anchors_and_handles(self, anchors1, handles1, handles2, anchors2)
 
-    def append_vectorized_mobject(self, source):
+    def append_vectorized_mobject(self, vectorized_mobject):
         from _manim_path_editing import append_vectorized_mobject
-        return append_vectorized_mobject(self, source)
+        return append_vectorized_mobject(self, vectorized_mobject)
 
     def add_points_as_corners(self, points):
         from _manim_path_editing import add_points_as_corners

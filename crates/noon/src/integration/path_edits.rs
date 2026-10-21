@@ -90,6 +90,12 @@ pub enum BorrowedPathEdit<'a> {
         anchor: Vec2,
         stride: i32,
     },
+    QuadraticF64WithStride {
+        object: &'a Mobject,
+        control: (f64, f64),
+        anchor: (f64, f64),
+        stride: i32,
+    },
     Cubic {
         object: &'a Mobject,
         control1: Vec2,
@@ -261,8 +267,28 @@ pub fn publish_borrowed_path_edit(
             object,
             control,
             anchor,
-        } => (object, PathEdit::Quadratic(control, anchor)),
+        } => (
+            object,
+            PathEdit::QuadraticWithStride(
+                crate::path_editing::promote_point(control),
+                crate::path_editing::promote_point(anchor),
+                4,
+            ),
+        ),
         BorrowedPathEdit::QuadraticWithStride {
+            object,
+            control,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::QuadraticWithStride(
+                crate::path_editing::promote_point(control),
+                crate::path_editing::promote_point(anchor),
+                stride,
+            ),
+        ),
+        BorrowedPathEdit::QuadraticF64WithStride {
             object,
             control,
             anchor,

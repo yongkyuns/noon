@@ -39,6 +39,13 @@ const objectMemberControlsSource = `import json
 OBJECT_MEMBER_CASES = json.loads(${JSON.stringify(JSON.stringify(objectMemberControlsFixture.cases))})
 ${await readFile(path.join(repoRoot, "scripts/manim_object_members_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_object_member_controls.py"), "utf8")}`;
+const pathKeywordFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/path-keywords.json"), "utf8"));
+const pathKeywordSource = `import json
+PATH_KEYWORD_CASES = json.loads(${JSON.stringify(JSON.stringify(pathKeywordFixture.cases))})
+QUADRATIC_PRECISION_CASES = json.loads(${JSON.stringify(JSON.stringify(pathKeywordFixture.quadraticPrecisionCases))})
+${await readFile(path.join(repoRoot, "scripts/manim_path_keyword_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_path_keyword_controls.py"), "utf8")}`;
 const queryHookFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/query-hooks.json"), "utf8"));
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
@@ -1052,6 +1059,7 @@ result = Scene()
       objectQueriesSource,
       objectMembersSource,
       objectMemberControlsSource,
+      pathKeywordSource,
       queryHooksSource,
     ],
   );
@@ -1062,15 +1070,16 @@ result = Scene()
       resolveQualifiedBackend(expected, result.metrics.backend);
     }
   }
-  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
+  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-3).metrics.backend}.`);
+  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

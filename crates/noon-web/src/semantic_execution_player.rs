@@ -948,16 +948,18 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_quadratic_bezier_curve_to(
         &mut self,
         source: &noon::Mobject,
-        control: noon_core::Vec2,
-        anchor: noon_core::Vec2,
+        control: (f64, f64),
+        anchor: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::QuadraticWithStride {
-            object: source,
-            control,
-            anchor,
-            stride,
-        })
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::QuadraticF64WithStride {
+                object: source,
+                control,
+                anchor,
+                stride,
+            },
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
