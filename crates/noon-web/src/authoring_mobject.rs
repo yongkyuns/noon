@@ -602,12 +602,18 @@ mod wasm {
             green: f64,
             blue: f64,
             alpha: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
             let color = super::family_color(true, red, green, blue, alpha)
                 .map_err(js_error)?
                 .expect("required family color");
             batch
-                .create_family_with_color(Rc::clone(&self.semantics), z_index, color)
+                .create_family(
+                    Rc::clone(&self.semantics),
+                    z_index,
+                    color,
+                    draw_enabled.unwrap_or(true),
+                )
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -617,9 +623,15 @@ mod wasm {
             &self,
             batch: crate::WasmSceneMembershipBatch,
             z_index: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
             batch
-                .create_family(Rc::clone(&self.semantics), z_index)
+                .create_family(
+                    Rc::clone(&self.semantics),
+                    z_index,
+                    noon::Color::WHITE,
+                    draw_enabled.unwrap_or(true),
+                )
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -699,6 +711,13 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = alignPathPoints)]
+        pub fn align_path_points(&self, other: &WasmLayoutAnchor) -> Result<(), JsValue> {
+            self.anchor
+                .align_path_points(&other.anchor)
+                .map_err(js_error)
+        }
+
         pub fn scale(
             &self,
             scale_x: f64,
@@ -1224,6 +1243,29 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = setPoints)]
+        pub fn set_points(&self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.semantic_family()?
+                .set_points_f64(&points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(&self) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .clear_points()
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathQuery)]
+        pub fn path_query(&self) -> Result<crate::WasmPathQuery, JsValue> {
+            self.semantic_family()?
+                .own_path_query()
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = pointCount)]
         pub fn point_count(&self) -> Result<u32, JsValue> {
             let family = self.semantic_family()?;
@@ -1288,6 +1330,15 @@ mod wasm {
             let family = self.semantic_family()?;
             noon::MobjectTarget::from(&family)
                 .all_points()
+                .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = vectorBoundaryPoints)]
+        pub fn vector_boundary_points(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .vector_boundary_points()
                 .map(flat_points)
                 .map_err(js_error)
         }
@@ -1998,12 +2049,19 @@ mod wasm {
 
         #[wasm_bindgen(getter, js_name = memberCount)]
         pub fn member_count(&self) -> Result<usize, JsValue> {
+            self.family.member_count().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = memberAt)]
+        pub fn member_at(&self, index: usize) -> Result<JsValue, JsValue> {
             self.family
-                .integration_store()
-                .borrow()
-                .semantic_family_checked(self.family.node_id())
-                .map(|node| node.member_count())
-                .map_err(typed_js_error)
+                .member_at(index)
+                .map(|entry| {
+                    entry
+                        .map(crate::authoring_composite::entry_handle)
+                        .unwrap_or(JsValue::NULL)
+                })
+                .map_err(js_error)
         }
 
         /// Observe authoritative family order when a frontend requests members.
@@ -2307,12 +2365,8 @@ mod wasm {
                 .flat_map(|(x, y)| [x, y])
                 .collect()
         }
-        pub fn anchors(&self) -> Vec<f64> {
-            self.value
-                .anchors()
-                .into_iter()
-                .flat_map(|(x, y)| [x, y])
-                .collect()
+        pub fn anchors(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.anchors().map(flat_points).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = pointFromProportion)]
@@ -2995,14 +3049,14 @@ mod wasm {
         /// Replace raw world-space points through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPoints)]
         pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.set_points(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle.set_points_f64(&points).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = appendPoints)]
         pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.append_points(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle.append_points_f64(&points).map_err(js_error)
         }
 
         /// Replace world-space corners through the shared semantic transaction.

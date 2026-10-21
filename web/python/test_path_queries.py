@@ -1,11 +1,12 @@
 import gc
 import inspect
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import _manim_compat as compat
 import _manim_path_queries as queries
 import _manim_semantic_handles as semantic_handles
-from _typed_geometry_test_support import identity_only_wrapper
+from _typed_geometry_test_support import identity_only_wrapper, empty_path_query
 
 
 def _path_observation(query):
@@ -21,6 +22,39 @@ def _path_observation(query):
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_single_anchor_array_precedes_mutable_stride_validation(self):
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        value = identity_only_wrapper(compat.VMobject)
+        for stride in (4, 0, -2, 3.5, None):
+            value.n_points_per_cubic_curve = stride
+            query = Mock(pointCount=1)
+            query.anchors.return_value = [1.0 + 2.0 ** -40, -2.0]
+            with patch.object(queries, "_query", return_value=query):
+                result = value.get_anchors()
+            self.assertEqual(float(result[0][0]), 1.0 + 2.0 ** -40)
+            if np is not None:
+                self.assertIsInstance(result, np.ndarray)
+            else:
+                self.assertIsInstance(result, list)
+            query.points.assert_not_called()
+            query.anchors.assert_called_once_with()
+            query.free.assert_called_once_with()
+
+    def test_default_anchor_pairing_error_is_engine_owned_and_frees_snapshot(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock(pointCount=2)
+        error = ValueError("zip() argument 2 is shorter than argument 1")
+        query.anchors.side_effect = error
+        with patch.object(queries, "_query", return_value=query):
+            with self.assertRaises(ValueError) as raised:
+                value.get_anchors()
+        self.assertIs(raised.exception, error)
+        query.points.assert_not_called()
+        query.free.assert_called_once_with()
+
     def test_vmobject_point_equality_uses_rust_with_broadcast_arrays_and_tolerance(self):
         value = identity_only_wrapper(compat.VMobject)
         value.tolerance_for_point_equality = 2e-6
@@ -458,7 +492,7 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         first = identity_only_wrapper(compat.VMobject)
         second = identity_only_wrapper(compat.VMobject)
         first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
@@ -483,8 +517,9 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         root = identity_only_wrapper(compat.VGroup)
-        root._semantic_family_handle = object()
+        root._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         nested = identity_only_wrapper(compat.VGroup)
+        nested._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         first = identity_only_wrapper(compat.VMobject)
         second = identity_only_wrapper(compat.VMobject)
         first.get_anchors = Mock(return_value=[noon.Vec2(0, 0), noon.Vec2(2, 0)])
@@ -507,7 +542,7 @@ class PathQueryTests(unittest.TestCase):
             self.skipTest("NumPy-only empty array shape check")
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         group.get_family = Mock(return_value=[group])
 
         boundary = group.get_points_defining_boundary()
@@ -520,7 +555,7 @@ class PathQueryTests(unittest.TestCase):
         import noon
 
         group = identity_only_wrapper(compat.VGroup)
-        group._semantic_family_handle = object()
+        group._semantic_family_handle = SimpleNamespace(pathQuery=empty_path_query)
         member = identity_only_wrapper(compat.VMobject)
         member.get_anchors = Mock(return_value=[noon.Vec2(1, 2), noon.Vec2(3, 4)])
         group.get_family = Mock(return_value=[group, member])

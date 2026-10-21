@@ -91,16 +91,54 @@ impl SemanticExecutionReachabilityUpdate {
 #[derive(Default)]
 struct ReachabilityJournal {
     originals: HashMap<SemanticNodeId, Option<ReachabilityNode>>,
+    // Content capability changes journal one bit without copying membership/alias sets.
+    object_flags: HashMap<SemanticNodeId, bool>,
     order: Vec<SemanticNodeId>,
 }
 
 impl ReachabilityJournal {
+    fn record_object(
+        &mut self,
+        nodes: &HashMap<SemanticNodeId, ReachabilityNode>,
+        id: SemanticNodeId,
+    ) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.object_flags.entry(id) {
+            entry.insert(nodes[&id].object);
+            if !self.originals.contains_key(&id) {
+                self.order.push(id);
+            }
+        }
+    }
+
+    fn previous_node<'a>(
+        &'a self,
+        nodes: &'a HashMap<SemanticNodeId, ReachabilityNode>,
+        id: SemanticNodeId,
+    ) -> Option<&'a ReachabilityNode> {
+        match self.originals.get(&id) {
+            Some(original) => original.as_ref(),
+            None => nodes.get(&id),
+        }
+    }
+
+    fn was_reachable_object(
+        &self,
+        nodes: &HashMap<SemanticNodeId, ReachabilityNode>,
+        id: SemanticNodeId,
+    ) -> bool {
+        self.previous_node(nodes, id).is_some_and(|node| {
+            node.is_reachable() && self.object_flags.get(&id).copied().unwrap_or(node.object)
+        })
+    }
+
     fn record(&mut self, nodes: &HashMap<SemanticNodeId, ReachabilityNode>, id: SemanticNodeId) {
         if self.originals.contains_key(&id) {
             return;
         }
         self.originals.insert(id, nodes.get(&id).cloned());
-        self.order.push(id);
+        if !self.object_flags.contains_key(&id) {
+            self.order.push(id);
+        }
     }
 }
 
@@ -235,6 +273,19 @@ impl SemanticExecutionReachability {
                 SemanticMutationImpact::NodeRemoved { node } => {
                     self.remove_node(node, &mut journal);
                 }
+                SemanticMutationImpact::ObjectContent { object } => {
+                    let owns_content = store
+                        .node(object)
+                        .is_some_and(|node| node.semantic_object_state().is_some());
+                    if self
+                        .nodes
+                        .get(&object)
+                        .is_some_and(|node| node.object != owns_content)
+                    {
+                        journal.record_object(&self.nodes, object);
+                        self.nodes.get_mut(&object).expect("tracked object").object = owns_content;
+                    }
+                }
                 SemanticMutationImpact::EffectAttachment { .. }
                 | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
@@ -245,7 +296,6 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::SpatialAnchorChanged { .. }
                 | SemanticMutationImpact::CameraProfile { .. }
                 | SemanticMutationImpact::CameraMotions { .. }
-                | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
                 | SemanticMutationImpact::ClickIndicate { .. }
@@ -256,6 +306,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::FamilyStyle { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
+                | SemanticMutationImpact::DrawEnabled { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
@@ -304,11 +355,7 @@ impl SemanticExecutionReachability {
 
         let mut update = SemanticExecutionReachabilityUpdate::default();
         for id in &journal.order {
-            let before = journal
-                .originals
-                .get(id)
-                .and_then(Option::as_ref)
-                .is_some_and(ReachabilityNode::is_reachable_object);
+            let before = journal.was_reachable_object(&self.nodes, *id);
             let after = self
                 .nodes
                 .get(id)
@@ -319,9 +366,7 @@ impl SemanticExecutionReachability {
                 _ => {}
             }
             let graph_before = journal
-                .originals
-                .get(id)
-                .and_then(Option::as_ref)
+                .previous_node(&self.nodes, *id)
                 .is_some_and(|node| node.graph_root && node.is_reachable());
             let graph_after = self
                 .nodes
@@ -342,11 +387,7 @@ impl SemanticExecutionReachability {
         journal: &ReachabilityJournal,
     ) -> Result<(), SemanticLoweringError> {
         for id in &journal.order {
-            let before = journal
-                .originals
-                .get(id)
-                .and_then(Option::as_ref)
-                .is_some_and(ReachabilityNode::is_reachable_object);
+            let before = journal.was_reachable_object(&self.nodes, *id);
             let after = self
                 .nodes
                 .get(id)
@@ -367,16 +408,19 @@ impl SemanticExecutionReachability {
 
     fn rollback(&mut self, mut journal: ReachabilityJournal) {
         for id in journal.order.into_iter().rev() {
-            match journal
-                .originals
-                .remove(&id)
-                .expect("journal order and original map stay coherent")
-            {
-                Some(node) => {
-                    self.nodes.insert(id, node);
+            if let Some(original) = journal.originals.remove(&id) {
+                match original {
+                    Some(node) => {
+                        self.nodes.insert(id, node);
+                    }
+                    None => {
+                        self.nodes.remove(&id);
+                    }
                 }
-                None => {
-                    self.nodes.remove(&id);
+            }
+            if let Some(object) = journal.object_flags.remove(&id) {
+                if let Some(node) = self.nodes.get_mut(&id) {
+                    node.object = object;
                 }
             }
         }
@@ -401,7 +445,7 @@ impl SemanticExecutionReachability {
         ))?;
         let object = match node.kind() {
             SemanticNodeKind::AuthoringObject => true,
-            SemanticNodeKind::Family(_) => false,
+            SemanticNodeKind::Family(_) => node.semantic_object_state().is_some(),
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
             | SemanticNodeKind::Effect(_) => return Ok(false),
@@ -655,6 +699,53 @@ mod tests {
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
+    }
+
+    #[test]
+    fn drawing_root_content_journals_only_capability_and_preserves_membership_storage() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        for _ in 0..512 {
+            let child = store.insert_semantic_object(circle(0.1));
+            store.add_member(family, child).unwrap();
+        }
+        store.attach_to_scene(family).unwrap();
+        let mut reachability = SemanticExecutionReachability::from_store(&store).unwrap();
+        let members_capacity = reachability.nodes[&family].members.capacity();
+        let mut journal = ReachabilityJournal::default();
+        journal.record_object(&reachability.nodes, family);
+        reachability.nodes.get_mut(&family).unwrap().object = true;
+        assert!(journal.originals.is_empty());
+        assert_eq!(journal.order, vec![family]);
+        assert!(!journal.was_reachable_object(&reachability.nodes, family));
+        // Upgrading to a structural journal later in the same batch still
+        // restores the original capability on rollback, in either order.
+        reachability.record_touch(&mut journal, family);
+        reachability.rollback(journal);
+        assert!(!reachability.nodes[&family].object);
+        assert_eq!(
+            reachability.nodes[&family].members.capacity(),
+            members_capacity
+        );
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(family, StoredGeometry::Circle { radius: 1.0 });
+        let result = transaction.apply(&mut store).unwrap();
+        let update = reachability
+            .apply_transaction_result(&store, &result)
+            .unwrap();
+        assert_eq!(update.entered_objects(), &[family]);
+        assert_eq!(
+            reachability.nodes[&family].members.capacity(),
+            members_capacity
+        );
+        assert_eq!(reachability.nodes[&family].members.len(), 512);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(family, StoredGeometry::Circle { radius: 2.0 });
+        let result = transaction.apply(&mut store).unwrap();
+        assert!(reachability
+            .apply_transaction_result(&store, &result)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -9,12 +9,14 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import pngjs from "pngjs";
 import {
+  authoredCameraReference,
   browserArgs,
   compareEffective3DCamera,
   compareEffectiveInsetCameras,
   dominantImageRgba,
   directStaticObservation,
   rasterFixtureSource,
+  rasterReferenceEnvironment,
   resolveRasterReferenceSamples,
   selectDirectReplayCapture,
 } from "./manim-raster-support.mjs";
@@ -29,22 +31,31 @@ const repoRoot = path.resolve(scriptDir, "..");
 const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
+const referenceEnvironment = rasterReferenceEnvironment(reference);
 const referenceFontPaths = JSON.parse(process.env.NOON_MANIM_REFERENCE_FONTS ?? "[]");
+const fontconfigFile = referenceEnvironment.FONTCONFIG_FILE;
+const referenceFontconfig = fontconfigFile ? {
+  path: path.resolve(fontconfigFile),
+  sha256: createHash("sha256").update(await readFile(fontconfigFile)).digest("hex"),
+} : null;
 assert.ok(Array.isArray(referenceFontPaths) && referenceFontPaths.every(value => typeof value === "string"),
   "NOON_MANIM_REFERENCE_FONTS must be a JSON array of font paths");
 // These are the explicit family used by the Text fixtures and Pango's generic
 // family selected by the MarkupText fixture's <tt> run.
-const referenceFontFamilies = ["DejaVu Sans Mono", "monospace"];
+const referenceFontFamilies = [...new Set([
+  "DejaVu Sans Mono", "monospace", ...(reference.text_font ? [reference.text_font] : []),
+])];
 const referenceFonts = await Promise.all([
   ...referenceFontFamilies.map(async requestedFamily => {
     const result = spawnSync("fc-match", [
       "--format", "%{family[0]}\n%{style[0]}\n%{file}\n%{index}\n", requestedFamily,
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", env: referenceEnvironment });
     assert.equal(result.status, 0, `fc-match failed for ${requestedFamily}: ${result.stderr ?? ""}`);
     const [resolvedFamily, style, font, index] = result.stdout.trimEnd().split("\n");
     assert.ok(resolvedFamily && style && font && index !== undefined,
       `fc-match returned incomplete metadata for ${requestedFamily}`);
     return {
+      source: "fontconfig-probe",
       requestedFamily,
       resolvedFamily,
       style,
@@ -54,6 +65,7 @@ const referenceFonts = await Promise.all([
     };
   }),
   ...referenceFontPaths.map(async font => ({
+    source: "registered-reference-font",
     path: path.resolve(font),
     sha256: createHash("sha256").update(await readFile(font)).digest("hex"),
   })),
@@ -114,6 +126,7 @@ await mkdir(artifactRoot, { recursive: true });
 function runChecked(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
+    env: referenceEnvironment,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...options,
@@ -454,7 +467,7 @@ async function renderManimReferences() {
         }
       }
       const outputPath = path.join(frameDir, `${sample.label}.png`);
-      const image = sample.referenceKind === "terminal"
+      let image = sample.referenceKind === "terminal"
         ? await readFile(semanticFixture.terminal_png.path)
         : await readFile(frameFiles[sample.frameIndex]);
       if (sample.referenceKind === "terminal") {
@@ -462,6 +475,16 @@ async function renderManimReferences() {
           semanticFixture.terminal_png.sha256, `${fixture.id}: terminal Cairo PNG provenance`);
         assert.ok(Math.abs(semanticFixture.terminal_png.authored_time - logicalDuration) <= 1e-9,
           `${fixture.id}: terminal Cairo PNG time`);
+      }
+      const authoredCamera = authoredCameraReference(fixture, sample, semanticFixture);
+      if (authoredCamera) {
+        sample.sampledManimReferencePath = path.join(frameDir, `${sample.label}-sampled-manim.png`);
+        await writeFile(sample.sampledManimReferencePath, image);
+        sample.sampledManimCamera3dOracle = sample.camera3dOracle;
+        sample.camera3dOracle = authoredCamera.camera_3d;
+        image = await readFile(authoredCamera.path);
+        assert.equal(createHash("sha256").update(image).digest("hex"), authoredCamera.sha256,
+          `${fixture.id}: authored checkpoint Cairo PNG provenance`);
       }
       if (fixture.id.startsWith("spatial-camera-labels-")) {
         assertSpatialCameraHudPixels(image, `${fixture.id} Manim reference at ${sample.time}`);
@@ -848,6 +871,7 @@ function bboxDelta(referenceStats, actualStats) {
 async function compareAll(references, backendResults) {
   const report = {
     referenceFonts,
+    referenceFontconfig,
     reference,
     enforce,
     generatedAt: new Date().toISOString(),
@@ -880,6 +904,25 @@ async function compareAll(references, backendResults) {
         let cameraProfileObservation = null;
         let insetCameraObservation = null;
         let semanticObservationError = null;
+        let sampledManimObservation = null;
+        if (capture.sampledManimReferencePath) {
+          const original = await readFile(capture.sampledManimReferencePath);
+          const originalDiff = comparePng(original, actualBuffer);
+          let cameraComparison;
+          try {
+            cameraComparison = { pass: true, ...compareEffective3DCamera(
+              capture.debugFrame, capture.sampledManimCamera3dOracle) };
+          } catch (error) {
+            cameraComparison = { pass: false, error: error.message };
+          }
+          sampledManimObservation = {
+            referencePath: capture.sampledManimReferencePath,
+            referenceSha256: createHash("sha256").update(original).digest("hex"),
+            camera3d: capture.sampledManimCamera3dOracle, cameraComparison,
+            differingRatio: originalDiff.differingRatio,
+            meanAbsoluteChannelError: originalDiff.meanAbsoluteChannelError,
+          };
+        }
         try {
           if (fixture.id.startsWith("vector-space-lts-")) {
             const oracle = capture.vectorOracle;
@@ -936,6 +979,7 @@ async function compareAll(references, backendResults) {
           noon: noonStats,
           debugFrame: capture.debugFrame,
           effectiveCameraProfile: cameraProfileObservation,
+          ...(sampledManimObservation ? { sampledManimObservation } : {}),
           ...(fixture.inset_camera_observation === true
             ? { effectiveInsetCameras: insetCameraObservation } : {}),
           semanticObservationError,
@@ -972,6 +1016,11 @@ async function compareAll(references, backendResults) {
     report.fixtures.push({
       id: fixture.id,
       scene: fixture.scene,
+      comparisonTarget: fixture.authored_camera_checkpoints
+        ? "explicit-authored-camera-checkpoints"
+        : reference.text_font ? "explicit-font-manim" : "original-manim",
+      ...(fixture.authored_camera_checkpoints
+        ? { authoredCameraCheckpoints: fixture.authored_camera_checkpoints } : {}),
       expectedDuration: fixture.expected_duration,
       manim: referenceResult.frames,
       backends: backendEntries,

@@ -189,6 +189,21 @@ impl LayoutAnchor {
         authored_layout(&self.store, self.resolve()?)
     }
 
+    /// Measure content extents without requiring valid vector anchors.
+    pub(crate) fn dimension_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(self.resolve()?)
+            .map_err(AuthoringError::from)?;
+        let mut bounds = None;
+        for leaf in leaves {
+            let object = Mobject::from_node(Rc::clone(&self.store), leaf)?;
+            union_bounds(&mut bounds, object.content_layout_bounds()?);
+        }
+        Ok(bounds)
+    }
+
     /// Move this entire source using another object's/family member's bounds.
     pub fn next_to_aligned(
         &self,

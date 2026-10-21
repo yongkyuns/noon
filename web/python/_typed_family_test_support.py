@@ -56,7 +56,8 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
         self.members = staged
         return changed
 
-    def create(batch, z_index):
+    def create(batch, z_index, draw_enabled):
+        assert isinstance(draw_enabled, bool)
         assert z_index == 0, "this identity fixture only models default constructor inputs"
         assert batch.kind == "add"
         family = factory()
@@ -99,5 +100,6 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
     family_class.copyFamily = lambda self, references: FakeFamilyCopy(self, references)
     family_class.editMembership = edit
     family_class.memberKeys = lambda self: [_key(identity) for identity in self.members]
+    family_class.memberAt = lambda self, index: registry[self.members[index]] if index < len(self.members) else None
     setattr(target, "noonCreateAuthoringFamilyHandle" if js else "_create_family_handle", create)
     setattr(target, "noonAuthoringMembershipBatch" if js else "_new_membership_batch", FakeMembershipBatch)

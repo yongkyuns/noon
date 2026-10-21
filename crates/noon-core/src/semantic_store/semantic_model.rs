@@ -337,9 +337,9 @@ impl SemanticStyle {
 
     /// Default paint profile owned by a Manim VMobject family root.
     ///
-    /// The root itself is not a rendered family leaf, but Manim stores a full
-    /// vector style there and exposes it through VMobject getters and
-    /// `family=False` mutations. Stroke widths are stored in scene units, where
+    /// Unrendered roots retain a full vector style, exposed through VMobject
+    /// getters and `family=False` mutations. Materializing root content moves
+    /// that style into its ordinary object payload. Stroke widths use scene units, where
     /// the compatibility layer maps Manim's four-pixel default to `0.04`.
     pub fn manim_family_root(color: crate::Color) -> Self {
         Self {
@@ -394,36 +394,83 @@ fn default_semantic_opacity() -> f64 {
 }
 
 /// Painter metadata is independent from transform hierarchy and style.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SemanticPresentation {
+    /// Drawing eligibility is independent from authored paint and query geometry.
+    #[serde(
+        default = "default_draw_enabled",
+        skip_serializing_if = "is_draw_enabled_default"
+    )]
+    pub draw_enabled: bool,
     pub z_index: f64,
     /// Stable insertion/painter tie-break assigned by the semantic store.
     pub insertion_order: u64,
 }
 
-/// Authored state on a non-rendered family root, independent of its leaves.
+fn default_draw_enabled() -> bool {
+    true
+}
+fn is_draw_enabled_default(value: &bool) -> bool {
+    *value
+}
+
+impl Default for SemanticPresentation {
+    fn default() -> Self {
+        Self {
+            draw_enabled: true,
+            z_index: 0.0,
+            insertion_order: 0,
+        }
+    }
+}
+
+/// Family identity remains stable when its root acquires ordinary content.
+/// Unrendered roots retain only their paint/painter state; after materialization
+/// the node's normal `SemanticObjectState` is the sole payload/style authority.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SemanticFamilyState {
+#[allow(clippy::large_enum_variant)] // Keep the common unrendered family allocation-free.
+pub enum SemanticFamilyState {
+    Unrendered(SemanticFamilyPresentation),
+    ContentOwning { fallback_color: crate::Color },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticFamilyPresentation {
     pub presentation: SemanticPresentation,
     pub own_color: crate::Color,
     pub own_style: SemanticStyle,
-    /// Background-stroke paint retained on the non-rendered family root.
-    pub own_background_stroke_color: crate::Color,
-    pub own_background_stroke_width: f64,
-    pub own_background_stroke_opacity: f64,
     pub own_sheen_direction: SemanticSheenDirection,
 }
+
 impl Default for SemanticFamilyState {
+    fn default() -> Self {
+        Self::Unrendered(SemanticFamilyPresentation::default())
+    }
+}
+
+impl Default for SemanticFamilyPresentation {
     fn default() -> Self {
         Self {
             presentation: SemanticPresentation::default(),
             own_color: crate::Color::WHITE,
             own_style: SemanticStyle::manim_family_root(crate::Color::WHITE),
-            own_background_stroke_color: crate::Color::BLACK,
-            own_background_stroke_width: 0.0,
-            own_background_stroke_opacity: 1.0,
             own_sheen_direction: SemanticSheenDirection::DEFAULT,
         }
+    }
+}
+
+impl SemanticFamilyPresentation {
+    pub(crate) fn with_content(
+        &self,
+        content: super::SemanticObjectContent,
+    ) -> super::SemanticObjectState {
+        let mut state = super::SemanticObjectState::new(content);
+        state.style = self.own_style.clone();
+        state.sheen_direction = self.own_sheen_direction;
+        state.set_draw_enabled(self.presentation.draw_enabled);
+        state.set_z_index(self.presentation.z_index);
+        state.assign_insertion_order(self.presentation.insertion_order);
+        state
     }
 }
 
@@ -730,11 +777,13 @@ mod tests {
     fn painter_key_uses_z_then_stable_insertion_order() {
         assert!(
             SemanticPresentation {
+                draw_enabled: true,
                 z_index: 2.0,
                 insertion_order: 0,
             }
             .order_key()
                 > SemanticPresentation {
+                    draw_enabled: true,
                     z_index: 1.0,
                     insertion_order: 100,
                 }

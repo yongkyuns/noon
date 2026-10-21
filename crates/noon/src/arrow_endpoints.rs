@@ -95,7 +95,7 @@ impl Mobject {
         direction: (f64, f64),
     ) -> Result<(f64, f64), AuthoringError> {
         let direction = checked_point("boundary direction", direction.0, direction.1)?;
-        let anchors = self.path_query()?.anchors();
+        let anchors = self.path_query()?.anchors()?;
         let Some(mut best) = anchors.first().copied() else {
             return Err(AuthoringError::PathQuery(PathProportionError::EmptyPath));
         };

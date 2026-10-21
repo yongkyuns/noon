@@ -3,10 +3,12 @@
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -194,6 +196,155 @@ class RasterManifestTests(unittest.TestCase):
             self.assertEqual(len(module._scene_state(scene, 3, 0.8, 0.8)["inset_2d_views"]), 1)
             scene.remove(scene.zoomed_display)
             self.assertEqual(module._scene_state(scene, 4, 1.0, 1.0)["inset_2d_views"], [])
+
+    def test_authored_camera_projection_keeps_original_frames_clock_and_endpoint(self):
+        from manim import Circle, ThreeDScene, tempconfig
+
+        spec = importlib.util.spec_from_file_location("authored_camera_reference_test", ORACLE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class CheckpointCamera(ThreeDScene):
+            def construct(self):
+                self.set_camera_orientation(phi=0.7, theta=0.2)
+                self.add(Circle())
+                self.begin_ambient_camera_rotation(rate=0.1)
+                self.wait(0.1)
+                self.stop_ambient_camera_rotation()
+                self.wait(0.1)
+
+        fixture = {"id": "checkpoint-camera", "scene": "CheckpointCamera",
+                   "expected_duration": 0.2, "sample_times": [0, 1 / 30, 0.1, 0.15, 0.2],
+                   "camera_profile_observation": True}
+        with tempfile.TemporaryDirectory() as directory, tempconfig({
+            "pixel_width": 160, "pixel_height": 90, "frame_rate": 30,
+            "media_dir": directory, "progress_bar": "none", "disable_caching": True,
+        }):
+            root = Path(directory)
+            scenes = SimpleNamespace(CheckpointCamera=CheckpointCamera)
+            original = module._render_fixture(scenes, fixture, 30, root / "original")
+            controlled_fixture = {**fixture, "authored_camera_checkpoints": [
+                {"time": time, "phi": 0.7, "theta": 0.4} for time in fixture["sample_times"]
+            ]}
+            controlled = module._render_fixture(scenes, controlled_fixture, 30, root / "controlled")
+            for field in ("frames", "frozen_intervals", "terminal_state", "logical_duration"):
+                self.assertEqual(controlled[field], original[field], field)
+            self.assertEqual(Path(controlled["terminal_png"]["path"]).read_bytes(),
+                             Path(original["terminal_png"]["path"]).read_bytes())
+            samples = controlled["authored_camera_samples"]
+            self.assertEqual([row["time"] for row in samples], fixture["sample_times"])
+            self.assertEqual(samples[3]["sampled_time"], 0.1)
+            for sample in samples:
+                self.assertEqual(sample["camera_3d"]["theta"], 0.4)
+                self.assertNotEqual(sample["sampled_manim_camera_3d"]["theta"], 0.4)
+                self.assertTrue(Path(sample["path"]).is_file())
+            self.assertNotEqual(samples[-1]["sha256"], controlled["terminal_png"]["sha256"])
+
+    def test_authored_camera_configuration_fails_closed(self):
+        spec = importlib.util.spec_from_file_location("authored_camera_validation_test", ORACLE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fixture = {"sample_times": [0, 1], "expected_duration": 1,
+                   "camera_profile_observation": True, "authored_camera_checkpoints": [
+                       {"time": 0, "phi": 0.7, "theta": 0.2},
+                       {"time": 1, "phi": 0.7, "theta": 0.3}]}
+        self.assertEqual(module._camera_checkpoints(fixture), fixture["authored_camera_checkpoints"])
+        for change in [[], [{"time": 0, "phi": 0.7, "theta": 0.2}],
+                       [{"time": 0, "phi": float("nan"), "theta": 0.2}],
+                       [{"time": True, "phi": 0.7, "theta": 0.2}],
+                       [{"time": 0, "phi": 0.7, "theta": 0.2, "zoom": 2}]]:
+            with self.subTest(checkpoints=change), self.assertRaises(ValueError):
+                module._camera_checkpoints({**fixture, "authored_camera_checkpoints": change})
+
+    def test_failed_authored_capture_restores_the_original_camera(self):
+        from manim import Circle, ThreeDScene, tempconfig
+
+        spec = importlib.util.spec_from_file_location("authored_camera_failure_test", ORACLE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory, tempconfig({
+            "pixel_width": 160, "pixel_height": 90, "media_dir": directory,
+        }):
+            renderer = module.SemanticRenderer(camera_class=module.ThreeDCamera,
+                camera_checkpoints=[{"time": 0, "phi": 0.7, "theta": 0.4}],
+                checkpoint_root=Path(directory))
+            scene = ThreeDScene(renderer=renderer)
+            scene.add(Circle())
+            before = module._three_d_camera_state(scene.camera)
+            with mock.patch.object(scene.camera, "get_image", side_effect=RuntimeError("capture failed")):
+                with self.assertRaisesRegex(RuntimeError, "capture failed"):
+                    renderer.capture_camera_checkpoints(scene, 0)
+            self.assertEqual(module._three_d_camera_state(scene.camera), before)
+            self.assertEqual(renderer.authored_camera_samples, [])
+
+    def test_real_reference_font_default_preserves_explicit_object_fonts(self):
+        import manimpango
+
+        fonts = sorted(manimpango.list_fonts())
+        self.assertGreaterEqual(len(fonts), 2)
+        selected = "DejaVu Sans Mono" if "DejaVu Sans Mono" in fonts else fonts[0]
+        explicit = next(font for font in fonts if font != selected)
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "font-default.py"
+            script.write_text(
+                "import json\nfrom manim import Text, MarkupText, tempconfig\n"
+                f"with tempconfig({{'media_dir': {directory!r}}}):\n"
+                "    text = Text('abc')\n    markup = MarkupText('abc')\n"
+                f"    explicit = Text('abc', font={explicit!r})\n"
+                "    print(json.dumps([text.font, markup.font, explicit.font]))\n"
+            )
+            result = subprocess.run(
+                [sys.executable, str(ORACLE.with_name("manim-reference-run.py")), str(script)],
+                env={**os.environ, "NOON_MANIM_REFERENCE_TEXT_FONT": selected},
+                text=True, capture_output=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]),
+                             [selected, selected, explicit])
+
+    def test_mobject_table_top_left_entry_fixture_is_enrolled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        matches = [
+            fixture for fixture in manifest["fixtures"]
+            if fixture["id"] == "mobject-table-top-left-entry"
+        ]
+        self.assertEqual(len(matches), 1)
+        fixture = matches[0]
+        self.assertEqual(fixture["scene"], "MobjectTableTopLeftEntryExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertNotIn("raster_tolerance", fixture)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        self.assertIn("top_left_entry=Circle(radius=0.25)", source)
+        self.assertIn("row_labels=[", source)
+        self.assertIn("col_labels=[", source)
+
+    def test_plain_table_labels_fixture_is_enrolled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        matches = [fixture for fixture in manifest["fixtures"] if fixture["id"] == "table-labels"]
+        self.assertEqual(len(matches), 1)
+        fixture = matches[0]
+        self.assertEqual(fixture["scene"], "TableLabelsExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertEqual(fixture["noon_source"], "web/python/examples/table_labels.py")
+        self.assertNotIn("raster_tolerance", fixture)
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        self.assertIn("table = Table(", source)
+        self.assertIn("row_labels=row_labels", source)
+        self.assertIn("col_labels=column_labels", source)
+        self.assertIn("top_left_entry=top_left_entry", source)
+
+    def test_decimal_table_format_fixture_has_pinned_and_noon_sources(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixture = next(item for item in manifest["fixtures"] if item["id"] == "decimal-table-format")
+        self.assertEqual(fixture["scene"], "DecimalTableFormatExample")
+        self.assertEqual(fixture["expected_duration"], 0.2)
+        self.assertTrue(fixture["requires_latex"])
+        source = (ROOT / fixture["source"]).read_text(encoding="utf-8")
+        noon_source = (ROOT / fixture["noon_source"]).read_text(encoding="utf-8")
+        for text in (source, noon_source):
+            self.assertIn("num_decimal_places", text)
+            self.assertIn("include_sign", text)
+            self.assertIn("group_with_commas", text)
 
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

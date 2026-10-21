@@ -50,6 +50,8 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringVectorPath",
   "proportionFromPointForRanges(",
   "queryMobjectPointCount(",
+  "vectorBoundaryPoints(",
+  "queryFamilyVectorBoundaryPoints(",
   "get pointCount()",
   "createManimGeometry(",
   "beginUnderline(",
@@ -98,6 +100,7 @@ const expectedJavascriptSurface = [
   "liveAddLineToWithSamples(",
   "export class WasmMobjectLayoutObservation",
   "queryMobjectLayout(",
+  "queryMobjectDimension(",
   "queryMobjectPointReductionTree(",
   "wasmauthoringmobjecthandle_pointReductionTree(",
   "resumeExecutionPlayer(",
@@ -312,6 +315,7 @@ const expectedTypeSurface = [
   "liveAlignFamilyToMobject(",
   "liveAlignFamilyToFamily(",
   "queryMobjectLayout(handle: WasmAuthoringMobjectHandle): WasmMobjectLayoutObservation",
+  "queryMobjectDimension(handle: WasmAuthoringMobjectHandle, dimension: number): number",
   "queryMobjectPointReductionTree(handle: WasmAuthoringMobjectHandle): Array<any>",
   "manimLineEndpoints(): WasmManimLineEndpoints",
   "manimColor(): WasmManimColor",
@@ -439,14 +443,19 @@ const expectedTypeSurface = [
   "localPathQuery(): WasmPathQuery",
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
   "queryMobjectPointCount(handle: WasmAuthoringMobjectHandle): number",
+  "liveSetFamilyPoints(source: WasmAuthoringFamilyHandle, values: Float64Array): void",
+  "alignPathPoints(other: WasmLayoutAnchor): void",
+  "liveAlignRootPoints(left: WasmLayoutAnchor, right: WasmLayoutAnchor): void",
+  "liveClearFamilyPoints(source: WasmAuthoringFamilyHandle): void",
+  "queryFamilyVectorBoundaryPoints(handle: WasmAuthoringFamilyHandle): Float64Array",
   "pointFromProportion(alpha: number): Float64Array",
   "proportionFromPointForRanges(ranges: Uint32Array, x: number, y: number, z: number): number | undefined",
   "liveCopyFamily(source: WasmAuthoringFamilyHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
   "mobjectFor(source: WasmAuthoringMobjectHandle): WasmAuthoringMobjectHandle",
   "familyFor(source: WasmAuthoringFamilyHandle): WasmAuthoringFamilyHandle",
-  "createFamily(batch: WasmSceneMembershipBatch, z_index: number): WasmAuthoringFamilyHandle",
+  "createFamily(batch: WasmSceneMembershipBatch, z_index: number, draw_enabled?: boolean | null): WasmAuthoringFamilyHandle",
   "editMembership(batch: WasmSceneMembershipBatch): Uint8Array",
-  "liveCreateFamily(batch: WasmSceneMembershipBatch, z_index: number): WasmAuthoringFamilyHandle",
+  "liveCreateFamily(batch: WasmSceneMembershipBatch, z_index: number, draw_enabled?: boolean | null): WasmAuthoringFamilyHandle",
   "liveEditFamilyMembership(handle: WasmAuthoringFamilyHandle, batch: WasmSceneMembershipBatch): Uint8Array",
   "arrange(options: WasmFamilyArrangeOptions): void",
   "shiftBy(delta_x: number, delta_y: number): void",
@@ -537,6 +546,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectCircleSurroundSmokeRenderer(",
     "export function createDirectFamilyAffineSmokeRenderer(",
     "export function createDirectFamilyPaintSmokeRenderer(",
+    "export function createDirectFamilyRootPointsSmokeRenderer(",
     "export function createDirectPlanarAffineSmokeRenderer(",
     "export function createDirectArcGeometrySmokeRenderer(",
     "export function createDirectTextSourcePartsSmokeRenderer(",
@@ -623,6 +633,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectCircleSurroundSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyRootPointsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectPlanarAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectArcGeometrySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectTextSourcePartsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -696,6 +707,9 @@ function classDeclaration(name) {
   return declarations.slice(start, next < 0 ? undefined : next);
 }
 const geometryOptionsDeclaration = classDeclaration("WasmManimGeometryOptions");
+if (!classDeclaration("WasmAuthoringFamilyHandle").includes("vectorBoundaryPoints(): Float64Array;")) {
+  throw new Error("WASM family declaration is missing its shared vector-boundary observation");
+}
 if (!classDeclaration("WasmAuthoringMobjectHandle").includes("readonly pointCount: number;")) {
   throw new Error("WASM Mobject declaration is missing its own-point scalar observation");
 }

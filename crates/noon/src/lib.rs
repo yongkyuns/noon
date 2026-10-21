@@ -94,6 +94,7 @@ pub mod effects {
         EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
     };
 }
+mod drawing;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
@@ -110,12 +111,15 @@ mod family_grid;
 mod family_layout;
 #[cfg(test)]
 mod family_layout_migration_tests;
+mod family_points;
+mod family_queries;
 mod family_style;
 #[cfg(test)]
 mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
+mod integer_index;
 mod polygon_authoring;
 pub mod polygon_example;
 mod spatial_authoring;
@@ -250,6 +254,7 @@ pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
 pub use inspection_view::{InspectionView2D, InspectionViewError};
+pub use integer_index::IntegerIndex;
 #[cfg(feature = "latex")]
 pub use latex_authoring::{
     DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
@@ -341,8 +346,9 @@ pub use svg_default_style::SvgDefaultStyle;
 pub use table_display::{DecimalTable, IntegerTable, MathTable};
 #[cfg(any(feature = "native-text", feature = "latex"))]
 pub use table_display::{
-    MobjectTable, Table, TableAuthoringError, TableOptions, DEFAULT_TABLE_H_BUFF,
-    DEFAULT_TABLE_LABEL_BUFF, DEFAULT_TABLE_V_BUFF,
+    MobjectTable, Table, TableAuthoringError, TableCellColumns, TableCellRows, TableEntry,
+    TableEntrySelection, TableOptions, DEFAULT_TABLE_H_BUFF, DEFAULT_TABLE_LABEL_BUFF,
+    DEFAULT_TABLE_V_BUFF,
 };
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;

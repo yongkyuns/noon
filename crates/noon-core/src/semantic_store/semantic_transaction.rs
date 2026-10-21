@@ -17,10 +17,11 @@ use crate::{
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
-    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle, SemanticTableLayout,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency, SemanticTransform,
-    SemanticTransformInterpolation, SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration,
-    SemanticVec3, StoredGeometry, TextPresentationBaseline, VectorPath,
+    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticTransactionTableLayout, SemanticTransform, SemanticTransformInterpolation,
+    SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
+    TextPresentationBaseline, VectorPath,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -152,6 +153,10 @@ pub enum SemanticMutation {
         node: SemanticTransactionNodeRef,
         value: f64,
     },
+    SetDrawEnabled {
+        node: SemanticTransactionNodeRef,
+        enabled: bool,
+    },
     SetFamilyColor {
         node: SemanticTransactionNodeRef,
         color: crate::Color,
@@ -218,7 +223,7 @@ pub enum SemanticMutation {
     },
     SetTableLayout {
         scope: SemanticTransactionNodeRef,
-        layout: SemanticTableLayout,
+        layout: SemanticTransactionTableLayout,
     },
     AddMember {
         family: SemanticTransactionNodeRef,
@@ -257,6 +262,7 @@ impl SemanticMutation {
             | Self::SetSheenDirection { node: object, .. }
             | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
+            | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
@@ -295,7 +301,9 @@ impl SemanticMutation {
             Self::SetGraphDeclaration { scope, graph } => std::iter::once(*scope)
                 .chain(graph.node_references())
                 .collect(),
-            Self::SetTableLayout { scope, .. } => vec![*scope],
+            Self::SetTableLayout { scope, layout } => std::iter::once(*scope)
+                .chain(layout.node_references())
+                .collect(),
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -345,6 +353,7 @@ impl SemanticMutation {
             | Self::SetSheenDirection { node: object, .. }
             | Self::SetUpdatingSuspended { node: object, .. }
             | Self::SetZIndex { node: object, .. }
+            | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetClickIndicate { object, .. }
@@ -424,6 +433,7 @@ impl SemanticMutation {
                 Some(SemanticMutationKey::UpdaterSuspension(*node))
             }
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
+            Self::SetDrawEnabled { node, .. } => Some(SemanticMutationKey::DrawEnabled(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
                 object, property, ..
@@ -483,6 +493,7 @@ pub(super) enum SemanticMutationKey {
     SheenDirection(SemanticTransactionNodeRef),
     UpdaterSuspension(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
+    DrawEnabled(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
@@ -526,6 +537,9 @@ pub enum SemanticMutationImpact {
         node: SemanticNodeId,
     },
     ZIndex {
+        node: SemanticNodeId,
+    },
+    DrawEnabled {
         node: SemanticNodeId,
     },
     SignalValue {
@@ -646,6 +660,7 @@ pub(super) struct SemanticTransactionPreflight {
     staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
     staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
+    staged_drawing: HashMap<SemanticTransactionNodeRef, bool>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
     /// Final constructor fields for transaction-only retained paths. This is a
@@ -1166,6 +1181,19 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Change root draw eligibility without changing paint, geometry or membership.
+    pub fn set_draw_enabled(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetDrawEnabled {
+            node: node.into(),
+            enabled,
+        });
+        self
+    }
+
     /// Change the authored signal driver for one object property.
     pub fn change_subscription(
         &mut self,
@@ -1323,11 +1351,11 @@ impl SemanticMutationTransaction {
     pub fn set_table_layout(
         &mut self,
         scope: impl Into<SemanticTransactionNodeRef>,
-        layout: SemanticTableLayout,
+        layout: impl Into<SemanticTransactionTableLayout>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetTableLayout {
             scope: scope.into(),
-            layout,
+            layout: layout.into(),
         });
         self
     }
@@ -2197,6 +2225,7 @@ impl SemanticMutationTransaction {
                         creation,
                         SemanticNodeCreation::Object { .. }
                             | SemanticNodeCreation::PendingPathObject { .. }
+                            | SemanticNodeCreation::Family { state: Some(_), .. }
                     )
             })
             .count();
@@ -2225,10 +2254,12 @@ impl SemanticMutationTransaction {
         let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
             HashMap::new();
         let mut staged_family_colors = HashMap::new();
-        let mut staged_family_styles = HashMap::new();
+        let mut staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle> =
+            HashMap::new();
         let mut staged_sheen_directions = HashMap::new();
         let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
+        let mut staged_drawing = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
         let mut staged_spatial_anchors = HashMap::new();
@@ -2623,6 +2654,32 @@ impl SemanticMutationTransaction {
                     changed.push(did_change);
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
+                    // A family can acquire its own content without replacing its
+                    // identity or membership. Preparation uses real content and
+                    // the current staged root metadata, never a fake resource.
+                    if !staged_objects.contains_key(object) {
+                        if let Some(mut state) =
+                            catalog.initial_family_content_state(*object, *content)
+                        {
+                            if let Some(style) = staged_family_styles.get(object) {
+                                state.style = style.clone();
+                            }
+                            if let Some(enabled) = staged_drawing.get(object) {
+                                state.set_draw_enabled(*enabled);
+                            }
+                            if let Some(value) = staged_family_z.get(object) {
+                                state.set_z_index(*value);
+                            }
+                            if let Some(direction) = staged_sheen_directions.get(object) {
+                                state.sheen_direction = *direction;
+                            }
+                            staged_objects.insert(*object, state);
+                            staged_object_order.push(*object);
+                        }
+                    }
+                    let materializing = catalog
+                        .initial_family_content_state(*object, *content)
+                        .is_some();
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
@@ -2636,7 +2693,7 @@ impl SemanticMutationTransaction {
                         *content,
                         index,
                     )?;
-                    let did_change = state.content != *content;
+                    let did_change = materializing || state.content != *content;
                     if did_change {
                         state.content = *content;
                     }
@@ -2888,24 +2945,35 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetFamilyColor { node, color } => {
                     catalog.ensure_family(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if ![color.red, color.green, color.blue, color.alpha]
                         .into_iter()
                         .all(f32::is_finite)
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous_color = staged_family_colors
+                    let previous_color =
+                        staged_family_colors.get(node).copied().unwrap_or_else(|| {
+                            catalog
+                                .family_fallback_color(*node)
+                                .expect("validated family")
+                        });
+                    let previous_style = staged_objects
                         .get(node)
-                        .copied()
-                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
-                    let previous_style = staged_family_styles
-                        .get(node)
-                        .cloned()
+                        .map(|state| state.style.clone())
+                        .or_else(|| staged_family_styles.get(node).cloned())
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
                     let mut next_style = previous_style.clone();
                     next_style.set_family_color(*color);
                     changed.push(previous_color != *color || previous_style != next_style);
                     staged_family_colors.insert(*node, *color);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.style = next_style.clone();
+                    }
                     staged_family_styles.insert(*node, next_style);
                 }
                 SemanticMutation::SetFamilyStyle {
@@ -2916,6 +2984,11 @@ impl SemanticMutationTransaction {
                     background_stroke_opacity,
                 } => {
                     catalog.ensure_family(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !style.is_finite() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -2933,42 +3006,42 @@ impl SemanticMutationTransaction {
                     {
                         return Err(invalid_style_error(index, *node));
                     }
-                    let previous_style = staged_family_styles
+                    let previous_style = staged_objects
                         .get(node)
-                        .cloned()
+                        .map(|state| state.style.clone())
+                        .or_else(|| staged_family_styles.get(node).cloned())
                         .unwrap_or_else(|| catalog.family_style(*node).expect("validated family"));
-                    let previous_background_stroke_opacity = catalog
-                        .family_background_stroke_opacity(*node)
-                        .expect("validated family");
-                    let previous_background_stroke_color = catalog
-                        .family_background_stroke_color(*node)
-                        .expect("validated family");
-                    let previous_background_stroke_width = catalog
-                        .family_background_stroke_width(*node)
-                        .expect("validated family");
-                    let previous_color = staged_family_colors
-                        .get(node)
-                        .copied()
-                        .unwrap_or_else(|| catalog.family_color(*node).expect("validated family"));
+                    let previous_color =
+                        staged_family_colors.get(node).copied().unwrap_or_else(|| {
+                            catalog
+                                .family_fallback_color(*node)
+                                .expect("validated family")
+                        });
                     let next_color = style.family_color().unwrap_or(previous_color);
-                    let next_background_stroke_opacity =
-                        background_stroke_opacity.unwrap_or(previous_background_stroke_opacity);
-                    let next_background_stroke_color =
-                        background_stroke_color.unwrap_or(previous_background_stroke_color);
-                    let next_background_stroke_width =
-                        background_stroke_width.unwrap_or(previous_background_stroke_width);
-                    changed.push(
-                        previous_style != *style
-                            || previous_color != next_color
-                            || previous_background_stroke_opacity != next_background_stroke_opacity
-                            || previous_background_stroke_color != next_background_stroke_color
-                            || previous_background_stroke_width != next_background_stroke_width,
-                    );
-                    staged_family_styles.insert(*node, style.clone());
+                    let mut next_style = style.clone();
+                    if let Some(color) = background_stroke_color {
+                        next_style.background_stroke = Some(crate::SemanticPaint::Solid(*color));
+                    }
+                    if let Some(width) = background_stroke_width {
+                        next_style.background_stroke_width = *width;
+                    }
+                    if let Some(opacity) = background_stroke_opacity {
+                        next_style.background_stroke_opacity = *opacity;
+                    }
+                    changed.push(previous_style != next_style || previous_color != next_color);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.style = next_style.clone();
+                    }
+                    staged_family_styles.insert(*node, next_style);
                     staged_family_colors.insert(*node, next_color);
                 }
                 SemanticMutation::SetSheenDirection { node, direction } => {
                     catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !direction.is_valid() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -2979,6 +3052,9 @@ impl SemanticMutationTransaction {
                         .expect("validated authoring node sheen direction");
                     changed.push(previous != *direction);
                     staged_sheen_directions.insert(*node, *direction);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.sheen_direction = *direction;
+                    }
                 }
                 SemanticMutation::SetUpdatingSuspended { node, suspended } => {
                     catalog.ensure_authoring_node(*node, index)?;
@@ -2990,8 +3066,31 @@ impl SemanticMutationTransaction {
                     changed.push(previous != *suspended);
                     staged_updating_suspended.insert(*node, *suspended);
                 }
+                SemanticMutation::SetDrawEnabled { node, enabled } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
+                    let previous = staged_drawing
+                        .get(node)
+                        .copied()
+                        .or_else(|| catalog.draw_enabled(*node))
+                        .expect("authoring presentation");
+                    changed.push(previous != *enabled);
+                    staged_drawing.insert(*node, *enabled);
+                    if let Some(state) = staged_objects.get_mut(node) {
+                        state.set_draw_enabled(*enabled);
+                    }
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
+                    catalog.stage_owned_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *node,
+                    );
                     if !value.is_finite() {
                         return Err(SemanticMutationTransactionError::NonFiniteZIndex {
                             index,
@@ -3010,6 +3109,9 @@ impl SemanticMutationTransaction {
                         let previous = staged_family_z.entry(*node).or_insert(previous);
                         changed.push(*previous != *value);
                         *previous = *value;
+                        if let Some(state) = staged_objects.get_mut(node) {
+                            state.set_z_index(*value);
+                        }
                     } else {
                         let state = catalog.staged_object_state(
                             &mut staged_objects,
@@ -3042,6 +3144,7 @@ impl SemanticMutationTransaction {
                     let did_change = state.style != *style;
                     if did_change {
                         state.style = style.clone();
+                        staged_family_styles.remove(object);
                     }
                     changed.push(did_change);
                 }
@@ -3286,25 +3389,36 @@ impl SemanticMutationTransaction {
                 }
                 SemanticMutation::SetTableLayout { scope, layout } => {
                     catalog.ensure_family(*scope, index)?;
+                    for node in layout.node_references() {
+                        catalog.ensure_authoring_node(node, index)?;
+                    }
+                    for family in layout.family_references() {
+                        catalog.ensure_family(family, index)?;
+                    }
+                    if let Some(node) = layout.placeholder() {
+                        catalog.ensure_object(node, index)?;
+                    }
                     if !layout.is_valid() {
                         return Err(SemanticMutationTransactionError::InvalidTableLayout {
                             index,
                             scope: *scope,
                         });
                     }
-                    let previous = match staged_table_layouts.get(scope).copied() {
+                    let previous = match staged_table_layouts.get(scope).cloned() {
                         Some(previous) => Some(previous),
                         None => match scope {
-                            SemanticTransactionNodeRef::Existing(scope) => {
-                                store.semantic_table_layout(*scope).map_err(|error| {
-                                    SemanticMutationTransactionError::Node { index, error }
+                            SemanticTransactionNodeRef::Existing(scope) => store
+                                .semantic_table_layout(*scope)
+                                .map_err(|error| SemanticMutationTransactionError::Node {
+                                    index,
+                                    error,
                                 })?
-                            }
+                                .map(SemanticTransactionTableLayout::from),
                             SemanticTransactionNodeRef::Pending(_) => None,
                         },
                     };
-                    changed.push(previous != Some(*layout));
-                    staged_table_layouts.insert(*scope, *layout);
+                    changed.push(previous != Some(layout.clone()));
+                    staged_table_layouts.insert(*scope, layout.clone());
                 }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
@@ -3402,7 +3516,10 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     match creation {
-                        SemanticNodeCreation::Object { state, .. } => {
+                        SemanticNodeCreation::Object { state, .. }
+                        | SemanticNodeCreation::Family {
+                            state: Some(state), ..
+                        } => {
                             staged_objects
                                 .entry((*token).into())
                                 .or_insert_with(|| (**state).clone());
@@ -3431,7 +3548,7 @@ impl SemanticMutationTransaction {
                                 .entry(*token)
                                 .or_insert_with(|| state.clone());
                         }
-                        SemanticNodeCreation::Family { .. }
+                        SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Signal { .. }
                         | SemanticNodeCreation::Effect { .. } => {}
                     }
@@ -3549,6 +3666,7 @@ impl SemanticMutationTransaction {
         }
         staged_family_colors.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_styles.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
+        staged_drawing.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
@@ -3558,6 +3676,7 @@ impl SemanticMutationTransaction {
             staged_family_colors,
             staged_family_styles,
             staged_family_z,
+            staged_drawing,
             changed,
             staged_objects,
             staged_spatial_anchors,
@@ -5228,6 +5347,9 @@ mod family_color_tests;
 
 #[cfg(test)]
 mod family_style_tests;
+
+#[cfg(test)]
+mod family_content_tests;
 
 #[cfg(test)]
 mod foreground_tests;

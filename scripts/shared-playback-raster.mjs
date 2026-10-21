@@ -59,7 +59,9 @@ async function qualifyFixture(page, fixture, backend) {
     fixture, denseSamples: dense.samples, semanticFixture: manim,
     pngFrameCount: denseFixture.manim.frameCount, sampleFractions: manifest.sample_fractions,
   });
-  const times = [...samples.map(sample => sample.time), fixture.expected_duration];
+  // The final sample may already complete the source. Do not send a second
+  // external sample to its now-retired continuation segment.
+  const times = [...new Set([...samples.map(sample => sample.time), fixture.expected_duration])];
   const source = await readFile(path.join(repoRoot, fixture.noon_source ?? fixture.source ?? manifest.reference.source), "utf8");
   const selected = rasterFixtureSource(source, fixture.scene, fixture);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });

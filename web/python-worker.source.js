@@ -373,29 +373,64 @@ async function initializePyodide() {
     context == null ? authoringStore.createCode(source, options)
       : context.liveCreateCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
-  self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
-    context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
-  self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
-    context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
-  self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
-  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
-    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer));
+  self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
+    context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
+      : context.liveHighlightTableCell(selection, column, red, green, blue, alpha, opacity);
+  self.noonGetHighlightedTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
+    context == null ? selection.getHighlightedCell(column, red, green, blue, alpha, opacity)
+      : context.liveGetHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
+  self.noonTableCell = (context, selection, column) => context == null
+    ? selection.getCell(column) : context.liveTableCell(selection, column);
+  const tableOptions = (v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY) => {
+    const options = new WasmTableOptions(v, h, outer);
+    options.setIncludeInnerLines(inner);
+    options.setLineStrokeColor(red, green, blue, alpha);
+    options.setLineStrokeWidth(width);
+    options.setLineStrokeOpacity(opacity);
+    options.setLineStrokeJoin(join);
+    options.setLineStrokeCap(cap);
+    options.setCellAlignment(alignX, alignY);
+    return options;
   };
-  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, context) => {
+  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
+    const args = [Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createTable(...args) : context.liveCreateTable(...args);
+  };
+  self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
+    const args = [
+      Array.from(rows, row => Array.from(row)),
+      compositeRows(rowLabels == null ? [] : [rowLabels]),
+      compositeRows(columnLabels == null ? [] : [columnLabels]),
+      compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createTableWithLabels(...args)
+      : context.liveCreateTableWithLabels(...args);
+  };
+  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
-    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
-  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, context) => {
+  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
-    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
-  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, context) => {
+  self.noonCreateAuthoringDecimalTableHandle = (rows, decimalPlaces, includeSign, groupWithCommas, showEllipsis, unit,
+    v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
-    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+    return context.liveCreateDecimalTable(
+      Array.from(rows, row => Array.from(row)), decimalPlaces, includeSign, groupWithCommas,
+      showEllipsis, unit, tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
-  self.noonCreateAuthoringMobjectTableHandle = (rows, v, h, outer, context) => {
+  self.noonCreateAuthoringMobjectTableHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const entries = compositeRows(rows);
-    return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
+    const rowLabelEntries = compositeRows(rowLabels == null ? [] : [rowLabels]);
+    const columnLabelEntries = compositeRows(columnLabels == null ? [] : [columnLabels]);
+    const topLeftEntryRows = compositeRows(topLeftEntry.length ? [topLeftEntry] : []);
+    const args = [
+      entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,
+      tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
+    return context == null ? authoringStore.createMobjectTableWithLabels(...args)
+      : context.liveCreateMobjectTableWithLabels(...args);
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
@@ -431,9 +466,9 @@ async function initializePyodide() {
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
-  self.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
-    ? authoringStore.createFamilyWithColor(batch, zIndex, ...color)
-    : authoringStore.createFamily(batch, zIndex);
+  self.noonCreateAuthoringFamilyHandle = (batch, zIndex, drawEnabled, ...color) => color.length
+    ? authoringStore.createFamilyWithColor(batch, zIndex, ...color, drawEnabled)
+    : authoringStore.createFamily(batch, zIndex, drawEnabled);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveCreateAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>

@@ -964,6 +964,14 @@ Examples:
 
 Transform/style/visibility-only changes must not regenerate immutable content.
 
+Text defaults use bundled fonts consistently across native and browser hosts;
+host font discovery is not an implicit compatibility rule. Controlled Manim
+appearance comparisons must select an explicit matching font and retain its
+file hashes and shaping/raster backend. An unchanged example that omits a font
+remains covered, but its machine-selected reference appearance is recorded
+separately from qualification with the explicit font profile. Missing fonts fail
+qualification rather than silently selecting a fallback.
+
 Renderer-local fill coverage may specialize a convex triangle or quadrilateral as one polygon, computing its pixel-box intersection once to avoid internal tessellation seams and multisample edge loss. Morph eligibility must prove convexity throughout the interpolated interval, including any removed collinear subdivisions; endpoint checks alone are insufficient. Eligible paths retain immutable endpoint vertices and GPU interpolation. Other paths keep ordinary tessellation or the sampled-mesh specialization below. This coverage choice does not create semantic geometry or a second source of animation state.
 
 Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object replaces its glyph masks in reusable object-local instance ranges; unrelated objects and uploads remain unchanged. A phase change may make a glyph empty or nonempty or change its atlas batches. Stable glyph-run submission entries resolve the current batch slots, so these transitions preserve painter order without rebuilding unrelated text. Vacated ranges and batch slots are reused under repeated phase churn. Atlas exhaustion still replaces the atlas generation and rebuilds text packing; that resource-pressure fallback remains a C4 locality limitation and is counted separately from ordinary object-local updates. Rotated, reflected, skewed or nonuniform bitmap transforms retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
@@ -1435,6 +1443,13 @@ authored edits require a completed animation segment, and zero-rate ambient
 intervals do not keep settled playback awake. Each camera admits at most 256
 camera-motion intervals; further begins fail before publication. Replay budgets count
 both saved and incoming motion metadata, including the payload exchanged on seek. Direct seeking and forward playback are required to produce the same effective spatial state.
+These authored-time rules also define camera compatibility: evaluate motion at
+the requested time, close an interval at its exact endpoint, and initialize the
+next interval from that endpoint. A materialized Manim frame and the exact
+authored endpoint are distinct observations. Preserve both without adding a
+frame offset, another clock, or scene-specific correction to reproduce sampled
+integration artifacts. Camera qualification checks the analytic rule and
+seek/forward equivalence; raw sampled-Manim differences remain visible evidence.
 `MoveAlongPath` captures a static retained path and target bounds-center offset
 at activation, then uses the ordinary Position timeline channel. Path length
 sampling plans are derived once, shared across equivalent snapshots, rebuilt
@@ -1522,7 +1537,7 @@ this overview is not another implementation checklist.
 
 | Workstream | Remaining outcome and owner |
 | --- | --- |
-| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. #254 records dispositions; #1879 owns unresolved implementations. |
+| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Keep their unchanged source and qualify effective state, timing/replay and raster/depth/compositing under the analytic-camera and explicit-font rules above. Preserve the original sampled-clock and host-font observations separately; neither adjusted Noon examples nor an explicit profile establish unrestricted exact Manim parity. #254 records dispositions; #1879 owns unfinished qualification. |
 | Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. It also owns the unresolved exact camera implementations recorded in #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
 | Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
 | Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The five spatial workloads have separate functional and Mac measurement evidence; the fixed Product Gate anchor measures five general gallery workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
@@ -1534,10 +1549,12 @@ qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
 state and raster on both WebGPU and WebGL. The untouched static
 `ThreeDSurfacePlot` case is qualified for source, camera state, raster, seek and
 restart on both backends; this does not qualify animated surfaces or general
-transparency. The other four required camera cases remain unresolved under
-#1879; #254 retains the per-case evidence and dispositions. Exact camera-motion
-handoff and completion observations retain timing differences even when raster
-comparisons pass.
+transparency. The other four camera examples remain required under #1879 and
+need qualification against the analytic-camera and explicit-font rules above;
+this policy decision alone does not qualify them. #254 retains the original
+per-case evidence and dispositions, including sampled camera handoff/endpoint
+differences and implicit-font appearance mismatches. Original captures are not
+rewritten or relabeled as exact parity.
 Straight-Line World-stroke and axes-label qualification can proceed beside
 physical-device pacing attribution. Independent
 geometry/vector-space batches need not wait for general transparency or all

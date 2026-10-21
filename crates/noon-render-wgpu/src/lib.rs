@@ -787,7 +787,7 @@ impl FramePreparer {
             .copied()
             .filter(|&index| {
                 index < old_slot_len
-                    && !frame.is_present(index)
+                    && !frame.is_drawable(index)
                     && self.slot_presences[index]
                     && !matches!(self.slots[index], PreparedSlot::Absent)
             })
@@ -798,7 +798,7 @@ impl FramePreparer {
             .copied()
             .filter(|&index| {
                 index < old_slot_len
-                    && frame.is_present(index)
+                    && frame.is_drawable(index)
                     && !self.slot_presences[index]
                     && !matches!(self.slots[index], PreparedSlot::Absent)
             })
@@ -813,7 +813,7 @@ impl FramePreparer {
                 changes.removed_indices().binary_search(index).is_err()
                     || changes.added_indices().binary_search(index).is_ok()
             })
-            .filter(|&index| frame.is_present(index))
+            .filter(|&index| frame.is_drawable(index))
             .filter(|&index| !self.slot_matches(frame, index))
             .filter(|&index| !self.can_materialize_absent_slot(frame, index))
             .collect::<Vec<_>>();
@@ -1046,7 +1046,7 @@ impl FramePreparer {
 
     fn can_materialize_absent_slot(&self, frame: &FrameState, object_index: usize) -> bool {
         if !matches!(self.slots.get(object_index), Some(PreparedSlot::Absent))
-            || !frame.is_present(object_index)
+            || !frame.is_drawable(object_index)
         {
             return false;
         }
@@ -1072,7 +1072,7 @@ impl FramePreparer {
     }
 
     fn can_append_structural_slot(&self, frame: &FrameState, object_index: usize) -> bool {
-        if !frame.is_present(object_index) {
+        if !frame.is_drawable(object_index) {
             return false;
         }
         matches!(
@@ -1382,7 +1382,7 @@ impl FramePreparer {
         let Some(object) = frame.objects.get(object_index) else {
             return false;
         };
-        if !frame.is_present(object_index) {
+        if !frame.is_drawable(object_index) {
             return false;
         }
         let Some(PreparedSlot::Path { index, batch, .. }) = self.slots.get(object_index) else {
@@ -1587,7 +1587,7 @@ impl FramePreparer {
         let mut path_group_lookup = HashMap::<usize, usize>::new();
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
-            if !frame.is_present(object_index) {
+            if !frame.is_drawable(object_index) {
                 self.slots.push(PreparedSlot::Absent);
                 self.slot_presences.push(false);
                 continue;
@@ -2000,7 +2000,7 @@ impl FramePreparer {
         let Some(slot) = self.slots.get(object_index) else {
             return false;
         };
-        if !frame.is_present(object_index) {
+        if !frame.is_drawable(object_index) {
             return matches!(slot, PreparedSlot::Absent);
         }
         if matches!(slot, PreparedSlot::Absent) {
@@ -2242,7 +2242,7 @@ impl FramePreparer {
         // Once all analytic reveals complete, normal bounded LRU pruning resumes.
         if !preserve_current_batches
             && frame.objects.iter().enumerate().any(|(object_index, _)| {
-                frame.is_present(object_index)
+                frame.is_drawable(object_index)
                     && frame.reveal(object_index) < 1.0
                     && frame
                         .render_geometry(object_index)
@@ -2264,7 +2264,7 @@ impl FramePreparer {
             }
         }
         for (object_index, object) in frame.objects.iter().enumerate() {
-            if !frame.is_present(object_index) {
+            if !frame.is_drawable(object_index) {
                 continue;
             }
             let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(object_index) else {
@@ -3091,6 +3091,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -5175,6 +5176,7 @@ mod structural_execution_delta_tests {
 
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,

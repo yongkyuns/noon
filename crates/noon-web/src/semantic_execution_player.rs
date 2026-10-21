@@ -772,11 +772,51 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+        points: &[(f64, f64)],
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::publish_family_points(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+            family,
+            points,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_clear_family_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::publish_clear_family_points(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+            family,
+        )
+        .map_err(AuthoringFailure::from)
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_points(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RawPoints {
             object: source,
@@ -788,7 +828,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_append_points(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendRawPoints {
             object: source,
@@ -1188,6 +1228,15 @@ impl SemanticExecutionPlayer {
             .expect("live semantic store has one scene root");
         noon::integration::publish_alignment(&semantics, root, &mut self.session, left, right)
             .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_root_points(
+        &mut self,
+        left: &noon::LayoutAnchor,
+        right: &noon::LayoutAnchor,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_path_points(left, right))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1998,7 +2047,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_layout_dimension_length(
         &mut self,
         source: &noon::LayoutAnchor,
@@ -2424,6 +2473,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn effective_family_own_path_query(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PathQuery, AuthoringFailure> {
+        family
+            .effective_own_path_query(&self.session)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn effective_path_query(
         &mut self,
         mobject: &noon::Mobject,
@@ -2446,6 +2505,19 @@ impl SemanticExecutionPlayer {
             .clone()
             .ok_or("execution player has no live semantic store")?;
         noon::integration::effective_all_points(&semantics, &self.session, target)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_vector_boundary_points(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_vector_boundary_points(&semantics, &self.session, target)
             .map_err(AuthoringFailure::from)
     }
 
@@ -3280,7 +3352,7 @@ impl SemanticExecutionPlayer {
 
     /// Create one detached family through the retained session so its node and
     /// ordered edges share the current semantic/runtime publication.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     pub(crate) fn live_family(
         &mut self,
         members: &[noon::MobjectTarget<'_>],
@@ -3289,18 +3361,29 @@ impl SemanticExecutionPlayer {
         self.live_family_with_color(members, z_index, noon::Color::WHITE)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     pub(crate) fn live_family_with_color(
         &mut self,
         members: &[noon::MobjectTarget<'_>],
         z_index: f64,
         color: noon::Color,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.live_family_with_presentation(members, z_index, color, true)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_family_with_presentation(
+        &mut self,
+        members: &[noon::MobjectTarget<'_>],
+        z_index: f64,
+        color: noon::Color,
+        draw_enabled: bool,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::integration::publish_family_creation_with_color(
+        noon::integration::publish_family_creation_with_presentation(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
@@ -3308,6 +3391,7 @@ impl SemanticExecutionPlayer {
             members,
             z_index,
             color,
+            draw_enabled,
         )
         .map_err(AuthoringFailure::from)
     }

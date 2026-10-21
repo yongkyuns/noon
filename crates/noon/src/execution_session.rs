@@ -3535,7 +3535,10 @@ impl ExecutionSession {
             .node(target)
             .expect("validated semantic object has a live node");
         if node.is_scene_owned()
-            || !node.parents().is_empty()
+            || node
+                .parents()
+                .iter()
+                .any(|parent| self.reachability.is_reachable(*parent))
             || self.reachability.is_object_reachable(target)
         {
             return Err(ExecutionSessionAnimationError::CreateTarget {

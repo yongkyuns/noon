@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from _noon_errors import (
-    NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
+    NoonError, NoonIndexError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
     engine_await, engine_call, map_engine_error,
 )
 
@@ -36,6 +36,14 @@ class ErrorProjectionTests(unittest.TestCase):
             self.assertIsInstance(mapped, ValueError)
             self.assertEqual(str(mapped), message)
             self.assertIs(mapped.js_error, original)
+
+    def test_index_category_preserves_builtin_index_error_contract(self):
+        original = diagnostic("index_error", "table.entry_index", "range object index out of range")
+        error = map_engine_error(js_exception(original))
+        self.assertIsInstance(error, NoonIndexError)
+        self.assertIsInstance(error, IndexError)
+        self.assertEqual(error.code, "table.entry_index")
+        self.assertIs(error.js_error, original)
 
     def test_unknown_category_is_not_reclassified(self):
         error = map_engine_error(js_exception(diagnostic("future", "new.code", "foreign")))

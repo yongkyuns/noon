@@ -474,9 +474,9 @@ try {
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
-    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
-      ? store.createFamilyWithColor(batch, zIndex, ...color)
-      : store.createFamily(batch, zIndex);
+    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex, drawEnabled, ...color) => color.length
+      ? store.createFamilyWithColor(batch, zIndex, ...color, drawEnabled)
+      : store.createFamily(batch, zIndex, drawEnabled);
     // Exact plain-result projection from the production worker, no host semantics.
     globalThis.noonResolveAnimationOptions = (...args) => {
       const result = wasm.resolveAnimationOptions(...args);

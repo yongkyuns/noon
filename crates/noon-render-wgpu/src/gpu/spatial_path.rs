@@ -514,7 +514,11 @@ impl SpatialPathGpuState {
         let effective_ranks = painter_ranks.as_ref().unwrap_or(&self.painter_ranks);
         for &index in indices {
             staged.extend(self.row_draw_ids(index).map(|draw_id| (draw_id, None)));
-            let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) else {
+            let Some(object) = frame
+                .objects
+                .get(index)
+                .filter(|_| frame.is_drawable(index))
+            else {
                 continue;
             };
             let Some(spatial) = object.spatial.as_deref().filter(|spatial| {

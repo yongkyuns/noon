@@ -59,7 +59,7 @@ class ZIndexTests(unittest.TestCase):
                  patch.object(handles, "_live_constructor_context", return_value=context):
                 family = compat.VGroup(z_index=-3.5)
                 operation = context.liveCreateFamily if live else create
-                operation.assert_called_once_with(batch, -3.5)
+                operation.assert_called_once_with(batch, -3.5, True)
                 self.assertNotIn("z_index", family.__dict__)
                 operation.reset_mock()
                 with self.assertRaises(ValueError):

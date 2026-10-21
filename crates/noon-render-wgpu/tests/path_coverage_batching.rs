@@ -23,6 +23,7 @@ fn mixed_paths_preserve_order_and_only_coalesce_matching_coverage_profiles() {
     let objects = geometries
         .enumerate()
         .map(|(index, path)| FrameObjectState {
+            draw_enabled: true,
             id: ObjectId::new(index as u64),
             content: ObjectContentRef::Geometry(GeometryRef::path(path)),
             text_bounds: None,

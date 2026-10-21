@@ -9,10 +9,7 @@ impl MobjectTarget<'_> {
     pub fn get_num_points(&self) -> Result<usize, AuthoringError> {
         match self {
             Self::Object(object) => object.get_num_points(),
-            Self::Family(family) => {
-                family.validate()?;
-                Ok(0)
-            }
+            Self::Family(family) => family.get_num_points(),
         }
     }
 }
@@ -24,6 +21,21 @@ impl Mobject {
         match self.state()?.content {
             SemanticObjectContent::Image(_) => Ok(4),
             SemanticObjectContent::Text(_) => Ok(0),
+            SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) => {
+                let count = {
+                    let store = self.integration_store().borrow();
+                    match store.geometry_resources().get(handle) {
+                        Some(noon_core::GeometryResource::VectorPath(path)) => {
+                            path.manim_points().map(<[_]>::len)
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(count) = count {
+                    return Ok(count);
+                }
+                self.local_path_query().map(|query| query.point_count())
+            }
             SemanticObjectContent::Geometry(_) => {
                 self.local_path_query().map(|query| query.point_count())
             }

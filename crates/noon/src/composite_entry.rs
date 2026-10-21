@@ -1,19 +1,18 @@
 //! Shared admission for one retained object-or-family composite entry.
 
+use crate::{AuthoringError, Mobject, MobjectFamily, MobjectTarget};
 #[cfg(any(feature = "native-text", feature = "latex", test))]
-use crate::AuthoringError;
-use crate::{Mobject, MobjectFamily, MobjectTarget};
+use noon_core::SemanticObjectState;
+use noon_core::{SemanticNodeId, SemanticStore};
 #[cfg(any(feature = "native-text", feature = "latex", test))]
-use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
-use std::rc::Rc;
-#[cfg(any(feature = "native-text", feature = "latex", test))]
-use std::{cell::RefCell, collections::BTreeSet};
+use std::collections::BTreeMap;
+use std::{cell::RefCell, rc::Rc};
 
 /// An owned retained entry root returned by composite display families.
 ///
 /// Construction APIs borrow [`MobjectTarget`] so callers keep their original
 /// root identity. Query APIs need an owned handle and use this common form for
-/// tables and matrices without flattening family entries.
+/// ordinary families, tables and matrices without flattening family entries.
 #[derive(Clone, Debug)]
 pub enum CompositeEntryHandle {
     Mobject(Mobject),
@@ -41,19 +40,25 @@ impl CompositeEntryHandle {
         }
     }
 
-    #[cfg(any(feature = "native-text", feature = "latex"))]
     pub(crate) fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
     ) -> Result<Self, AuthoringError> {
-        let kind = store.borrow().node(node).map(|value| value.kind().clone());
-        match kind {
-            Some(noon_core::SemanticNodeKind::AuthoringObject) => {
-                Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?))
-            }
-            Some(noon_core::SemanticNodeKind::Family(_)) => Ok(Self::Family(
-                MobjectFamily::from_node(Rc::clone(&store), node)?,
-            )),
+        // Read only the kind tag; a family declaration can contain large data.
+        let is_family = store
+            .borrow()
+            .node(node)
+            .and_then(|value| match value.kind() {
+                noon_core::SemanticNodeKind::AuthoringObject => Some(false),
+                noon_core::SemanticNodeKind::Family(_) => Some(true),
+                _ => None,
+            });
+        match is_family {
+            Some(false) => Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?)),
+            Some(true) => Ok(Self::Family(MobjectFamily::from_node(
+                Rc::clone(&store),
+                node,
+            )?)),
             _ => Err(AuthoringError::Semantic(
                 noon_core::SemanticSceneOperationError::UnknownNode(node),
             )),
@@ -77,10 +82,26 @@ impl CompositeEntry {
     pub(crate) fn leaves(&self) -> &[(Mobject, SemanticObjectState)] {
         &self.leaves
     }
+    #[cfg(any(feature = "latex", test))]
     pub(crate) fn bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
+        self.measured_bounds(false)
+    }
+    #[cfg(any(feature = "native-text", feature = "latex"))]
+    pub(crate) fn boundary_bounds(&self) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
+        self.measured_bounds(true)
+    }
+    fn measured_bounds(
+        &self,
+        anchors: bool,
+    ) -> Result<Option<noon_core::Bounds2D64>, AuthoringError> {
         let mut result: Option<noon_core::Bounds2D64> = None;
         for (object, state) in &self.leaves {
-            if let Some(next) = crate::semantic_mobject::layout_for_content(
+            let measure = if anchors {
+                crate::semantic_mobject::boundary_for_content
+            } else {
+                crate::semantic_mobject::layout_for_content
+            };
+            if let Some(next) = measure(
                 &object.integration_store().borrow(),
                 state.content,
                 state
@@ -103,13 +124,32 @@ impl CompositeEntry {
 /// The shared topology and overlap check, parameterized by the ownership-aware
 /// state capture boundary.  Table and matrix admission use their owning Scene
 /// or LiveSession here so Scene-owned execution observes effective placement.
-#[cfg(any(feature = "native-text", feature = "latex", test))]
+#[cfg(any(feature = "latex", test))]
 pub(crate) fn capture_entries_with(
     store: &Rc<RefCell<SemanticStore>>,
     entries: &[MobjectTarget<'_>],
     mut capture_state: impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
 ) -> Result<Vec<CompositeEntry>, AuthoringError> {
-    let mut seen = BTreeSet::new();
+    capture_entries(store, entries, false, &mut capture_state)
+}
+
+#[cfg(any(feature = "native-text", feature = "latex"))]
+pub(crate) fn capture_entries_with_aliases(
+    store: &Rc<RefCell<SemanticStore>>,
+    entries: &[MobjectTarget<'_>],
+    mut capture_state: impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
+) -> Result<Vec<CompositeEntry>, AuthoringError> {
+    capture_entries(store, entries, true, &mut capture_state)
+}
+
+#[cfg(any(feature = "native-text", feature = "latex", test))]
+fn capture_entries(
+    store: &Rc<RefCell<SemanticStore>>,
+    entries: &[MobjectTarget<'_>],
+    allow_aliases: bool,
+    capture_state: &mut impl FnMut(&Mobject) -> Result<SemanticObjectState, AuthoringError>,
+) -> Result<Vec<CompositeEntry>, AuthoringError> {
+    let mut states = BTreeMap::<SemanticNodeId, SemanticObjectState>::new();
     entries
         .iter()
         .map(|entry| {
@@ -120,13 +160,20 @@ pub(crate) fn capture_entries_with(
                 .map_err(AuthoringError::from)?;
             let mut captured = Vec::with_capacity(leaves.len());
             for node in leaves {
-                if !seen.insert(node) {
+                if !allow_aliases && states.contains_key(&node) {
                     return Err(AuthoringError::Semantic(
                         noon_core::SemanticSceneOperationError::DuplicateMembershipTarget(node),
                     ));
                 }
                 let object = Mobject::from_node(Rc::clone(store), node)?;
-                let state = capture_state(&object)?;
+                let state = match states.get(&node) {
+                    Some(state) => state.clone(),
+                    None => {
+                        let state = capture_state(&object)?;
+                        states.insert(node, state.clone());
+                        state
+                    }
+                };
                 captured.push((object, state));
             }
             Ok(CompositeEntry {

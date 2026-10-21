@@ -1,12 +1,51 @@
 from noon import *
+import numpy as np
 
 
 class OrdinaryPathQueries(Scene):
     def construct(self):
+        precise = 1.0 + 2.0 ** -40
+        for count in range(10):
+            value = VMobject().set_points([(precise, 0.0, 0.0)] * count)
+            assert value.width == 0.0
+            family = VGroup(value)
+            assert family.width == family.height == 0.0
+            if count != 1 and count % 4 != 0:
+                for query in (value.get_anchors, value.get_center):
+                    try:
+                        query()
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError(("unmatched anchors", count))
+            else:
+                assert float(value.get_center()[0]) == (0.0 if count == 0 else precise)
+                anchors = value.get_anchors()
+                assert isinstance(anchors, np.ndarray) == (count == 1)
+                assert len(anchors) == (1 if count == 1 else count // 2)
+
         rectangle = Rectangle(width=2, height=1, color=WHITE)
         rectangle.stretch_to_fit_width(4).rotate(0.25).shift(LEFT * 2.5)
+        precise_points = [[float(p[0]), float(p[1]), 0.0]
+                          for p in rectangle.get_all_points()]
+        precise_points[0][0] += 2.0 ** -40
+        rectangle.set_points(precise_points)
+        assert [[float(p[0]), float(p[1])] for p in rectangle.get_all_points()] == [p[:2] for p in precise_points]
+        assert float(rectangle.get_start()[0]) == precise_points[0][0]
+        assert float(rectangle.point_from_proportion(0.0)[0]) == precise_points[0][0]
+
         ellipse = Circle(radius=0.8, color=WHITE)
         ellipse.stretch_to_fit_width(2.4).shift(RIGHT * 2.5)
+        family = VGroup(VGroup(rectangle, ellipse), rectangle)
+
+        def check_boundary():
+            actual = [[float(p[0]), float(p[1])]
+                      for p in family.get_points_defining_boundary()]
+            expected = [[float(p[0]), float(p[1])]
+                        for shape in (ellipse, rectangle) for p in shape.get_anchors()]
+            assert actual == expected
+
+        check_boundary()
         assert Mobject().get_num_points() == 0
         assert Mobject().has_no_points()
         assert VGroup(Circle()).get_num_points() == 0
@@ -42,6 +81,7 @@ class OrdinaryPathQueries(Scene):
         live = self.live_execution()
         finish = live.play(animation)
         live.advance_to(0.5)
+        check_boundary()
         midpoint = rectangle.get_start()
         assert abs(midpoint[0] - (start[0] + end[0]) * 0.5) < 2e-6
         assert abs(midpoint[1] - (start[1] + end[1]) * 0.5) < 2e-6

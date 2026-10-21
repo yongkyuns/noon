@@ -201,3 +201,9 @@ def identity_only_wrapper(cls, **metadata):
     wrapper = object.__new__(cls)
     wrapper.__dict__.update(_scene=None, _object=None, **metadata)
     return wrapper
+
+
+def empty_path_query():
+    """An empty owned-root observation at the typed Rust test boundary."""
+    from types import SimpleNamespace
+    return SimpleNamespace(pointCount=0, points=lambda: [], anchors=lambda: [], free=lambda: None)

@@ -73,17 +73,20 @@ impl SemanticStore {
         let previous = self
             .node(object)
             .and_then(|node| node.semantic_object_state())
-            .expect("preflighted semantic object remains valid while transaction owns the store")
-            .content;
-        if previous == content {
+            .map(|state| state.content);
+        if previous == Some(content) {
             return;
         }
         self.retain_semantic_content_resources(content);
-        self.node_mut(object)
-            .and_then(|node| node.semantic_object_state_mut())
-            .expect("preflighted semantic object remains valid while transaction owns the store")
-            .content = content;
-        self.release_semantic_content_resources(previous);
+        let node = self.node_mut(object).expect("preflighted content owner");
+        if let Some(state) = node.semantic_object_state_mut() {
+            state.content = content;
+        } else {
+            node.materialize_family_content(content);
+        }
+        if let Some(previous) = previous {
+            self.release_semantic_content_resources(previous);
+        }
     }
 
     pub(super) fn replace_semantic_decimal_number(

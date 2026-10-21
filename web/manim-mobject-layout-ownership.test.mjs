@@ -32,10 +32,18 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
   assert.match(getCenter, /return _layout_center\(self\)/);
 
   const width = functionBody(semanticHandlesSource, "_width");
-  assert.match(width, /handle\.width/);
+  assert.match(width, /_layout_dimension\(self, 0\)/);
 
   const height = functionBody(semanticHandlesSource, "_height");
-  assert.match(height, /handle\.height/);
+  assert.match(height, /_layout_dimension\(self, 1\)/);
+
+  const dimension = functionBody(semanticHandlesSource, "_layout_dimension");
+  assert.match(dimension, /_handle_for\(self\)/);
+  assert.match(dimension, /handle\.width/);
+  assert.match(dimension, /handle\.height/);
+  assert.match(dimension, /_bound_layout_observation\(self, "queryMobjectDimension", dimension\)/);
+  assert.match(dimension, /_dimension_fit_extent\(/);
+  assert.doesNotMatch(dimension, /_group_layout_observation|_layout_bounds|snapshotJson|\b(?:min|max)\(/);
 
   assert.match(facadeSource, /return _callback_operations\(\)\._canonical_get_center\(self\)/);
   assert.match(callbackSource, /return _base\._semantic_operations\(\)\._get_center\(self\)/);

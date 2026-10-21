@@ -202,7 +202,7 @@ impl GpuRenderer {
         let Some(glow) = row
             .glow
             .as_ref()
-            .filter(|_| frame.is_present(request.object_index))
+            .filter(|_| frame.is_drawable(request.object_index))
         else {
             self.remove_analytic_glow(row.id);
             return Ok(AnalyticGlowStats {

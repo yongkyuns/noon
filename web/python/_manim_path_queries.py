@@ -13,6 +13,7 @@ from _manim_semantic_handles import (
     _length_over_dim_observation,
     _merged_points_observation,
     _path_boundary_points_observation,
+    _vector_boundary_points_observation,
     _point_reduction_tree_observation,
     _typed_manim_observation,
     _handle_for,
@@ -375,6 +376,22 @@ def _reduce_point_reduction_tree(tree, reduce_func, dim):
     return result
 
 
+def _default_vector_anchor_hooks(value):
+    # Inspect language hooks without invoking arbitrary descriptors. Geometry,
+    # semantic membership and anchor order remain Rust-owned.
+    from inspect import getattr_static
+    from _manim_compat import VMobject
+
+    anchors = getattr_static(value, "get_anchors", None)
+    if anchors is None:
+        return getattr_static(value, "_semantic_family_handle", None) is not None
+    if any(getattr_static(value, name, None) is not getattr(VMobject, name)
+           for name in ("get_anchors", "get_start_anchors", "get_end_anchors")):
+        return False
+    stride = getattr_static(value, "n_points_per_cubic_curve", 4)
+    return type(stride) is int and stride == 4
+
+
 def boundary_points(value):
     try:
         integer_stride = operator.index(
@@ -382,13 +399,25 @@ def boundary_points(value):
         )
     except TypeError:
         integer_stride = None
-    # Manim's VGroup inherits VMobject.get_points_defining_boundary, which
-    # concatenates anchors across the full family. A retained Noon family has
-    # no point array of its own, so resolve its Rust-ordered family wrappers
-    # and ask each vector leaf for its Rust-backed anchor snapshot.
+    # Resolve existing wrappers only to identify caller-owned Python hooks.
+    # Default retained families use one shared Rust vector-anchor observation.
     has_family_handle = getattr(value, "_semantic_family_handle", None) is not None
     if integer_stride != 4 or has_family_handle:
         family = value.get_family()
+        from inspect import getattr_static
+
+        if (has_family_handle
+                and getattr_static(value, "get_family", None) is _base.Mobject.get_family
+                and all(_default_vector_anchor_hooks(member) for member in family)):
+            coordinates = _vector_boundary_points_observation(value)
+            if coordinates is None:
+                raise NotImplementedError(
+                    "vector boundary points require a shared Rust family handle"
+                )
+            result = _format_points(coordinates)
+            if len(coordinates) == 0 and hasattr(result, "reshape"):
+                return result.reshape((0,))
+            return result
 
         def member_anchors(member):
             get_anchors = getattr(member, "get_anchors", None)
@@ -1012,14 +1041,17 @@ def curve_length(value, n, sample_points):
 
 
 def path_points(value, method):
-    stride = getattr(value, "n_points_per_cubic_curve", 4)
+    query = _query(value)
     try:
-        integer_stride = operator.index(stride)
-    except TypeError:
-        integer_stride = None
-    if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
-        query = _query(value)
+        # Manim returns its single point as an array before inspecting stride.
+        if method == "anchors" and query.pointCount == 1:
+            return _points_array(_points(engine_call(query.anchors)))
+        stride = getattr(value, "n_points_per_cubic_curve", 4)
         try:
+            integer_stride = operator.index(stride)
+        except TypeError:
+            integer_stride = None
+        if method in ("startAnchors", "endAnchors", "anchors") and integer_stride != 4:
             points = _points(engine_call(query.points))
             starts = points[::stride]
             if method == "startAnchors":
@@ -1027,13 +1059,7 @@ def path_points(value, method):
             ends = points[stride - 1 :: stride]
             if method == "endAnchors":
                 return _points_array(ends)
-            return _point_rows(
-                [point for pair in zip(starts, ends, strict=True) for point in pair]
-            )
-        finally:
-            query.free()
-    query = _query(value)
-    try:
+            return _point_rows([point for pair in zip(starts, ends, strict=True) for point in pair])
         points = _points(engine_call(getattr(query, method)))
         return _point_rows(points) if method == "anchors" else _points_array(points)
     finally:

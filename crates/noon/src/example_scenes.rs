@@ -23,6 +23,7 @@ pub mod family_grid;
 pub mod family_paint;
 pub mod family_placement;
 pub mod family_replacement;
+pub mod family_root_points;
 pub mod family_transform_indicate;
 pub mod following_graph_camera;
 pub mod foreground_matching;

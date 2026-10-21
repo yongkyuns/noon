@@ -11,6 +11,7 @@ fn frame() -> FrameState {
         .into_iter()
         .enumerate()
         .map(|(index, z_index)| FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             id: ObjectId::new(40 + index as u64),
@@ -347,4 +348,50 @@ fn invalid_layers_reject_snapshot_and_incremental_publications_atomically() {
             assert_eq!(mirror.applied_sequence(), sequence);
         }
     }
+}
+
+#[test]
+fn drawing_eligibility_survives_remapped_snapshot_and_sparse_worker_transport() {
+    let mut frame = frame();
+    frame.objects[0].draw_enabled = false;
+    let mut encoder = RetainedExecutionDeltaEncoder::new(72);
+    let snapshot = encoder
+        .encode_snapshot_indices_with_context(
+            &frame,
+            Camera2DState::default(),
+            noon_core::PublicationContext::default(),
+            [1, 0],
+        )
+        .unwrap();
+    let mut missing = serde_json::to_value(&snapshot).unwrap();
+    missing["objects"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("draw_enabled");
+    assert!(serde_json::from_value::<RetainedExecutionDeltaEnvelope>(missing).is_err());
+    let mut mirror = RetainedExecutionFrameMirror::default();
+    mirror.apply(wire_round_trip(&snapshot)).unwrap();
+    assert_eq!(mirror.frame_index_for_object(ObjectId::new(40)), Some(1));
+    let before = mirror.frame().unwrap().objects[1].clone();
+    assert!(!before.draw_enabled);
+    assert!(mirror.frame().unwrap().is_present(1));
+    assert!(!mirror.frame().unwrap().is_drawable(1));
+    frame.time = 0.5;
+    frame.objects[0].draw_enabled = true;
+    let delta = encoder
+        .encode_incremental_with_context(
+            &frame,
+            &FrameChanges::objects(vec![0]),
+            Camera2DState::default(),
+            noon_core::PublicationContext::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(delta.objects.len(), 1);
+    let (_, changed) = mirror.apply(wire_round_trip(&delta)).unwrap();
+    assert_eq!(changed.object_indices(), &[1]);
+    let mut wanted = before;
+    wanted.draw_enabled = true;
+    assert_eq!(mirror.frame().unwrap().objects[1], wanted);
+    assert!(mirror.frame().unwrap().is_drawable(1));
 }

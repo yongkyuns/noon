@@ -121,6 +121,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::FamilyStyle { .. }
                 | SemanticMutationImpact::UpdaterSuspension { .. }
                 | SemanticMutationImpact::ZIndex { .. }
+                | SemanticMutationImpact::DrawEnabled { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }

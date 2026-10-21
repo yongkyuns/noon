@@ -52,6 +52,7 @@ impl SceneInstance {
             let object = &self.compiled.objects()[self.frame.objects.len()];
             debug_assert!(!object.live);
             self.frame.objects.push(FrameObjectState {
+                draw_enabled: object.draw_enabled,
                 glow: None,
                 id: object.id,
                 content: object.content.clone(),

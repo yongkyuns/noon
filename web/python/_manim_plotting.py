@@ -473,7 +473,7 @@ def _three_d_axis_label_object(label):
         from _manim_latex import MathTex
 
         label = MathTex(label)
-    if isinstance(label, _compat.Group):
+    if isinstance(label, (_compat.Group, _compat.VGroup)):
         return label
     if isinstance(label, _base.Mobject):
         return _compat.Group(label)

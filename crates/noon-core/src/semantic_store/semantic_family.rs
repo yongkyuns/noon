@@ -192,8 +192,8 @@ impl SemanticStore {
 
     /// Return render/animation leaves below `root` in authoritative semantic order.
     ///
-    /// An object's own content precedes its ordered children. Families contribute
-    /// their descendants without a draw of their own. Shared nodes are emitted
+    /// Own content precedes ordered children. A family without owned content
+    /// contributes only its descendants. Shared nodes are emitted
     /// once at their first occurrence,
     /// instead of animating aliases multiple times. Manim's public family query
     /// retains the last occurrence; use `ordered_last_occurrence_leaf_nodes` for
@@ -324,7 +324,8 @@ impl SemanticStore {
             match node.kind() {
                 SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_) => {
                     let emit = include_families
-                        || matches!(node.kind(), SemanticNodeKind::AuthoringObject);
+                        || matches!(node.kind(), SemanticNodeKind::AuthoringObject)
+                        || node.semantic_object_state().is_some();
                     if emit && !keep_last {
                         leaves.push(node_id);
                     }

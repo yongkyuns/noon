@@ -568,6 +568,7 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -579,6 +580,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -604,6 +606,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -615,6 +618,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    draw_enabled: true,
                     glow: None,
                     spatial: None,
                     z_index: 0.0,
@@ -691,6 +695,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            draw_enabled: true,
             glow: None,
             spatial: None,
             z_index: 0.0,
@@ -711,6 +716,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                draw_enabled: true,
                 glow: None,
                 spatial: None,
                 z_index: 0.0,

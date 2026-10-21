@@ -34,6 +34,10 @@ class NoonValueError(NoonError, ValueError):
     pass
 
 
+class NoonIndexError(NoonError, IndexError):
+    pass
+
+
 class NoonForeignHandleError(NoonError, ValueError):
     pass
 
@@ -78,6 +82,7 @@ class MultiAnimationOverrideException(Exception):
 
 _EXCEPTION_TYPES = {
     "invalid_input": NoonValueError,
+    "index_error": NoonIndexError,
     "foreign_handle": NoonForeignHandleError,
     "stale_handle": NoonStaleHandleError,
     "missing_resource": NoonMissingResourceError,

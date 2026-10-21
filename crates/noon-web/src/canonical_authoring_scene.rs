@@ -328,21 +328,20 @@ impl SceneMembershipBatch {
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         z_index: f64,
-    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.create_family_with_color(store, z_index, noon::Color::WHITE)
-    }
-
-    fn create_family_with_color(
-        &self,
-        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        z_index: f64,
         color: noon::Color,
+        draw_enabled: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create_with_own_color(store, &self.family_members()?, z_index, color)
-            .map_err(AuthoringFailure::from)
+        noon::MobjectFamily::create_with_presentation(
+            store,
+            &self.family_members()?,
+            z_index,
+            color,
+            draw_enabled,
+        )
+        .map_err(AuthoringFailure::from)
     }
 
     fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, AuthoringFailure> {
@@ -902,12 +901,48 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_dimension(
+        &mut self,
+        handle: &noon::Mobject,
+        dimension: noon::LayoutDimension,
+    ) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
+            |player, handle| {
+                player.live_layout_dimension_length(&noon::LayoutAnchor::from(handle), dimension)
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&mut self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
         self.mobject_observation(
             handle,
             noon::Mobject::get_num_points,
             crate::SemanticExecutionPlayer::effective_point_count,
         )
+    }
+
+    /// Observe one family's own root through the current execution owner.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_own_path_query(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PathQuery, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        family.validate().map_err(AuthoringFailure::from)?;
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local_mut() {
+                return player.effective_family_own_path_query(family);
+            }
+        }
+        family.own_path_query().map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1096,11 +1131,16 @@ impl CanonicalAuthoringScene {
         target.all_points().map_err(AuthoringFailure::from)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn family_point_reduction_tree(
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_observation<T>(
         &mut self,
         family: &noon::MobjectFamily,
-    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        authored: impl FnOnce(noon::MobjectTarget<'_>) -> Result<T, noon::AuthoringError>,
+        effective: impl FnOnce(
+            &mut crate::SemanticExecutionPlayer,
+            noon::MobjectTarget<'_>,
+        ) -> Result<T, AuthoringFailure>,
+    ) -> Result<T, AuthoringFailure> {
         if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
@@ -1110,12 +1150,34 @@ impl CanonicalAuthoringScene {
             .map_err(AuthoringFailure::from)?;
         if !self.returned_player_is_stale() {
             if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_point_reduction_tree(target);
+                return effective(player, target);
             }
         }
-        target
-            .point_reduction_tree()
-            .map_err(AuthoringFailure::from)
+        authored(target).map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_point_reduction_tree(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.point_reduction_tree(),
+            crate::SemanticExecutionPlayer::live_effective_point_reduction_tree,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_vector_boundary_points(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.vector_boundary_points(),
+            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points,
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -3041,7 +3103,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     fn live_family(
         &mut self,
         members: &[noon::MobjectTarget<'_>],
@@ -3060,17 +3122,28 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     fn live_family_with_color(
         &mut self,
         members: &[noon::MobjectTarget<'_>],
         z_index: f64,
         color: noon::Color,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        self.live_family_with_presentation(members, z_index, color, true)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_family_with_presentation(
+        &mut self,
+        members: &[noon::MobjectTarget<'_>],
+        z_index: f64,
+        color: noon::Color,
+        draw_enabled: bool,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_family_with_color(members, z_index, color),
+                .live_family_with_presentation(members, z_index, color, draw_enabled),
             PlayerOwnership::Unstarted => {
                 Err("live family creation requires an active canonical session".into())
             }
@@ -4129,17 +4202,11 @@ mod wasm {
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
             z_index: f64,
-        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.create_family(store, z_index)
-        }
-
-        pub(crate) fn create_family_with_color(
-            &self,
-            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-            z_index: f64,
             color: noon::Color,
+            draw_enabled: bool,
         ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.create_family_with_color(store, z_index, color)
+            self.inner
+                .create_family(store, z_index, color, draw_enabled)
         }
 
         pub(crate) fn edit_family(
@@ -7264,6 +7331,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectDimension)]
+        pub fn query_mobject_dimension(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            dimension: u32,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_dimension(
+                    handle.semantic_mobject(),
+                    dimension.try_into().map_err(typed_js_error)?,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLayout)]
         pub fn query_mobject_layout(
             &mut self,
@@ -7279,6 +7360,18 @@ mod wasm {
                 width,
                 height,
             })
+        }
+
+        /// Observe only the owned root without capturing descendant membership.
+        #[wasm_bindgen(js_name = queryFamilyOwnPath)]
+        pub fn query_family_own_path(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<crate::WasmPathQuery, JsValue> {
+            self.inner
+                .family_own_path_query(&handle.semantic_family()?)
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
         }
 
         /// Read a family through the same live session that owns its effective leaves.
@@ -7309,6 +7402,17 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             self.inner
                 .family_all_points(&handle.semantic_family()?)
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyVectorBoundaryPoints)]
+        pub fn query_family_vector_boundary_points(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_vector_boundary_points(&handle.semantic_family()?)
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(typed_js_error)
         }
@@ -8366,13 +8470,39 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyPoints)]
+        pub fn live_set_family_points(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_points(&source.semantic_family()?, &points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveClearFamilyPoints)]
+        pub fn live_clear_family_points(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_clear_family_points(&source.semantic_family()?)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetPoints)]
         pub fn live_set_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8386,7 +8516,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8869,6 +8999,19 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_align_points(left.semantic_mobject(), right.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignRootPoints)]
+        pub fn live_align_root_points(
+            &mut self,
+            left: &crate::WasmLayoutAnchor,
+            right: &crate::WasmLayoutAnchor,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_align_root_points(&left.anchor, &right.anchor)
                 .map_err(typed_js_error)
         }
 
@@ -9807,6 +9950,7 @@ mod wasm {
             &mut self,
             batch: WasmSceneMembershipBatch,
             z_index: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             let batch = batch.into_inner().map_err(typed_js_error)?;
             if batch.kind != SceneMembershipBatchKind::Add {
@@ -9814,7 +9958,12 @@ mod wasm {
             }
             let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
-                .live_family(&members, z_index)
+                .live_family_with_presentation(
+                    &members,
+                    z_index,
+                    noon::Color::WHITE,
+                    draw_enabled.unwrap_or(true),
+                )
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
@@ -9829,6 +9978,7 @@ mod wasm {
             green: f64,
             blue: f64,
             alpha: f64,
+            draw_enabled: Option<bool>,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
                 .map_err(typed_js_error)?
@@ -9838,10 +9988,11 @@ mod wasm {
                 return Err(typed_js_error("family creation requires an add batch"));
             }
             self.inner
-                .live_family_with_color(
+                .live_family_with_presentation(
                     &batch.family_members().map_err(typed_js_error)?,
                     z_index,
                     color,
+                    draw_enabled.unwrap_or(true),
                 )
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
@@ -11119,14 +11270,24 @@ mod tests {
         };
         assert_eq!(batch.family_members().unwrap().len(), 1);
         let family = batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
+            .create_family(
+                std::rc::Rc::clone(scene.integration_store()),
+                0.0,
+                noon::Color::WHITE,
+                true,
+            )
             .unwrap();
         let committed = scene.integration_store().borrow().scene_revision();
         assert_eq!(committed, revision.checked_next().unwrap());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
         batch.kind = SceneMembershipBatchKind::Remove;
         assert!(batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
+            .create_family(
+                std::rc::Rc::clone(scene.integration_store()),
+                0.0,
+                noon::Color::WHITE,
+                true
+            )
             .is_err());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
         batch.kind = SceneMembershipBatchKind::Clear;
@@ -11958,6 +12119,125 @@ mod tests {
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
         context.live_target_editor(&source).unwrap();
+    }
+
+    #[test]
+    fn family_own_path_queries_follow_authored_active_transferred_and_returned_ownership() {
+        let mut context = CanonicalAuthoringScene::default();
+        let empty = context.scene.family(&[]).unwrap();
+        let owned = context.scene.family(&[]).unwrap();
+        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        owned.set_points_f64(&points).unwrap();
+        context
+            .scene
+            .add_many(&[(&empty).into(), (&owned).into()])
+            .unwrap();
+        assert!(context
+            .family_own_path_query(&empty)
+            .unwrap()
+            .points()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.family(&[]).unwrap();
+        assert!(context.family_own_path_query(&foreign).is_err());
+        context.live_player(1.0).unwrap();
+        assert!(context
+            .family_own_path_query(&empty)
+            .unwrap()
+            .points()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        let transferred = context.take_execution_player(1.0, 41).unwrap();
+        assert!(context.family_own_path_query(&empty).is_err());
+        assert!(context.family_own_path_query(&owned).is_err());
+        context.return_execution_player(transferred).unwrap();
+        assert_eq!(
+            context
+                .family_own_path_query(&owned)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+    }
+
+    #[test]
+    fn live_family_root_points_preserve_constructor_drawing_intent_and_ownership() {
+        for draw_enabled in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let child = context.scene.square(0.5).unwrap();
+            let child_before = child.state().unwrap();
+            context.bind_mobject(ObjectId::new(0), &child).unwrap();
+            context.live_player(1.0).unwrap();
+            let revision = context.scene.revision();
+            let family = context
+                .live_family_with_presentation(
+                    &[(&child).into()],
+                    3.0,
+                    noon::Color::GREEN,
+                    draw_enabled,
+                )
+                .unwrap();
+            assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
+            let revision = context.scene.revision();
+            context
+                .active_live_player()
+                .unwrap()
+                .live_clear_family_points(&family)
+                .unwrap();
+            assert_eq!(context.scene.revision(), revision);
+            assert!(family.own_object().unwrap().is_none());
+            let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.), (4., 0.)];
+            context
+                .active_live_player()
+                .unwrap()
+                .live_set_family_points(&family, &points)
+                .unwrap();
+            assert_eq!(
+                context
+                    .family_own_path_query(&family)
+                    .unwrap()
+                    .points()
+                    .unwrap(),
+                points
+            );
+            assert_eq!(family.draw_enabled().unwrap(), draw_enabled);
+            assert_eq!(family.own_color().unwrap(), noon::Color::GREEN);
+            assert_eq!(child.state().unwrap(), child_before);
+            let transferred = context.take_execution_player(1.0, 42).unwrap();
+            assert!(context.active_live_player().is_err());
+            context.return_execution_player(transferred).unwrap();
+            context
+                .active_live_player()
+                .unwrap()
+                .live_clear_family_points(&family)
+                .unwrap();
+            assert_eq!(
+                context
+                    .family_own_path_query(&family)
+                    .unwrap()
+                    .point_count(),
+                0
+            );
+            assert_eq!(child.state().unwrap(), child_before);
+        }
     }
 
     #[test]
@@ -14153,6 +14433,75 @@ mod tests {
             )
             .is_err());
         assert!(context.player_ownership.is_unstarted());
+    }
+
+    #[test]
+    fn vector_family_points_use_live_leaves_without_requiring_root_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let family = context.scene.family(&[(&circle).into()]).unwrap();
+        let empty = context.scene.family(&[]).unwrap();
+        let authored = context.family_vector_boundary_points(&family).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        assert!(!context.identities.contains_key(&family.node_id()));
+        let animation = context
+            .declare_live_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        {
+            let player = context.live_player(2.0).unwrap();
+            player.live_play_animation(&animation).unwrap();
+            player.live_advance_segment_to(1.0).unwrap();
+        }
+        let observed = context.family_vector_boundary_points(&family).unwrap();
+        assert_eq!(observed.len(), authored.len());
+        for (actual, expected) in observed.into_iter().zip(authored) {
+            assert!((actual.0 - expected.0 - 2.0).abs() < 1e-6);
+            assert!((actual.1 - expected.1 + 1.0).abs() < 1e-6);
+        }
+        assert!(context
+            .family_vector_boundary_points(&empty)
+            .unwrap()
+            .is_empty());
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.family(&[]).unwrap();
+        assert!(context.family_vector_boundary_points(&foreign).is_err());
+        let player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context.family_vector_boundary_points(&family).is_err());
+        assert!(context.family_vector_boundary_points(&empty).is_err());
+        drop(player);
+    }
+
+    #[test]
+    fn incomplete_path_dimensions_validate_the_owner_without_querying_anchors() {
+        use noon::LayoutDimension::{Height, Width};
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context
+            .scene
+            .path(
+                noon_core::VectorPath::from_manim_points_f64(vec![(1.0, -2.0), (4.0, 5.0)]),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.bind_mobject(ObjectId::new(0), &object).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        context.live_player(1.0).unwrap();
+        assert!(context.mobject_layout(&object).is_err());
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
+        assert_eq!(context.mobject_dimension(&object, Height).unwrap(), 7.0);
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        assert!(context.mobject_dimension(&object, Width).is_err());
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.mobject_dimension(&object, Width).unwrap(), 3.0);
     }
 
     #[test]

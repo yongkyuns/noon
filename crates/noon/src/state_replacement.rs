@@ -333,14 +333,20 @@ impl<'a> PersistentFamilyReconcile<'a> {
         })?;
         match node.kind() {
             SemanticNodeKind::AuthoringObject => Ok(PersistentTargetNode::Object),
-            SemanticNodeKind::Family(state) => Ok(PersistentTargetNode::Family {
+            SemanticNodeKind::Family(_) => Ok(PersistentTargetNode::Family {
                 members: node.members_iter().collect(),
-                own_color: state.own_color,
-                own_style: Box::new(state.own_style.clone()),
-                own_background_stroke_color: state.own_background_stroke_color,
-                own_background_stroke_width: state.own_background_stroke_width,
-                own_background_stroke_opacity: state.own_background_stroke_opacity,
-                own_sheen_direction: state.own_sheen_direction,
+                own_color: node.family_color().expect("family color"),
+                own_style: Box::new(node.family_style().expect("family style").clone()),
+                own_background_stroke_color: node
+                    .family_background_stroke_color()
+                    .expect("family background stroke color"),
+                own_background_stroke_width: node
+                    .family_background_stroke_width()
+                    .expect("family background stroke width"),
+                own_background_stroke_opacity: node
+                    .family_background_stroke_opacity()
+                    .expect("family background stroke opacity"),
+                own_sheen_direction: node.sheen_direction().expect("family sheen direction"),
             }),
             _ => Err(AuthoringError::from(
                 noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
@@ -442,9 +448,9 @@ impl<'a> PersistentFamilyReconcile<'a> {
                     let (prototype_members, prototype_z_index) = prototype
                         .and_then(|prototype| self.store.node(prototype))
                         .and_then(|node| match node.kind() {
-                            SemanticNodeKind::Family(presentation) => Some((
+                            SemanticNodeKind::Family(_) => Some((
                                 node.members_iter().collect::<Vec<_>>(),
-                                presentation.presentation.z_index,
+                                node.presentation().expect("family presentation").z_index,
                             )),
                             _ => None,
                         })

@@ -18,6 +18,11 @@ from typing import Any
 import noon as _base
 import _manim_compat as _compat
 
+try:
+    from pyodide.ffi import jsnull as _jsnull
+except ImportError:  # Native CPython adapters receive None for optional handles.
+    _jsnull = None
+
 
 def _alignment_mask2(value: object) -> _base.Vec2:
     try:
@@ -69,8 +74,8 @@ def _raw_from_json(value: str) -> _ir.Mobject:
 def _is_bound(value: object) -> bool:
     return (
         isinstance(value, _base.Mobject)
-        and value._scene is not None
-        and value._object is not None
+        and getattr(value, "_scene", None) is not None
+        and getattr(value, "_object", None) is not None
     )
 
 
@@ -125,6 +130,12 @@ def _typed_manim_observation(
     authored semantic handle. A typed wrapper never falls through to a Python
     scene projection.
     """
+    if handle_method == "pathQuery" and _is_shared_family(value):
+        family = value._semantic_family_handle
+        context = _live_mutation_context(value) or _live_constructor_context()
+        if context is not None:
+            return engine_call(context.queryFamilyOwnPath, family)
+        return engine_call(family.pathQuery)
     semantic_handle = getattr(value, "_semantic_handle", None)
     if semantic_handle is None:
         return None
@@ -194,7 +205,7 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
-def _bound_layout_observation(value: _base.Mobject):
+def _bound_layout_observation(value: _base.Mobject, method="queryMobjectLayout", *arguments):
     """Ask the owning Rust context for one coherent ordinary live observation."""
 
     if (
@@ -206,8 +217,8 @@ def _bound_layout_observation(value: _base.Mobject):
     if handle is None:
         return None
     context = getattr(value._scene, "_canonical_authoring_context", None)
-    query = getattr(context, "queryMobjectLayout", None)
-    return None if query is None else engine_call(query, handle)
+    query = getattr(context, method, None)
+    return None if query is None else engine_call(query, handle, *arguments)
 
 
 _CONSTRUCTOR_MISSING = object()
@@ -673,6 +684,8 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _vmobject_path_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _is_shared_family(value):
+        return False
     if _is_bound(value):
         context = getattr(value._scene, "_canonical_authoring_context", None)
         return (
@@ -719,6 +732,10 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
+    if _is_shared_family(self):
+        layout = _group_layout_observation(self)
+        return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
+                          float(engine_call(layout.criticalY, axis.x, axis.y)))
     if isinstance(self, _compat.VMobject):
         if self.get_num_points() == 0:
             return _base.ORIGIN
@@ -726,10 +743,6 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
             _extremum_along_dim_observation(self, 0, axis.x),
             _extremum_along_dim_observation(self, 1, axis.y),
         )
-    if _is_shared_family(self):
-        layout = _group_layout_observation(self)
-        return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
-                          float(engine_call(layout.criticalY, axis.x, axis.y)))
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(
@@ -739,28 +752,28 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     return _critical(self, axis)
 
 
-def _width(self: _base.Mobject) -> float:
+def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
+    """Read Rust content extents without asking for vector boundary anchors."""
     if _is_shared_family(self):
-        return float(_group_layout_observation(self).width)
-    observed = _bound_layout_observation(self)
+        anchor = _layout_anchor(self)
+        if anchor is None:
+            raise RuntimeError("family layout requires a current shared Rust semantic handle")
+        return float(_dimension_fit_extent(anchor, _group_live_layout_context(self), dimension))
+    observed = _bound_layout_observation(self, "queryMobjectDimension", dimension)
     if observed is not None:
-        return float(observed.width)
+        return float(observed)
     handle = _handle_for(self)
     if handle is not None:
-        return float(handle.width)
+        return float(handle.width if dimension == 0 else handle.height)
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+
+
+def _width(self: _base.Mobject) -> float:
+    return _layout_dimension(self, 0)
 
 
 def _height(self: _base.Mobject) -> float:
-    if _is_shared_family(self):
-        return float(_group_layout_observation(self).height)
-    observed = _bound_layout_observation(self)
-    if observed is not None:
-        return float(observed.height)
-    handle = _handle_for(self)
-    if handle is not None:
-        return float(handle.height)
-    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+    return _layout_dimension(self, 1)
 
 
 def _set_width_property(self: _base.Mobject, width: float) -> None:
@@ -1532,7 +1545,7 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
         for value in objects
     )
     leaf_profile = all(
-        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        isinstance(value, _compat.VMobject) and not isinstance(value, (_compat.Group, _compat.VGroup))
         for value in objects
     )
     if not family_profile and not leaf_profile:
@@ -1596,7 +1609,7 @@ def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
         for value in objects
     )
     leaf_profile = all(
-        isinstance(value, _compat.VMobject) and not isinstance(value, _compat.Group)
+        isinstance(value, _compat.VMobject) and not isinstance(value, (_compat.Group, _compat.VGroup))
         for value in objects
     )
     if not family_profile and not leaf_profile:
@@ -2669,13 +2682,12 @@ def _merged_points_observation(value: _base.Mobject):
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
     if not _is_shared_family(value):
         return None
-    # Family nodes own membership but no point array of their own, matching
-    # Mobject.get_num_points() on Manim Group/VGroup instances.
+    # Only root-owned points contribute; direct-child membership stays separate.
     return int(engine_call(value._semantic_family_handle.pointCount))
 
 
 def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
-    if isinstance(value, _compat.VMobject):
+    if isinstance(value, _compat.VMobject) and not _is_shared_family(value):
         try:
             stride = operator.index(
                 getattr(value, "n_points_per_cubic_curve", 4)
@@ -2778,7 +2790,7 @@ def _boundary_point_observation(
     direction_x: float,
     direction_y: float,
 ):
-    if isinstance(value, _compat.VMobject):
+    if isinstance(value, _compat.VMobject) and not _is_shared_family(value):
         try:
             stride = operator.index(
                 getattr(value, "n_points_per_cubic_curve", 4)
@@ -2818,6 +2830,10 @@ def _boundary_point_observation(
         direction_x,
         direction_y,
     )
+
+
+def _vector_boundary_points_observation(value: _base.Mobject):
+    return _point_query_observation(value, "VectorBoundaryPoints")
 
 
 def _path_boundary_points_observation(value: _base.Mobject):
@@ -2891,7 +2907,7 @@ def _boundary_point_from_points_observation(
 
 def _is_shared_family(value: object) -> bool:
     return (
-        isinstance(value, _compat.Group)
+        isinstance(value, (_compat.Group, _compat.VGroup))
         and getattr(value, "_semantic_family_handle", None) is not None
     )
 
@@ -2933,7 +2949,15 @@ def _family_wrapper_key(value: object) -> str:
     _, handle = _family_member_handle(value)
     if handle is None:
         raise RuntimeError("family member has no shared semantic identity")
+    return _shared_handle_key(handle)
+
+
+def _shared_handle_key(handle: object) -> str:
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _is_missing_handle(handle: object) -> bool:
+    return handle is None or handle is _jsnull
 
 
 def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
@@ -2981,6 +3005,25 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
+def _group_indexed_member(self: _compat.Group, index: object) -> object:
+    # Python owns its index protocol. Rust observes current membership only
+    # after __index__ finishes, using the already-normalized absolute rank.
+    normalized = range(len(self))[index]
+    handle = engine_call(self._semantic_family_handle.memberAt, normalized)
+    if _is_missing_handle(handle):
+        raise IndexError("list index out of range")
+    key = _shared_handle_key(handle)
+    # Specialized wrappers refresh language metadata even for known identities.
+    # Ordinary Group/VGroup reads have no such hook or sibling traversal.
+    refresh = getattr(self, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
+    try:
+        return self._semantic_member_wrappers[key]
+    except KeyError as error:
+        raise RuntimeError("shared family identity has no Python wrapper") from error
+
+
 def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():
@@ -2991,16 +3034,21 @@ def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
     if handle is None:
         raise RuntimeError("get_family requires a shared Rust semantic handle")
     keys = [str(key) for key in engine_call(handle.familyKeys)]
+    selected = set(keys)
     wrappers = {}
     pending = [self]
     while pending:
         wrapper = pending.pop()
         key = _family_wrapper_key(wrapper)
-        if key in wrappers:
+        if key not in selected or key in wrappers:
             continue
         wrappers[key] = wrapper
         if _is_shared_family(wrapper):
             pending.extend(wrapper.submobjects)
+        else:
+            pending.extend(member for member_key, member in
+                           getattr(wrapper, "_semantic_member_wrappers", {}).items()
+                           if str(member_key) in selected)
     try:
         return [wrappers[key] for key in keys]
     except KeyError as error:
@@ -3013,17 +3061,20 @@ def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, colo
     z_index = _ir._finite_number("z_index", z_index)
     parsed = _base.BLACK if color is None else _compat._as_color("color", color)
     arguments = () if parsed == _base.WHITE else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    draw_enabled = isinstance(self, _compat.VMobject)
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     family = (
         engine_call(context.liveCreateFamilyWithColor if arguments else context.liveCreateFamily,
-                    batch, z_index, *arguments)
+                    batch, z_index, *arguments, draw_enabled)
         if context is not None
-        else engine_call(_create_family_handle, batch, z_index, *arguments)
+        else engine_call(_create_family_handle, batch, z_index, draw_enabled, *arguments)
     )
     self._semantic_family_handle = family
     self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
@@ -3282,6 +3333,7 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            "_table_query_wrappers",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle", "_code_handle",
             "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
             # Arrow and ArrowVectorField keep this aggregate JS capability only for

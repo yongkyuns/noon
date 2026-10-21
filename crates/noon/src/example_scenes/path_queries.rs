@@ -4,10 +4,50 @@ use crate::{ExecutionSession, Scene};
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
+        let precise = 1.0 + 2.0_f64.powi(-40);
+        for count in 0_usize..10 {
+            let points = vec![(precise, 0.0); count];
+            let value = scene.path(
+                crate::VectorPath::from_manim_points_f64(points),
+                Default::default(),
+            )?;
+            assert_eq!(value.width()?, 0.0);
+            let family = scene.family(&[(&value).into()])?;
+            let anchor = crate::LayoutAnchor::from(&family);
+            assert_eq!(anchor.dimension_length(crate::LayoutDimension::Width)?, 0.0);
+            assert_eq!(
+                anchor.dimension_length(crate::LayoutDimension::Height)?,
+                0.0
+            );
+            if count != 1 && !count.is_multiple_of(4) {
+                assert!(value.path_query()?.anchors().is_err());
+                assert!(value.center().is_err());
+            } else {
+                assert_eq!(
+                    value.center()?,
+                    (if count == 0 { 0.0 } else { precise }, 0.0)
+                );
+                assert_eq!(
+                    value.path_query()?.anchors()?.len(),
+                    if count == 1 { 1 } else { count / 2 }
+                );
+            }
+        }
+
         let mut rectangle = scene.rectangle(2., 1.)?;
         rectangle.set_scale(2., 1.)?;
         rectangle.rotate(0.25)?;
         rectangle.shift(-2.5, 0.)?;
+        let mut precise_points = rectangle.path_query()?.points()?;
+        precise_points[0].0 += 2.0_f64.powi(-40);
+        rectangle.set_points_f64(&precise_points)?;
+        assert_eq!(rectangle.path_query()?.points()?, precise_points);
+        assert_eq!(rectangle.path_query()?.start()?, precise_points[0]);
+        assert_eq!(
+            rectangle.path_query()?.point_from_proportion(0.0)?,
+            precise_points[0]
+        );
+
         rectangle.disable_fill()?;
         rectangle.set_stroke_color(1., 1., 1., 1.)?;
         let mut ellipse = scene.circle(0.8)?;
@@ -15,6 +55,18 @@ pub fn session() -> Result<ExecutionSession, String> {
         ellipse.shift(2.5, 0.)?;
         ellipse.disable_fill()?;
         ellipse.set_stroke_color(1., 1., 1., 1.)?;
+        let nested = scene.family(&[(&rectangle).into(), (&ellipse).into()])?;
+        let vector_family = scene.family(&[(&nested).into(), (&rectangle).into()])?;
+        let expected_boundary = ellipse
+            .path_query()?
+            .anchors()?
+            .into_iter()
+            .chain(rectangle.path_query()?.anchors()?)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::MobjectTarget::from(&vector_family).vector_boundary_points()?,
+            expected_boundary
+        );
         assert_eq!(rectangle.get_num_points()?, 16);
         assert_eq!(ellipse.get_num_points()?, 32);
         let empty = scene.path(crate::VectorPath::new(), Default::default())?;
@@ -128,6 +180,20 @@ pub fn session() -> Result<ExecutionSession, String> {
             &session,
             &rectangle,
         )?;
+        let expected_boundary = ellipse
+            .path_query()?
+            .anchors()?
+            .into_iter()
+            .chain(captured.anchors()?)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::integration::effective_vector_boundary_points(
+                scene.integration_store(),
+                &session,
+                (&vector_family).into(),
+            )?,
+            expected_boundary
+        );
         let midpoint = captured.start()?;
         assert!((midpoint.0 - (start.0 + end.0) * 0.5).abs() < 2e-6);
         assert!((midpoint.1 - (start.1 + end.1) * 0.5).abs() < 2e-6);

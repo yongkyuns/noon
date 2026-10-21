@@ -26,13 +26,13 @@ def _int_func_mode(value: object) -> str:
 
 
 def _subset_family(group: object) -> tuple[_compat.Group, list[_base.Mobject], object]:
-    if not isinstance(group, _compat.Group):
+    if not isinstance(group, (_compat.Group, _compat.VGroup)):
         raise TypeError("subset-display animation requires a Group or VGroup")
     if not group.submobjects:
         raise ValueError("subset-display animation requires at least one direct submobject")
     members: list[_base.Mobject] = []
     for member in group.submobjects:
-        if isinstance(member, _compat.Group) or not isinstance(member, _base.Mobject):
+        if isinstance(member, (_compat.Group, _compat.VGroup)) or not isinstance(member, _base.Mobject):
             raise NotImplementedError(
                 "nested retained families are not yet supported by subset-display parity"
             )

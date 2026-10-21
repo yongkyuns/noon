@@ -26,6 +26,11 @@ on:
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/table-*"
+      - "scripts/manim-table-*"
+      - "fixtures/manim-v0.21/table-*"
+      - "scripts/manim-family-*"
+      - "fixtures/manim-v0.21/family-*"
       - "scripts/code-*"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
@@ -54,6 +59,11 @@ on:
       - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/table-*"
+      - "scripts/manim-table-*"
+      - "fixtures/manim-v0.21/table-*"
+      - "scripts/manim-family-*"
+      - "fixtures/manim-v0.21/family-*"
       - "scripts/code-*"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
@@ -197,6 +207,34 @@ jobs:
         with:
           name: code-browser-qualification
           path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify Table pixels, lifecycle and pinned position protocols
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 10
+        env:
+          NOON_TABLE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/table
+        run: node scripts/table-qualification.mjs
+      - name: Retain Table rendering and position evidence
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: table-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/table
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify held family root points and native drawing intent
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 10
+        env:
+          NOON_FAMILY_ROOT_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-root
+        run: node scripts/family-root-points-qualification.mjs
+      - name: Retain family root held-frame evidence
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: family-root-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-root
           if-no-files-found: warn
           retention-days: 3
       - name: Test gallery click animation and idle restoration
