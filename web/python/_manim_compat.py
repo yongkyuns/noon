@@ -141,10 +141,10 @@ def _manim_point3(point):
 
 
 class VMobject(Mobject):
+    """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
+
     def _assert_valid_submobjects(self, submobjects):
         return self._assert_valid_submobjects_internal(submobjects, VMobject)
-
-    """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
     n_points_per_cubic_curve = 4
     tolerance_for_point_equality = 1e-6
