@@ -164,13 +164,28 @@ class FamilyIndexedQueryTests(unittest.TestCase):
         bridge.splitAt.assert_called_once_with(0, True)
         group.has_no_points.assert_called_once_with()
 
-    def test_length_dispatches_an_overridden_split(self):
-        group, _, values, bridge = self.group()
-        group.split = Mock(return_value=[group, *values])
-        bridge.splitCount = Mock(side_effect=AssertionError("custom split was bypassed"))
-        self.assertEqual(len(group), 4)
-        group.split.assert_called_once_with()
-        bridge.splitCount.assert_not_called()
+    def test_length_does_not_dispatch_an_overridden_split(self):
+        group, _, _, bridge = self.group()
+        group.split = Mock(side_effect=LookupError("split hook"))
+        bridge.splitCount = Mock(return_value=2)
+        self.assertEqual(len(group), 2)
+        group.split.assert_not_called()
+        bridge.splitCount.assert_called_once_with(None)
+
+    def test_intrinsic_split_does_not_dispatch_custom_point_predicates(self):
+        for own in (False, True):
+            for predicate in (False, True, LookupError("point hook")):
+                with self.subTest(own=own, predicate=predicate):
+                    group, _, values, bridge = self.group()
+                    group.has_points = Mock(**(
+                        {"side_effect": predicate} if isinstance(predicate, Exception)
+                        else {"return_value": predicate}))
+                    keys = (["99:1"] if own else []) + ["0:1", "1:1"]
+                    bridge.splitKeys = Mock(return_value=keys)
+                    expected = ([group] if own else []) + values[:2]
+                    self.assertEqual(group.split(), expected)
+                    group.has_points.assert_not_called()
+                    bridge.splitKeys.assert_called_once_with(None)
 
     def test_copy_keeps_iterator_reference_ownership_on_the_source(self):
         from _typed_family_test_support import FakeMembershipBatch

@@ -3133,15 +3133,13 @@ def _group_iter(root):
 
 
 def _group_length(root):
-    split = root.split
-    if getattr(split, "__func__", None) not in (_compat._FamilyMethods.split, _base.Mobject.split):
-        return len(split())
     return int(engine_call(_family_query_handle(root).splitCount, _group_point_inclusion(root)))
 
 
 def _group_split(root):
-    inclusion = _group_point_inclusion(root)
-    keys = engine_call(_family_query_handle(root).splitKeys, inclusion)
+    # CE split reads the intrinsic point array; unlike len/iteration/indexing,
+    # it does not invoke an overridden has_points predicate.
+    keys = engine_call(_family_query_handle(root).splitKeys, None)
     refresh = getattr(root, "_refresh_semantic_members", None)
     if refresh is not None:
         refresh()
