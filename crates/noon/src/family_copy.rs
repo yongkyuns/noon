@@ -215,14 +215,21 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family(_) => (
+                SemanticNodeKind::Family(family_state) => (
                     true,
                     node.members_iter().collect::<Vec<_>>(),
                     Some(node.presentation().expect("family presentation").z_index),
                     node.presentation()
                         .expect("family presentation")
                         .draw_enabled,
-                    node.family_color(),
+                    // Visible paint may differ from the stored fallback. Copy the
+                    // authored fallback itself; the complete style is copied below.
+                    Some(match family_state {
+                        noon_core::SemanticFamilyState::Unrendered(state) => state.own_color,
+                        noon_core::SemanticFamilyState::ContentOwning { fallback_color } => {
+                            *fallback_color
+                        }
+                    }),
                     node.family_style().cloned(),
                     node.family_background_stroke_color(),
                     node.family_background_stroke_width(),
@@ -471,4 +478,67 @@ fn authored_copy<R>(
     )?;
     let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
     pending.resolve(&result, from_node)
+}
+
+#[cfg(test)]
+mod owned_root_fallback_copy_tests {
+    use crate::{Color, MobjectFamily, Scene};
+
+    fn fallback(family: &MobjectFamily) -> Color {
+        let store = family.integration_store().borrow();
+        match store.node(family.node_id()).unwrap().kind() {
+            noon_core::SemanticNodeKind::Family(
+                noon_core::SemanticFamilyState::ContentOwning { fallback_color },
+            ) => *fallback_color,
+            kind => panic!("expected an owned family root, got {kind:?}"),
+        }
+    }
+
+    #[test]
+    fn authored_and_live_copies_preserve_fallback_independently_from_visible_paint() {
+        let mut scene = Scene::new();
+        let child = scene.square(0.2).unwrap();
+        let source = scene
+            .family_with_presentation(&[(&child).into()], 0.0, Color::RED, true)
+            .unwrap();
+        source
+            .set_points_f64(&[(0.0, 0.0), (0.1, 0.0), (0.2, 0.1), (0.3, 0.2)])
+            .unwrap();
+        source
+            .own_object()
+            .unwrap()
+            .unwrap()
+            .set_fill(0.0, 0.0, 1.0, 1.0)
+            .unwrap();
+        assert_eq!(fallback(&source), Color::RED);
+        assert_ne!(
+            scene
+                .integration_store()
+                .borrow()
+                .node(source.node_id())
+                .unwrap()
+                .family_color(),
+            Some(Color::RED)
+        );
+        let style = source.own_object().unwrap().unwrap().state().unwrap().style;
+        let authored = source.copy_family().unwrap().root().clone();
+        scene.add_many(&[(&source).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let live = scene
+            .live(&mut session)
+            .copy_family(&source)
+            .unwrap()
+            .root()
+            .clone();
+        for copied in [authored, live] {
+            assert_eq!(fallback(&copied), Color::RED);
+            assert_eq!(
+                copied.own_object().unwrap().unwrap().state().unwrap().style,
+                style
+            );
+            assert_eq!(copied.get_num_points().unwrap(), 4);
+            assert_eq!(copied.member_count().unwrap(), 1);
+        }
+        assert_eq!(fallback(&source), Color::RED);
+    }
 }
