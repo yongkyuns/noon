@@ -355,6 +355,15 @@ pub async fn create_direct_family_paint_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Held root geometry uses exactly the native compiled Rust continuation.
+#[wasm_bindgen(js_name = createDirectFamilyRootPointsSmokeRenderer)]
+pub async fn create_direct_family_root_points_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_root_points::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Row/column grid placement uses the shared family transaction planner.
 #[wasm_bindgen(js_name = createDirectFamilyGridSmokeRenderer)]
 pub async fn create_direct_family_grid_smoke_renderer(
