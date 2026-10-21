@@ -37,6 +37,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   done < <(find web -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print | sort)
 
   node --check scripts/build-python-worker.mjs
+  node --test scripts/worker-composite-rows.test.mjs
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs

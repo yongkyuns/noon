@@ -1,5 +1,6 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmAuthoringFamilyHandle,
   WasmGlow,
   WasmGlowUpdate,
   WasmAuthoringVectorPath,
@@ -358,7 +359,7 @@ async function initializePyodide() {
     for (const row of rows) {
       entries.beginRow();
       for (const entry of row) {
-        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        if (entry instanceof WasmAuthoringFamilyHandle) entries.appendFamilyEntry(entry);
         else entries.appendEntry(entry);
       }
     }
