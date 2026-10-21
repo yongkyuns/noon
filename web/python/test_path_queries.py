@@ -1341,13 +1341,22 @@ class PathQueryTests(unittest.TestCase):
         from unittest.mock import Mock
         import noon
 
-        root = Mock()
-        root.has_points.return_value = False
+        root = identity_only_wrapper(noon.Mobject)
+        root.has_points = Mock(return_value=False)
+        root.get_num_points = Mock(return_value=0)
+        root.get_family = Mock()
         leaf = Mock(get_num_points=Mock(return_value=4), submobjects=[])
         second_leaf = Mock(get_num_points=Mock(return_value=2), submobjects=[])
         empty = Mock(get_num_points=Mock(return_value=0), submobjects=[])
         nested = Mock(get_num_points=Mock(return_value=0), submobjects=[empty])
         root.submobjects = [nested, empty, leaf, second_leaf]
+        from types import SimpleNamespace
+        root._semantic_member_wrappers = dict(zip(("1:1", "2:1", "3:1", "4:1"), root.submobjects))
+        root._semantic_handle = SimpleNamespace(
+            semanticSlot=99, semanticGeneration=1,
+            splitKeys=Mock(side_effect=lambda include: (["99:1"] if include else []) + list(root._semantic_member_wrappers)),
+        )
+        root._semantic_handle_fresh = True
 
         self.assertEqual(noon.Mobject.split(root), [nested, empty, leaf, second_leaf])
         self.assertEqual(noon.Mobject.nonempty_submobjects(root), [nested, leaf, second_leaf])

@@ -1,5 +1,5 @@
 //! Ordered direct-member reads share the semantic store's count and rank index.
-use crate::{AuthoringError, CompositeEntryHandle, MobjectFamily};
+use crate::{AuthoringError, CompositeEntryHandle, Mobject, MobjectFamily};
 use std::rc::Rc;
 
 /// A retained direct-member list view, independent of any language frontend.
@@ -30,7 +30,7 @@ impl FamilyMemberView {
 /// Membership edits follow that container's lifetime; member values stay live.
 #[derive(Debug)]
 pub struct FamilyIterator {
-    prefix: Option<MobjectFamily>,
+    prefix: Option<CompositeEntryHandle>,
     members: Option<FamilyMemberView>,
     index: usize,
 }
@@ -38,11 +38,11 @@ impl Iterator for FamilyIterator {
     type Item = Result<CompositeEntryHandle, AuthoringError>;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(root) = self.prefix.take() {
-            if let Err(error) = root.validate() {
+            if let Err(error) = root.as_target().validate() {
                 self.members = None;
                 return Some(Err(error));
             }
-            return Some(Ok(CompositeEntryHandle::Family(root)));
+            return Some(Ok(root));
         }
         match self.members.as_ref()?.member_at(self.index) {
             Ok(Some(member)) => {
@@ -73,7 +73,7 @@ fn member_view_error(error: noon_core::SemanticMemberViewError) -> AuthoringErro
     }
 }
 
-impl MobjectFamily {
+impl CompositeEntryHandle {
     /// Capture direct-member container identity without copying its order.
     pub fn member_view(&self) -> Result<FamilyMemberView, AuthoringError> {
         self.validate()?;
@@ -91,7 +91,7 @@ impl MobjectFamily {
     pub fn member_count(&self) -> Result<usize, AuthoringError> {
         self.integration_store()
             .borrow()
-            .semantic_family_checked(self.node_id())
+            .semantic_authoring_node_checked(self.node_id())
             .map(|node| node.member_count())
             .map_err(Into::into)
     }
@@ -136,7 +136,7 @@ impl MobjectFamily {
         self.validate()?;
         if include_self {
             if index == 0 {
-                return Ok(Some(CompositeEntryHandle::Family(self.clone())));
+                return Ok(Some(self.clone()));
             }
             self.member_at(index - 1)
         } else {
@@ -157,11 +157,11 @@ impl MobjectFamily {
         let ids = self
             .integration_store()
             .borrow()
-            .semantic_family_checked(self.node_id())?
+            .semantic_authoring_node_checked(self.node_id())?
             .members();
         let mut members = Vec::with_capacity(ids.len() + usize::from(include_self));
         if include_self {
-            members.push(CompositeEntryHandle::Family(self.clone()));
+            members.push(self.clone());
         }
         for id in ids {
             members.push(CompositeEntryHandle::from_node(
@@ -181,12 +181,74 @@ impl MobjectFamily {
         let node = self
             .integration_store()
             .borrow()
-            .semantic_family_member_at_checked(self.node_id(), index)
+            .semantic_member_at_checked(self.node_id(), index)
             .map_err(AuthoringError::from)?;
         node.map(|node| CompositeEntryHandle::from_node(Rc::clone(self.integration_store()), node))
             .transpose()
     }
 }
+
+// Both public handle types use exactly the same membership and split engine.
+macro_rules! member_queries {
+    ($target:ty, $variant:ident) => {
+        impl $target {
+            pub fn member_view(&self) -> Result<FamilyMemberView, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).member_view()
+            }
+            pub fn member_count(&self) -> Result<usize, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).member_count()
+            }
+            pub fn member_at(
+                &self,
+                index: usize,
+            ) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).member_at(index)
+            }
+            pub fn split_count(&self) -> Result<usize, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_count()
+            }
+            pub fn split_count_with_self(
+                &self,
+                include_self: bool,
+            ) -> Result<usize, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_count_with_self(include_self)
+            }
+            pub fn split_at(
+                &self,
+                index: usize,
+            ) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_at(index)
+            }
+            pub fn split_at_with_self(
+                &self,
+                index: usize,
+                include_self: bool,
+            ) -> Result<Option<CompositeEntryHandle>, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_at_with_self(index, include_self)
+            }
+            pub fn split_members(&self) -> Result<Vec<CompositeEntryHandle>, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_members()
+            }
+            pub fn split_members_with_self(
+                &self,
+                include_self: bool,
+            ) -> Result<Vec<CompositeEntryHandle>, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_members_with_self(include_self)
+            }
+            pub fn split_iter(&self) -> Result<FamilyIterator, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_iter()
+            }
+            pub fn split_iter_with_self(
+                &self,
+                include_self: bool,
+            ) -> Result<FamilyIterator, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).split_iter_with_self(include_self)
+            }
+        }
+    };
+}
+member_queries!(MobjectFamily, Family);
+member_queries!(Mobject, Mobject);
 
 #[cfg(test)]
 mod tests {

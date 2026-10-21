@@ -415,3 +415,6 @@ pub mod prelude {
 }
 
 pub use family_gradient::color_gradient;
+
+#[cfg(all(test, feature = "diagnostics"))]
+mod object_member_queries;

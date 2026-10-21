@@ -658,6 +658,7 @@ def _clone_mobject(
         "_semantic_handle",
         "_semantic_handle_fresh",
         "_canonical_live_target_context",
+        "_semantic_member_reference_scope",
     }
     # A callback registry belongs to its source occurrence. The detached target
     # carries only its opaque semantic handle, never copied callback ownership.
@@ -3005,6 +3006,15 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
+def _family_query_handle(root):
+    handle = getattr(root, "_semantic_family_handle", None)
+    if handle is None:
+        handle = _handle_for(root)
+    if handle is None:
+        raise RuntimeError("member queries require a shared Rust semantic handle")
+    return handle
+
+
 class _FamilyWrapperReferences:
     """Host object references only; Rust selects membership and order."""
     __slots__ = ("wrappers", "readers")
@@ -3015,6 +3025,8 @@ class _FamilyWrapperReferences:
 
 
 def _retain_group_wrapper_references(root):
+    if getattr(root, "_semantic_member_wrappers", None) is None:
+        root._semantic_member_wrappers = {}
     scope = getattr(root, "_semantic_member_reference_scope", None)
     if scope is None or scope.wrappers is not root._semantic_member_wrappers:
         scope = _FamilyWrapperReferences(root._semantic_member_wrappers)
@@ -3071,7 +3083,7 @@ class _SharedFamilyIterator:
         refresh = getattr(root, "_refresh_semantic_members", None)
         if refresh is not None:
             refresh()
-        self._native = engine_call(root._semantic_family_handle.splitIterator, inclusion)
+        self._native = engine_call(_family_query_handle(root).splitIterator, inclusion)
         self._references = _retain_group_wrapper_references(root)
 
     def __iter__(self):
@@ -3122,14 +3134,14 @@ def _group_iter(root):
 
 def _group_length(root):
     split = root.split
-    if getattr(split, "__func__", None) is not _compat._FamilyMethods.split:
+    if getattr(split, "__func__", None) not in (_compat._FamilyMethods.split, _base.Mobject.split):
         return len(split())
-    return int(engine_call(root._semantic_family_handle.splitCount, _group_point_inclusion(root)))
+    return int(engine_call(_family_query_handle(root).splitCount, _group_point_inclusion(root)))
 
 
 def _group_split(root):
     inclusion = _group_point_inclusion(root)
-    keys = engine_call(root._semantic_family_handle.splitKeys, inclusion)
+    keys = engine_call(_family_query_handle(root).splitKeys, inclusion)
     refresh = getattr(root, "_refresh_semantic_members", None)
     if refresh is not None:
         refresh()
@@ -3140,7 +3152,7 @@ def _group_indexed_member(self: _compat.Group, index: object) -> object:
     # Python normalizes before invoking __index__; Rust then reads current
     # root inclusion and current direct-member rank after that callback.
     normalized = range(len(self))[index]
-    selected = engine_call(self._semantic_family_handle.splitAt, normalized,
+    selected = engine_call(_family_query_handle(self).splitAt, normalized,
                            _group_point_inclusion(self, "has_no_points"))
     if _is_missing_handle(selected):
         raise IndexError("list index out of range")
@@ -3176,7 +3188,7 @@ def _group_slice(root, value):
     refresh = getattr(root, "_refresh_semantic_members", None)
     if refresh is not None:
         refresh()
-    plan = engine_call(root._semantic_family_handle.prepareSlice, inclusion)
+    plan = engine_call(_family_query_handle(root).prepareSlice, inclusion)
     scope = None
     try:
         if bool(plan.includesSelf):

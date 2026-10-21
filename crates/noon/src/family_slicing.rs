@@ -1,17 +1,17 @@
 //! Split slices capture their query profile before host index protocols run.
-use crate::{AuthoringError, CompositeEntryHandle, FamilyMemberView, MobjectFamily};
+use crate::{AuthoringError, CompositeEntryHandle, FamilyMemberView, Mobject, MobjectFamily};
 use std::num::NonZeroI64;
 
 /// A prepared slice over one family. Point-free roots retain the member list;
 /// own-point roots retain the split length and read current members at selection.
 #[derive(Debug)]
 pub struct FamilySlicePlan {
-    root: MobjectFamily,
+    root: CompositeEntryHandle,
     captured_members: Option<FamilyMemberView>,
     split_length: usize,
 }
 
-impl MobjectFamily {
+impl CompositeEntryHandle {
     pub fn slice_plan(&self) -> Result<FamilySlicePlan, AuthoringError> {
         self.slice_plan_with_self(self.get_num_points()? != 0)
     }
@@ -104,7 +104,7 @@ impl FamilySlicePlan {
         let mut selected = Vec::new();
         for index in span.indices() {
             let member = if include_root && index == 0 {
-                Some(CompositeEntryHandle::Family(self.root.clone()))
+                Some(self.root.clone())
             } else {
                 let rank = if include_root {
                     index.checked_sub(1)
@@ -199,6 +199,24 @@ impl SliceSpan {
             .map(|value| value as i64)
     }
 }
+
+macro_rules! slice_queries {
+    ($target:ty, $variant:ident) => {
+        impl $target {
+            pub fn slice_plan(&self) -> Result<FamilySlicePlan, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).slice_plan()
+            }
+            pub fn slice_plan_with_self(
+                &self,
+                include_self: bool,
+            ) -> Result<FamilySlicePlan, AuthoringError> {
+                CompositeEntryHandle::$variant(self.clone()).slice_plan_with_self(include_self)
+            }
+        }
+    };
+}
+slice_queries!(MobjectFamily, Family);
+slice_queries!(Mobject, Mobject);
 
 #[cfg(all(test, feature = "diagnostics"))]
 mod reference_tests;
