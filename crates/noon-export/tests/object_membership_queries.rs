@@ -8,8 +8,8 @@ fn visible_patch(frame: &[u8], x: f64, y: f64) -> bool {
     // The default 640x360 camera spans 128/9 by 8 world units.
     let cx = (320.0 + x * 45.0).round() as usize;
     let cy = (180.0 - y * 45.0).round() as usize;
-    (cy - 11..cy + 12).any(|row| {
-        (cx - 11..cx + 12).any(|column| {
+    (cy - 20..cy + 21).any(|row| {
+        (cx - 20..cx + 21).any(|column| {
             let pixel = &frame[4 * (row * 640 + column)..][..4];
             pixel[..3].iter().any(|&value| value > 32)
         })

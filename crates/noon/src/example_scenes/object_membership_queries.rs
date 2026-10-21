@@ -63,10 +63,10 @@ impl LiveContinuation for ObjectMembershipQueries {
 pub fn program() -> Result<LiveProgram<ObjectMembershipQueries>, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
-        let root = scene.geometry(ManimGeometryOptions::circle(0.2)?)?;
-        let mut a = scene.geometry(ManimGeometryOptions::square(0.1)?)?;
-        let mut b = scene.geometry(ManimGeometryOptions::circle(0.1)?)?;
-        let mut c = scene.geometry(ManimGeometryOptions::square(0.15)?)?;
+        let root = scene.geometry(ManimGeometryOptions::circle(0.4)?)?;
+        let mut a = scene.geometry(ManimGeometryOptions::square(0.3)?)?;
+        let mut b = scene.geometry(ManimGeometryOptions::circle(0.3)?)?;
+        let mut c = scene.geometry(ManimGeometryOptions::square(0.4)?)?;
         a.shift(-1.0, 0.0)?;
         b.shift(1.0, 0.0)?;
         c.shift(0.0, 1.0)?;

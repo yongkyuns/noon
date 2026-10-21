@@ -4,8 +4,8 @@ from manim import *
 
 class ObjectMembers(Scene):
     def construct(self):
-        root = Circle(.2)
-        a, b, c = Square(.1).shift(LEFT), Circle(.1).shift(RIGHT), Square(.15).shift(UP)
+        root = Circle(.4)
+        a, b, c = Square(.3).shift(LEFT), Circle(.3).shift(RIGHT), Square(.4).shift(UP)
         assert root.add(a, b, a) is root
         assert root.submobjects == [b, a]
         captured = iter(root)
