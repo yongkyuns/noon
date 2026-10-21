@@ -3637,6 +3637,9 @@ impl SemanticExecutionPlayer {
             .live_wake_clock
             .scene_time_at(wall_time_ms)
             .ok_or("observe the live segment wake before driving it from wall time")?;
+        let requested_time = self
+            .session
+            .initial_continuous_segment_sample(segment, requested_time);
         self.live_drive_segment_to(segment, requested_time)
     }
 
@@ -5751,6 +5754,9 @@ impl SemanticExecutionPlayer {
         self.session.frame().time
     }
 }
+
+#[cfg(test)]
+mod live_initial_sample_tests;
 
 #[cfg(test)]
 mod tests;

@@ -321,6 +321,39 @@ impl ExecutionSegmentState {
 }
 
 impl ExecutionSession {
+    /// Propose one interior realtime sample when a new composition is overdue.
+    ///
+    /// A callback-free composition with active continuous work must not lose its
+    /// entire first interval to an earlier source/renderer stall. The host keeps
+    /// its original wall clock and presents this sample through its ordinary
+    /// publication barrier before requesting another one. Subsequent catch-up,
+    /// waits, callbacks and explicitly sampled/seek execution keep their targets.
+    pub fn initial_continuous_segment_sample(
+        &self,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> f64 {
+        let current = self.frame().time;
+        if !requested_time.is_finite()
+            || segment.token().is_none()
+            || self.has_required_callbacks()
+            || current != segment.start_time()
+            || requested_time < segment.end_time()
+            || !matches!(
+                self.segment_state(segment).timeline(),
+                TimelineWakeState::Continuous
+            )
+        {
+            return requested_time;
+        }
+        let interior = current + (segment.end_time() - current) * 0.5;
+        if current < interior && interior < segment.end_time() {
+            interior
+        } else {
+            requested_time
+        }
+    }
+
     /// Start a logical wait segment at the current authored scene time.
     ///
     /// This does not add a no-op track or mutate the runtime scheduler. The returned
