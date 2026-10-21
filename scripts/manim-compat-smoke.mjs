@@ -48,6 +48,15 @@ ${await readFile(path.join(repoRoot, "scripts/manim_path_keyword_observation.py"
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_path_keyword_controls.py"), "utf8")}`;
 const queryHookFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/query-hooks.json"), "utf8"));
+const pointListFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/point-list-insertion.json"), "utf8"));
+const pointListOracle = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/point-list-insertion-oracle.json"), "utf8"));
+const pointListSource = `import json
+POINT_LIST_CASES = json.loads(${JSON.stringify(JSON.stringify(pointListFixture.cases))})
+POINT_LIST_ORACLE = json.loads(${JSON.stringify(JSON.stringify(pointListOracle))})
+${await readFile(path.join(repoRoot, "scripts/manim_point_list_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_point_list_controls.py"), "utf8")}`;
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_query_hooks.py"), "utf8")}`;
 const uncreateSource = await readFile(
@@ -1046,22 +1055,24 @@ result = Scene()
   // Plain Text Write/Unwrite and mixed ordinary compositions execute through the
   // shared semantic session. Source assertions cover membership at completion;
   // these public reports cover authored timing and stable live canvas ownership.
+  const sharedSources = [
+    concurrentFamilySource,
+    plainTextLifecycleSource,
+    mixedFamilyOrdinarySource,
+    mixedFamilyOrdinaryEditedSource,
+    familyClassQueriesSource,
+    familyRootPointsSource,
+    familySlicesSource,
+    objectQueriesSource,
+    objectMembersSource,
+    objectMemberControlsSource,
+    pathKeywordSource,
+    queryHooksSource,
+    pointListSource,
+  ];
   const sharedText = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
-    [
-      concurrentFamilySource,
-      plainTextLifecycleSource,
-      mixedFamilyOrdinarySource,
-      mixedFamilyOrdinaryEditedSource,
-      familyClassQueriesSource,
-      familyRootPointsSource,
-      familySlicesSource,
-      objectQueriesSource,
-      objectMembersSource,
-      objectMemberControlsSource,
-      pathKeywordSource,
-      queryHooksSource,
-    ],
+    sharedSources,
   );
   assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
   if (requestedBackend) {
@@ -1070,16 +1081,18 @@ result = Scene()
       resolveQualifiedBackend(expected, result.metrics.backend);
     }
   }
-  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${sharedText.results.at(-3).metrics.backend}.`);
-  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${sharedText.results.at(-2).metrics.backend}.`);
+  const reportFor = source => sharedText.results[sharedSources.indexOf(source)];
+  console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${reportFor(objectMemberControlsSource).metrics.backend}.`);
+  console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${reportFor(pathKeywordSource).metrics.backend}.`);
+  console.log(`Pinned point-list insertion controls passed: ${pointListFixture.cases.length} same-platform cases in authored/live phases; backend ${reportFor(pointListSource).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {

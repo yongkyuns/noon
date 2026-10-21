@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import hashlib
 import json
+import sys
 import unittest
 import warnings
 
@@ -16,9 +17,34 @@ import _manim_namespace as namespace
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = json.loads((ROOT / 'fixtures/manim-v0.21/point-list-insertion.json').read_text())
+if np is not None:
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    from manim_point_list_observation import (
+        assert_point_list_observation, observe_point_list, pinned_point_list_oracle,
+    )
 
 
 class PointListInsertionTests(unittest.TestCase):
+    @unittest.skipIf(np is None, 'NumPy runs in the pinned array-oracle lane')
+    def test_exact_extracted_ce_reproduces_every_original_desktop_observation(self):
+        witness = json.loads((ROOT / 'fixtures/manim-v0.21/point-list-insertion-oracle.json').read_text())
+        self.assertEqual(witness['rawMethodSha256'], FIXTURE['methodSourceSha256'])
+        self.assertEqual(np.dtype(int).name, 'int64', 'Original desktop fixture requires its captured integer platform')
+        oracle = pinned_point_list_oracle(witness)
+        for expected in FIXTURE['cases']:
+            with self.subTest(spec=expected['spec']):
+                assert_point_list_observation(observe_point_list(oracle, expected['spec']), expected)
+
+    @unittest.skipIf(np is None, 'NumPy runs in the pinned array-oracle lane')
+    def test_observation_comparator_preserves_metadata_and_value_failures(self):
+        for field, actual, expected in [('dtype', 'int32', 'int64'),
+                                        ('message', 'wrong error', 'pinned error'),
+                                        ('values', [0.1], [0.10001]),
+                                        ('ownership', True, False),
+                                        ('shape', [4, 3], [3, 4])]:
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_point_list_observation({field: actual}, {field: expected})
+
     def test_numpy_is_discovered_for_plain_list_arguments(self):
         self.assertEqual(namespace.required_packages(
             'value.insert_n_curves_to_point_list(n=2, points=[[1, 2, 3]])'), ('numpy',))
