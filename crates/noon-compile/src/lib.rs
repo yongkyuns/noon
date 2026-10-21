@@ -48,8 +48,8 @@ use noon_core::{
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
 pub use execution_patch::{
-    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, ExecutionMutationTransaction,
-    ExecutionPatch,
+    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, CompiledInset2DView,
+    ExecutionMutationTransaction, ExecutionPatch,
 };
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
@@ -936,6 +936,9 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
+    // Keyed by stable identity, so compaction needs no row remapping. Ordinary
+    // scenes allocate no entries and ordinary frame rows carry no view payload.
+    inset_2d_views: BTreeMap<ObjectId, CompiledInset2DView>,
     /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
@@ -1090,6 +1093,7 @@ pub enum CompilePatchError {
     InvalidGlowUpdate {
         object: ObjectId,
     },
+    InvalidInset2DView(ObjectId),
     ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
@@ -1143,6 +1147,7 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidInset2DView(object) => write!(formatter, "inset display {} cannot capture itself as its camera", object.get()),
             Self::ReplaySealed => formatter
                 .write_str("sealed replay is read-only; discard its retention before editing"),
             Self::TooManyObjects(count) => {
@@ -1486,6 +1491,7 @@ impl CompiledScene {
             track_count,
             object_indices,
             retired_object_indices: BTreeMap::new(),
+            inset_2d_views: BTreeMap::new(),
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
@@ -1508,6 +1514,15 @@ impl CompiledScene {
         };
         compiled.rebuild_spatial_anchor_groups();
         Ok(compiled)
+    }
+
+    /// Relations in the selected execution revision, ordered by display identity.
+    /// A detached camera suppresses capture without discarding the authored link.
+    pub fn inset_2d_views(&self) -> impl Iterator<Item = (ObjectId, CompiledInset2DView)> + '_ {
+        self.inset_2d_views.iter().filter_map(|(&display, &view)| {
+            (self.object_index(display).is_some() && self.object_index(view.camera_frame).is_some())
+                .then_some((display, view))
+        })
     }
 
     /// Stable compiled object slots. Retired slots remain in this slice and have `live == false`.
@@ -1888,6 +1903,10 @@ impl CompiledScene {
                         || glow.is_some()
                 })
             }
+            ExecutionPatch::SetInset2DView { object, view } => {
+                self.object_index(*object).is_none()
+                    || self.inset_2d_views.get(object) != view.as_ref()
+            }
             ExecutionPatch::ReplaceTrack(track) => self.track(track.id).is_none_or(|existing| {
                 self.object_index(track.object) != Some(existing.object_index)
                     || existing.property != track.property
@@ -1986,6 +2005,7 @@ impl CompiledScene {
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
                 self.update_spatial_anchor_group(index, previous.as_ref(), None);
                 self.graph_authored_content.remove(&index);
+                self.inset_2d_views.remove(id);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
                     if let Some(removed) = self.tracks.remove(&channel) {
@@ -2247,6 +2267,19 @@ impl CompiledScene {
                 glow,
             } => {
                 self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
+            }
+            ExecutionPatch::SetInset2DView { object, view } => {
+                if self.object_index(*object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                if view.is_some_and(|view| view.camera_frame == *object) {
+                    return Err(CompilePatchError::InvalidInset2DView(*object));
+                }
+                if let Some(view) = view {
+                    self.inset_2d_views.insert(*object, *view);
+                } else {
+                    self.inset_2d_views.remove(object);
+                }
             }
             ExecutionPatch::SetGraphDependencies {
                 owner,

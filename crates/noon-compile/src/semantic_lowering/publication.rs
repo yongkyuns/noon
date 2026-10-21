@@ -18,8 +18,8 @@ use super::{
 };
 use crate::{
     CompiledGraphArrowPolicy, CompiledGraphDependencyDefinition, CompiledGraphDependencyKind,
-    CompiledNumericTextDriver, CompiledObject, CompiledResources, ExecutionMutationTransaction,
-    ExecutionPatch,
+    CompiledInset2DView, CompiledNumericTextDriver, CompiledObject, CompiledResources,
+    ExecutionMutationTransaction, ExecutionPatch,
 };
 
 #[derive(Clone, Debug)]
@@ -183,6 +183,7 @@ pub struct SemanticPublicationPreparationStats {
 
 #[derive(Clone, Debug)]
 struct PreparedEntry {
+    inset_view: Option<CompiledInset2DView>,
     object: SemanticTransactionNodeRef,
     compiled: CompiledObject,
     numeric_text: Option<CompiledNumericTextDriver>,
@@ -249,15 +250,23 @@ impl PreparedSemanticPublication {
         &self,
         prepared: &PreparedSemanticMutationTransaction<'_>,
     ) -> Vec<ExecutionPatch> {
-        self.entries
-            .iter()
-            .filter_map(|entry| {
-                let semantic = prepared.planned_node_id(entry.object)?;
-                let mut compiled = entry.compiled.clone();
-                compiled.id = semantic_execution_object_id(semantic);
-                Some(ExecutionPatch::CreateObject(compiled))
-            })
-            .collect()
+        let mut patches = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            let Some(semantic) = prepared.planned_node_id(entry.object) else {
+                continue;
+            };
+            let mut compiled = entry.compiled.clone();
+            compiled.id = semantic_execution_object_id(semantic);
+            let object = compiled.id;
+            patches.push(ExecutionPatch::CreateObject(compiled));
+            if let Some(view) = entry.inset_view {
+                patches.push(ExecutionPatch::SetInset2DView {
+                    object,
+                    view: Some(view),
+                });
+            }
+        }
+        patches
     }
 
     /// Candidate-local numeric driver changes for runtime preflight. Exact
@@ -321,7 +330,14 @@ impl PreparedSemanticPublication {
                 object: entry.compiled.id,
                 declaration: entry.numeric_text,
             });
+            let object = entry.compiled.id;
             patches.push(ExecutionPatch::CreateObject(entry.compiled));
+            if let Some(view) = entry.inset_view {
+                patches.push(ExecutionPatch::SetInset2DView {
+                    object,
+                    view: Some(view),
+                });
+            }
         }
         patches.extend(self.anchor_bounds_updates.into_iter().map(|update| {
             ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
@@ -543,8 +559,23 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
-    let (values, mut resource_additions, numeric_text) =
+    let (mut values, mut resource_additions, numeric_text) =
         lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
+    let inset_updates = prepare_inset_updates(prepared)?;
+    // Existing display updates precede removals. Entry relations are installed
+    // after their CreateObject patch below; pending identities are already planned.
+    let mut live_inset_updates = inset_updates
+        .iter()
+        .filter_map(|(object, view)| {
+            let node = object.existing()?;
+            (reachability.is_object_reachable(node) && !prepared.node_is_removed(node))
+                .then_some((semantic_execution_object_id(node), *view))
+        })
+        .collect::<Vec<_>>();
+    live_inset_updates.sort_by_key(|(object, _)| *object);
+    for (object, view) in live_inset_updates {
+        values.push(ExecutionPatch::SetInset2DView { object, view });
+    }
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
     let mut possible_exit_nodes = Vec::new();
@@ -627,7 +658,9 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
 
     let entries = possible_entry_refs
         .into_iter()
-        .map(|object| lower_prepared_entry(prepared, object, &mut resource_additions))
+        .map(|object| {
+            lower_prepared_entry(prepared, object, &inset_updates, &mut resource_additions)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let possible_exits = possible_exit_nodes
@@ -651,6 +684,56 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         numeric_text,
         stats,
     })
+}
+
+// Read only the edited relations and reverse references of removed cameras.
+// Ordinary property edits neither enumerate nor relower the scene's inset views.
+fn prepare_inset_updates(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+) -> Result<
+    HashMap<SemanticTransactionNodeRef, Option<CompiledInset2DView>>,
+    SemanticPublicationLoweringError,
+> {
+    let mut updates = HashMap::new();
+    for mutation in prepared.candidate_mutations() {
+        if let SemanticMutation::RemoveNode {
+            node: SemanticTransactionNodeRef::Existing(camera),
+        } = mutation
+        {
+            for display in prepared.store().inset_displays_for_camera(*camera) {
+                if !prepared.node_is_removed(display) {
+                    updates.insert(display.into(), None);
+                }
+            }
+        }
+    }
+    for mutation in prepared.candidate_mutations() {
+        if let SemanticMutation::SetInset2DView {
+            object,
+            camera_frame,
+            capture_own_display,
+        } = mutation
+        {
+            if prepared.node_is_removed(*object) {
+                continue;
+            }
+            let view = if let Some(camera) = camera_frame {
+                let camera = prepared.planned_node_id(*camera).ok_or(
+                    SemanticPublicationLoweringError::PlannedObjectIdUnavailable {
+                        object: *camera,
+                    },
+                )?;
+                Some(CompiledInset2DView {
+                    camera_frame: semantic_execution_object_id(camera),
+                    capture_own_display: *capture_own_display,
+                })
+            } else {
+                None
+            };
+            updates.insert(*object, view);
+        }
+    }
+    Ok(updates)
 }
 
 fn prepare_anchor_bounds_updates(
@@ -1115,6 +1198,7 @@ fn collect_existing_exit_leaves(
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     object: SemanticTransactionNodeRef,
+    inset_updates: &HashMap<SemanticTransactionNodeRef, Option<CompiledInset2DView>>,
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
     let state = prepared.proposed_object_state(object)?;
@@ -1171,7 +1255,18 @@ fn lower_prepared_entry(
     compiled.base_z_index = state.z_index();
     compiled.draw_enabled = state.draw_enabled();
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
+    let inset_view = inset_updates
+        .get(&object)
+        .copied()
+        .unwrap_or_else(|| match state.role() {
+            SemanticObjectRole::Inset2DView(view) => Some(CompiledInset2DView {
+                camera_frame: semantic_execution_object_id(view.camera_frame),
+                capture_own_display: view.capture_own_display,
+            }),
+            _ => None,
+        });
     Ok(PreparedEntry {
+        inset_view,
         object,
         compiled,
         numeric_text,

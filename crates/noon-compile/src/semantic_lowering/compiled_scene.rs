@@ -358,6 +358,7 @@ fn materialize_semantic_projection(
         track_count: 0,
         object_indices,
         retired_object_indices: BTreeMap::new(),
+        inset_2d_views: projection.inset_2d_views.clone(),
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),

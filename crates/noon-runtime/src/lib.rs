@@ -721,6 +721,13 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
+    /// Sparse view relations from the same selected plan revision as the frame.
+    pub fn inset_2d_views(
+        &self,
+    ) -> impl Iterator<Item = (ObjectId, noon_compile::CompiledInset2DView)> + '_ {
+        self.compiled.inset_2d_views()
+    }
+
     pub fn apply_execution_patch(
         &mut self,
         patch: &ExecutionPatch,
@@ -856,6 +863,15 @@ impl SceneInstance {
         }
         if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
             self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetInset2DView { object, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            // A relation-only publication must wake presentation, even when the
+            // rectangle's geometry and pose did not change.
+            if let Some(index) = self.compiled.object_index(*object) {
+                self.mark_changed(index as usize);
+            }
             return Ok(&self.frame);
         }
         if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {

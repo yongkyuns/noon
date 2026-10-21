@@ -100,7 +100,7 @@ impl SemanticStore {
     }
 
     /// Derived reverse references keep inset validation local to an edited frame.
-    pub(crate) fn inset_displays_for_camera(
+    pub fn inset_displays_for_camera(
         &self,
         camera: SemanticNodeId,
     ) -> impl Iterator<Item = SemanticNodeId> + '_ {
