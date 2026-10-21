@@ -9,7 +9,7 @@ await qualifyPairedAuthoring({
     factory: "createDirectObjectMembershipQueriesRenderer",
     objectCount: index === 0 ? 3 : 6,
     duration: 0.5, sampleTime, boundaries: [0.25],
-    playback: "live", stopAtSourceCompletion: true,
-    directHeldSampleTime: [0, 0.25, 0.5][index],
+    playback: "live", stopAtSourceCompletion: index === 2,
+    ...(index < 2 ? { directHeldSampleTime: index * 0.25 } : {}),
   })),
 });
