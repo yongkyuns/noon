@@ -164,6 +164,7 @@ mod path_smoothing;
 mod plot_authoring;
 pub mod plot_presentation;
 mod point_matching;
+mod point_promotion;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod sample_space;

@@ -70,6 +70,8 @@ pub enum UnsupportedAuthoringOperation {
     ApplyMatrixNonPlanar,
     /// CyclicReplace currently requires one non-empty flat family of object members.
     CyclicReplaceFamilyTopology,
+    /// Own-point promotion cannot discard structured root dependencies.
+    PointPromotionStructuredRoot,
     /// Updater suspension requires the ordered host callback phase for scene-owned nodes.
     UpdaterSuspensionLive,
 }
@@ -107,6 +109,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
             Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
             Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
+            Self::PointPromotionStructuredRoot => "own-point promotion requires an ordinary root without structured dependencies",
             Self::UpdaterSuspensionLive => "updater suspension on scene-owned objects requires the ordered callback phase",
         })
     }
