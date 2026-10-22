@@ -165,6 +165,7 @@ mod plot_authoring;
 pub mod plot_presentation;
 mod point_matching;
 mod point_promotion;
+pub use point_promotion::{PointAlignment, PointAlignmentSide};
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod sample_space;

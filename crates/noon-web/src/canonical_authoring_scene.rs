@@ -8676,6 +8676,42 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        /// Promote own points through one coherent copy/clear/member publication.
+        #[wasm_bindgen(js_name = livePromoteFamilyOwnPoints)]
+        pub fn live_promote_family_own_points(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            let source = source.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_promote_own_points(
+                    (&source).into(),
+                    &references.copy_references().map_err(typed_js_error)?,
+                )
+                .map(crate::WasmFamilyCopy::from_entry_copy)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = livePromoteMobjectOwnPoints)]
+        pub fn live_promote_mobject_own_points(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_promote_own_points(
+                    source.semantic_mobject().into(),
+                    &references.copy_references().map_err(typed_js_error)?,
+                )
+                .map(crate::WasmFamilyCopy::from_entry_copy)
+                .map_err(typed_js_error)
+        }
+
         /// Copy the complete family through one coherent live publication.
         #[wasm_bindgen(js_name = liveCopyFamily)]
         pub fn live_copy_family(

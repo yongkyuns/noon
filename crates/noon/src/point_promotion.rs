@@ -1,4 +1,5 @@
 //! Root-local copy, clear and append through one semantic transaction.
+mod alignment;
 use crate::{
     family_copy::{
         prepare_semantic_copy_with_root_membership, CopyRootMembership, PendingSemanticCopy,
@@ -6,6 +7,8 @@ use crate::{
     path_editing::{prepare_object_edit, PathEdit, PreparedPathEdits},
     AuthoringError, CompositeEntryHandle, Mobject, MobjectTarget, SemanticCopy,
 };
+pub(crate) use alignment::alignment_side;
+pub use alignment::{PointAlignment, PointAlignmentSide};
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeId, SemanticObjectState,
     SemanticStore,

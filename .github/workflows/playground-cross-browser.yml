@@ -27,6 +27,7 @@ on:
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/object-membership-qualification.mjs"
+      - "scripts/point-promotion-qualification.mjs"
       - "scripts/xyz-queries-qualification.mjs"
       - "scripts/manim-xyz-queries-reference*"
       - "scripts/manim_xyz_query_observation.py"
@@ -67,6 +68,7 @@ on:
       - "scripts/pyodide-resource-cache.mjs"
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/object-membership-qualification.mjs"
+      - "scripts/point-promotion-qualification.mjs"
       - "scripts/xyz-queries-qualification.mjs"
       - "scripts/manim-xyz-queries-reference*"
       - "scripts/manim_xyz_query_observation.py"
@@ -277,6 +279,20 @@ jobs:
         with:
           name: object-xyz-query-browser-qualification
           path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/object-xyz-queries
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Qualify own-point promotion across native Rust semantics and Python
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 15
+        env:
+          NOON_POINT_PROMOTION_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
+        run: node scripts/point-promotion-qualification.mjs
+      - name: Retain own-point promotion observations and paired renders
+        if: always() && matrix.browser == 'chromium'
+        uses: actions/upload-artifact@v7
+        with:
+          name: point-promotion-browser-qualification
+          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
           if-no-files-found: warn
           retention-days: 3
       - name: Qualify full XYZ queries through authored, bound, edited and removed states

@@ -1231,6 +1231,12 @@ mod wasm {
     }
 
     impl WasmFamilyCopy {
+        pub(crate) fn from_entry_copy(
+            copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
+        ) -> Self {
+            Self { copied }
+        }
+
         pub(crate) fn from_object_copy(copied: noon::MobjectCopy) -> Self {
             Self {
                 copied: copied.into_entry_copy(),
@@ -2336,6 +2342,20 @@ mod wasm {
             self.semantic_family()?
                 .copy_with_references(&references.copy_references().map_err(js_error)?)
                 .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = promoteOwnPoints)]
+        pub fn promote_own_points(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            let source = self.semantic_family()?;
+            noon::MobjectTarget::from(&source)
+                .promote_own_points_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_entry_copy)
                 .map_err(js_error)
         }
 
@@ -3564,6 +3584,19 @@ mod wasm {
                 .map(WasmFamilyCopy::from_object_copy)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = promoteOwnPoints)]
+        pub fn promote_own_points(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .promote_own_points_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_entry_copy)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.handle

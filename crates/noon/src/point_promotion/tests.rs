@@ -182,6 +182,30 @@ fn opaque_content_rejects_without_source_loss_or_resource_and_node_admission() {
 }
 
 #[test]
+fn structured_root_rejects_before_copy_capture_or_publication() {
+    let mut scene = Scene::new();
+    let graph = scene
+        .graph([(0, (-1., 0.)), (1, (1., 0.))], [(0, 1)])
+        .unwrap();
+    let before = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let result = prepare_point_promotion::<AuthoringError>(
+        graph.family().into(),
+        &[],
+        |_, _| panic!("structured root must reject before capture"),
+        |_, _, _, _| panic!("structured root must reject before effect copy"),
+    );
+    assert!(matches!(
+        result,
+        Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::PointPromotionStructuredRoot
+        ))
+    ));
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+}
+
+#[test]
 fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
     let mut scene = Scene::new();
     let child = scene.square(0.2).unwrap();

@@ -499,11 +499,15 @@ class Mobject:
         return self
 
     def null_point_align(self, mobject: Mobject) -> Self:
-        if self.has_points() != mobject.has_points():
-            raise NotImplementedError(
-                "null_point_align requires shared point-to-family promotion"
-            )
+        for left, right in ((self, mobject), (mobject, self)):
+            if left.has_no_points() and right.has_points():
+                right.push_self_into_submobjects()
         return self
+
+    def push_self_into_submobjects(self) -> Self:
+        """Move own points to an appended child through shared Rust semantics."""
+        from _manim_point_promotion import push_self_into_submobjects
+        return push_self_into_submobjects(self)
 
     def align_data(
         self, mobject: Mobject, skip_point_alignment: bool = False

@@ -3605,7 +3605,9 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _compat.Group:
+def _group_copy_operation(
+    self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
+) -> _base.Mobject:
     context = _group_target_context(self)
 
     def excluded_fields(value):
@@ -3630,7 +3632,12 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
 
     clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    if cyclic_replace:
+    if promote_own_points:
+        copied = _membership_call(
+            self, context, "livePromoteFamilyOwnPoints", "livePromoteMobjectOwnPoints",
+            "promoteOwnPoints", references,
+        )
+    elif cyclic_replace:
         copied = (
             engine_call(context.liveCyclicReplaceTarget, self._semantic_family_handle, references)
             if context is not None
@@ -3654,7 +3661,12 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
             if owner is not None:
                 target._canonical_live_target_context = owner
     for target, members in family_members:
+        if promote_own_points and target is clone:
+            members = ()
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
+    if promote_own_points:
+        _fork_group_wrapper_references(self)
+        self._semantic_member_wrappers[_family_wrapper_key(clone)] = clone
     for source, target in pairs:
         latex = getattr(source, "_semantic_latex_handle", None)
         if latex is not None:

@@ -2253,6 +2253,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_promote_own_points(
+        &mut self,
+        source: noon::MobjectTarget<'_>,
+        references: &[noon::MobjectTarget<'_>],
+    ) -> Result<noon::SemanticCopy<noon::CompositeEntryHandle>, AuthoringFailure> {
+        self.with_live_session(|live| live.promote_own_points(source, references))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_copy_mobject_family(
         &mut self,
         source: &noon::Mobject,
