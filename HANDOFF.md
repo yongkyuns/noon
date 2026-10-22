@@ -14,10 +14,15 @@ git fetch origin
 git switch --track origin/codex/phase-d-handoff-20261021
 ```
 
-This checkpoint starts at remote `master` commit
-`b0bc03e9fa1c6e2b7fe6f42da8790bbef90c3c7c`. All completed Phase D source changes
-are already merged and pushed. There is no task-owned implementation waiting
-only on the original Mac. This handoff does not include unrelated local WIP.
+This document branch starts at `b0bc03e9fa1c6e2b7fe6f42da8790bbef90c3c7c`.
+Current verified `master` and publication have advanced to
+`982c13d878dd453241ed1831f0558f4a0dcdb4d5`. The active CI-only PR #2261 is fully
+pushed at `38f860d476babb50878811aa193791f83b2bff82` on
+`codex/browser-stall-evidence`; its CI is running. Inspect the actual PR state
+before continuing or merging it. No implementation exists only on this Mac;
+unrelated primary-checkout WIP is excluded. Read this file, then switch to the
+appropriate current source branch rather than treating this document tree as
+current product code.
 
 Suggested continuation prompt:
 
@@ -48,6 +53,81 @@ original startup-failure attribution.
   Qualified analytic camera/portable-font profiles do not establish unrestricted
   exact Manim parity. Raw sampled-clock and host-font disagreements remain
   retained; unsupported profiles remain unsupported.
+
+## Active continuation — PR #2261
+
+The user reports no phone available. The goal remains active. Native Screen
+Recording preflight is still false; no phone/access request is pending.
+
+External #2257 added shared-Rust preservation of one initial interior sample
+for wholly overdue callback-free continuous finite compositions. It preserves
+the original epoch, wait deadline and sampled/seek paths. This addresses skipped
+animation rather than the earlier b0 trace's authoring-preparation cost. Personal
+inspection found no justified narrow authoring optimization; no parallel builder,
+JSON scanner, ownership bypass or second scheduler was added.
+
+The current actual public source is `982c13d878dd453241ed1831f0558f4a0dcdb4d5`,
+build `50ff8a4f1bcabf5df243356e384285792684ae18ce62d30507e3fea3effaed84`.
+[Deployment 39707233136](https://github.com/yongkyuns/noon/actions/runs/39707233136)
+passed, and all four served runtime assets were streamed and hash-verified.
+A separately declared unchanged-harness WebKit 26.5 / WebGL2 diagnostic passed
+three public executions: original Field (627 objects /19 authored seconds),
+Math Create/Write, and explicit no-JSPI Math. The two math runs presented35/44
+and32/35 intermediate Create/Write samples respectively; the no-JSPI endpoint
+capture was personally inspected. Browser processes and borrowed links are
+closed/removed. These are functional observations, not iPhone, physical pacing,
+causal speedup, broad camera replay or original crash-attribution qualification.
+The prior b0 CPU trace retains its own source/build identity.
+
+The normal [post-merge cross-browser run39707233206](https://github.com/yongkyuns/noon/actions/runs/39707233206)
+has a new Firefox public-workflow timeout at scene time0.932 s /2 objects, with
+no reported Python/browser errors. Its other12 jobs pass, including every
+gallery shard. Preserve the original failed job119593001264 and artifact12396266184:
+SHA256 `3749a0eae06eff00bd74bf9633363bc1bf92584a9e7dc04cc5e9ef88d47df01f`.
+The exact CI runtime artifact12395931529 is preserved (25,516,464 bytes,
+SHA256 `7cf58e44ed24b417c685174a30deb10710833127a43af5928687350df0ecb65b`).
+Its build is `033464c2fe13080908113c4486250c871cc35b49f364974583269e64bc5b0dd0`,
+which differs from the public50ff build. Public success does not reproduce or
+attribute the CI stall. No original failed job or physical study was rerun.
+
+[PR #2261](https://github.com/yongkyuns/noon/pull/2261) extends the existing failure
+collector only: fixed scalar renderer progress, DOM visibility/focus and run
+identity; two protocol calls bounded to2 s each by default. DOM survives a hung
+metrics query; metrics from a changed run are rejected. Deferred execution is
+not initialized, and optional profile samples are not consumed. Successful tests
+do no extra observation work. Two existing CI files change (+140/-5), no product
+runtime patch, dependency, module or migration seam. The original Firefox hang
+and original WebKit crash remain unexplained; do not call this a runtime fix.
+
+Source was personally reviewed without automated/delegated reviewers. The
+architecture gate passes. A broad172-file Node run records1,711 pass,10 configured
+skips and3 missing external frozen-fixture failures. Restoring precisely the two
+pinned Git blobs makes the affected protocol suite plus final evidence tests
+pass51 tests. Four new controls failed against the original helper before the
+patch. Four real Chromium collector controls pass: responsive metrics, stalled
+RPC with DOM retained, run change during query, closed page. These controls are
+synthetic collector tests and provide no product pacing measurement. All local
+processes are terminal. PR checks are verified live; track their existing handles
+rather than restarting them. Current workflow IDs:39710506368 (fast gate),
+39710506517 (cross-browser),39710506394 (playback),39710506460 and39710506366 (passed
+architecture/dependency guards).
+
+The active owned checkout is
+`/Users/ykshin/.codex/worktrees/browser-stall-evidence/noon`; branch
+`codex/browser-stall-evidence`, head `38f860d476babb50878811aa193791f83b2bff82`,
+clean and pushed. Keep it while CI/diagnostic work is active; after a qualified
+merge, use managed archive. Held #2240 and other-owner checkouts are unchanged.
+
+Evidence: `current-master-continuation-20261022T0204Z/` beneath the original
+October18 evidence root. It remains **mutable and not enrolled** while CI is in
+flight; it includes current source review, the three functional observations,
+original Firefox artifacts/runtime ZIP, all local test outcomes, PR/issue
+receipts and this handoff update. The sealed catalog below still describes the
+previous checkpoint. Do not edit its enrolled roots or pretend it includes the
+new unsealed files. The earlier `remote-handoff-update-20261022T0150Z/` push proof
+also remains pending enrollment. Seal these roots once the current work reaches
+a stable checkpoint, preserving exact prior canonical gzip snapshots and all
+adverse data. Raw evidence remains outside Git and needs a separate transfer.
 
 ## Completed changes and validation
 
@@ -85,7 +165,8 @@ mistake that transient automatic closure for completion.
 
 ## Publication
 
-The current public metadata was rechecked at handoff and still identifies:
+The earlier b0 publication checkpoint identified the following; retain it as
+historical evidence. The current982 publication is recorded above:
 
 - Site: <https://yongkyuns.github.io/noon/>
 - Source: `b0bc03e9fa1c6e2b7fe6f42da8790bbef90c3c7c`
