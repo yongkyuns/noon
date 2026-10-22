@@ -112,13 +112,14 @@ export async function prepare(root, env, compiler) {
   const { source, build, dependencyLock } = identity;
   const cacheRef = env.NOON_CI_CACHE_REF || source;
   assert.match(cacheRef, /^[0-9a-f]{40}$/, "invalid cache revision");
-  const namespace = `${env.RUNNER_OS}-${env.RUNNER_ARCH}-wasm-build-v2-${digest(json({ build, compiler }))}-`;
+  const family = `${env.RUNNER_OS}-${env.RUNNER_ARCH}-wasm-build-v2-`;
+  const namespace = `${family}${digest(json({ build, compiler }))}-`;
   return { schema: 1, source, build, compiler, dependencyLock,
     key: `${namespace}${dependencyLock}-${cacheRef}`,
     restoreKeys: [`${namespace}${dependencyLock}-`, namespace,
-      // Legacy seeds contain compiler objects, never web/pkg or Cargo target binaries.
-      // Cargo and sccache still validate the current invocation after any fallback.
-      `${env.RUNNER_OS}-wasm-build-v1-`] };
+      // Reuse compiler hints across configuration changes on the same host.
+      // Cargo and sccache validate every current invocation; artifacts are rebuilt.
+      family] };
 }
 
 async function packageFiles(root) {
