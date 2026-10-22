@@ -3,7 +3,10 @@ import types
 import unittest
 from unittest.mock import patch
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 import noon
 import _manim_semantic_handles as semantic
 from _typed_geometry_test_support import identity_only_wrapper
@@ -27,17 +30,22 @@ class ScaleXYZTests(unittest.TestCase):
                     resolver = "_group_live_layout_context" if family else "_live_mutation_context"
                     with patch.object(semantic, resolver, return_value=context):
                         self.assertIs(source.scale(2), source)
-                        source.scale(np.array([-.7, 1.3, 2.5]), about_point=(1, -2, 4.25))
+                        source.scale([-.7, 1.3, 2.5], about_point=(1, -2, 4.25))
                         source.scale(-1.25, about_edge=(1, -1, 1))
                     self.assertEqual(calls, [(2., 2., 2., 0., 0., 0., False),
                                              (-.7, 1.3, 2.5, 1., -2., 4.25, True),
                                              (-1.25, -1.25, -1.25, 1., -1., 1., False)])
 
     def test_numeric_array_broadcasts_and_planar_convenience(self):
-        for value, expected in ((np.array(2.), (2., 2., 2.)),
-                                ([2], (2., 2., 2.)), ((2, 3), (2., 3., 1.)),
+        for value, expected in (([2], (2., 2., 2.)), ((2, 3), (2., 3., 1.)),
                                 (noon.Vec2(2, 3), (2., 3., 1.))):
             self.assertEqual(semantic._scale_factors_xyz(value), expected)
+
+    @unittest.skipIf(np is None, "NumPy argument adaptation requires NumPy")
+    def test_numpy_numeric_array_factors(self):
+        self.assertEqual(semantic._scale_factors_xyz(np.array(2.)), (2., 2., 2.))
+        self.assertEqual(semantic._scale_factors_xyz(np.array([-.7, 1.3, 2.5])),
+                         (-.7, 1.3, 2.5))
 
     def test_unpaired_anchor_error_maps_to_ce_value_error(self):
         native = types.SimpleNamespace(code="path.unpaired_anchors")
