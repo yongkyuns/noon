@@ -1494,6 +1494,14 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    pub fn point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointArrayObservation, LiveSessionError> {
+        crate::path_queries::effective_point_array(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
     /// Choose existing point versus retained-content boundary semantics from
     /// this publication, without consulting host wrapper types.
     pub fn requires_content_boundary(

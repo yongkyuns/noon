@@ -97,6 +97,21 @@ use noon_core::SemanticNodeId;
 use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn point_array_to_js(array: noon::PointArrayObservation) -> js_sys::Array {
+    let (points, shape) = array.into_parts();
+    let coordinates = crate::authoring_geometry::flat_points_3d(points);
+    let dimensions = shape
+        .dimensions()
+        .iter()
+        .map(|&axis| axis as f64)
+        .collect::<Vec<_>>();
+    let result = js_sys::Array::new();
+    result.push(&js_sys::Float64Array::from(coordinates.as_slice()));
+    result.push(&js_sys::Float64Array::from(dimensions.as_slice()));
+    result
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_sys::Array {
     let result = js_sys::Array::new();
     let coordinates: Vec<_> = tree
@@ -1504,6 +1519,13 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(&self, dimensions: Vec<f64>) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_empty_point_array(crate::authoring_geometry::point_array_shape(&dimensions)?)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = setPoints3D)]
         pub fn set_points_3d(&self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
@@ -1624,6 +1646,15 @@ mod wasm {
             noon::MobjectTarget::from(&family)
                 .all_points_3d()
                 .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pointArray)]
+        pub fn point_array(&self) -> Result<js_sys::Array, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .point_array()
+                .map(super::point_array_to_js)
                 .map_err(js_error)
         }
 
@@ -3204,6 +3235,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = pointArray)]
+        pub fn point_array(&self) -> Result<js_sys::Array, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .point_array()
+                .map(super::point_array_to_js)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pointReductionTree)]
         pub fn point_reduction_tree(&self) -> Result<js_sys::Array, JsValue> {
             noon::MobjectTarget::from(&self.handle)
@@ -3629,6 +3668,13 @@ mod wasm {
         pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.handle.set_points_f64(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(&mut self, dimensions: Vec<f64>) -> Result<(), JsValue> {
+            self.handle
+                .set_empty_point_array(crate::authoring_geometry::point_array_shape(&dimensions)?)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setPoints3D)]

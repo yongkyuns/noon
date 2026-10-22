@@ -1040,6 +1040,7 @@ pub(crate) enum PathEdit<'a> {
     Scalar(ScalarPathEdit<'a>),
     Scalar3d(ScalarPathEdit<'a, SemanticVec3>),
     Clear,
+    EmptyPointArray(&'a noon_core::PointArrayShape),
     RawPoints(&'a [(f64, f64)]),
     AppendRawPoints(&'a [(f64, f64)]),
     RawPoints3d(&'a [SemanticVec3]),
@@ -1137,6 +1138,9 @@ impl PathEdit<'_> {
                 scalar::prepare(path, edit)
             }
             Self::Clear => Ok(Some(VectorPath::new())),
+            Self::EmptyPointArray(shape) => VectorPath::from_empty_point_array(shape.clone())
+                .map(Some)
+                .map_err(AuthoringError::from),
             Self::RawPoints(points) => raw_points_path(points).map(Some),
             Self::AppendRawPoints(points) => {
                 let points = point_arrays::promote_xyz(points);
@@ -1470,6 +1474,7 @@ pub(crate) fn prepare_object_edit(
     if matches!(
         &edit,
         PathEdit::RawPoints(_)
+            | PathEdit::EmptyPointArray(_)
             | PathEdit::AppendRawPoints(_)
             | PathEdit::RawPoints3d(_)
             | PathEdit::AppendRawPoints3d(_)

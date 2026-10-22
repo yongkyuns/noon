@@ -10,6 +10,10 @@ pub struct VectorPath {
     /// incomplete trailing points that Manim retains for point-array queries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manim_points: Option<Vec<SemanticVec3>>,
+    /// Noncanonical zero-row storage has observable rank and dimensions even
+    /// though there are no coordinates. This is semantic resource data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    empty_point_array_shape: Option<Box<crate::PointArrayShape>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     morph_target: Option<Box<VectorPath>>,
 }
@@ -91,7 +95,9 @@ impl VectorPath {
     /// Bake one authored planar transform without quantizing raw coordinates.
     /// Drawable commands continue to use the explicit renderer representation.
     pub fn transformed_semantic(&self, transform: SemanticTransform2_5D) -> Self {
-        let mut result = if let Some(points) = self.manim_points() {
+        let mut result = if self.empty_point_array_shape.is_some() {
+            self.clone()
+        } else if let Some(points) = self.manim_points() {
             let points = points
                 .iter()
                 .map(|&point| transform.transform_xyz(point))
@@ -123,7 +129,11 @@ impl VectorPath {
     /// Whether every point, including morph targets, is finite.
     pub fn is_finite(&self) -> bool {
         let vec2_is_finite = |value: Vec2| value.x.is_finite() && value.y.is_finite();
-        self.commands().iter().all(|command| match *command {
+        self.empty_point_array_shape.as_ref().is_none_or(|shape| {
+            shape.rows() == 0
+                && self.commands.is_empty()
+                && self.manim_points.as_ref().is_some_and(Vec::is_empty)
+        }) && self.commands().iter().all(|command| match *command {
             PathCommand::MoveTo { to } | PathCommand::LineTo { to } => vec2_is_finite(to),
             PathCommand::QuadraticTo { control, to } => {
                 vec2_is_finite(control) && vec2_is_finite(to)
@@ -174,30 +184,35 @@ impl VectorPath {
         Self {
             commands: Vec::new(),
             manim_points: None,
+            empty_point_array_shape: None,
             morph_target: None,
         }
     }
 
     pub fn move_to(mut self, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::MoveTo { to });
         self
     }
 
     pub fn line_to(mut self, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::LineTo { to });
         self
     }
 
     pub fn quadratic_to(mut self, control: Vec2, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::QuadraticTo { control, to });
         self
     }
 
     pub fn cubic_to(mut self, control1: Vec2, control2: Vec2, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::CubicTo {
             control1,
             control2,
@@ -208,6 +223,7 @@ impl VectorPath {
 
     pub fn close(mut self) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::Close);
         self
     }
@@ -249,6 +265,7 @@ impl VectorPath {
             });
         self.commands.pop();
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         if let (Some(start), Some((_, last))) = (start, self.endpoints()) {
             if last != start {
                 self.commands.push(PathCommand::LineTo { to: start });

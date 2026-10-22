@@ -34,14 +34,14 @@ class ManimMobjectBasePathMethodTests(unittest.TestCase):
                 calls.append(index)
                 return (1., -1., 1.)[index]
         value._semantic_handle = SimpleNamespace(
-            allPoints3D=Mock(return_value=(1., 2., -7., 3., 4., 11.125)),
+            pointArray=Mock(return_value=((1., 2., -7., 3., 4., 11.125), (2, 3))),
             criticalPoint3D=Mock(side_effect=AssertionError("caller direction hook")),
             extremumFromPoints=Mock(side_effect=[3., 2., 11.125]))
         value._semantic_handle_fresh = True
         self.assertEqual(list(critical_point(value, Direction())), [3., 2., 11.125])
         self.assertEqual(calls, [0, 1, 2])
         value._semantic_handle.criticalPoint3D.assert_not_called()
-        value._semantic_handle.allPoints3D.assert_called_once_with()
+        value._semantic_handle.pointArray.assert_called_once_with()
 
     def test_point_result_formatter_keeps_xyz_and_explicit_planar_inputs(self):
         from _manim_compat import _manim_point3

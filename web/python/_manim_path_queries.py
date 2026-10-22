@@ -4,7 +4,7 @@ import noon as _base
 import _noon_ir as _ir
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _all_points_observation,
+    _point_array_observation,
     _critical_point_observation,
     _default_point_query_hooks,
     _boundary_point_observation,
@@ -292,10 +292,10 @@ def point_count(value):
 
 
 def all_points(value):
-    coordinates = _all_points_observation(value)
-    if coordinates is None:
+    array = _anchor_observation(value, _point_array_observation)
+    if array is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
-    return _format_points(coordinates, dimensions=3)
+    return _format_point_array(array)
 
 
 def merged_array(value, array_attr):
@@ -311,14 +311,19 @@ def merged_array(value, array_attr):
             "merged-array queries are unavailable during staged callbacks"
         )
 
-    coordinates = _all_points_observation(value)
-    if coordinates is None:
-        query = _query(value)
-        try:
-            coordinates = engine_call(query.points3D)
-        finally:
-            query.free()
-    return _format_points(coordinates, dimensions=3)
+    return all_points(value)
+
+
+def _format_point_array(array):
+    coordinates, dimensions = array[0], array[1]
+    shape = tuple(int(dimensions[index]) for index in range(len(dimensions)))
+    try:
+        import numpy as np
+    except ImportError:
+        return _format_points(coordinates, dimensions=3)
+    # JS typed arrays need scalar indexing; array slices are not required.
+    values = [float(coordinates[index]) for index in range(len(coordinates))]
+    return np.asarray(values, dtype=np.float64).reshape(shape)
 
 
 def reduce_across_dimension(value, reduce_func, dim):
@@ -396,9 +401,9 @@ def _anchor_observation(value, observe):
     try:
         return observe(value)
     except NoonValueError as error:
-        if error.code != "path.unpaired_anchors":
+        if error.code not in ("path.unpaired_anchors", "point.array_shape"):
             raise
-        # Rust owns exact anchor admission; Python supplies CE's public class.
+        # Rust owns array admission; Python supplies CE's public class.
         raise ValueError(str(error)) from error
 
 

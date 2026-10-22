@@ -63,7 +63,7 @@ pub use crate::execution_session::{NativePointerInputPublication, NativePointerI
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
 pub use crate::family_points::{
     publish_append_family_points, publish_append_family_points_3d, publish_clear_family_points,
-    publish_family_points, publish_family_points_3d,
+    publish_empty_family_point_array, publish_family_points, publish_family_points_3d,
 };
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fade, effective_style_with_fade_to,
@@ -78,7 +78,7 @@ pub use crate::path_queries::{
     effective_length_over_dim, effective_mobject_point_count,
     effective_path_boundary_extremum_along_dim, effective_path_boundary_point,
     effective_path_boundary_points, effective_path_boundary_points_3d, effective_path_query,
-    effective_point_reduction_tree, effective_requires_content_boundary,
+    effective_point_array, effective_point_reduction_tree, effective_requires_content_boundary,
     effective_vector_boundary_points, effective_vector_boundary_points_3d,
 };
 pub use crate::point_matching::publish_match_points;

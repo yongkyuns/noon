@@ -20,6 +20,8 @@ mod semantic_store;
 mod spatial3d;
 mod vector_path;
 pub use vector_path::VectorPath;
+mod point_array_shape;
+pub use point_array_shape::{PointArrayShape, PointArrayShapeError};
 
 pub use animation::*;
 pub use camera_motion::*;

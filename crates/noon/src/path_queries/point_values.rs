@@ -228,10 +228,7 @@ impl MobjectTarget<'_> {
     /// Full-coordinate points in the same recursive order and alias multiplicity
     /// as the planar convenience. Traversal stays in the semantic store.
     pub fn all_points_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
-        self.validate()?;
-        let store = self.integration_store().borrow();
-        let occurrences = FamilyPointObservation::RecursivePoints.nodes(&store, self.node_id())?;
-        authored_points_for_occurrences(&store, &occurrences, PathQuery::points_3d)
+        self.point_array().map(PointArrayObservation::into_points)
     }
 }
 
@@ -241,13 +238,7 @@ pub fn effective_all_points_3d(
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
 ) -> Result<Vec<SemanticVec3>, AuthoringError> {
-    effective_point_observation_map(
-        store,
-        execution,
-        target,
-        FamilyPointObservation::RecursivePoints,
-        PathQuery::points_3d,
-    )
+    effective_point_array(store, execution, target).map(PointArrayObservation::into_points)
 }
 
 /// Full vector anchors from one coherent execution publication.

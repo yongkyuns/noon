@@ -1,4 +1,36 @@
 use super::*;
+
+impl LiveSession<'_> {
+    pub(crate) fn set_empty_mobject_point_array(
+        &mut self,
+        object: &Mobject,
+        shape: &crate::PointArrayShape,
+    ) -> Result<(), LiveSessionError> {
+        crate::path_editing::publish_running_object_edit(
+            self.store,
+            self.root,
+            self.session,
+            object,
+            crate::path_editing::PathEdit::EmptyPointArray(shape),
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    pub(crate) fn set_empty_family_point_array(
+        &mut self,
+        family: &MobjectFamily,
+        shape: &crate::PointArrayShape,
+    ) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_empty_family_point_array(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            shape,
+        )
+        .map_err(LiveSessionError::from)
+    }
+}
 use crate::{path_editing::publish_running_path_edits, LayoutAnchor};
 
 impl LiveSession<'_> {

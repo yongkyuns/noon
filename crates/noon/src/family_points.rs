@@ -1,8 +1,10 @@
 //! Own point content stays on the addressed family node and uses normal path edits.
 mod append;
+mod empty_arrays;
 mod xyz;
 use crate::{AuthoringError, Mobject, MobjectFamily, PathQuery};
 pub use append::publish_append_family_points;
+pub use empty_arrays::publish_empty_family_point_array;
 use noon_core::{
     SemanticMutationTransaction, SemanticStore, SemanticTransform2_5D, StoredGeometry, Vec2,
     VectorPath,

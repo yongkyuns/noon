@@ -117,6 +117,12 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
 
 impl std::error::Error for UnsupportedAuthoringOperation {}
 
+impl From<noon_core::PointArrayShapeError> for AuthoringError {
+    fn from(error: noon_core::PointArrayShapeError) -> Self {
+        Self::PointArrayShape(error)
+    }
+}
+
 /// Failure of a shared authored object, value, layout or membership operation.
 ///
 /// Inspect variants or [`std::error::Error::source`], never diagnostics, for
@@ -237,6 +243,7 @@ pub enum AuthoringError {
     ZeroMatchWidth,
     /// A point-coordinate dimension is outside the supplied point width.
     InvalidPointDimension(u32),
+    PointArrayShape(noon_core::PointArrayShapeError),
     /// An operation requires finite bounds for this node.
     MissingLayoutBounds(noon_core::SemanticNodeId),
     /// The requested direct family member index does not exist.
@@ -451,6 +458,7 @@ impl std::fmt::Display for AuthoringError {
             Self::NoSubpathForClose { point_count, stride } => write!(f,
                 "path with {point_count} points and stride {stride} has no complete subpath to close"),
             Self::PathQuery(error) => error.fmt(f),
+            Self::PointArrayShape(error) => error.fmt(f),
             Self::MorphQuery(error) => error.fmt(f),
             Self::Boolean(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
@@ -480,6 +488,7 @@ impl std::error::Error for AuthoringError {
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
+            Self::PointArrayShape(error) => Some(error),
             Self::MorphQuery(error) => Some(error),
             Self::Boolean(error) => Some(error),
             Self::Arc(error) => Some(error),

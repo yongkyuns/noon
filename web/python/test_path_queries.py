@@ -42,7 +42,7 @@ class PathQueryTests(unittest.TestCase):
                     value = identity_only_wrapper(cls)
                     expected = points[:count]
                     coordinates = IndexOnlyArray([number for point in expected for number in point])
-                    with patch.object(queries, "_all_points_observation", return_value=coordinates), \
+                    with patch.object(queries, "_point_array_observation", return_value=(coordinates, (count, 3))), \
                          patch.dict("sys.modules", {"numpy": None}):
                         self.assertEqual(value.get_all_points(), expected)
 
@@ -470,8 +470,8 @@ class PathQueryTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(
             queries,
-            "_all_points_observation",
-            return_value=[0., 0., .25, 1., 0., .5, 2., 0., .75, 3., 0., 1.],
+            "_point_array_observation",
+            return_value=([0., 0., .25, 1., 0., .5, 2., 0., .75, 3., 0., 1.], (4, 3)),
         ) as observe, patch.object(
             queries,
             "_path_boundary_points_observation",
@@ -633,8 +633,8 @@ class PathQueryTests(unittest.TestCase):
         with (
             patch.object(
                 queries,
-                "_all_points_observation",
-                return_value=[0., 0., .5, 1., 2., .75],
+                "_point_array_observation",
+                return_value=([0., 0., .5, 1., 2., .75], (2, 3)),
             ),
             patch.dict("sys.modules", {"numpy": None}),
         ):
@@ -647,24 +647,24 @@ class PathQueryTests(unittest.TestCase):
         coordinates = [0., 0., .5, 1., 2., .75]
 
         context = Mock()
-        context.queryFamilyAllPoints3D.return_value = coordinates
+        context.queryFamilyPointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
             "_group_live_layout_context",
             return_value=context,
         ):
-            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
-        context.queryFamilyAllPoints3D.assert_called_once_with(family)
-        family.allPoints3D.assert_not_called()
+            self.assertIs(semantic_handles._point_array_observation(value), coordinates)
+        context.queryFamilyPointArray.assert_called_once_with(family)
+        family.pointArray.assert_not_called()
 
-        family.allPoints3D.return_value = coordinates
+        family.pointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
             "_group_live_layout_context",
             return_value=None,
         ):
-            self.assertIs(semantic_handles._all_points_observation(value), coordinates)
-        family.allPoints3D.assert_called_once_with()
+            self.assertIs(semantic_handles._point_array_observation(value), coordinates)
+        family.pointArray.assert_called_once_with()
 
     def test_group_point_count_excludes_descendant_points(self):
         for cls in (compat.Group, compat.VGroup):

@@ -62,6 +62,13 @@ pub(super) fn append(
 }
 
 impl Mobject {
+    pub fn set_empty_point_array(
+        &mut self,
+        shape: noon_core::PointArrayShape,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::EmptyPointArray(&shape))
+    }
+
     /// Replace the complete world-coordinate array, retaining all three f64 axes.
     pub fn set_points_3d(&mut self, points: &[SemanticVec3]) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::RawPoints3d(points))

@@ -1000,6 +1000,18 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn mobject_point_array(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).point_array(),
+            |player, handle| player.live_point_array(noon::MobjectTarget::from(handle)),
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn mobject_point_reduction_tree(
         &mut self,
         handle: &noon::Mobject,
@@ -1196,6 +1208,18 @@ impl CanonicalAuthoringScene {
             family,
             |target| target.all_points_3d(),
             crate::SemanticExecutionPlayer::live_effective_all_points_3d,
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_point_array(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.point_array(),
+            crate::SemanticExecutionPlayer::live_point_array,
         )
     }
 
@@ -7560,6 +7584,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyPointArray)]
+        pub fn query_family_point_array(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<js_sys::Array, JsValue> {
+            self.inner
+                .family_point_array(&handle.semantic_family()?)
+                .map(crate::authoring_mobject::point_array_to_js)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyRequiresContentBoundary)]
         pub fn query_family_requires_content_boundary(
             &mut self,
@@ -8129,6 +8164,17 @@ mod wasm {
             self.inner
                 .mobject_all_points(handle.semantic_mobject())
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPointArray)]
+        pub fn query_mobject_point_array(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<js_sys::Array, JsValue> {
+            self.inner
+                .mobject_point_array(handle.semantic_mobject())
+                .map(crate::authoring_mobject::point_array_to_js)
                 .map_err(typed_js_error)
         }
 
@@ -8789,6 +8835,23 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyEmptyPointArray)]
+        pub fn live_set_family_empty_point_array(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            dimensions: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_empty_point_array(
+                    noon::MobjectTarget::from(&source.semantic_family()?),
+                    shape,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyPoints3D)]
         pub fn live_set_family_points_3d(
             &mut self,
@@ -8854,6 +8917,23 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_points(source.semantic_mobject(), &points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetEmptyPointArray)]
+        pub fn live_set_empty_point_array(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            dimensions: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_empty_point_array(
+                    noon::MobjectTarget::from(source.semantic_mobject()),
+                    shape,
+                )
                 .map_err(typed_js_error)
         }
 

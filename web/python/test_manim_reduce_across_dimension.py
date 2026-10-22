@@ -15,9 +15,9 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         calls = []
 
         class Handle:
-            def allPoints3D(self):
+            def pointArray(self):
                 calls.append("points")
-                return (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+                return ((1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0), (3, 3))
 
             def pointReductionTree(self):
                 calls.append("tree")
@@ -121,7 +121,7 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
 
     def test_get_merged_array_returns_rust_ordered_points(self):
         coordinates = (10.0, 1.0, -7.0, 2.0, 3.0, 8.0)
-        with patch("_manim_path_queries._all_points_observation", return_value=coordinates):
+        with patch("_manim_path_queries._point_array_observation", return_value=(coordinates, (2, 3))):
             points = merged_array(object(), "points")
         self.assertEqual(
             [[float(component) for component in point] for point in points],
@@ -129,7 +129,7 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         )
 
     def test_get_merged_array_rejects_unmodeled_attributes_before_query(self):
-        with patch("_manim_path_queries._all_points_observation") as query:
+        with patch("_manim_path_queries._point_array_observation") as query:
             with self.assertRaisesRegex(NotImplementedError, "only the shared Rust points"):
                 merged_array(object(), "rgbas")
         query.assert_not_called()

@@ -6,6 +6,26 @@ use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::js_error;
 
+pub(crate) fn point_array_shape(values: &[f64]) -> Result<noon_core::PointArrayShape, JsValue> {
+    let dimensions = values
+        .iter()
+        .map(|&value| {
+            if value.is_finite()
+                && value >= 0.
+                && value.fract() == 0.
+                && value <= f64::from(u32::MAX)
+            {
+                Ok(value as usize)
+            } else {
+                Err(noon_core::PointArrayShapeError::InvalidDimension)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>();
+    dimensions
+        .and_then(noon_core::PointArrayShape::new)
+        .map_err(|error| js_error(noon::AuthoringError::from(error)))
+}
+
 /// Constructor values own no semantic store, identity, or execution state.
 #[wasm_bindgen]
 pub struct WasmManimGeometryOptions {

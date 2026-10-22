@@ -378,6 +378,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::PathQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_query", cause)
             }
+            AuthoringError::PointArrayShape(cause) => {
+                Self::new("invalid_input", "point.array_shape", cause)
+            }
             AuthoringError::MorphQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_morph_query", cause)
             }

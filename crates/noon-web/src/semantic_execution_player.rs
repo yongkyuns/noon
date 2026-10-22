@@ -2661,6 +2661,23 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_point_array(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
+        self.with_live_session(|live| live.point_array(target))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_empty_point_array(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+        shape: noon_core::PointArrayShape,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_empty_point_array(target, shape))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_requires_content_boundary(
         &mut self,
         target: noon::MobjectTarget<'_>,

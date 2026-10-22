@@ -152,6 +152,10 @@ fn detached_profiles(scene: &mut Scene) -> Result<(), crate::AuthoringError> {
                     root.add((&child).into())?;
                     crate::CompositeEntryHandle::Mobject(root)
                 };
+                if count == 0 {
+                    root.as_target()
+                        .set_empty_point_array(crate::PointArrayShape::new(vec![0])?)?;
+                }
                 let old_members = root.member_view()?;
                 let old_iterator = root.split_iter()?;
                 let copied = root
@@ -169,6 +173,10 @@ fn detached_profiles(scene: &mut Scene) -> Result<(), crate::AuthoringError> {
                 assert_eq!(old.len(), if count == 0 { 1 } else { 2 });
                 assert_eq!(clone.member_count()?, 0);
                 assert_eq!(clone.as_target().all_points_3d()?, points[..count]);
+                assert_eq!(
+                    clone.as_target().point_array()?.shape().dimensions(),
+                    if count == 0 { vec![0] } else { vec![count, 3] }
+                );
                 let alias = copied.mobject(&child)?;
                 assert_ne!(alias.node_id(), child.node_id());
                 assert_eq!(alias.path_query()?.points_3d()?, points[..4]);
@@ -180,11 +188,28 @@ fn detached_profiles(scene: &mut Scene) -> Result<(), crate::AuthoringError> {
                     .expect("pointful peer");
                 assert_eq!(peer.get_num_points()?, 0);
                 assert!(root.as_target().align_own_points((&peer).into())?.is_none());
-                let before = root.as_target().all_points_3d()?;
+                let before = root
+                    .as_target()
+                    .point_array()
+                    .map_err(|error| error.to_string());
+                if count == 0 {
+                    assert_eq!(
+                        before.as_ref().unwrap_err(),
+                        &crate::PointArrayShapeError::RankMismatch { left: 2, right: 1 }
+                            .to_string()
+                    );
+                } else {
+                    assert!(before.is_ok());
+                }
                 let second = root.as_target().promote_own_points()?;
                 assert_eq!(second.root().get_num_points()?, 0);
                 assert_eq!(second.root().member_count()?, 0);
-                assert_eq!(root.as_target().all_points_3d()?, before);
+                assert_eq!(
+                    root.as_target()
+                        .point_array()
+                        .map_err(|error| error.to_string()),
+                    before
+                );
             }
         }
     }

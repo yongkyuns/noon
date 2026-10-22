@@ -17,6 +17,12 @@ const expectedJavascriptSurface = [
   "requiresContentBoundary(",
   "queryFamilyRequiresContentBoundary(",
   "queryMobjectRequiresContentBoundary(",
+  "pointArray(",
+  "setEmptyPointArray(",
+  "queryFamilyPointArray(",
+  "queryMobjectPointArray(",
+  "liveSetFamilyEmptyPointArray(",
+  "liveSetEmptyPointArray(",
   "promoteOwnPoints(",
   "livePromoteFamilyOwnPoints(",
   "livePromoteMobjectOwnPoints(",
@@ -276,6 +282,12 @@ const expectedTypeSurface = [
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
+  "pointArray(): Array<any>",
+  "setEmptyPointArray(dimensions: Float64Array): void",
+  "queryFamilyPointArray(handle: WasmAuthoringFamilyHandle): Array<any>",
+  "queryMobjectPointArray(handle: WasmAuthoringMobjectHandle): Array<any>",
+  "liveSetFamilyEmptyPointArray(source: WasmAuthoringFamilyHandle, dimensions: Float64Array): void",
+  "liveSetEmptyPointArray(source: WasmAuthoringMobjectHandle, dimensions: Float64Array): void",
   "constructor()",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
@@ -795,8 +807,9 @@ if (!geometryOptionsDeclaration.includes(
   throw new Error("WASM declarations are missing typed VMobject sheen-direction constructor support");
 }
 for (const name of ["WasmAuthoringMobjectHandle", "WasmAuthoringFamilyHandle"]) {
-  if (!classDeclaration(name).includes("requiresContentBoundary(): boolean;")) {
-    throw new Error(`${name} is missing retained-content boundary classification`);
+  const declaration = classDeclaration(name);
+  for (const signature of ["pointArray(): Array<any>;", "setEmptyPointArray(dimensions: Float64Array): void;", "requiresContentBoundary(): boolean;"]) {
+    if (!declaration.includes(signature)) throw new Error(`${name} is missing ${signature}`);
   }
 }
 

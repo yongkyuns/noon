@@ -308,6 +308,7 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_core::{PointArrayShape, PointArrayShapeError};
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
@@ -329,7 +330,7 @@ pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthor
 pub use path_queries::{
     manim_cubic_bezier_point_ranges, manim_points_2d_close, manim_points_allclose,
     manim_subpath_ranges, manim_subpath_split_indices, reduce_point_boundary,
-    reduce_point_extremum, PathQuery, PointReductionTree,
+    reduce_point_extremum, PathQuery, PointArrayObservation, PointReductionTree,
 };
 pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;

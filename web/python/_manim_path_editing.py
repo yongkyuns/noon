@@ -687,8 +687,25 @@ def _raw_point3(point):
     return (float(point[0]), float(point[1]), float(point[2]) if len(point) == 3 else 0.0)
 
 
+def _empty_point_array_shape(points):
+    # Inspect concrete caller inputs only. Do not invoke additional hooks on
+    # custom sequences or retain a Python copy of the semantic array shape.
+    if type(points) in (list, tuple) and not points:
+        return (0,)
+    import sys
+    np = sys.modules.get("numpy")
+    if np is not None and type(points) is np.ndarray:
+        shape = points.shape
+        if shape and shape[0] == 0:
+            return shape
+    return None
+
+
 def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     _check_path_edit_phase()
+    empty_shape = _empty_point_array_shape(points) if method == "setPoints" else None
+    if empty_shape is not None:
+        method, live_method = "setEmptyPointArray", "liveSetEmptyPointArray"
     raw_points = method in ("setPoints", "appendPoints")
     xyz_points = raw_points or method in (
         "setPointsAsCorners", "setPointsAsCornersWithSamples",
@@ -697,7 +714,9 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
         "addCubicBezierCurves", "setCubicBezierCurves",
         "addPointsAsCorners", "addPointsAsCornersWithStride",
     )
-    if xyz_points:
+    if empty_shape is not None:
+        values = list(empty_shape)
+    elif xyz_points:
         # Coordinate coercion belongs to Python; complete point state and
         # publication stay in the shared Rust operation.
         values = [component for point in points for component in _raw_point3(point)]
@@ -719,6 +738,8 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
             live_method = "liveAppendFamilyPoints"
         elif method == "clearPoints":
             live_method = "liveClearFamilyPoints"
+        elif method == "setEmptyPointArray":
+            live_method = "liveSetFamilyEmptyPointArray"
         else:
             raise NotImplementedError("this family root path edit requires shared Rust support")
     if raw_points:

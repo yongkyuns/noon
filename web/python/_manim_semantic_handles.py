@@ -2756,6 +2756,11 @@ def _all_points_observation(value: _base.Mobject):
     )
 
 
+def _point_array_observation(value: _base.Mobject):
+    """Return shared coordinates and dimensions from one Rust observation."""
+    return _point_query_observation(value, "PointArray")
+
+
 def _point_reduction_tree_observation(value: _base.Mobject):
     """Return Rust-owned family nesting and per-object effective point arrays."""
     if not _is_shared_family(value):
