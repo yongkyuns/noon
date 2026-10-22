@@ -3,7 +3,7 @@
 Temporary handoff for another PC. This branch adds only this file; it is not a
 new architecture or roadmap document and does not need merging into `master`.
 Read `AGENTS.md`, `docs/architecture.md`, and the owning issues before continuing.
-Status checked on October 21, 2026, America/Toronto.
+Status updated on October 21, 2026, America/Toronto, after a Mac-only continuation.
 
 ## Pick up the work
 
@@ -30,7 +30,7 @@ Suggested continuation prompt:
 
 ## Current status
 
-**Phase D is incomplete. The original thread goal is blocked.** The selected
+**Phase D is incomplete. The user resumed the goal, which is active.** The selected
 camera, material, primitive, axes, and vector-space profiles have recorded
 dispositions and qualification. The open exit gates are physical pacing and
 original startup-failure attribution.
@@ -94,8 +94,9 @@ The current public metadata was rechecked at handoff and still identifies:
 
 All four registered assets were previously streamed and hash-verified at this
 exact identity. Their bytes match the previous #2258 publication, which matched
-its immediate base. The handoff recheck observed metadata only; it did not run
-new scenes or a timing study. Publication integrity does not extend earlier
+its immediate base. The later Mac-only continuation streamed and hash-verified all four registered
+assets again, then completed one separate ordinary Field gallery CPU diagnostic.
+That diagnostic is not physical pacing or zoom replay qualification. Publication integrity does not extend earlier
 physical/replay qualification to a new source automatically. The last full
 actual-publication zoom replay remains scoped to #2252's `8a055814...` source and
 build `546c0b12961a17bf856088d7d484be293c31de68d7cff91f7b26c7bfc3661e07`.
@@ -163,6 +164,51 @@ host reproduction nor physical pacing qualification. It did not reproduce or
 attribute the original crash. Do not repeat that declared one-case diagnostic
 or replace an original failed cohort with this success.
 
+## Latest Mac-only continuation
+
+The user explicitly has no phone available. Native Screen Recording preflight
+still denies access; no OS screen/audio capture or physical timing study ran.
+There is no outstanding phone or permission question.
+
+One separately declared normal published **A field in motion** launch completed
+with the original Python source: 627 objects, 19 authored seconds, no browser
+errors or failed requests. Cached Chromium 151.0.7922.34 requested hardware
+WebGPU on MacBookPro16,1 / AMD-Intel / macOS 15.5, nice 10, 1280×900 viewport,
+DPR 2, actual canvas backing 1240×696. A bounded CPU trace and the existing
+worker stage metrics do not require Screen Recording permission. They are
+headless, instrumented diagnostics; the separately requested available adapter
+is not proof of the actual Noon device or physical visibility.
+
+The compressed trace is 7,807,219 bytes. It retains 119 metric snapshots, 526
+controller render calls, 524 publication-stage samples, and 526 renderer
+substage samples. There are no sequence gaps within the retained publication
+sessions; two bootstrap render calls lack publication-stage entries. These
+controller calls are not physical display frames. Three authoring-worker tasks
+lasted 715.6, 715.1 and 648.3 ms, aligning with 665–734 ms wave-boundary receive
+gaps. Wave median renderer CPU work was 2.5 ms and delta application 6.5 ms.
+Sampled receiver metadata parsing accounts for approximately 757 ms and WASM
+string marshalling 513 ms over the run. Anonymous WASM samples do not isolate
+all Python versus Rust preparation costs. Tracing, polling and nice 10 perturb
+timing; this is not a causal speedup, GPU-completion, physical FPS or original
+crash-attribution result.
+
+This supports the existing authoring-preparation diagnosis. No speculative
+production patch, new framework, module or dependency was added. Do not skip
+receiver validation, add a handwritten JSON scanner, weaken ownership/atomicity,
+or substitute prebuilt Transform endpoints for chained animate: earlier source
+variants changed qualified output or failed to improve pacing. Keep #2240 held
+and other prepared-prefix owners independent. Original cohorts/limits remain
+unchanged. All browser processes are stopped.
+
+New raw trace, source, protocol, analysis, personal assessment and cleanup proof:
+`mac-only-continuation-20261022T012620Z/` under the original evidence root.
+That root, the original remote-handoff evidence, and the native-access retry
+are now enrolled. All prior 20,587 rows were fully rehashed; prior canonical
+bytes are preserved as gzip snapshots. This remote handoff's own push proof
+follows sealing under `remote-handoff-update-20261022T0150Z/` and is explicitly
+not enrolled yet, avoiding a manifest self-reference. Raw evidence stays out
+of Git and still requires a separate transfer.
+
 ## Evidence transfer: important portability limitation
 
 **Raw historical evidence is not in this Git branch.** This file is the portable
@@ -175,11 +221,11 @@ Original Mac evidence root:
 /Users/ykshin/.codex/task-evidence/noon/remaining-phase-d-20261018
 ```
 
-The sealed catalog `editor-native-source-evidence-manifest.json` has **20,587
-entries / 4,058,984,779 cataloged bytes**, SHA-256:
+The sealed catalog `editor-native-source-evidence-manifest.json` has **20,634
+entries / 4,069,907,620 cataloged bytes**, SHA-256:
 
 ```text
-877903966017736b79a798b323c1a0eb20587493cad04f87792bfac1889b7881
+df5b29ffc4f562e027e4be80da69f3aee3d2660a89c8f252b82c662e4eb55517
 ```
 
 Before independently auditing historical results on another PC, transfer the
@@ -197,7 +243,7 @@ this evidence outside the Git checkout; it is not a reason to add 4 GB to Git.
   one-case frozen-runtime diagnostic and cleanup, original capacity failure,
   successful leaf retry, three-turn blocked audit, and actual goal-status proof.
 - `native-access-retry-20261022T010212Z/`: latest access/app-identity retry;
-  created after sealing and **not included** in the catalog above.
+  now enrolled in the catalog above, with exact prior canonical snapshots.
 
 Two especially useful preserved archives:
 
@@ -239,10 +285,11 @@ The primary Mac checkout remains on `codex/visual-effects-m0-contract` at
 protected WIP and are not included in this transfer. The held #2240 checkout is
 also untouched.
 
-Operational cleanup remains: the clean, merged #2259 checkout at
-`/Users/ykshin/.codex/worktrees/phase-d-qualification-status/noon` could not be
-registered because the app repeatedly returned “Server overloaded; retry
-later.” Its archive request was rejected as unattached; **no archive is queued**.
-After service recovery, attach that existing checkout, then use managed archive.
-Do not create a duplicate checkout or manually delete it while an archive is
-pending. The previous #2258 worktree archive was confirmed complete.
+Operational cleanup completed after the app service recovered: the existing
+clean, merged #2259 checkout at
+`/Users/ykshin/.codex/worktrees/phase-d-qualification-status/noon` was registered,
+archived through the managed API, and verified as an archived attachment with
+its PR identity retained and checkout removed. No archive remains queued. The
+previous #2258 archive is also complete. Primary, held #2240 and other-owner
+checkouts remain unchanged. Restore an archived checkout only if needed; do not
+create a duplicate workspace merely to read this checkpoint.
