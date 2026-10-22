@@ -34,24 +34,38 @@ for (const source of ["web/pkg/noon_web_bg.wasm", "web/pkg/noon_web.js", "web/ba
 function observeAudio() {
   const NativeAudioContext = window.AudioContext;
   const contexts = [], starts = [], stops = [], buffers = [], parameters = [];
+  const nodes = [], connections = [], disconnects = [], ended = [], parameterRefs = [];
   const contextIds = new WeakMap(), sourceIds = new WeakMap(), bufferIds = new WeakMap();
-  const parameterIds = new WeakMap(), sourceGains = new WeakMap();
+  const parameterIds = new WeakMap(), parameterContexts = new WeakMap();
+  const sourceGains = new WeakMap(), gainDestinations = new WeakMap(), nodeIds = new WeakMap();
   const pendingResumes = [];
   const connect = AudioNode.prototype.connect;
+  const disconnect = AudioNode.prototype.disconnect;
   const start = AudioBufferSourceNode.prototype.start;
   const stop = AudioBufferSourceNode.prototype.stop;
   const parameterValue = Object.getOwnPropertyDescriptor(AudioParam.prototype, "value");
   const contextId = context => contextIds.get(context);
-  const parameterId = parameter => {
+  const parameterId = (parameter, context) => {
     if (!parameterIds.has(parameter)) {
       parameterIds.set(parameter, parameters.length);
-      parameters.push({ events: [] });
+      parameters.push({ context: contextId(context), events: [] });
+      parameterRefs.push(parameter);
     }
+    if (context) parameterContexts.set(parameter, context);
     return parameterIds.get(parameter);
   };
+  const nodeId = node => {
+    if (!nodeIds.has(node)) {
+      nodeIds.set(node, nodes.length);
+      nodes.push({ context: contextId(node.context), kind: node.constructor.name,
+        ...(node instanceof GainNode ? { parameter: parameterId(node.gain, node.context) } : {}) });
+    }
+    return nodeIds.get(node);
+  };
   const parameterEvent = (parameter, method, args) =>
-    parameters[parameterId(parameter)].events.push({ method, args: Array.from(args) });
-  for (const method of ["setValueAtTime", "linearRampToValueAtTime"]) {
+    parameters[parameterId(parameter)].events.push({ method, args: Array.from(args),
+      observedAt: parameterContexts.get(parameter)?.currentTime });
+  for (const method of ["setValueAtTime", "linearRampToValueAtTime", "cancelScheduledValues", "cancelAndHoldAtTime"]) {
     const native = AudioParam.prototype[method];
     AudioParam.prototype[method] = function (...args) {
       const value = native.apply(this, args);
@@ -65,8 +79,12 @@ function observeAudio() {
   });
   AudioNode.prototype.connect = function (destination, ...args) {
     if (this instanceof AudioBufferSourceNode && destination instanceof GainNode) {
-      sourceGains.set(this, parameterId(destination.gain));
+      sourceGains.set(this, destination);
     }
+    if (this instanceof GainNode && destination instanceof GainNode) {
+      gainDestinations.set(this, destination);
+    }
+    connections.push({ from: nodeId(this), to: nodeId(destination), observedAt: this.context.currentTime });
     const record = contexts[contextId(this.context)];
     if (record && destination === this.context.destination && this !== record.analyser) {
       // Insert one unity-gain analyser after the actual master node. The native
@@ -80,17 +98,30 @@ function observeAudio() {
     }
     return connect.call(this, destination, ...args);
   };
+  AudioNode.prototype.disconnect = function (...args) {
+    const value = disconnect.apply(this, args);
+    disconnects.push({ node: nodeId(this), observedAt: this.context.currentTime });
+    return value;
+  };
   AudioBufferSourceNode.prototype.start = function (...args) {
     const value = start.apply(this, args);
+    const gain = sourceGains.get(this);
+    const bus = gainDestinations.get(gain);
+    const master = gainDestinations.get(bus);
     starts.push({ context: contextId(this.context), source: sourceIds.get(this),
-      buffer: bufferIds.get(this.buffer), gainParameter: sourceGains.get(this),
+      node: nodeId(this), buffer: bufferIds.get(this.buffer),
+      gainParameter: gain && parameterId(gain.gain, this.context),
+      busParameter: bus && parameterId(bus.gain, this.context),
+      masterParameter: master && parameterId(master.gain, this.context),
+      busNode: bus && nodeId(bus),
       loop: this.loop, loopStart: this.loopStart, loopEnd: this.loopEnd,
       args, observedAt: this.context.currentTime });
     return value;
   };
   AudioBufferSourceNode.prototype.stop = function (...args) {
     const value = stop.apply(this, args);
-    stops.push({ context: contextId(this.context), source: sourceIds.get(this), args });
+    stops.push({ context: contextId(this.context), source: sourceIds.get(this),
+      node: nodeId(this), args, observedAt: this.context.currentTime });
     return value;
   };
   class ObservedAudioContext extends NativeAudioContext {
@@ -115,7 +146,14 @@ function observeAudio() {
     createBufferSource(...args) {
       const source = super.createBufferSource(...args);
       sourceIds.set(source, this.nextObservedSource = (this.nextObservedSource ?? 0) + 1);
+      source.addEventListener("ended", () => ended.push({ context: contextId(this),
+        source: sourceIds.get(source), node: nodeId(source), observedAt: this.currentTime }));
       return source;
+    }
+    createGain(...args) {
+      const gain = super.createGain(...args);
+      nodeId(gain);
+      return gain;
     }
     resume() {
       const native = super.resume();
@@ -129,7 +167,9 @@ function observeAudio() {
   window.AudioContext = ObservedAudioContext;
   window.audioQualification = {
     contexts, starts, stops, buffers, parameters, pendingResumes,
+    nodes, connections, disconnects, ended,
     holdNextResume: false, renderer: null,
+    parameterValue(id) { return parameterRefs[id].value; },
     sample() {
       return contexts.map(({ context, analyser, states }) => {
         const samples = new Float32Array(analyser.fftSize);
@@ -142,11 +182,15 @@ function observeAudio() {
     },
     snapshot() {
       const renderer = this.renderer;
-      return { output: this.sample(), starts, stops, buffers, parameters,
+      // Tests may retain several observations within one page.evaluate call.
+      // Copy the plain diagnostic data now, before later native events append.
+      return structuredClone({ output: this.sample(), starts, stops, buffers,
+        parameters: parameters.map((record, id) => ({ ...record, value: this.parameterValue(id) })),
+        nodes, connections, disconnects, ended,
         transport: renderer ? { time: renderer.time(), playing: renderer.isDirectPlaying(),
           enabled: renderer.audioEnabled(), voices: renderer.audioVoiceCount(),
           volume: renderer.audioVolume(), muted: renderer.audioMuted(),
-          sceneRevision: String(renderer.directSceneRevision()) } : null };
+          sceneRevision: String(renderer.directSceneRevision()) } : null });
     },
   };
 }
@@ -166,6 +210,33 @@ async function record(name, action) {
 const state = () => page.evaluate(() => audioQualification.snapshot());
 const near = (actual, expected, label, tolerance = 1e-6) =>
   assert.ok(Math.abs(actual - expected) <= tolerance, `${label}: ${actual} != ${expected}`);
+const attackSeconds = 0.040, releaseSeconds = 0.060, viewerRampSeconds = 0.020;
+function rampTo(snapshot, parameter, target, duration, label) {
+  assert.ok(Number.isInteger(parameter), `${label}: native graph must expose its gain parameter`);
+  const events = snapshot.parameters[parameter].events;
+  const index = events.findLastIndex(event => event.method === "linearRampToValueAtTime"
+    && Math.abs(event.args[0] - target) < 1e-6);
+  assert.ok(index >= 0, `${label}: must schedule a native linear ramp to ${target}`);
+  const ramp = events[index];
+  const hold = events.slice(0, index).findLast(event =>
+    event.method === "setValueAtTime" || event.method === "linearRampToValueAtTime");
+  assert.ok(hold, `${label}: ramp must have an explicit starting value/time`);
+  assert.equal(hold.method, "linearRampToValueAtTime",
+    `${label}: close the prior linear segment at its held value before retargeting`);
+  near(ramp.args[1] - hold.args[1], duration, `${label} duration`);
+  return { hold, ramp };
+}
+function valueOnRamp({ hold, ramp }, time) {
+  const progress = Math.max(0, Math.min(1, (time - hold.args[1]) / (ramp.args[1] - hold.args[1])));
+  return hold.args[0] + (ramp.args[0] - hold.args[0]) * progress;
+}
+function sourceStoppedAt(snapshot, source, deadline, label) {
+  const stop = snapshot.stops.find(event => event.node === source.node
+    && event.args.length === 1 && Math.abs(event.args[0] - deadline) < 1e-6);
+  assert.ok(stop, `${label}: native source must stop at the exact release deadline`);
+  assert.ok(stop.args[0] > stop.observedAt, `${label}: release stop must be scheduled in the future`);
+  return stop;
+}
 async function playing() {
   await page.waitForFunction(() => document.querySelector("#stage-state").textContent === "PLAYING");
   await page.waitForFunction(() => audioQualification.sample().some(output =>
@@ -308,7 +379,15 @@ try {
     for (const [index, offset] of [0, 1.5, 27.5, 30].entries()) {
       near(automation[index].args[1] - first.args[0], offset, "authored fade time");
     }
-    return { running };
+    assert.notEqual(first.gainParameter, first.busParameter, "authored and transport gains are separate native nodes");
+    assert.notEqual(first.busParameter, first.masterParameter, "viewer gain is separate from the transport envelope");
+    const attack = rampTo(running, first.busParameter, 1, attackSeconds, "initial transport attack");
+    near(attack.hold.args[0], 0, "initial attack starts muted", 0);
+    assert.ok(Number.isFinite(attack.hold.observedAt));
+    assert.ok(attack.hold.args[1] >= first.args[0] - 1e-9
+      && attack.hold.args[1] <= attack.hold.observedAt + 1e-9,
+    "initial attack begins after source admission and no later than its native scheduling call");
+    return { running, attack };
   });
   await record("pause silences the device and freezes authored time", async () => {
     await clickSceneControl("play");
@@ -316,10 +395,18 @@ try {
     const paused = await state();
     pausedTime = paused.transport.time;
     assert.ok(pausedTime > 0 && pausedTime < 5);
-    assert.equal(paused.transport.voices, 0);
+    assert.ok(paused.transport.voices <= 1, "pause may retain only its bounded release voice");
+    const source = paused.starts.at(-1);
+    const release = rampTo(paused, source.busParameter, 0, releaseSeconds, "pause release");
+    const stop = sourceStoppedAt(paused, source, release.ramp.args[1], "pause");
     const silence = await quiet();
-    near((await state()).transport.time, pausedTime, "paused time", 0);
-    return { paused, silence };
+    const settled = await state();
+    near(settled.transport.time, pausedTime, "paused time", 0);
+    assert.equal(settled.transport.voices, 0, "native ended cleanup releases the paused graph");
+    assert.ok(settled.ended.some(event => event.node === source.node));
+    assert.ok(settled.disconnects.some(event => event.node === source.busNode
+      && event.observedAt >= release.ramp.args[1]), "releasing bus disconnects after its envelope finishes");
+    return { paused, release, stop, silence, settled };
   });
   await record("resume preserves the PCM phase and immutable buffer", async () => {
     await page.locator("#play").click();
@@ -357,12 +444,16 @@ try {
     await page.locator("#mute").click();
     const mutedSilence = await quiet();
     const muted = await state();
+    const muteRamp = rampTo(muted, before.starts.at(-1).masterParameter, 0,
+      viewerRampSeconds, "viewer mute");
     assert.ok(muted.transport.time > before.transport.time);
     assert.equal(muted.transport.muted, true);
     assert.equal(muted.transport.sceneRevision, before.transport.sceneRevision);
     await volume(0.25);
     await page.locator("#mute").click();
     const reduced = await playing();
+    const unmuteRamp = rampTo(reduced, before.starts.at(-1).masterParameter, 0.25,
+      viewerRampSeconds, "viewer unmute");
     near(reduced.transport.volume, 0.25, "viewer volume", 0);
     assert.equal(reduced.transport.sceneRevision, before.transport.sceneRevision);
     assert.equal(reduced.starts.length, before.starts.length, "viewer gain must not restart the clip");
@@ -371,7 +462,7 @@ try {
     await volume(0.7);
     const restored = await playing();
     assert.equal(restored.transport.sceneRevision, before.transport.sceneRevision);
-    return { before, muted, reduced, restored, mutedSilence, zeroVolumeSilence };
+    return { before, muted, reduced, restored, muteRamp, unmuteRamp, mutedSilence, zeroVolumeSilence };
   });
   await record("scene key-point buttons seek picture and sound while preserving transport state", async () => {
     const before = await state();
@@ -466,6 +557,8 @@ try {
     const scrubbed = await playing();
     near(scrubbed.starts.at(-1).args[1], 12.5, "scrub source offset", 0);
     await page.locator("#restart").click();
+    await page.waitForFunction(() => audioQualification.renderer.audioVoiceCount() === 1,
+      null, { timeout: 2_000 });
     const restarted = await playing();
     near(restarted.starts.at(-1).args[1], 0, "restart source offset", 0);
     assert.equal(restarted.buffers.length, 1);
@@ -481,6 +574,193 @@ try {
     assert.ok(rejected.message, "seek beyond the qualified finite audio interval must reject");
     assert.equal(rejected.before, rejected.after);
     return { scrubbed, restarted, rejected };
+  });
+  await record("transport release and attack use separate native ramps without moving source anchors", async () => {
+    await seek(8);
+    await page.locator("#play").click();
+    await playing();
+    await page.waitForTimeout(120);
+    const transition = await page.evaluate(async () => {
+      const qualification = audioQualification;
+      const renderer = qualification.renderer;
+      const before = qualification.snapshot();
+      const oldSource = qualification.starts.at(-1);
+      renderer.seekDirect(10);
+      renderer.render();
+      renderer.directWakeDirectiveJson(performance.now());
+      const newSource = qualification.starts.at(-1);
+      const admitted = qualification.snapshot();
+      const observations = [];
+      // These values come from the real native AudioParams while the device
+      // renders. Event inspection below separately verifies exact deadlines.
+      for (let index = 0; index < 35; index++) {
+        observations.push({ deviceTime: qualification.contexts[newSource.context].context.currentTime,
+          oldBus: qualification.parameterValue(oldSource.busParameter),
+          newBus: qualification.parameterValue(newSource.busParameter),
+          output: qualification.sample()[newSource.context] });
+        await new Promise(resolve => setTimeout(resolve, 4));
+      }
+      return { before, admitted, oldSource, newSource, observations, settled: qualification.snapshot() };
+    });
+    const { oldSource, newSource, admitted, observations, settled } = transition;
+    const release = rampTo(admitted, oldSource.busParameter, 0, releaseSeconds, "seek release");
+    const attack = rampTo(admitted, newSource.busParameter, 1, attackSeconds, "seek attack");
+    sourceStoppedAt(admitted, oldSource, release.ramp.args[1], "seek");
+    near(attack.hold.args[0], 0, "replacement graph starts muted", 0);
+    near(attack.hold.args[1], release.ramp.args[1], "attack begins at the retained release deadline");
+    near(newSource.args[1], 10, "new source keeps its admitted scene offset", 0);
+    near(newSource.args[2], 20, "new source keeps its admitted duration", 0);
+    near(admitted.transport.time, 10, "output transition does not advance authored time", 0);
+    assert.ok(newSource.args[0] < attack.hold.args[1], "new PCM runs behind the muted bus before attack");
+    assert.equal(admitted.transport.sceneRevision, transition.before.transport.sceneRevision);
+    const waiting = observations.filter(sample => sample.deviceTime < attack.hold.args[1]);
+    assert.ok(waiting.length > 0, "observe the replacement's muted waiting interval");
+    assert.ok(waiting.every(sample => sample.newBus === 0));
+    assert.ok(observations.some(sample => sample.oldBus > 0.01 && sample.oldBus < 0.99),
+      "native retiring gain traverses intermediate values");
+    assert.ok(observations.some(sample => sample.newBus > 0.01 && sample.newBus < 0.99),
+      "native replacement gain traverses intermediate values");
+    assert.ok(observations.some(sample => sample.deviceTime >= attack.ramp.args[1]
+      && sample.output.rms > 1e-5), "replacement produces real output after attack");
+    assert.equal(settled.transport.voices, 1);
+    assert.ok(settled.ended.some(event => event.node === oldSource.node));
+    assert.ok(settled.disconnects.some(event => event.node === oldSource.node));
+    return { ...transition, release, attack };
+  });
+  await record("rapid viewer-gain changes retarget continuously without changing clip phase", async () => {
+    const result = await page.evaluate(async () => {
+      const qualification = audioQualification;
+      const renderer = qualification.renderer;
+      const source = qualification.starts.at(-1);
+      const parameter = source.masterParameter;
+      const before = qualification.snapshot();
+      const firstIndex = qualification.parameters[parameter].events.length;
+      renderer.setAudioVolume(0.1);
+      const first = qualification.snapshot();
+      renderer.setAudioVolume(0.4);
+      const second = qualification.snapshot();
+      await new Promise(resolve => setTimeout(resolve, 8));
+      renderer.setAudioVolume(0.7);
+      const third = qualification.snapshot();
+      const observations = [];
+      for (let index = 0; index < 12; index++) {
+        observations.push({ deviceTime: qualification.contexts[source.context].context.currentTime,
+          value: qualification.parameterValue(parameter), output: qualification.sample()[source.context] });
+        await new Promise(resolve => setTimeout(resolve, 4));
+      }
+      return { parameter, firstIndex, before, first, second, third, observations,
+        settled: qualification.snapshot() };
+    });
+    const first = rampTo(result.first, result.parameter, 0.1, viewerRampSeconds, "first viewer retarget");
+    const second = rampTo(result.second, result.parameter, 0.4, viewerRampSeconds, "second viewer retarget");
+    const third = rampTo(result.third, result.parameter, 0.7, viewerRampSeconds, "third viewer retarget");
+    near(second.hold.args[0], valueOnRamp(first, second.hold.args[1]), "second ramp holds the prior curve");
+    near(third.hold.args[0], valueOnRamp(second, third.hold.args[1]), "third ramp holds the prior curve");
+    const changed = result.settled.parameters[result.parameter].events.slice(result.firstIndex);
+    assert.ok(changed.filter(event => event.method === "cancelScheduledValues").length >= 3,
+      "each viewer retarget cancels superseded native automation");
+    assert.ok(changed.every(event => event.method !== "value"), "viewer changes must not step the native gain");
+    assert.ok(result.observations.some(sample => sample.value > third.hold.args[0] + 0.001
+      && sample.value < 0.699), "native master gain traverses its new ramp");
+    near(result.settled.parameters[result.parameter].value, 0.7, "settled native viewer gain");
+    assert.equal(result.settled.starts.length, result.before.starts.length);
+    assert.equal(result.settled.transport.sceneRevision, result.before.transport.sceneRevision);
+    assert.ok(result.settled.transport.time > result.before.transport.time);
+    return { ...result, firstRamp: first, secondRamp: second, thirdRamp: third };
+  });
+  await record("rapid admitted seeks keep only the latest muted replacement and one releasing graph", async () => {
+    const burst = await page.evaluate(() => {
+      const qualification = audioQualification;
+      const renderer = qualification.renderer;
+      const before = qualification.snapshot();
+      const oldSource = qualification.starts.at(-1);
+      const steps = [];
+      for (let index = 0; index < 16; index++) {
+        const target = 8 + index * 0.25;
+        renderer.seekDirect(target);
+        renderer.render();
+        renderer.directWakeDirectiveJson(performance.now());
+        const source = qualification.starts.at(-1);
+        steps.push({ target, time: renderer.time(), voices: renderer.audioVoiceCount(),
+          revision: String(renderer.directSceneRevision()), source,
+          busGain: qualification.parameterValue(source.busParameter),
+          bus: structuredClone(qualification.parameters[source.busParameter]) });
+      }
+      return { before, oldSource, steps, after: qualification.snapshot() };
+    });
+    const release = rampTo(burst.after, burst.oldSource.busParameter, 0, releaseSeconds, "burst initial release");
+    sourceStoppedAt(burst.after, burst.oldSource, release.ramp.args[1], "burst initial graph");
+    assert.equal(burst.after.starts.length - burst.before.starts.length, burst.steps.length,
+      "every admitted seek starts exactly its own replacement source");
+    for (const step of burst.steps) {
+      near(step.time, step.target, "burst committed scene time", 0);
+      near(step.source.args[1], step.target, "burst PCM source offset", 0);
+      near(step.source.args[2], 30 - step.target, "burst PCM remaining duration", 0);
+      assert.equal(step.revision, burst.before.transport.sceneRevision);
+      assert.ok(step.voices >= 1 && step.voices <= 2, "voice lifetime is bounded during every admitted seek");
+    }
+    const waiting = burst.steps.filter(step => step.source.args[0] < release.ramp.args[1]);
+    assert.ok(waiting.length >= 2, "burst must exercise multiple commands inside one release interval");
+    for (const step of waiting) {
+      const attack = rampTo({ parameters: { [step.source.busParameter]: step.bus } },
+        step.source.busParameter, 1, attackSeconds, "waiting replacement attack");
+      near(attack.hold.args[1], release.ramp.args[1], "rapid retarget preserves the original release deadline");
+      near(step.busGain, 0, "superseded replacement remains inaudible", 0);
+    }
+    const originalStops = burst.after.stops.filter(event => event.node === burst.oldSource.node
+      && event.args.length === 1 && event.args[0] > event.observedAt);
+    assert.equal(originalStops.length, 1, "rapid retargeting does not extend or reschedule the audible release");
+    await page.waitForFunction(() => audioQualification.renderer.audioVoiceCount() === 1,
+      null, { timeout: 2_000 });
+    await page.waitForTimeout(80);
+    const settled = await playing();
+    assert.equal(settled.starts.length, burst.after.starts.length, "no queued commands or late source starts");
+    assert.equal(settled.buffers.length, 1, "transition bursts reuse prepared PCM");
+    assert.equal(settled.transport.voices, 1);
+    assert.equal(settled.transport.sceneRevision, burst.before.transport.sceneRevision);
+    for (const step of burst.steps.slice(0, -1)) {
+      assert.ok(settled.disconnects.some(event => event.node === step.source.node),
+        "every superseded source is disconnected after the burst settles");
+    }
+    return { ...burst, release, settled };
+  });
+  await record("visibility hard-stops both graphs during a pending transport release", async () => {
+    const result = await page.evaluate(() => {
+      const qualification = audioQualification;
+      const renderer = qualification.renderer;
+      const oldSource = qualification.starts.at(-1);
+      renderer.seekDirect(12.75);
+      renderer.render();
+      renderer.directWakeDirectiveJson(performance.now());
+      const newSource = qualification.starts.at(-1);
+      const releasing = qualification.snapshot();
+      const previous = Object.getOwnPropertyDescriptor(document, "hidden");
+      try {
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+      } finally {
+        if (previous) Object.defineProperty(document, "hidden", previous);
+        else delete document.hidden;
+      }
+      document.dispatchEvent(new Event("visibilitychange"));
+      return { oldSource, newSource, releasing, stopped: qualification.snapshot() };
+    });
+    const release = rampTo(result.releasing, result.oldSource.busParameter, 0, releaseSeconds, "pending visibility release");
+    assert.equal(result.releasing.transport.voices, 2, "lifecycle event occurs with both graph lifetimes present");
+    assert.equal(result.stopped.transport.voices, 0, "visibility must hard-stop instead of retaining a release tail");
+    assert.equal(result.stopped.transport.playing, false);
+    for (const source of [result.oldSource, result.newSource]) {
+      assert.ok(result.stopped.stops.some(event => event.node === source.node
+        && (event.args.length === 0 || event.args[0] <= event.observedAt)),
+      "lifecycle cancellation immediately stops each native source");
+      assert.ok(result.stopped.disconnects.some(event => event.node === source.node
+        && event.observedAt < release.ramp.args[1]), "lifecycle cleanup does not wait for the release deadline");
+    }
+    const silence = await quiet();
+    const settled = await state();
+    assert.equal(settled.starts.length, result.stopped.starts.length);
+    near(settled.transport.time, result.stopped.transport.time, "visibility freezes authored time", 0);
+    return { ...result, release, silence, settled };
   });
   await record("finite completion stops at 30 seconds and stays silent", async () => {
     await seek(29.6);
@@ -638,17 +918,34 @@ try {
     await page.locator("#play").click();
     await page.waitForFunction(() => audioQualification.sample().some(output =>
       output.state === "running" && output.rms > 1e-5), null, { timeout: 8_000 });
+    await page.waitForTimeout(80);
     const active = await state();
     assert.equal(active.transport.voices, 1);
-    await page.evaluate(() => {
+    const pending = await page.evaluate(() => {
       const renderer = audioQualification.renderer;
+      const oldSource = audioQualification.starts.at(-1);
+      renderer.seekDirect(8.5);
+      renderer.render();
+      renderer.directWakeDirectiveJson(performance.now());
+      const newSource = audioQualification.starts.at(-1);
+      const releasing = audioQualification.snapshot();
       audioQualification.renderer = null;
       renderer.free();
+      return { oldSource, newSource, releasing };
     });
     await page.waitForFunction(() => audioQualification.contexts.every(({ context }) => context.state === "closed"));
     const freed = await state();
-    assert.equal(freed.stops.at(-1).source, freed.starts.at(-1).source);
-    return { active, freed };
+    const release = rampTo(pending.releasing, pending.oldSource.busParameter, 0,
+      releaseSeconds, "release pending at free");
+    assert.equal(pending.releasing.transport.voices, 2);
+    for (const source of [pending.oldSource, pending.newSource]) {
+      assert.ok(freed.stops.some(event => event.node === source.node
+        && (event.args.length === 0 || event.args[0] <= event.observedAt)),
+      "free immediately stops both current and retiring sources");
+      assert.ok(freed.disconnects.some(event => event.node === source.node
+        && event.observedAt < release.ramp.args[1]));
+    }
+    return { active, pending, release, freed };
   });
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
   assert.deepEqual(report.consoleErrors, [], "no browser audio/GPU errors");
@@ -658,6 +955,11 @@ try {
   report.error = String(error.stack ?? error);
   process.exitCode = 1;
   console.error(report.error);
+  report.failureState = await page?.evaluate(() => ({
+    stage: document.querySelector("#stage-state")?.textContent,
+    status: document.querySelector("#status")?.textContent,
+    audio: window.audioQualification?.snapshot(),
+  })).catch(error => ({ unavailable: String(error) }));
   await page?.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true }).catch(() => {});
 } finally {
   await browser?.close();

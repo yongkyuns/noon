@@ -3,6 +3,8 @@
 //! Clip timing and gain envelopes are supplied by the existing Runtime. This
 //! adapter owns disposable browser nodes and PCM copies, never authored time.
 
+mod transition;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ViewerAudioControls {
     volume: f64,
@@ -68,14 +70,25 @@ fn device_time(origin: f64, offset: f64) -> Result<f64, &'static str> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::{cell::Cell, collections::BTreeMap, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+        rc::Rc,
+    };
 
     use noon::ExecutionSession;
     use noon_core::AudioResourceHandle;
     use wasm_bindgen::{closure::Closure, JsCast, JsValue};
-    use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, GainNode};
+    use web_sys::{
+        AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioParam,
+        AudioScheduledSourceNode, GainNode,
+    };
 
-    use super::{device_gain, device_time, ViewerAudioControls};
+    use super::{
+        device_gain, device_time,
+        transition::{GainRamp, ATTACK_SECONDS, RELEASE_SECONDS, VIEWER_RAMP_SECONDS},
+        ViewerAudioControls,
+    };
 
     struct DeviceVoice {
         source: AudioBufferSourceNode,
@@ -95,10 +108,54 @@ mod wasm {
     struct DeviceGraph {
         voices: Vec<DeviceVoice>,
         bus: GainNode,
+        ramp: GainRamp,
+        last_voice: usize,
+        natural_end: f64,
+        ended: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    }
+
+    impl DeviceGraph {
+        /// The latest-ending native source retires this one disposable graph.
+        /// A weak slot reference and the browser node's own identity avoid a
+        /// reference cycle, an extra generation, or a cleanup timer.
+        fn observe_retirement(&mut self, retiring: &Rc<RefCell<Option<Self>>>) {
+            let slot = Rc::downgrade(retiring);
+            let ended = Closure::new(move |event: web_sys::Event| {
+                let Some(slot) = slot.upgrade() else {
+                    return;
+                };
+                let Some(target) = event.target() else {
+                    return;
+                };
+                let is_current = slot.borrow().as_ref().is_some_and(|graph| {
+                    graph.voices[graph.last_voice]
+                        .source
+                        .unchecked_ref::<web_sys::EventTarget>()
+                        == &target
+                });
+                if is_current {
+                    // wasm-bindgen retains an invocation until its callback
+                    // returns, so dropping its registered owner here is safe.
+                    let graph = slot.borrow_mut().take();
+                    drop(graph);
+                }
+            });
+            AudioScheduledSourceNode::set_onended(
+                self.voices[self.last_voice].source.as_ref(),
+                Some(ended.as_ref().unchecked_ref()),
+            );
+            self.ended = Some(ended);
+        }
     }
 
     impl Drop for DeviceGraph {
         fn drop(&mut self) {
+            if self.ended.is_some() {
+                AudioScheduledSourceNode::set_onended(
+                    self.voices[self.last_voice].source.as_ref(),
+                    None,
+                );
+            }
             self.bus.gain().set_value(0.0);
             let _ = self.bus.disconnect();
         }
@@ -118,7 +175,9 @@ mod wasm {
         master: GainNode,
         buffers: BTreeMap<AudioResourceHandle, AudioBuffer>,
         graph: Option<DeviceGraph>,
+        retiring: Rc<RefCell<Option<DeviceGraph>>>,
         controls: ViewerAudioControls,
+        master_ramp: Rc<Cell<GainRamp>>,
         interrupted: Rc<Cell<bool>>,
         unlock_pending: Rc<Cell<bool>>,
         unlock_promise: Option<js_sys::Promise>,
@@ -146,16 +205,19 @@ mod wasm {
                 return Err(error);
             }
             let interrupted = Rc::new(Cell::new(false));
+            let master_ramp = Rc::new(Cell::new(GainRamp::constant(controls.device_gain())));
             let state_change = {
                 let context = context.clone();
                 let master = master.clone();
                 let interrupted = interrupted.clone();
+                let master_ramp = master_ramp.clone();
                 Closure::new(move |_: web_sys::Event| {
                     if context.state() != AudioContextState::Running {
                         // Never restart queued sound merely because the browser
                         // later resumes its device clock. The next explicit
                         // unlock and transport anchor must rebuild the output.
-                        master.gain().set_value(0.0);
+                        silence_parameter(&master.gain(), context.current_time());
+                        master_ramp.set(GainRamp::constant(0.0));
                         interrupted.set(true);
                     }
                 })
@@ -166,7 +228,9 @@ mod wasm {
                 master,
                 buffers: BTreeMap::new(),
                 graph: None,
+                retiring: Rc::new(RefCell::new(None)),
                 controls,
+                master_ramp,
                 interrupted,
                 unlock_pending: Rc::new(Cell::new(false)),
                 unlock_promise: None,
@@ -179,7 +243,11 @@ mod wasm {
         pub(crate) fn unlock(&mut self) -> Result<js_sys::Promise, JsValue> {
             self.stop();
             self.interrupted.set(false);
-            self.master.gain().set_value(self.controls.device_gain());
+            let gain = self.controls.device_gain();
+            let now = self.context.current_time();
+            self.master.gain().cancel_scheduled_values(now)?;
+            self.master.gain().set_value_at_time(gain, now)?;
+            self.master_ramp.set(GainRamp::constant(gain));
             if self.unlock_pending.get() {
                 return Ok(self.unlock_promise.as_ref().unwrap().clone());
             }
@@ -206,20 +274,93 @@ mod wasm {
         }
 
         pub(crate) fn voice_count(&self) -> usize {
+            self.retire_completed(self.context.current_time());
             self.graph.as_ref().map_or(0, |graph| graph.voices.len())
+                + self
+                    .retiring
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, |graph| graph.voices.len())
         }
 
-        pub(crate) fn set_controls(&mut self, controls: ViewerAudioControls) {
+        pub(crate) fn set_controls(
+            &mut self,
+            controls: ViewerAudioControls,
+        ) -> Result<(), JsValue> {
             self.controls = controls;
-            self.master.gain().set_value(if self.interrupted.get() {
-                0.0
-            } else {
-                controls.device_gain()
-            });
+            let now = self.context.current_time();
+            if self.interrupted.get() {
+                silence_parameter(&self.master.gain(), now);
+                self.master_ramp.set(GainRamp::constant(0.0));
+                return Ok(());
+            }
+            let ramp = self
+                .master_ramp
+                .get()
+                .retarget(controls.device_gain(), now, VIEWER_RAMP_SECONDS)
+                .map_err(js_error)?;
+            apply_ramp(&self.master.gain(), ramp)?;
+            self.master_ramp.set(ramp);
+            Ok(())
         }
 
+        /// Lifecycle/failure cancellation is immediate, including a release
+        /// already scheduled on the device. It never leaves a delayed tail.
         pub(crate) fn stop(&mut self) {
             self.graph = None;
+            self.retiring.borrow_mut().take();
+        }
+
+        /// Ordinary transport changes release one audible graph. A newer graph
+        /// remains at zero until that release ends; rapid changes can therefore
+        /// replace it without truncating an audible tail or accumulating graphs.
+        pub(crate) fn release(&mut self) -> Result<(), JsValue> {
+            if !self.is_ready() {
+                self.stop();
+                return Ok(());
+            }
+            let result = self.release_at(self.context.current_time());
+            if result.is_err() {
+                self.stop();
+            }
+            result
+        }
+
+        fn retire_completed(&self, now: f64) {
+            let complete = self
+                .retiring
+                .borrow()
+                .as_ref()
+                .is_some_and(|graph| now >= graph.ramp.end());
+            if complete {
+                let graph = self.retiring.borrow_mut().take();
+                drop(graph);
+            }
+        }
+
+        fn release_at(&mut self, now: f64) -> Result<(), JsValue> {
+            self.retire_completed(now);
+            let Some(mut graph) = self.graph.take() else {
+                return Ok(());
+            };
+            if graph.ramp.value_at(now) == 0.0 || graph.natural_end <= now {
+                return Ok(());
+            }
+            if self.retiring.borrow().is_some() {
+                return Err(JsValue::from_str(
+                    "audio transition cannot retain two audible release graphs",
+                ));
+            }
+            let duration = RELEASE_SECONDS.min(graph.natural_end - now);
+            let ramp = graph.ramp.retarget(0.0, now, duration).map_err(js_error)?;
+            apply_ramp(&graph.bus.gain(), ramp)?;
+            graph.ramp = ramp;
+            graph.observe_retirement(&self.retiring);
+            for voice in &graph.voices {
+                AudioScheduledSourceNode::stop_with_when(voice.source.as_ref(), ramp.end())?;
+            }
+            *self.retiring.borrow_mut() = Some(graph);
+            Ok(())
         }
 
         pub(crate) fn preload(&mut self, session: &ExecutionSession) -> Result<(), JsValue> {
@@ -295,6 +436,10 @@ mod wasm {
             let mut graph = DeviceGraph {
                 voices: Vec::with_capacity(prepared.len()),
                 bus,
+                ramp: GainRamp::constant(0.0),
+                last_voice: 0,
+                natural_end: 0.0,
+                ended: None,
             };
             for voice in &prepared {
                 let source = self.context.create_buffer_source()?;
@@ -314,7 +459,7 @@ mod wasm {
             // Check the complete device-time conversion before starting even a
             // muted source. Extremely large finite authored times can overflow
             // or collapse when added to a device clock.
-            for voice in &prepared {
+            for (index, voice) in prepared.iter().enumerate() {
                 let start = device_time(origin, voice.start_delay).map_err(js_error)?;
                 let end = device_time(start, voice.duration).map_err(js_error)?;
                 if end <= start {
@@ -324,6 +469,10 @@ mod wasm {
                 }
                 for &(offset, _) in &voice.gain_points {
                     device_time(start, offset).map_err(js_error)?;
+                }
+                if end > graph.natural_end {
+                    graph.natural_end = end;
+                    graph.last_voice = index;
                 }
             }
             for (voice, device) in prepared.iter().zip(&graph.voices) {
@@ -348,9 +497,20 @@ mod wasm {
                         voice.duration,
                     )?;
             }
-            self.stop();
-            self.master.gain().set_value(self.controls.device_gain());
-            graph.bus.gain().set_value(1.0);
+            let now = self.context.current_time();
+            self.release_at(now)?;
+            let attack_start = self
+                .retiring
+                .borrow()
+                .as_ref()
+                .map_or(now, |retiring| retiring.ramp.end().max(now));
+            // Sources already run at their exact authored offsets. Only their
+            // disposable bus is gated during the old graph's bounded release;
+            // opening it later cannot shift the audio/visual anchor.
+            let ramp =
+                GainRamp::linear(0.0, 1.0, attack_start, ATTACK_SECONDS).map_err(js_error)?;
+            apply_ramp(&graph.bus.gain(), ramp)?;
+            graph.ramp = ramp;
             self.graph = Some(graph);
             Ok(())
         }
@@ -362,7 +522,7 @@ mod wasm {
             // Keep the closure alive until its browser registration is removed.
             let _ = &self.state_change;
             self.stop();
-            self.master.gain().set_value(0.0);
+            silence_parameter(&self.master.gain(), self.context.current_time());
             let _ = self.master.disconnect();
             let _ = self.context.close();
         }
@@ -370,6 +530,22 @@ mod wasm {
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&error.to_string())
+    }
+
+    fn apply_ramp(parameter: &AudioParam, ramp: GainRamp) -> Result<(), JsValue> {
+        parameter.cancel_scheduled_values(ramp.start())?;
+        // Cancelling a running ramp removes its future endpoint. Close that
+        // linear segment at the observed value before adding the new one; a
+        // setValueAtTime alone would replace its preceding curve with a step.
+        parameter.linear_ramp_to_value_at_time(ramp.from(), ramp.start())?;
+        parameter.linear_ramp_to_value_at_time(ramp.target(), ramp.end())?;
+        Ok(())
+    }
+
+    fn silence_parameter(parameter: &AudioParam, now: f64) {
+        let _ = parameter.cancel_scheduled_values(now);
+        let _ = parameter.set_value_at_time(0.0, now);
+        parameter.set_value(0.0);
     }
 }
 

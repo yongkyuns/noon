@@ -161,16 +161,24 @@ function retire() {
   renderer = null;
 }
 window.addEventListener("pagehide", retire, { once: true });
-// Browser backgrounding explicitly pauses this demo. Returning to the tab does
-// not automatically resume sound or create another playback epoch.
+// Browser backgrounding explicitly pauses this demo. Returning presents any
+// pending paused frame without resuming sound or creating a playback epoch.
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && renderer) {
-    // Cancel this serialized command even if the tab returns before an async
-    // device unlock resolves. A fresh user action may start a new command.
-    commandCancelled = true;
-    cancelWake();
-    try { renderer.pauseDirect(performance.now()); update(); } catch (error) { fail(error); }
-  }
+  if (retired || !renderer) return;
+  try {
+    if (document.hidden) {
+      // Cancel this serialized command even if the tab returns before an async
+      // device unlock resolves. A fresh user action may start a new command.
+      commandCancelled = true;
+      cancelWake();
+      renderer.pauseDirect(performance.now());
+      update();
+    } else {
+      // The pause observation may have published a final frame while hidden.
+      // Honor the shared presentation directive before accepting another seek.
+      schedule();
+    }
+  } catch (error) { fail(error); }
 });
 window.addEventListener("resize", () => { try { resize(); } catch (error) { fail(error); } });
 
