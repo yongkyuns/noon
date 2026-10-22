@@ -17,9 +17,10 @@ hot reload (#64) remain independent owners.
 The human explicitly asked to continue without a phone. Do not ask for one or
 re-probe it until availability changes. Mac Screen Recording last denied access.
 No physical requirement, original cohort or acceptance limit is waived.
-The registry still reports the pre-resumption blocked goal; the fresh audit
-reset when this resumed CI work made meaningful progress. Do not create a
-second goal or claim that CI maintenance completes Phase D.
+The goal registry was observed active at the latest qualification checkpoint
+(October 22, 14:25 UTC). Newly audited current-source evidence resets the fresh
+impasse count to zero. Query the live state before using that observation; do
+not create a second goal or treat functional qualification as full Phase D.
 
 Current source/publication and CI closeout: Master and the actual public source are `93fb42745d7b9d7a5e8de3770136823c609284b5`; published build `90fa87740cce313605621215e5d333005fc82a18df3919f1f39efc488dd9c07d`. All 31 active PR checks passed (one configured skip), all nine PR workflows passed on attempt 1, and all nine normal post-merge workflows passed on attempt 1. The normal ManimCE semantics comparison passed; the full Manim raster oracle was not selected for this CI-only change. All 60 original product reports and ten passing comparisons were retained and checked without rescoring. All four actual served runtime assets have identical byte counts and hashes to the verified baseline: zero runtime growth.
 
@@ -58,6 +59,40 @@ Publication baseline: source `7e0aa61067d758ee93ad72fdf446dff50b8995d2`, build
 All four served runtime assets were streamed and SHA-verified. The published
 #2219 source has the same four asset byte counts and hashes. This verifies
 publication integrity and growth; it does not run scenes or qualify pacing.
+
+## Newly verified scheduled raster qualification
+
+[Scheduled run 39774667781](https://github.com/yongkyuns/noon/actions/runs/39774667781)
+completed on source `93fb42745d7b9d7a5e8de3770136823c609284b5`, attempt 1.
+The original reports were retained and replayed using five existing verifier
+and manifest files copied verbatim from that commit:
+
+- All 160 fixtures / 320 backend cells / 1,256 raster checkpoints reproduce
+  the blocking per-fixture ratchets. The previous 157 fixture tolerances are
+  identical; three family/membership cases were added and none removed.
+- Shared sparse/dense playback covers 147 fixtures per backend / 1,170 samples
+  with identical pixels. Four moving-dot state deltas are nonzero, at most
+  `4.76837158203125e-7`, within the unchanged `1e-6` tolerance. Do not relabel
+  them as bit-exact state equality or extend this replay claim to the other13.
+- FollowingGraphCamera retains 14 paired fixtures and13 Cairo samples/backend;
+  opaque callback replay remains denied. Four static Typst rows pass their
+  ratchets; they do not qualify Create/Write animation parity.
+
+The producer's general `enforce:false` flag is followed by a separate blocking
+per-fixture ratchet, which passed and whose complete verdict was reproduced.
+Semantic deltas are diagnostic. The oracle configuration enables renderer-smoke
+and skips optimization: runtime build
+`095d02161ddb58bff19c96b985420ba7f483135e68762cd78f87b9ef43cc4af5`, distinct
+from the optimized published build. This is source/profile raster qualification,
+not physical pacing or causal attribution of the original failures. No new run,
+retry, production patch, threshold change or dependency was introduced.
+
+The first local review assertion incorrectly required bit-exact state equality;
+its failure and correction to the existing tolerance are retained. Original
+reports were untouched. The temporary114,583,909-byte decoded report was removed;
+its original archive remains preserved with the GitHub digest. New proof:
+`post-phone-free-ci-20261022/scheduled-current-source-raster-qualification-proof.json`.
+Repeated same-source copies of this successful corpus would not advance the goal.
 
 ## Remaining gates: preserve their actual meaning
 
@@ -104,13 +139,19 @@ Canonical checkpoint files:
 - `empty-scalar-checkpoint.json`
 - `editor-native-source-evidence-manifest.json`
 
-Catalog and seal: **20,940 entries / 4,141,537,505 cataloged bytes**, SHA-256:
+Catalog and seal: **20,985 entries / 4,276,439,243 cataloged bytes**, SHA-256:
 
-`74721d32f6d6e533adaaa47763f572aee031cee9ff7b226c912d62bcaa291253`
+`fdc5f66376081f21a27116a7d91ea31a5d9af787832a4aa4cc96e5f3f5177f34`
 
-All prior20,825 rows were fully rehashed. Exact prior canonical bytes are retained in compressed snapshots. Both continuation roots below are now sealed; the next mutable root is `post-phone-free-ci-20261022/`, containing this final handoff push receipt and reserved for future native evidence. That postseal receipt is not in the sealed catalog; no diagnostic or hosted qualification is running.
+All prior20,940 catalog rows were fully rehashed. Prior canonical files are
+retained as exact compressed snapshots. `post-phone-free-ci-20261022/` is now
+sealed too, including the four original scheduled-raster archives and verifier
+proofs. The next mutable root is `native-qualification-after-raster-20261022/`,
+reserved for this postseal handoff receipt and future native evidence. The
+receipt is outside the sealed catalog. No task-owned browser, build, native
+probe or hosted qualification is running.
 
-New continuation roots are `phase-d-native-evidence-continuation-20261022T0338Z/`
+Earlier continuation roots are `phase-d-native-evidence-continuation-20261022T0338Z/`
 and `phone-free-ci-continuation-20261022T092803Z/`. The latter retains actual
 cache logs, regression controls, source review, CI, merge and publication proofs.
 Old enrolled roots are immutable. Never execute a helper in a sealed root; copy
