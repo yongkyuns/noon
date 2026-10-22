@@ -379,3 +379,25 @@ fn appended_corners_preserve_existing_morph_target_metadata() {
         }
     }
 }
+
+#[test]
+fn noncanonical_corner_samples_keep_their_cubic_geometry() {
+    let mut scene = crate::Scene::new();
+    let mut object = scene.path(VectorPath::new(), Default::default()).unwrap();
+    object
+        .set_points_as_corners_f64_with_samples(&[(0.0, 0.0), (1.0, 0.0)], &[0.0, -0.25, 1.25, 1.0])
+        .unwrap();
+    let path = world_path(
+        &scene.integration_store().borrow(),
+        &object.state().unwrap(),
+    )
+    .unwrap();
+    assert!(path
+        .commands()
+        .iter()
+        .any(|command| matches!(command, noon_core::PathCommand::CubicTo { .. })));
+    assert_eq!(
+        path.manim_points().unwrap(),
+        &[(0.0, 0.0), (-0.25, 0.0), (1.25, 0.0), (1.0, 0.0)]
+    );
+}

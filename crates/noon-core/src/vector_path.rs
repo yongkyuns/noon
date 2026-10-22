@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct VectorPath {
     commands: Vec<PathCommand>,
     /// Manim-style raw point storage when the path was authored from a raw
-    /// point array. Commands remain the drawable cubic prefix; this preserves
+    /// point array. Commands remain an explicitly lowered drawable prefix; this preserves
     /// incomplete trailing points that Manim retains for point-array queries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manim_points: Option<Vec<(f64, f64)>>,
@@ -92,12 +92,18 @@ impl VectorPath {
     /// Drawable commands continue to use the explicit renderer representation.
     pub fn transformed_semantic(&self, transform: SemanticTransform2_5D) -> Self {
         let mut result = if let Some(points) = self.manim_points() {
-            Self::from_manim_points_f64(
-                points
-                    .iter()
-                    .map(|&(x, y)| transform.transform_xy(x, y))
-                    .collect(),
-            )
+            let points = points
+                .iter()
+                .map(|&(x, y)| transform.transform_xy(x, y))
+                .collect();
+            let line_segments = !self.commands().iter().any(|command| {
+                matches!(
+                    command,
+                    PathCommand::QuadraticTo { .. } | PathCommand::CubicTo { .. }
+                )
+            });
+            let closed = matches!(self.commands().last(), Some(PathCommand::Close));
+            Self::from_manim_points_drawing(points, line_segments, closed)
         } else {
             self.transformed(Transform2D {
                 translation: Vec2::new(
@@ -186,6 +192,14 @@ impl VectorPath {
     /// Retain authored planar coordinates at semantic precision. Drawable
     /// commands are an explicitly lowered prefix; queries use the raw array.
     pub fn from_manim_points_f64(points: Vec<(f64, f64)>) -> Self {
+        Self::from_manim_points_drawing(points, false, false)
+    }
+
+    fn from_manim_points_drawing(
+        points: Vec<(f64, f64)>,
+        line_segments: bool,
+        closed: bool,
+    ) -> Self {
         if points.is_empty() {
             return Self::new();
         }
@@ -197,14 +211,39 @@ impl VectorPath {
             if previous_end != Some(start) {
                 path = path.move_to(lower(start));
             }
-            path = path.cubic_to(lower(control1), lower(control2), lower(end));
+            path = if line_segments {
+                path.line_to(lower(end))
+            } else {
+                path.cubic_to(lower(control1), lower(control2), lower(end))
+            };
             previous_end = Some(end);
         }
         if let Some(&start) = points.get(points.len() / 4 * 4) {
             path = path.move_to(lower(start));
         }
+        if closed {
+            path = path.close();
+        }
         path.manim_points = Some(points);
         path
+    }
+
+    /// Retain CE's canonical cubic controls for line corners while preserving
+    /// their compact drawable polyline, including its closing contour flag.
+    /// Semantic queries use the original f64 controls; rendering lowers only
+    /// the supplied corner coordinates to Vec2.
+    pub fn from_manim_corners_f64(corners: &[(f64, f64)]) -> Self {
+        let mut raw = Vec::with_capacity(corners.len().saturating_sub(1) * 4);
+        for pair in corners.windows(2) {
+            let (start, end) = (pair[0], pair[1]);
+            for t in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
+                raw.push((
+                    (1.0 - t) * start.0 + t * end.0,
+                    (1.0 - t) * start.1 + t * end.1,
+                ));
+            }
+        }
+        Self::from_manim_points_drawing(raw, true, corners.first() == corners.last())
     }
 
     /// Raw authored coordinates, including any incomplete cubic tail.
@@ -357,3 +396,6 @@ fn semantic_transform(transform: Transform2D) -> SemanticTransform2_5D {
         rotation_z: transform.rotation as f64,
     }
 }
+
+#[cfg(test)]
+mod corner_tests;

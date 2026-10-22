@@ -188,6 +188,9 @@ fn line(
 fn corners(points: &[Point], samples: &[f64]) -> Result<VectorPath, AuthoringError> {
     validate_raw_points(points)?;
     validate_samples(samples)?;
+    if samples == LINE_SAMPLES {
+        return finish(VectorPath::from_manim_corners_f64(points));
+    }
     let raw = points
         .windows(2)
         .flat_map(|pair| {
