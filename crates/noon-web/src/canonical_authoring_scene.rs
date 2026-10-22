@@ -8701,8 +8701,8 @@ mod wasm {
             anchor_y: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control = crate::authoring_geometry::point(control_x, control_y)?;
-            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            let control = crate::authoring_geometry::point_f64(control_x, control_y)?;
+            let anchor = crate::authoring_geometry::point_f64(anchor_x, anchor_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?

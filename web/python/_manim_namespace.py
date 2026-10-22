@@ -41,6 +41,7 @@ _OPTIONAL_HELPER_PACKAGES = {
     "split_bezier": "numpy",
     "subdivide_bezier": "numpy",
     "bezier_remap": "numpy",
+    "insert_n_curves_to_point_list": "numpy",
     "point_lies_on_bezier": "numpy",
     "proportions_along_bezier_curve_for_point": "numpy",
     "line_intersection": "numpy",

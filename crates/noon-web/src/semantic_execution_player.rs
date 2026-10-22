@@ -948,16 +948,18 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_quadratic_bezier_curve_to(
         &mut self,
         source: &noon::Mobject,
-        control: noon_core::Vec2,
-        anchor: noon_core::Vec2,
+        control: (f64, f64),
+        anchor: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::QuadraticWithStride {
-            object: source,
-            control,
-            anchor,
-            stride,
-        })
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::QuadraticF64WithStride {
+                object: source,
+                control,
+                anchor,
+                stride,
+            },
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -3635,6 +3637,9 @@ impl SemanticExecutionPlayer {
             .live_wake_clock
             .scene_time_at(wall_time_ms)
             .ok_or("observe the live segment wake before driving it from wall time")?;
+        let requested_time = self
+            .session
+            .initial_continuous_segment_sample(segment, requested_time);
         self.live_drive_segment_to(segment, requested_time)
     }
 
@@ -5749,6 +5754,9 @@ impl SemanticExecutionPlayer {
         self.session.frame().time
     }
 }
+
+#[cfg(test)]
+mod live_initial_sample_tests;
 
 #[cfg(test)]
 mod tests;
