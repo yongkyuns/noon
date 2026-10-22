@@ -840,9 +840,9 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_points_as_corners(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CornersF64 {
             object: source,
             points,
         })
@@ -852,14 +852,16 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_points_as_corners_with_samples(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
         bezier_t_values: &[f64; 4],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CornersWithSamples {
-            object: source,
-            points,
-            bezier_t_values,
-        })
+        self.publish_borrowed_path_edit(
+            noon::integration::BorrowedPathEdit::CornersF64WithSamples {
+                object: source,
+                points,
+                bezier_t_values,
+            },
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -892,11 +894,12 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_start_new_path(
         &mut self,
         source: &noon::Mobject,
-        point: noon_core::Vec2,
+        point: (f64, f64),
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Start {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::StartF64WithStride {
             object: source,
             point,
+            stride: 4,
         })
     }
 
@@ -904,10 +907,10 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_start_new_path_with_stride(
         &mut self,
         source: &noon::Mobject,
-        point: noon_core::Vec2,
+        point: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::StartWithStride {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::StartF64WithStride {
             object: source,
             point,
             stride,
@@ -918,10 +921,10 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_line_to(
         &mut self,
         source: &noon::Mobject,
-        point: noon_core::Vec2,
+        point: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithStride {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineF64WithStride {
             object: source,
             point,
             stride,
@@ -932,11 +935,11 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_line_to_with_samples(
         &mut self,
         source: &noon::Mobject,
-        point: noon_core::Vec2,
+        point: (f64, f64),
         stride: i32,
         bezier_t_values: &[f64; 4],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineWithSamples {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::LineF64WithSamples {
             object: source,
             point,
             stride,
@@ -966,12 +969,12 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_cubic_bezier_curve_to(
         &mut self,
         source: &noon::Mobject,
-        control1: noon_core::Vec2,
-        control2: noon_core::Vec2,
-        anchor: noon_core::Vec2,
+        control1: (f64, f64),
+        control2: (f64, f64),
+        anchor: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicWithStride {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicF64WithStride {
             object: source,
             control1,
             control2,
@@ -1014,12 +1017,12 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_cubic_bezier_curve(
         &mut self,
         source: &noon::Mobject,
-        anchor1: noon_core::Vec2,
-        handle1: noon_core::Vec2,
-        handle2: noon_core::Vec2,
-        anchor2: noon_core::Vec2,
+        anchor1: (f64, f64),
+        handle1: (f64, f64),
+        handle2: (f64, f64),
+        anchor2: (f64, f64),
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurve {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurveF64 {
             object: source,
             anchor1,
             handle1,
@@ -1032,9 +1035,9 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_cubic_bezier_curves(
         &mut self,
         source: &noon::Mobject,
-        curves: &[[noon_core::Vec2; 4]],
+        curves: &[[(f64, f64); 4]],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurves {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurvesF64 {
             object: source,
             curves,
         })
@@ -1044,9 +1047,9 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_set_cubic_bezier_curves(
         &mut self,
         source: &noon::Mobject,
-        curves: &[[noon_core::Vec2; 4]],
+        curves: &[[(f64, f64); 4]],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurves {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurvesF64 {
             object: source,
             curves,
         })
@@ -1056,9 +1059,9 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_points_as_corners(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCorners {
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCornersF64 {
             object: source,
             points,
         })
@@ -1068,12 +1071,12 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_add_points_as_corners_with_stride(
         &mut self,
         source: &noon::Mobject,
-        points: &[noon_core::Vec2],
+        points: &[(f64, f64)],
         stride: i32,
         bezier_t_values: &[f64],
     ) -> Result<(), AuthoringFailure> {
         self.publish_borrowed_path_edit(
-            noon::integration::BorrowedPathEdit::AppendCornersWithStride {
+            noon::integration::BorrowedPathEdit::AppendCornersF64WithStride {
                 object: source,
                 points,
                 stride,

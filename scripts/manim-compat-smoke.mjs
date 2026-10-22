@@ -57,6 +57,12 @@ POINT_LIST_CASES = json.loads(${JSON.stringify(JSON.stringify(pointListFixture.c
 POINT_LIST_ORACLE = json.loads(${JSON.stringify(JSON.stringify(pointListOracle))})
 ${await readFile(path.join(repoRoot, "scripts/manim_point_list_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_point_list_controls.py"), "utf8")}`;
+const scalarPathFixture = JSON.parse(await readFile(
+  path.join(repoRoot, "fixtures/manim-v0.21/scalar-path-precision.json"), "utf8"));
+const scalarPathSource = `import json
+SCALAR_PATH_PRECISION_CASES = json.loads(${JSON.stringify(JSON.stringify(scalarPathFixture.cases))})
+${await readFile(path.join(repoRoot, "scripts/manim_scalar_path_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_scalar_path_precision.py"), "utf8")}`;
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_query_hooks.py"), "utf8")}`;
 const uncreateSource = await readFile(
@@ -1069,6 +1075,7 @@ result = Scene()
     pathKeywordSource,
     queryHooksSource,
     pointListSource,
+    scalarPathSource,
   ];
   const sharedText = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
@@ -1085,14 +1092,15 @@ result = Scene()
   console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${reportFor(objectMemberControlsSource).metrics.backend}.`);
   console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${reportFor(pathKeywordSource).metrics.backend}.`);
   console.log(`Pinned point-list insertion controls passed: ${pointListFixture.cases.length} same-platform cases in authored/live phases; backend ${reportFor(pointListSource).metrics.backend}.`);
+  console.log(`Pinned scalar path precision controls passed: ${scalarPathFixture.cases.length} cases in authored/live phases; backend ${reportFor(scalarPathSource).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
-    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
     "shared Text composition must preserve child-default and explicit play timing",
   );
   assert.deepEqual(
     sharedText.results.map((result) => result.metrics.objectCount),
-    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0, 0],
+    [2, 0, 2, 3, 2, 4, 6, 5, 6, 0, 0, 0, 0, 0],
     "Write/Unwrite and mixed composition must publish final scene membership",
   );
   for (const result of sharedText.results) {
