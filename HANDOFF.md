@@ -120,20 +120,33 @@ post-merge/publication evidence under `post-merge-2261-20261022T0245Z/` are now
 sealed. All prior20,754 catalog rows were fully rehashed at the latest seal, with
 exact prior canonical gzip snapshots retained. Earlier handoff receipts are also
 enrolled. The next mutable root is `frozen594-host-audit-20261022T0318Z/`, currently
-holding only a read-only prior-diagnostic inventory and postseal handoff receipts.
+holding the completed read-only host audit, its retrieved original/later log
+comparison, artifact-availability receipts and postseal handoff receipts.
 Raw evidence remains outside Git and needs a separate transfer.
 
-The next independent action is to audit whether an original-host frozen-runtime
-diagnostic would add genuinely new evidence. Prior hosted run39504435250 used the
-exact original package and matching macOS26.6.2/WebKit26.5, but injected an active
-startup sample and selected one stress-grid case. The later uninstrumented local
-case used macOS15.5. The tracked web/scripts trees of original producerbd044 and
-failing trigger594 are unchanged. Confirm the original full shard queue and every
-later hosted uninstrumented boundary before deciding on a new run. A branch-only
-variant of the existing manual workflow can be considered only after an explicit
-one-shot protocol/admission; no new diagnostic, workflow branch or source
-execution has been registered or launched. Do not repeat either completed
-one-case diagnostic or use a passing new diagnostic to erase the old failure.
+The original-host diagnostic novelty audit is complete. Hosted run39504274080,
+job118912895583, already passed the same ordered23 examples and four no-JSPI
+controls on macOS26.6.2(25G83), image macos-26-arm64 20261013.0424.1, matching the
+original failing host image. Original trigger594 and tested producer5a7 differ
+only in three CI workflow/test files; runtime, frontend, gallery harness and
+cross-browser workflow sources are unchanged. This later pass has no injected
+active startup sampler. The earlier original-package hosted one-case diagnostic
+and different-OS local one-case diagnostic also remain retained separately.
+
+The later development artifact is no longer listed, so exact binary equality
+with the failed development package is not newly claimed. Optimized Product
+package equivalence is a separate fact. GitHub now returns404 for the original
+runtime artifact12298512743; the hash-verified original ZIP remains preserved
+locally. Do not rebuild or upload a substitute and call it the original.
+
+No further repetitive diagnostic, workflow branch, source execution or cohort
+was registered or launched. The merged failure-only native log and renderer
+collectors are qualified for future genuine failures. Further attribution needs
+a distinct causal hypothesis and admitted evidence. These later successes do
+not explain the original WebKit crash, Firefox stall or physical cold Field trap.
+Phone access and a verified native content/display timing join remain necessary
+for the physical pacing gates. Full Phase D is still incomplete; #2240 remains
+held. Audit proof: `frozen594-host-audit-20261022T0318Z/host-diagnostic-novelty-assessment.json`.
 
 ## Completed changes and validation
 
