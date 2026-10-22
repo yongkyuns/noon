@@ -978,15 +978,23 @@ class PathQueryTests(unittest.TestCase):
         critical_point.assert_called_once_with(value, (0., 0., 0.))
 
     def test_extremum_along_dim_reduces_one_xyz_boundary_in_rust(self):
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
         value = identity_only_wrapper(compat.VMobject)
-        points = np.array([[1., 2., -7.25], [3., 4., 11.125]])
+        points = [[1., 2., -7.25], [3., 4., 11.125]]
+        if np is not None:
+            points = np.array(points)
         value.get_points_defining_boundary = Mock(return_value=points)
         with patch.object(queries, "_extremum_from_points_observation", return_value=11.125) as observe:
             result = value.get_extremum_along_dim(dim=-1, key=1)
-        self.assertIsInstance(result, np.float64)
+        self.assertIsInstance(result, float if np is None else np.float64)
         self.assertEqual(result, 11.125)
-        observe.assert_called_once_with(value, [-7.25, 11.125], 1, 0, 1.)
+        if np is None:
+            observe.assert_called_once_with(value, [1., 2., -7.25, 3., 4., 11.125], 3, 2, 1.)
+        else:
+            observe.assert_called_once_with(value, [-7.25, 11.125], 1, 0, 1.)
         value.get_points_defining_boundary.assert_called_once_with()
         with self.assertRaises(IndexError):
             value.get_extremum_along_dim(dim=3)

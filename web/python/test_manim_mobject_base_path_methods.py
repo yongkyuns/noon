@@ -74,16 +74,25 @@ class ManimMobjectBasePathMethodTests(unittest.TestCase):
                 options.setDrawEnabled.assert_not_called()
 
     def test_xyz_critical_point_preserves_one_snapshot_and_python_extremum_hooks(self):
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
         from _manim_path_queries import critical_point
         mobject = object.__new__(noon.Mobject)
         mobject.dim = 3
-        points = np.array([[1., 2., -7.25], [3., 4., 11.125]])
+        points = [[1., 2., -7.25], [3., 4., 11.125]]
+        if np is not None:
+            points = np.array(points)
         mobject.get_points_defining_boundary = Mock(return_value=points)
         mobject.get_extremum_along_dim = Mock(side_effect=[3., 2., 11.125])
         result = critical_point(mobject, [1., -1., 1.])
-        np.testing.assert_array_equal(result, [3., 2., 11.125])
-        self.assertEqual(result.dtype, np.dtype("float64"))
+        self.assertEqual(list(result), [3., 2., 11.125])
+        if np is not None:
+            np.testing.assert_array_equal(result, [3., 2., 11.125])
+            self.assertEqual(result.dtype, np.dtype("float64"))
+        else:
+            self.assertIs(type(result), list)
         mobject.get_points_defining_boundary.assert_called_once_with()
         calls = mobject.get_extremum_along_dim.call_args_list
         self.assertEqual([(call.kwargs["dim"], call.kwargs["key"]) for call in calls],
@@ -91,13 +100,22 @@ class ManimMobjectBasePathMethodTests(unittest.TestCase):
         self.assertTrue(all(call.args[0] is points for call in calls))
 
     def test_empty_xyz_critical_point_does_not_index_a_direction_or_reduce(self):
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
         from _manim_path_queries import critical_point
         mobject = object.__new__(noon.Mobject)
         mobject.dim = 3
-        mobject.get_points_defining_boundary = Mock(return_value=np.empty((0,)))
+        mobject.get_points_defining_boundary = Mock(return_value=[] if np is None else np.empty((0,)))
         mobject.get_extremum_along_dim = Mock(side_effect=AssertionError("empty reduction"))
-        np.testing.assert_array_equal(critical_point(mobject, object()), [0., 0., 0.])
+        result = critical_point(mobject, object())
+        self.assertEqual(list(result), [0., 0., 0.])
+        if np is not None:
+            np.testing.assert_array_equal(result, [0., 0., 0.])
+            self.assertEqual(result.dtype, np.dtype("float64"))
+        else:
+            self.assertIs(type(result), list)
         mobject.get_extremum_along_dim.assert_not_called()
 
     def test_z_coordinate_and_zenith_nadir_keep_the_requested_direction(self):
