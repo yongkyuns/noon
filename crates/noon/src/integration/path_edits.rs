@@ -4,7 +4,7 @@
 //! transient host request to the existing Rust prepare/publish authority; it
 //! owns no store, executor, cache, persistent state, or replacement facade.
 use crate::{
-    path_editing::{self, PathEdit},
+    path_editing::{self, PathEdit, ScalarPathEdit},
     AuthoringError, ExecutionSession, Mobject, MobjectFamily,
 };
 use noon_core::{SemanticNodeId, SemanticStore, Vec2};
@@ -15,6 +15,64 @@ use std::{cell::RefCell, rc::Rc};
 /// All variants use the same coherent effective-state capture, validation,
 /// scoped immutable-resource rollback and semantic publication as Scene.
 pub enum BorrowedPathEdit<'a> {
+    CornersF64 {
+        object: &'a Mobject,
+        points: &'a [(f64, f64)],
+    },
+    LineF64WithStride {
+        object: &'a Mobject,
+        point: (f64, f64),
+        stride: i32,
+    },
+    AppendCornersF64 {
+        object: &'a Mobject,
+        points: &'a [(f64, f64)],
+    },
+    StartF64WithStride {
+        object: &'a Mobject,
+        point: (f64, f64),
+        stride: i32,
+    },
+    LineF64WithSamples {
+        object: &'a Mobject,
+        point: (f64, f64),
+        stride: i32,
+        bezier_t_values: &'a [f64; 4],
+    },
+    CubicF64WithStride {
+        object: &'a Mobject,
+        control1: (f64, f64),
+        control2: (f64, f64),
+        anchor: (f64, f64),
+        stride: i32,
+    },
+    CubicCurveF64 {
+        object: &'a Mobject,
+        anchor1: (f64, f64),
+        handle1: (f64, f64),
+        handle2: (f64, f64),
+        anchor2: (f64, f64),
+    },
+    CornersF64WithSamples {
+        object: &'a Mobject,
+        points: &'a [(f64, f64)],
+        bezier_t_values: &'a [f64; 4],
+    },
+    AppendCornersF64WithStride {
+        object: &'a Mobject,
+        points: &'a [(f64, f64)],
+        stride: i32,
+        bezier_t_values: &'a [f64],
+    },
+    CubicCurvesF64 {
+        object: &'a Mobject,
+        curves: &'a [[(f64, f64); 4]],
+    },
+    SetCubicCurvesF64 {
+        object: &'a Mobject,
+        curves: &'a [[(f64, f64); 4]],
+    },
+
     Clear {
         object: &'a Mobject,
     },
@@ -202,6 +260,116 @@ pub fn publish_borrowed_path_edit(
     // Cross-object partial selection and family edits have their own coherent
     // capture requirements, but still publish through the same Rust authority.
     let (object, operation) = match edit {
+        BorrowedPathEdit::CornersF64 { object, points } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Corners {
+                points,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::LineF64WithStride {
+            object,
+            point,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Line {
+                point,
+                stride,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::AppendCornersF64 { object, points } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::AppendCorners {
+                points,
+                stride: 4,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::StartF64WithStride {
+            object,
+            point,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Start { point, stride }),
+        ),
+        BorrowedPathEdit::LineF64WithSamples {
+            object,
+            point,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Line {
+                point,
+                stride,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::CubicF64WithStride {
+            object,
+            control1,
+            control2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::CubicTo {
+                controls: [control1, control2, anchor],
+                stride,
+            }),
+        ),
+        BorrowedPathEdit::CubicCurveF64 {
+            object,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Cubic([anchor1, handle1, handle2, anchor2])),
+        ),
+        BorrowedPathEdit::CornersF64WithSamples {
+            object,
+            points,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Corners {
+                points,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::AppendCornersF64WithStride {
+            object,
+            points,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::AppendCorners {
+                points,
+                stride,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::CubicCurvesF64 { object, curves } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Cubics {
+                curves,
+                replace: false,
+            }),
+        ),
+        BorrowedPathEdit::SetCubicCurvesF64 { object, curves } => (
+            object,
+            PathEdit::Scalar(ScalarPathEdit::Cubics {
+                curves,
+                replace: true,
+            }),
+        ),
+
         BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
         BorrowedPathEdit::RawPoints { object, points } => (object, PathEdit::RawPoints(points)),
         BorrowedPathEdit::AppendRawPoints { object, points } => {
