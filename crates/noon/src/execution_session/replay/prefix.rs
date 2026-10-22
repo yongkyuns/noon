@@ -36,4 +36,22 @@ impl ExecutionSession {
         self.ensure_prefix_boundary(boundary)?;
         self.runtime.prepare_prefix_update(publisher)
     }
+
+    /// Publish the exact endpoint after the source has explicitly sealed replay.
+    /// The caller declares that no further source continuation is expected, calls
+    /// `seal_replay`, then supplies the actual completed final boundary here.
+    /// This never seals implicitly, resumes source code, or acknowledges rendering.
+    ///
+    /// The terminal batch includes every still-undelivered write, including writes
+    /// at the previous frontier's timestamp. Only its successful adoption admits
+    /// that endpoint in the reader; the current frame and effects stay unchanged.
+    /// There is no additional full-scene snapshot or terminal frame evaluation.
+    pub fn finish_prepared_prefix(
+        &self,
+        boundary: ExecutionSegment,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.ensure_prefix_boundary(boundary)?;
+        self.runtime.prepare_prefix_finish(publisher)
+    }
 }

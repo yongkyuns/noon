@@ -206,3 +206,62 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
         eprintln!("PREFIX_LIFECYCLE_RASTER: 35 historical comparisons passed across late image creation, replacement, removal, reentry, producer destruction, fresh renderer");
     });
 }
+
+#[test]
+#[ignore = "requires Vulkan; explicitly invoked by focused qualification"]
+fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreation() {
+    pollster::block_on(async {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.15).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(ReplayLimits {
+                revisions: 128,
+                payloads: 2048,
+            })
+            .unwrap();
+        let boundary = source.wait_segment(1.0).unwrap();
+        source.advance_to(1.0).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+        reader.seek(0.5).unwrap();
+        let mut raster = raster_support::Raster::new().await;
+        let before = raster.capture(&reader.take_renderer_publication());
+        let image = scene
+            .live(&mut source)
+            .create_image(image([230, 35, 15, 255]))
+            .unwrap();
+        scene.live(&mut source).add(&image).unwrap();
+        source.seal_replay().unwrap();
+        let mut oracle = raster_support::Raster::new().await;
+        let endpoint = oracle.capture(&source.take_renderer_publication());
+        assert_ne!(
+            before, endpoint,
+            "terminal resource must visibly change the frame"
+        );
+        let terminal = source
+            .finish_prepared_prefix(boundary, &mut publisher)
+            .unwrap();
+        assert_eq!(terminal.stats().resource_payloads, 1);
+        assert_eq!(terminal.stats().new_object_slots, 1);
+        reader
+            .reserve_object_capacity(terminal.required_object_capacity())
+            .unwrap();
+        reader.append(terminal).unwrap();
+        assert_eq!(reader.end_time(), Some(1.0));
+        assert_eq!(raster.capture(&reader.take_renderer_publication()), before);
+        drop(image);
+        drop(anchor);
+        drop(scene);
+        drop(source);
+        drop(publisher);
+        for time in [1.0, 0.5, 1.0, 0.0, 1.0] {
+            reader.seek(time).unwrap();
+            let expected = if time == 1.0 { &endpoint } else { &before };
+            assert_eq!(&raster.capture(&reader.take_renderer_publication()), expected);
+        }
+        let mut fresh = raster_support::Raster::new().await;
+        assert_eq!(fresh.capture(&reader.take_renderer_publication()), endpoint);
+        eprintln!("PREFIX_TERMINAL_RASTER: exact endpoint image, unchanged append frame, repeated rewind, producer destruction, fresh renderer");
+    });
+}
