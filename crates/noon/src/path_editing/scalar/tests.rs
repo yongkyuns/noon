@@ -299,3 +299,83 @@ fn scalar_invalid_inputs_preserve_payload_revision_and_resources() {
         }
     }
 }
+
+#[test]
+fn appended_corners_preserve_existing_morph_target_metadata() {
+    let target = VectorPath::from_manim_points_f64(
+        PREFIX.iter().map(|&(x, y)| (x + 2.0, y - 1.0)).collect(),
+    );
+    for mode in 0..3 {
+        for precise in [false, true] {
+            let mut scene = crate::Scene::new();
+            let path = VectorPath::from_manim_points_f64(PREFIX.to_vec())
+                .with_morph_target(target.clone());
+            let mut object = scene.path(path, Default::default()).unwrap();
+            scene.add(&object).unwrap();
+            let original = world_path(
+                &scene.integration_store().borrow(),
+                &object.state().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                original.morph_target(),
+                Some(&target),
+                "fixture must retain its target"
+            );
+            let corners = [Vec2::new(1.25, -0.5)];
+            let corners_f64 = [(1.25, -0.5)];
+            match mode {
+                0 => {
+                    if precise {
+                        object.add_points_as_corners_f64(&corners_f64)
+                    } else {
+                        object.add_points_as_corners(&corners)
+                    }
+                    .unwrap();
+                }
+                1 => {
+                    let execution = scene.execution_session().unwrap();
+                    scene.install_execution(execution);
+                    if precise {
+                        scene.add_points_as_corners_f64(&object, &corners_f64)
+                    } else {
+                        scene.add_points_as_corners(&object, &corners)
+                    }
+                    .unwrap();
+                }
+                _ => {
+                    let mut execution = scene.execution_session().unwrap();
+                    let edit = if precise {
+                        BorrowedPathEdit::AppendCornersF64 {
+                            object: &object,
+                            points: &corners_f64,
+                        }
+                    } else {
+                        BorrowedPathEdit::AppendCorners {
+                            object: &object,
+                            points: &corners,
+                        }
+                    };
+                    publish_borrowed_path_edit(
+                        scene.integration_store(),
+                        scene.root(),
+                        &mut execution,
+                        edit,
+                    )
+                    .unwrap();
+                }
+            }
+            let path = world_path(
+                &scene.integration_store().borrow(),
+                &object.state().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                path.morph_target(),
+                Some(&target),
+                "mode={mode}, precise={precise}"
+            );
+            assert_eq!(&path.manim_points().unwrap()[..4], &PREFIX);
+        }
+    }
+}

@@ -27,10 +27,9 @@ pub fn session() -> Result<ExecutionSession, String> {
             scene.integration_store(),
             scene.root(),
             &mut session,
-            crate::integration::BorrowedPathEdit::LineF64WithStride {
+            crate::integration::BorrowedPathEdit::AppendCornersF64 {
                 object: &polygon,
-                point: (0., -2.),
-                stride: 4,
+                points: &[(0., -2.)],
             },
         )?;
         crate::integration::publish_borrowed_path_edit(

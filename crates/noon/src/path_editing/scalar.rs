@@ -233,7 +233,11 @@ fn append_corners(
         }
         start = end;
     }
-    finish(VectorPath::from_manim_points_f64(points))
+    let mut result = VectorPath::from_manim_points_f64(points);
+    if let Some(target) = path.morph_target().cloned() {
+        result = result.with_morph_target(target);
+    }
+    finish(result)
 }
 
 fn close(
