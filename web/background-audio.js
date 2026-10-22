@@ -1,4 +1,5 @@
 import init, { createBackgroundAudioRenderer } from "./pkg/noon_web.js";
+import { attachNativeInputs } from "./native-inputs.js";
 
 // Browser lifecycle only. Rust owns clip timing, section navigation, playback
 // time, wake cadence, and every audio-device scheduling instruction.
@@ -10,6 +11,8 @@ let wakeKind = null;
 let retired = false;
 let commandPending = false;
 let commandCancelled = false;
+let detachInputs = null;
+let sceneUnlockPromise = null;
 const sectionButtons = [];
 
 function cancelWake() {
@@ -90,6 +93,38 @@ async function command(action) {
   } finally { commandPending = false; }
 }
 
+// The common collector sends physical input only. Rust picks the scene object,
+// commits the click, and dispatches its typed control. This callback schedules
+// presentation and carries an opaque input receipt across a native device Promise.
+function sceneInput() {
+  if (retired || !renderer || document.hidden) return;
+  const current = renderer;
+  const sequence = current.pendingSceneControlSequence();
+  const unlock = current.sceneControlAudioUnlock();
+  schedule();
+  if (sequence === undefined || !unlock || sceneUnlockPromise === unlock) return;
+  sceneUnlockPromise = unlock;
+  Promise.resolve(unlock).then(() => {
+    if (retired || renderer !== current || document.hidden) return;
+    // Device preparation may serve a newer explicit click after cancellation.
+    // Rust still owns and validates that request's exact input/publication.
+    if (current.sceneControlAudioUnlock() !== unlock) return;
+    const admitted = current.pendingSceneControlSequence();
+    if (admitted !== undefined && current.completeSceneControl(admitted)) {
+      $("status").textContent = "A Small Discovery · original music · CC0 1.0";
+      current.render();
+      schedule();
+    }
+  }, error => {
+    // A superseded request cannot fault or resume the newer session action.
+    if (!retired && renderer === current && current.sceneControlAudioUnlock() === unlock) fail(error);
+  }).catch(error => {
+    if (!retired && renderer === current) fail(error);
+  }).finally(() => {
+    if (sceneUnlockPromise === unlock) sceneUnlockPromise = null;
+  });
+}
+
 $("play").addEventListener("click", () => command(async current => {
   if (current.isDirectPlaying()) {
     current.pauseDirect(performance.now());
@@ -119,6 +154,8 @@ function resize() {
 function retire() {
   retired = true;
   cancelWake();
+  detachInputs?.();
+  detachInputs = null;
   renderer?.disposeAudio();
   renderer?.free();
   renderer = null;
@@ -158,9 +195,12 @@ try {
       $("sections").append(button);
     }
     resize();
+    detachInputs = attachNativeInputs(renderer, $("scene"), {
+      keyboardTarget: $("scene"), onInput: sceneInput, onError: fail,
+    });
     $("loading").hidden = true;
     for (const id of controls) $(id).disabled = false;
-    $("status").textContent = "Ready · press Play to enable sound";
+    $("status").textContent = "Ready · use the canvas Play button or Play with sound";
     schedule();
   }
 } catch (error) { fail(error); $("loading").textContent = $("status").textContent; }

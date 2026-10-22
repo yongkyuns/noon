@@ -13,7 +13,7 @@ h1 { font-size: clamp(38px, 5.8vw, 66px); font-weight: 470; letter-spacing: -3.6
 .dek { font-size: 16px; line-height: 1.65; color: #62685f; margin: 0; }
 .player { overflow: hidden; border: 1px solid #d2d6ca; border-radius: 14px; background: #fafbf7; box-shadow: 0 18px 45px #2631270b; }
 .stage { position: relative; background: #080b10; aspect-ratio: 16 / 8.2; }
-canvas { display: block; width: 100%; height: 100%; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .stage-caption { position: absolute; bottom: 20px; left: 25px; right: 25px; display: flex; justify-content: space-between; color: #a3aaae; pointer-events: none; font-size: 9px; }
 #stage-state { color: #d9bd8b; }
 #loading { position: absolute; inset: 0; display: grid; place-items: center; color: #d1d5d2; font-size: 14px; background: #080b10; padding: 30px; text-align: center; }

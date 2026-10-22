@@ -2384,7 +2384,7 @@ impl crate::ExecutionSession {
                 || state.spatial_properties().is_some()
                 || state.content.text().is_some()
                 || !state.signal_bindings().is_empty()
-                || state.click_indicate().is_some()
+                || state.click_action().is_some()
                 || store.node(node)?.members_iter().next().is_some()
                 || !store.semantic_updater_registrations(node).ok()?.is_empty()
                 || !store.animation_effect_snapshot(node).ok()?.is_empty()

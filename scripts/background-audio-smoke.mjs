@@ -25,6 +25,7 @@ const report = {
 };
 await mkdir(artifacts, { recursive: true });
 for (const source of ["web/pkg/noon_web_bg.wasm", "web/pkg/noon_web.js", "web/background-audio.js",
+  "web/native-inputs.js", "web/browser-pointer-input.js", "web/browser-wheel-units.js",
   "web/background-audio.html", "web/background-audio.css", "scripts/background-audio-smoke.mjs"]) {
   report[source] = createHash("sha256").update(await readFile(path.join(root, source))).digest("hex");
 }
@@ -206,6 +207,30 @@ async function seek(time) {
   await page.waitForFunction(target =>
     Math.abs(Number(document.querySelector("#scrubber").value) - target) < 0.001, time);
 }
+// Known authored coordinates of this test scene. Production JavaScript neither
+// knows these positions nor chooses a control action; real pointer occurrences
+// travel through the normal collector, displayed-frame receipt and Rust picker.
+const sceneControls = { previous: -4, play: -2, next: 0, restart: 2, mute: 4 };
+async function scenePosition(x, y) {
+  const canvas = page.locator("#scene");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  assert.ok(box, "scene canvas must have a visible surface");
+  return { x: box.x + box.width / 2 + x * box.height / 8,
+    y: box.y + box.height / 2 - y * box.height / 8 };
+}
+async function clickSceneControl(name) {
+  assert.ok(Object.hasOwn(sceneControls, name), "known authored scene control");
+  const position = await scenePosition(sceneControls[name], -2.6);
+  await page.mouse.click(position.x, position.y);
+}
+async function pausedAt(time) {
+  await page.waitForFunction(target => {
+    const renderer = audioQualification.renderer;
+    return renderer && !renderer.isDirectPlaying() && renderer.time() === target;
+  }, time);
+  return state();
+}
 async function centroid(name) {
   const bytes = await page.locator("#scene").screenshot({ path: path.join(artifacts, `${name}.png`) });
   const image = pngjs.PNG.sync.read(bytes);
@@ -266,8 +291,8 @@ try {
     await page.screenshot({ path: path.join(artifacts, "page.png"), fullPage: true });
     return { initial, point: initialPoint };
   });
-  await record("trusted Play produces real finite PCM output", async () => {
-    await page.locator("#play").click();
+  await record("trusted in-scene Play produces real finite PCM output", async () => {
+    await clickSceneControl("play");
     const running = await playing();
     assert.equal(running.output.length, 1);
     assert.equal(running.buffers.length, 1);
@@ -286,7 +311,9 @@ try {
     return { running };
   });
   await record("pause silences the device and freezes authored time", async () => {
-    const paused = await pause();
+    await clickSceneControl("play");
+    await page.waitForFunction(() => document.querySelector("#stage-state").textContent === "PAUSED");
+    const paused = await state();
     pausedTime = paused.transport.time;
     assert.ok(pausedTime > 0 && pausedTime < 5);
     assert.equal(paused.transport.voices, 0);
@@ -346,6 +373,94 @@ try {
     assert.equal(restored.transport.sceneRevision, before.transport.sceneRevision);
     return { before, muted, reduced, restored, mutedSilence, zeroVolumeSilence };
   });
+  await record("scene key-point buttons seek picture and sound while preserving transport state", async () => {
+    const before = await state();
+    await clickSceneControl("play");
+    await page.waitForFunction(() => !audioQualification.renderer.isDirectPlaying());
+    await clickSceneControl("restart");
+    await pausedAt(0);
+    await clickSceneControl("previous");
+    await pausedAt(0);
+    await clickSceneControl("next");
+    await pausedAt(10);
+    const discover = await centroid("scene-discover");
+    await clickSceneControl("next");
+    await pausedAt(20);
+    const resolve = await centroid("scene-resolve");
+    await clickSceneControl("next");
+    await pausedAt(20);
+    await clickSceneControl("previous");
+    const previous = await pausedAt(10);
+    assert.equal(previous.transport.sceneRevision, before.transport.sceneRevision);
+    assert.ok(initialPoint.x < discover.x && discover.x < resolve.x);
+    assert.ok(discover.y < initialPoint.y - 50 && discover.y < resolve.y - 50);
+    await clickSceneControl("play");
+    const running = await playing();
+    near(running.starts.at(-1).args[1], 10, "scene section resume source offset", 0);
+    await clickSceneControl("next");
+    await page.waitForFunction(() => audioQualification.starts.at(-1)?.args[1] === 20);
+    const nextWhilePlaying = await playing();
+    near(nextWhilePlaying.starts.at(-1).args[1], 20, "playing scene Next source offset", 0);
+    assert.equal(nextWhilePlaying.transport.playing, true);
+    await clickSceneControl("restart");
+    await page.waitForFunction(() => audioQualification.starts.at(-1)?.args[1] === 0);
+    const restarted = await playing();
+    near(restarted.starts.at(-1).args[1], 0, "playing scene Restart source offset", 0);
+    assert.equal(restarted.transport.playing, true);
+    assert.equal(restarted.buffers.length, 1);
+    return { discover, resolve, previous, running, nextWhilePlaying, restarted };
+  });
+  await record("scene Sound controls viewer gain without restarting or rewriting the scene", async () => {
+    const before = await state();
+    await clickSceneControl("mute");
+    const silence = await quiet();
+    const muted = await state();
+    assert.equal(muted.transport.muted, true);
+    assert.equal(muted.transport.playing, true);
+    assert.ok(muted.transport.time > before.transport.time);
+    assert.equal(muted.transport.sceneRevision, before.transport.sceneRevision);
+    assert.equal(muted.starts.length, before.starts.length);
+    await clickSceneControl("mute");
+    const restored = await playing();
+    assert.equal(restored.transport.muted, false);
+    assert.equal(restored.starts.length, before.starts.length);
+    assert.equal(restored.transport.sceneRevision, before.transport.sceneRevision);
+    return { before, muted, restored, silence };
+  });
+  await record("background, drag and cancelled scene gestures cannot activate playback", async () => {
+    await clickSceneControl("play");
+    await page.waitForFunction(() => !audioQualification.renderer.isDirectPlaying());
+    await clickSceneControl("restart");
+    const before = await pausedAt(0);
+    const background = await scenePosition(5.7, 2.6);
+    await page.mouse.click(background.x, background.y);
+    const afterBackground = await state();
+    assert.equal(afterBackground.transport.playing, false);
+    const play = await scenePosition(sceneControls.play, -2.6);
+    await page.mouse.move(play.x, play.y);
+    await page.mouse.down();
+    await page.mouse.move(play.x + 30, play.y, { steps: 3 });
+    await page.mouse.move(play.x, play.y, { steps: 3 });
+    await page.mouse.up();
+    const afterDrag = await state();
+    assert.equal(afterDrag.transport.playing, false, "returning inside after drag must not count as a click");
+    await page.mouse.down();
+    // The host receives the browser's cancellation occurrence. This deliberately
+    // supplies no target or action, and the later physical release must not revive it.
+    await page.locator("#scene").dispatchEvent("pointercancel", {
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0,
+      clientX: play.x, clientY: play.y,
+    });
+    await page.mouse.up();
+    const afterCancel = await pausedAt(0);
+    assert.equal(afterCancel.starts.length, before.starts.length);
+    assert.equal(afterCancel.transport.sceneRevision, before.transport.sceneRevision);
+    await clickSceneControl("play");
+    const fresh = await playing();
+    assert.equal(fresh.starts.length, before.starts.length + 1,
+      "one fresh complete click starts playback after cancellation");
+    return { before, afterBackground, afterDrag, afterCancel, fresh };
+  });
   await record("scrub and restart replace device voices at the chosen scene time", async () => {
     await seek(12.5);
     const scrubbed = await playing();
@@ -391,6 +506,67 @@ try {
     await page.waitForFunction(() => audioQualification.contexts.every(({ context }) => context.state === "closed"));
     const retired = await state();
     assert.equal(retired.stops.at(-1).source, retired.starts.at(-1).source);
+    return { retired };
+  });
+  await page.close();
+  page = await newProductPage();
+  await record("visibility invalidates a delayed scene Play before its unlock completes", async () => {
+    await page.evaluate(() => { audioQualification.holdNextResume = true; });
+    await clickSceneControl("play");
+    await page.waitForFunction(() => audioQualification.pendingResumes.length === 1);
+    const sequence = await page.evaluate(() => {
+      const renderer = audioQualification.renderer;
+      const pending = renderer.pendingSceneControlSequence();
+      if (pending === undefined) throw new Error("scene Play must retain its admitted input request");
+      const unlock = renderer.sceneControlAudioUnlock();
+      if (renderer.enableAudio() !== unlock || renderer.enableAudio() !== unlock) {
+        throw new Error("repeated preparation must reuse the one outstanding native device operation");
+      }
+      const previous = Object.getOwnPropertyDescriptor(document, "hidden");
+      try {
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Object.defineProperty(document, "hidden", { configurable: true, value: false });
+        document.dispatchEvent(new Event("visibilitychange"));
+      } finally {
+        if (previous) Object.defineProperty(document, "hidden", previous);
+        else delete document.hidden;
+      }
+      for (const resolve of audioQualification.pendingResumes.splice(0)) resolve();
+      return String(pending);
+    });
+    const silence = await quiet();
+    const cancelled = await pausedAt(0);
+    assert.equal(cancelled.starts.length, 0);
+    const stale = await page.evaluate(value => {
+      const renderer = audioQualification.renderer;
+      return { pending: renderer.pendingSceneControlSequence() === undefined,
+        applied: renderer.completeSceneControl(BigInt(value)) };
+    }, sequence);
+    assert.equal(stale.pending, true, "visibility pause retires the pending scene command");
+    assert.equal(stale.applied, false, "the old input sequence cannot revive playback");
+    await clickSceneControl("play");
+    const running = await playing();
+    assert.equal(running.starts.length, 1);
+    near(running.starts[0].args[1], 0, "fresh scene Play after visibility cancellation", 0);
+    return { sequence, cancelled, stale, silence, running };
+  });
+  await page.close();
+  page = await newProductPage();
+  await record("retirement closes audio during a delayed scene Play without later revival", async () => {
+    await page.evaluate(() => { audioQualification.holdNextResume = true; });
+    await clickSceneControl("play");
+    await page.waitForFunction(() => audioQualification.pendingResumes.length === 1);
+    await page.evaluate(() => {
+      audioQualification.renderer = null;
+      window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    });
+    await page.waitForFunction(() => audioQualification.contexts.every(({ context }) => context.state === "closed"));
+    await page.evaluate(() => { for (const resolve of audioQualification.pendingResumes.splice(0)) resolve(); });
+    await page.waitForTimeout(200);
+    const retired = await state();
+    assert.equal(retired.starts.length, 0);
+    assert.equal(retired.output[0].state, "closed");
     return { retired };
   });
   await page.close();

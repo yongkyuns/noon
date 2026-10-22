@@ -1,14 +1,15 @@
 //! Finite authored animation and original background music on one scene timeline.
 //!
 //! Native Rust and direct Rust/WASM lower the same initial scene. The browser
-//! example supplies device output and playback controls; this builder owns no
-//! device, wall clock, or transport. Python worker audio remains gated by #2263.
+//! example supplies device output. Its visible buttons are ordinary authored
+//! scene objects; this builder owns no device, wall clock, or transport. Python
+//! worker audio and playback controls remain gated by #2263.
 
 pub mod music;
 
 use crate::{
-    AnimationOptions, AudioClipOptions, AudioResource, DeclaredAnimation, RateFunction, Scene,
-    SectionType, SemanticAnimationCompositionKind, SemanticVec3,
+    AnimationOptions, AudioClipOptions, AudioResource, DeclaredAnimation, PlaybackControl,
+    RateFunction, Scene, SectionType, SemanticAnimationCompositionKind, SemanticVec3,
     DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
 };
 use noon_core::{
@@ -26,6 +27,9 @@ pub const SAMPLE_RATE: u32 = 24_000;
 /// `scene.execution_session_with_animation_root(&animation)`; keeping the Scene
 /// available also retains its section-navigation metadata. Music is generated
 /// once during preparation, never on a frame, seek, or audio-device callback.
+/// Five filled rectangles declare click actions for Previous, Play/Pause, Next,
+/// Restart and Sound. The existing shared picker resolves their semantic targets;
+/// the direct host applies the resulting command after the input publication.
 pub fn scene() -> Result<(Scene, DeclaredAnimation), String> {
     let pcm = music::render_music(SAMPLE_RATE).map_err(|error| error.to_string())?;
     let resource = AudioResource::from_interleaved(
@@ -77,6 +81,7 @@ fn scene_with_music(resource: AudioResource) -> Result<(Scene, DeclaredAnimation
         .set_stroke_width(0.035)
         .map_err(|error| error.to_string())?;
     scene.add(&square).map_err(|error| error.to_string())?;
+    add_playback_controls(&mut scene).map_err(|error| error.to_string())?;
     let mut point = scene.circle(0.26).map_err(|error| error.to_string())?;
     point
         .set_translation(vertices[0].0, vertices[0].1)
@@ -149,6 +154,94 @@ fn scene_with_music(resource: AudioResource) -> Result<(Scene, DeclaredAnimation
     }
     scene.wait(10.0)?;
     Ok((scene, animation))
+}
+
+/// Keep text outside the clickable fill. The shared picker deliberately rejects
+/// unsupported topmost fills, including Text; decorations must not bypass that
+/// painter-order rule. Stroke-only icons are visible without creating a second
+/// filled hit target or requiring a frontend hit-test map.
+fn add_playback_controls(scene: &mut Scene) -> Result<(), Box<dyn std::error::Error>> {
+    type StrokeSegment = ((f64, f64), (f64, f64));
+    for (x, label, action) in [
+        (-4.0, "PREVIOUS", PlaybackControl::PreviousSection),
+        (-2.0, "PLAY / PAUSE", PlaybackControl::TogglePlayback),
+        (0.0, "NEXT", PlaybackControl::NextSection),
+        (2.0, "RESTART", PlaybackControl::Restart),
+        (4.0, "SOUND ON / OFF", PlaybackControl::ToggleAudioMuted),
+    ] {
+        let y = -2.6;
+        let mut button = scene.rectangle(1.7, 0.65)?;
+        button.set_translation(x, y)?;
+        button.set_color(0.30, 0.48, 0.55, 1.0)?;
+        button.set_fill(0.09, 0.17, 0.20, 1.0)?;
+        button.set_stroke_width(0.018)?;
+        scene.add(&button)?;
+        scene.on_click_playback(&button, action)?;
+
+        let segments: &[StrokeSegment] = match action {
+            PlaybackControl::PreviousSection => &[
+                ((-0.24, 0.0), (0.14, 0.0)),
+                ((-0.24, 0.0), (-0.02, 0.17)),
+                ((-0.24, 0.0), (-0.02, -0.17)),
+                ((-0.35, -0.17), (-0.35, 0.17)),
+            ],
+            PlaybackControl::TogglePlayback => &[
+                ((-0.30, -0.17), (-0.30, 0.17)),
+                ((-0.30, 0.17), (-0.03, 0.0)),
+                ((-0.03, 0.0), (-0.30, -0.17)),
+                ((0.14, -0.17), (0.14, 0.17)),
+                ((0.30, -0.17), (0.30, 0.17)),
+            ],
+            PlaybackControl::NextSection => &[
+                ((0.24, 0.0), (-0.14, 0.0)),
+                ((0.24, 0.0), (0.02, 0.17)),
+                ((0.24, 0.0), (0.02, -0.17)),
+                ((0.35, -0.17), (0.35, 0.17)),
+            ],
+            PlaybackControl::Restart => &[
+                ((-0.18, 0.20), (-0.18, -0.02)),
+                ((-0.18, -0.02), (0.04, -0.02)),
+            ],
+            PlaybackControl::ToggleAudioMuted => &[
+                ((-0.30, -0.08), (-0.30, 0.08)),
+                ((-0.30, 0.08), (-0.18, 0.08)),
+                ((-0.18, 0.08), (-0.02, 0.20)),
+                ((-0.02, 0.20), (-0.02, -0.20)),
+                ((-0.02, -0.20), (-0.18, -0.08)),
+                ((-0.18, -0.08), (-0.30, -0.08)),
+                ((0.13, 0.14), (0.23, 0.0)),
+                ((0.23, 0.0), (0.13, -0.14)),
+            ],
+        };
+        for &(start, end) in segments {
+            let mut line = scene.line((x + start.0, y + start.1), (x + end.0, y + end.1))?;
+            line.set_color(0.79, 0.88, 0.91, 1.0)?;
+            line.set_stroke_width(0.025)?;
+            line.set_fill(0.0, 0.0, 0.0, 0.0)?;
+            scene.add(&line)?;
+        }
+        if action == PlaybackControl::Restart {
+            let mut ring = scene.circle(0.19)?;
+            ring.set_translation(x, y)?;
+            ring.set_color(0.79, 0.88, 0.91, 1.0)?;
+            ring.set_stroke_width(0.025)?;
+            ring.set_fill(0.0, 0.0, 0.0, 0.0)?;
+            scene.add(&ring)?;
+        }
+        #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+        {
+            let label = scene.text(
+                crate::Text::new(label)
+                    .with_font_size(16.0)
+                    .color(crate::Color::rgb(0.59, 0.69, 0.72))
+                    .shift(crate::Vec2::new(x as f32, -3.20)),
+            )?;
+            scene.add_many(&[(&label).into()])?;
+        }
+        #[cfg(not(all(feature = "native-text", feature = "bundled-fonts")))]
+        let _ = label;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

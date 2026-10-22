@@ -619,7 +619,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
-                | SemanticMutation::SetClickIndicate { object, .. }
+                | SemanticMutation::SetClickAction { object, .. }
                 | SemanticMutation::SetSpatialCompositionDomain { object, .. }
                 | SemanticMutation::SetCameraProfile { object, .. }
                 | SemanticMutation::SetCameraMotions { object, .. }
@@ -1593,16 +1593,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
                     }
                 }
-                SemanticMutation::SetClickIndicate { object, binding } => {
+                SemanticMutation::SetClickAction { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);
                     store
                         .node_mut(object)
                         .expect("preflighted semantic object")
                         .semantic_object_state_mut()
                         .expect("preflighted semantic object state")
-                        .set_click_indicate(binding);
+                        .set_click_action(binding);
                     written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::ClickIndicate { object });
+                    impacts.push(SemanticMutationImpact::ClickAction { object });
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
                     let object = resolve_node_ref(object, &committed_nodes);

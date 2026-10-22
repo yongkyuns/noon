@@ -30,6 +30,9 @@ pub struct CompiledNumericTextDriverRevisionEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
+    PlaybackControlUnavailable {
+        object: SemanticTransactionNodeRef,
+    },
     AudioOutputUnavailable {
         index: usize,
     },
@@ -87,6 +90,10 @@ pub enum SemanticPublicationLoweringError {
 impl std::fmt::Display for SemanticPublicationLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PlaybackControlUnavailable { object } => write!(
+                f,
+                "scene playback control on {object:?} cannot be published during execution; declare controls before execution starts (#2263)"
+            ),
             Self::AudioOutputUnavailable { index } => write!(
                 f,
                 "audio mutation {index} cannot be published during execution; declare audio before execution starts (#2263)"
@@ -495,6 +502,30 @@ fn validate_mutations(
                 index: position,
             });
         }
+        let playback_object = match mutation {
+            SemanticMutation::SetClickAction {
+                object,
+                binding: Some(noon_core::SemanticClickAction::Playback(_)),
+            } => Some(*object),
+            SemanticMutation::AddNode {
+                token,
+                creation:
+                    SemanticNodeCreation::Object { state, .. }
+                    | SemanticNodeCreation::Family {
+                        state: Some(state), ..
+                    },
+            } if matches!(
+                state.click_action(),
+                Some(noon_core::SemanticClickAction::Playback(_))
+            ) =>
+            {
+                Some((*token).into())
+            }
+            _ => None,
+        };
+        if let Some(object) = playback_object {
+            return Err(SemanticPublicationLoweringError::PlaybackControlUnavailable { object });
+        }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
@@ -510,7 +541,7 @@ fn validate_mutations(
                 | SemanticMutation::AddUpdater { .. }
                 | SemanticMutation::RemoveUpdater { .. }
                 | SemanticMutation::ClearUpdaters { .. }
-                | SemanticMutation::SetClickIndicate { .. }
+                | SemanticMutation::SetClickAction { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
                 | SemanticMutation::ReplaceStyle { .. }
@@ -1158,7 +1189,15 @@ fn collect_prepared_entry_leaves(
         }
     }
     match prepared.object_state(node) {
-        Ok(_) => {
+        Ok(state) => {
+            if matches!(
+                state.click_action(),
+                Some(noon_core::SemanticClickAction::Playback(_))
+            ) {
+                return Err(
+                    SemanticPublicationLoweringError::PlaybackControlUnavailable { object: node },
+                );
+            }
             if node
                 .existing()
                 .is_none_or(|id| !reachability.is_object_reachable(id))
@@ -1426,7 +1465,7 @@ fn lower_semantic_publication(
             | SemanticMutation::AddUpdater { .. }
             | SemanticMutation::RemoveUpdater { .. }
             | SemanticMutation::ClearUpdaters { .. }
-            | SemanticMutation::SetClickIndicate { .. } => {}
+            | SemanticMutation::SetClickAction { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }

@@ -34,6 +34,66 @@ fn worker_player_rejects_audio_before_allocating_transport_resources() {
     assert!(error.contains("Python/render worker channel"));
 }
 
+#[test]
+fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport() {
+    let mut scene = noon::Scene::new();
+    let mut button = scene.rectangle(1.7, 0.65).unwrap();
+    button.set_fill(0.2, 0.4, 0.5, 1.0).unwrap();
+    scene.add(&button).unwrap();
+    scene
+        .on_click_playback(&button, noon::PlaybackControl::NextSection)
+        .unwrap();
+    let revision = scene.revision();
+    let session = scene.execution_session().unwrap();
+    assert!(!session.has_audio());
+    assert!(session.has_playback_controls());
+    // The profile rejection must precede even playback-clock validation, which
+    // itself precedes resource encoding. No partial worker player is returned.
+    let error = SemanticExecutionPlayer::from_session(session, f64::NAN, 101)
+        .err()
+        .expect("worker transport must not silently discard scene control actions");
+    assert!(error.contains("scene playback controls"));
+    assert!(error.contains("#2263"));
+    let error = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        f64::NAN,
+        102,
+    )
+    .err()
+    .expect("live worker entry must reject the same unsupported controls");
+    assert!(error.contains("scene playback controls"));
+    assert_eq!(scene.revision(), revision);
+}
+
+#[test]
+fn worker_profile_gate_preserves_existing_click_indicate_admission() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    scene
+        .on_click_indicate(
+            &circle,
+            noon::IndicateOptions::default(),
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    let session = scene.execution_session().unwrap();
+    assert!(!session.has_playback_controls());
+    let player = SemanticExecutionPlayer::from_session(session, 1.0, 103).unwrap();
+    assert!(!player.resource_bundle_bytes().is_empty());
+    let live_player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        104,
+    )
+    .unwrap();
+    assert!(!live_player.resource_bundle_bytes().is_empty());
+}
+
 fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNodeId) {
     let mut store = SemanticStore::new();
     let root = store.insert_family();

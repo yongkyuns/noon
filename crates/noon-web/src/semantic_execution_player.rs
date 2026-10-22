@@ -527,7 +527,7 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
-        Self::require_worker_audio_output(&session)?;
+        Self::require_worker_execution_profile(&session)?;
         let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
         let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
@@ -577,7 +577,7 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
-        Self::require_worker_audio_output(&session)?;
+        Self::require_worker_execution_profile(&session)?;
         let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
         let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
@@ -610,10 +610,15 @@ impl SemanticExecutionPlayer {
         })
     }
 
-    fn require_worker_audio_output(session: &ExecutionSession) -> Result<(), String> {
+    fn require_worker_execution_profile(session: &ExecutionSession) -> Result<(), String> {
         if session.has_audio() {
             return Err(
                 "audio playback through the Python/render worker channel is not available yet; use the direct Rust/WASM audio host (#2263)".into(),
+            );
+        }
+        if session.has_playback_controls() {
+            return Err(
+                "scene playback controls through the Python/render worker channel are not available yet; use the finite direct Rust/WASM playback host (#2263)".into(),
             );
         }
         Ok(())
