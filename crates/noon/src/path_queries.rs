@@ -1038,6 +1038,7 @@ fn family_point_occurrences(
             }
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::AudioClip(_)
             | SemanticNodeKind::Effect(_) => continue,
         }
         // Keep every child occurrence in pre-order. An explicit worklist avoids
@@ -1060,6 +1061,7 @@ fn point_reduction_topology(
         SemanticNodeKind::Family(_) => node.semantic_object_state().is_some().then_some(root),
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::AudioClip(_)
         | SemanticNodeKind::Effect(_) => {
             return Ok(PointReductionTopology {
                 object: None,

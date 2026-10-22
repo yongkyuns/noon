@@ -1,8 +1,11 @@
-//! Immutable geometry, font, image and text resources and their versioned storage.
+//! Immutable audio, geometry, font, image and text resources and their versioned storage.
 //!
 //! Semantic authoring and compiled snapshots share these resource contracts.
 //! Lookup and atomic replacement operate on resource handles; they do not own
 //! scene identity, reactive evaluation, execution state or GPU residency.
+
+mod audio;
+pub use audio::*;
 
 mod font;
 pub use font::*;

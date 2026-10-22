@@ -63,6 +63,7 @@ fn reference_order(store: &SemanticStore, root: SemanticNodeId) -> Vec<ObjectId>
             SemanticNodeKind::Family(_) => {}
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::AudioClip(_)
             | SemanticNodeKind::Effect(_) => return,
         }
         for child in node.members_iter() {

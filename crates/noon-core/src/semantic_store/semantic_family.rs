@@ -142,6 +142,8 @@ impl SemanticStore {
                 }
                 (SemanticNodeKind::Effect(_), _)
                 | (_, SemanticNodeKind::Effect(_))
+                | (SemanticNodeKind::AudioClip(_), _)
+                | (_, SemanticNodeKind::AudioClip(_))
                 | (SemanticNodeKind::Signal(_), _)
                 | (SemanticNodeKind::Animation(_), _)
                 | (_, SemanticNodeKind::Signal(_))
@@ -342,6 +344,7 @@ impl SemanticStore {
                 }
                 SemanticNodeKind::Signal(_)
                 | SemanticNodeKind::Animation(_)
+                | SemanticNodeKind::AudioClip(_)
                 | SemanticNodeKind::Effect(_) => {}
             }
             Ok(())

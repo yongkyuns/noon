@@ -654,6 +654,10 @@ impl From<SemanticStoreError> for AuthoringFailure {
             E::NotFamily(_) => ("invalid_input", "store.not_family"),
             E::NotEffect(_) => ("invalid_input", "store.not_effect"),
             E::EffectCannotBeMember(_) => ("invalid_input", "store.effect_not_painter_member"),
+            E::NotAudioClip(_) => ("invalid_input", "store.not_audio_clip"),
+            E::AudioClipCannotBeMember(_) => {
+                ("invalid_input", "store.audio_clip_not_painter_member")
+            }
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),

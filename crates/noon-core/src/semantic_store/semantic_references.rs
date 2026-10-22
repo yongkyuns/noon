@@ -13,6 +13,7 @@ use super::{
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
     EffectOwner,
+    AudioClipScope,
     SignalBinding {
         property: SemanticObjectProperty,
     },
@@ -44,6 +45,10 @@ impl SemanticIncomingReference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticRemoveNodeEffect {
     NodeRemoved(SemanticNodeId),
+    AudioClipChanged {
+        scope: SemanticNodeId,
+        clip: SemanticNodeId,
+    },
     EffectAttachmentChanged {
         owner: SemanticNodeId,
         effect: SemanticNodeId,
@@ -316,6 +321,7 @@ impl SemanticStore {
                     | SemanticReferenceKind::Inset2DCameraFrame => {}
                     SemanticReferenceKind::SpatialAnchorFamily => {}
                     SemanticReferenceKind::EffectOwner
+                    | SemanticReferenceKind::AudioClipScope
                     | SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
@@ -484,6 +490,7 @@ impl SemanticStore {
                     }
                 }
                 SemanticReferenceKind::EffectOwner
+                | SemanticReferenceKind::AudioClipScope
                 | SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
@@ -503,6 +510,16 @@ impl SemanticStore {
             .node(id)
             .expect("node remains live until its reverse referrers are cleaned")
             .clone();
+        if let Some(clip) = node.semantic_audio_clip_state() {
+            let scope = clip.scope();
+            self.unlink_audio_clip(id, scope);
+            if self.node(scope).is_some() {
+                outcome.written_slots.insert(scope);
+                outcome
+                    .effects
+                    .push(SemanticRemoveNodeEffect::AudioClipChanged { scope, clip: id });
+            }
+        }
         if let Some(effect) = node.semantic_effect_state() {
             let owner = effect.owner();
             self.unlink_effect(id, owner);
@@ -592,6 +609,9 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
     }
 
     match node.kind() {
+        SemanticNodeKind::AudioClip(state) => {
+            references.push((state.scope(), SemanticReferenceKind::AudioClipScope))
+        }
         SemanticNodeKind::Effect(state) => {
             references.push((state.owner(), SemanticReferenceKind::EffectOwner))
         }

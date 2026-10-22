@@ -850,3 +850,6 @@ mod tests;
 
 #[cfg(test)]
 mod object_membership_tests;
+
+#[cfg(test)]
+mod audio_tests;
