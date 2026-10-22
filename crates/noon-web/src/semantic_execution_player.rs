@@ -2651,6 +2651,14 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_requires_content_boundary(
+        &mut self,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<bool, AuthoringFailure> {
+        self.with_live_session(|live| live.requires_content_boundary(target))
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_all_points_3d(
         &mut self,

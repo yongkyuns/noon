@@ -976,6 +976,18 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn mobject_requires_content_boundary(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).requires_content_boundary(),
+            |player, handle| player.live_requires_content_boundary(handle.into()),
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn mobject_all_points_3d(
         &mut self,
         handle: &noon::Mobject,
@@ -1184,6 +1196,18 @@ impl CanonicalAuthoringScene {
             family,
             |target| target.all_points_3d(),
             crate::SemanticExecutionPlayer::live_effective_all_points_3d,
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn family_requires_content_boundary(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<bool, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.requires_content_boundary(),
+            crate::SemanticExecutionPlayer::live_requires_content_boundary,
         )
     }
 
@@ -7536,6 +7560,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyRequiresContentBoundary)]
+        pub fn query_family_requires_content_boundary(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<bool, JsValue> {
+            self.inner
+                .family_requires_content_boundary(&handle.semantic_family()?)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyAllPoints3D)]
         pub fn query_family_all_points_3d(
             &mut self,
@@ -8095,6 +8129,16 @@ mod wasm {
             self.inner
                 .mobject_all_points(handle.semantic_mobject())
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectRequiresContentBoundary)]
+        pub fn query_mobject_requires_content_boundary(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<bool, JsValue> {
+            self.inner
+                .mobject_requires_content_boundary(handle.semantic_mobject())
                 .map_err(typed_js_error)
         }
 

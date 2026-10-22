@@ -14,6 +14,9 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
+  "requiresContentBoundary(",
+  "queryFamilyRequiresContentBoundary(",
+  "queryMobjectRequiresContentBoundary(",
   // Generated bindings must match the optional Python effects facade. Checking
   // the exact class token avoids mistaking WasmGlowUpdate for WasmGlow.
   "export class WasmGlow {",
@@ -267,6 +270,9 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "requiresContentBoundary(): boolean",
+  "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
+  "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
   "constructor()",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
@@ -780,6 +786,12 @@ if (!geometryOptionsDeclaration.includes(
 )) {
   throw new Error("WASM declarations are missing typed VMobject sheen-direction constructor support");
 }
+for (const name of ["WasmAuthoringMobjectHandle", "WasmAuthoringFamilyHandle"]) {
+  if (!classDeclaration(name).includes("requiresContentBoundary(): boolean;")) {
+    throw new Error(`${name} is missing retained-content boundary classification`);
+  }
+}
+
 for (const fragment of expectedTypeSurface) {
   if (!declarations.includes(fragment)) {
     throw new Error(`Generated declarations are missing: ${fragment}`);

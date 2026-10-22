@@ -1605,6 +1605,13 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = requiresContentBoundary)]
+        pub fn requires_content_boundary(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.semantic_family()?)
+                .requires_content_boundary()
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = allPoints3D)]
         pub fn all_points_3d(&self) -> Result<Vec<f64>, JsValue> {
             let family = self.semantic_family()?;
@@ -3159,6 +3166,13 @@ mod wasm {
             noon::MobjectTarget::from(&self.handle)
                 .all_points()
                 .map(flat_points)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = requiresContentBoundary)]
+        pub fn requires_content_boundary(&self) -> Result<bool, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .requires_content_boundary()
                 .map_err(js_error)
         }
 

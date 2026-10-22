@@ -23,12 +23,88 @@ class Observation:
 
 
 class ManimSharedLayoutQueryTests(unittest.TestCase):
+    def test_generic_retained_leaf_selects_authored_content_layout_in_rust(self):
+        handle = SimpleNamespace(
+            requiresContentBoundary=Mock(return_value=True),
+            criticalPoint3D=Mock(side_effect=AssertionError("retained content is not a path")),
+        )
+        value = self.wrapper(handle)
+        with patch.object(shared, "_layout_center", return_value=(7., -3.)) as center:
+            self.assertEqual(shared._get_center(value), (7., -3.))
+        handle.requiresContentBoundary.assert_called_once_with()
+        handle.criticalPoint3D.assert_not_called()
+        center.assert_called_once_with(value)
+
+    def test_generic_bound_retained_leaf_uses_owning_context_classification(self):
+        handle = SimpleNamespace(requiresContentBoundary=Mock(side_effect=AssertionError("stale authored query")))
+        value = self.wrapper(handle)
+        context = SimpleNamespace(
+            queryMobjectRequiresContentBoundary=Mock(return_value=True),
+            queryMobjectLayout=Mock(return_value=Observation()),
+        )
+        value._scene = SimpleNamespace(_canonical_authoring_context=context)
+        value._object = object()
+        self.assertEqual(shared._get_center(value), (7., -3.))
+        context.queryMobjectRequiresContentBoundary.assert_called_once_with(handle)
+        context.queryMobjectLayout.assert_called_once_with(handle)
+        handle.requiresContentBoundary.assert_not_called()
+
+    def test_generic_geometry_keeps_point_boundary_behavior_without_wrapper_traversal(self):
+        handle = SimpleNamespace(requiresContentBoundary=Mock(return_value=False))
+        value = self.wrapper(handle)
+        with patch("_manim_path_queries.critical_point", return_value=(1., 2., 3.)) as point:
+            self.assertEqual(shared._get_center(value), (1., 2., 3.))
+        point.assert_called_once_with(value, (0., 0., 0.))
+        handle.requiresContentBoundary.assert_called_once_with()
+
+    def test_live_family_classification_does_not_walk_python_members(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        value = identity_only_wrapper(noon.Group)
+        handle = SimpleNamespace(requiresContentBoundary=Mock(side_effect=AssertionError("authored read")))
+        value._semantic_family_handle = handle
+        context = SimpleNamespace(queryFamilyRequiresContentBoundary=Mock(return_value=True))
+        with patch.object(shared, "_group_live_layout_context", return_value=context), \
+             patch.object(shared, "_group_layout_observation", return_value=Observation()):
+            self.assertEqual(shared._get_center(value), (7., -3.))
+        context.queryFamilyRequiresContentBoundary.assert_called_once_with(handle)
+        handle.requiresContentBoundary.assert_not_called()
+
+    def test_custom_query_hooks_precede_native_content_selection(self):
+        handle = SimpleNamespace(requiresContentBoundary=Mock(side_effect=AssertionError("must preserve caller hook")))
+        value = self.wrapper(handle)
+        value.get_all_points = Mock(return_value=[])
+        with patch("_manim_path_queries.critical_point", return_value=(0., 0., 0.)) as point:
+            self.assertEqual(shared._get_center(value), (0., 0., 0.))
+        point.assert_called_once_with(value, (0., 0., 0.))
+        handle.requiresContentBoundary.assert_not_called()
+
+    def test_native_profile_failure_is_not_retried_with_a_different_query(self):
+        error = RuntimeError("execution is transferred")
+        handle = SimpleNamespace(requiresContentBoundary=Mock(side_effect=error))
+        value = self.wrapper(handle)
+        with patch.object(shared, "_layout_center") as layout:
+            with self.assertRaises(RuntimeError) as raised:
+                shared._get_center(value)
+        self.assertIs(raised.exception, error)
+        layout.assert_not_called()
+
+    def test_staged_bound_object_does_not_add_an_ordinary_content_query(self):
+        value = self.wrapper(object())
+        context = SimpleNamespace(queryMobjectRequiresContentBoundary=Mock())
+        value._scene = SimpleNamespace(_canonical_authoring_context=context)
+        value._object = object()
+        with patch.object(shared, "_handle_for", return_value=None), \
+             patch("_manim_path_queries.critical_point", return_value=(1., 2., 3.)) as point:
+            self.assertEqual(shared._get_center(value), (1., 2., 3.))
+        point.assert_called_once_with(value, (0., 0., 0.))
+        context.queryMobjectRequiresContentBoundary.assert_not_called()
+
     def test_staged_family_center_keeps_layout_guard_before_point_membership(self):
         from _typed_geometry_test_support import identity_only_wrapper
         import _manim_updaters
         value = identity_only_wrapper(noon.VGroup)
         point_read = Mock(side_effect=AssertionError("staged query read point membership"))
-        value._semantic_family_handle = SimpleNamespace(allPoints3D=point_read, familyKeys=point_read)
+        value._semantic_family_handle = SimpleNamespace(requiresContentBoundary=point_read, familyKeys=point_read)
         with patch.object(_manim_updaters, "canonical_callback_phase_active", return_value=True), patch.object(
             shared, "_group_layout_observation",
             side_effect=NotImplementedError("family layout query during active callback phase"),
@@ -72,6 +148,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
                 point_query = Mock(side_effect=AssertionError("opaque content is not a point array"))
                 value._semantic_family_handle = SimpleNamespace(
                     semanticSlot=2, semanticGeneration=0,
+                    requiresContentBoundary=Mock(return_value=True),
                     allPoints3D=point_query,
                     familyKeys=Mock(return_value=['2:0', '1:0']),
                     memberKeys=Mock(return_value=['1:0']))
@@ -80,12 +157,14 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
                     self.assertEqual(shared._get_center(value), (7., -3.))
                     self.assertEqual(shared._get_critical_point(value, noon.RIGHT), (12., -3.))
                 point_query.assert_not_called()
-                self.assertEqual(value._semantic_family_handle.familyKeys.call_count, 2)
+                self.assertEqual(value._semantic_family_handle.requiresContentBoundary.call_count, 2)
+                value._semantic_family_handle.familyKeys.assert_not_called()
 
     def test_custom_family_query_is_not_replaced_by_content_layout_routing(self):
         from _typed_geometry_test_support import identity_only_wrapper
         value = identity_only_wrapper(noon.VGroup)
         value._semantic_family_handle = SimpleNamespace(
+            requiresContentBoundary=Mock(side_effect=AssertionError("custom selector")),
             allPoints3D=Mock(), familyKeys=Mock(side_effect=AssertionError("custom selector")))
         value.get_family = Mock(return_value=[])
         self.assertTrue(shared._point_boundary_queries_available(value))

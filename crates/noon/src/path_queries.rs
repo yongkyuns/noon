@@ -1,6 +1,8 @@
 //! Immutable observations of one retained path in an explicit coordinate space.
+mod boundary_profiles;
 mod point_counts;
 mod point_values;
+pub use boundary_profiles::effective_requires_content_boundary;
 pub use point_counts::effective_mobject_point_count;
 pub use point_values::{
     effective_all_points_3d, effective_critical_point_3d, effective_path_boundary_points_3d,

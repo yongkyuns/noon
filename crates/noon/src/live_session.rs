@@ -1493,6 +1493,16 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Choose existing point versus retained-content boundary semantics from
+    /// this publication, without consulting host wrapper types.
+    pub fn requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, LiveSessionError> {
+        crate::path_queries::effective_requires_content_boundary(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(

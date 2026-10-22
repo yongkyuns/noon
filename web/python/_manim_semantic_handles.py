@@ -749,22 +749,21 @@ def _point_boundary_queries_available(value: _base.Mobject) -> bool:
             # selecting a point route must not inspect callback membership.
             return False
         handle = value._semantic_family_handle
-        available = hasattr(handle, "allPoints3D")
+        available = hasattr(handle, "requiresContentBoundary")
     else:
         handle = _handle_for(value)
         if _is_bound(value):
             context = getattr(value._scene, "_canonical_authoring_context", None)
-            available = getattr(context, "queryMobjectAllPoints3D", None) is not None
+            available = getattr(context, "queryMobjectRequiresContentBoundary", None) is not None
         else:
-            available = handle is not None and hasattr(handle, "allPoints3D")
+            available = handle is not None and hasattr(handle, "requiresContentBoundary")
     if not available:
         return False
-    if _default_point_query_hooks(value) and handle is not None and hasattr(handle, "familyKeys"):
-        # Membership/order come from Rust. Inspect wrapper types, never geometry
-        # or a cached Python membership list, before choosing the content path.
-        members = _base.Mobject.get_family(value)
-        if any(_uses_content_layout(member) for member in members):
-            return False
+    if _default_point_query_hooks(value) and handle is not None:
+        # Wrapper subclasses do not identify retained content reliably (for
+        # example generic Table entries). Rust selects from current semantic
+        # content; no geometry or membership snapshot crosses this boundary.
+        return not bool(_point_query_observation(value, "RequiresContentBoundary"))
     return True
 
 
