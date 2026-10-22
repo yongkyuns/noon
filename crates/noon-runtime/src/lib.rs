@@ -745,6 +745,16 @@ impl SceneInstance {
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
+        self.apply_patch_with_deferred_track_frames(patch, None)
+    }
+
+    fn apply_patch_with_deferred_track_frames(
+        &mut self,
+        patch: &ExecutionPatch,
+        added_channels: Option<&mut Vec<CompiledChannelKey>>,
+    ) -> Result<&FrameState, CompilePatchError> {
+        debug_assert!(added_channels.is_none() || matches!(patch, ExecutionPatch::AddTrack(_)));
+        let defer_frame = added_channels.is_some();
         self.require_replay_writable()?;
         let previous_anchor_groups = match patch {
             ExecutionPatch::SetContent { object, .. }
@@ -788,7 +798,7 @@ impl SceneInstance {
             _ => BTreeSet::new(),
         };
         let inverse = self.prepare_replay_change(patch);
-        self.apply_patch_without_history(patch)?;
+        self.apply_patch_without_history(patch, added_channels)?;
         if matches!(patch, ExecutionPatch::RemoveObject(_)) {
             for track in affected_path_tracks {
                 self.path_motion_plans.remove(&track);
@@ -797,7 +807,9 @@ impl SceneInstance {
         if let Some(groups) = previous_anchor_groups {
             self.pending_spatial_anchor_groups.extend(groups);
         }
-        self.flush_spatial_anchor_changes();
+        if !defer_frame {
+            self.flush_spatial_anchor_changes();
+        }
         match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
                 if matches!(track.property, Property::Morph | Property::Transform) =>
@@ -846,6 +858,7 @@ impl SceneInstance {
     fn apply_patch_without_history(
         &mut self,
         patch: &ExecutionPatch,
+        added_channels: Option<&mut Vec<CompiledChannelKey>>,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
@@ -897,7 +910,7 @@ impl SceneInstance {
                 | ExecutionPatch::RemoveTrack(_)
                 | ExecutionPatch::ReconcileTrack { .. }
         ) {
-            self.apply_timeline_patch(patch)?;
+            self.apply_timeline_patch(patch, added_channels)?;
             return Ok(&self.frame);
         }
 
@@ -1073,7 +1086,11 @@ impl SceneInstance {
         Ok(())
     }
 
-    fn apply_timeline_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
+    fn apply_timeline_patch(
+        &mut self,
+        patch: &ExecutionPatch,
+        added_channels: Option<&mut Vec<CompiledChannelKey>>,
+    ) -> Result<(), CompilePatchError> {
         if matches!(patch, ExecutionPatch::AddFamilyAnimation(_)) {
             let animation_index = self.compiled.family_animations().len();
             self.compiled.apply_execution_patch(patch)?;
@@ -1103,7 +1120,7 @@ impl SceneInstance {
             let mut evaluation = EvaluationStats::default();
             self.relower_timeline_object(
                 channel.object_index as usize,
-                &[Some(channel), None],
+                &[channel],
                 &mut evaluation,
             );
             self.reapply_reactive_for_object(channel.object_index as usize);
@@ -1189,27 +1206,54 @@ impl SceneInstance {
             }
         }
 
-        let mut affected_objects = [None, None];
-        push_unique_object(
-            &mut affected_objects,
-            old_channel.map(|channel| channel.object_index as usize),
+        if let Some(added_channels) = added_channels {
+            added_channels.extend(affected_channels.into_iter().flatten());
+            self.last_patch_stats = patch_stats;
+            return Ok(());
+        }
+        self.refresh_timeline_channels(
+            affected_channels.into_iter().flatten().collect(),
+            patch_stats,
         );
-        push_unique_object(
-            &mut affected_objects,
-            new_channel.map(|channel| channel.object_index as usize),
-        );
+        Ok(())
+    }
+
+    /// Refresh each addressed row once after its channel metadata is coherent.
+    /// Sorting also keeps the per-row channel slice local; filtering the whole
+    /// batch for every row would make dense authoring quadratic.
+    fn refresh_timeline_channels(
+        &mut self,
+        mut channels: Vec<CompiledChannelKey>,
+        mut patch_stats: RuntimePatchStats,
+    ) {
+        channels.sort_unstable();
+        channels.dedup();
         let mut evaluation = EvaluationStats::default();
-        for object_index in affected_objects.into_iter().flatten() {
-            self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
+        let mut start = 0;
+        while start < channels.len() {
+            let object_index = channels[start].object_index as usize;
+            let mut end = start + 1;
+            while end < channels.len() && channels[end].object_index as usize == object_index {
+                end += 1;
+            }
+            self.relower_timeline_object(object_index, &channels[start..end], &mut evaluation);
             self.reapply_reactive_for_object(object_index);
             self.reapply_numeric_text_for_object(object_index);
             self.mark_changed(object_index);
             patch_stats.objects_recomputed += 1;
+            start = end;
         }
         patch_stats.groups_evaluated = evaluation.groups_evaluated;
         self.last_stats = evaluation;
         self.last_patch_stats = patch_stats;
-        Ok(())
+    }
+
+    fn flush_added_track_frames(&mut self, channels: &mut Vec<CompiledChannelKey>) {
+        if channels.is_empty() {
+            return;
+        }
+        self.refresh_timeline_channels(std::mem::take(channels), self.last_patch_stats);
+        self.flush_spatial_anchor_changes();
     }
 
     fn apply_value_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
@@ -1368,13 +1412,12 @@ impl SceneInstance {
     fn relower_timeline_object(
         &mut self,
         object_index: usize,
-        channels: &[Option<CompiledChannelKey>; 2],
+        channels: &[CompiledChannelKey],
         stats: &mut EvaluationStats,
     ) {
         let relevant = || {
             channels
                 .iter()
-                .flatten()
                 .filter(|channel| channel.object_index as usize == object_index)
         };
         let coupled = [Property::Transform, Property::Morph]
@@ -1966,18 +2009,6 @@ fn push_unique_channel(
     }
     if let Some(slot) = slots.iter_mut().find(|slot| slot.is_none()) {
         *slot = Some(channel);
-    }
-}
-
-fn push_unique_object(slots: &mut [Option<usize>; 2], object: Option<usize>) {
-    let Some(object) = object else {
-        return;
-    };
-    if slots.iter().flatten().any(|existing| *existing == object) {
-        return;
-    }
-    if let Some(slot) = slots.iter_mut().find(|slot| slot.is_none()) {
-        *slot = Some(object);
     }
 }
 

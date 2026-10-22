@@ -605,14 +605,27 @@ impl SceneInstance {
         // that may change what a property write means. Full preflight above still
         // validates overwritten writes rather than hiding malformed input.
         let mut changed = false;
+        let mut added_channels = Vec::new();
         for patch in final_value_writes(transaction) {
+            let adds_track = matches!(patch, ExecutionPatch::AddTrack(_));
+            if !adds_track {
+                // Other mutations may read or replace current effective content.
+                // Keep their existing ordered frame boundary, even for a no-op.
+                self.flush_added_track_frames(&mut added_channels);
+            }
             if !self.compiled.patch_changes_execution(patch) {
                 continue;
             }
-            self.apply_patch_unpublished(patch)
-                .expect("runtime transaction was fully preflighted");
+            // Track definitions and replay inverses still commit in authored
+            // order. Only unobservable intermediate row refreshes are coalesced.
+            self.apply_patch_with_deferred_track_frames(
+                patch,
+                adds_track.then_some(&mut added_channels),
+            )
+            .expect("runtime transaction was fully preflighted");
             changed = true;
         }
+        self.flush_added_track_frames(&mut added_channels);
         changed
     }
 }
@@ -623,9 +636,10 @@ mod tests {
 
     use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
     use noon_core::{
-        CompositionTimeMap, FontResourceArena, GeometryResourceArena, Property, RateFunction, Rect,
-        SemanticObjectState, SemanticStore, StoredGeometry, Style, TextResource, TextSourceKind,
-        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+        CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena, Property,
+        RateFunction, Rect, SemanticObjectState, SemanticStore, StoredGeometry, Style,
+        TextResource, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues,
+        Transform2D, Vec2,
     };
 
     use super::*;
@@ -649,6 +663,203 @@ mod tests {
     fn semantic_instance() -> (SceneInstance, ObjectId) {
         let (instance, [object]) = semantic_instances([1.0]);
         (instance, object)
+    }
+
+    fn animated_channels(object: ObjectId, first_id: u64) -> Vec<ExecutionPatch> {
+        let source = noon_geometry::canonical_outline_path(&GeometryRef::circle(1.0)).unwrap();
+        let target = source.transformed(Transform2D {
+            rotation: 0.5,
+            ..Transform2D::IDENTITY
+        });
+        [
+            (
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::new(3.0, -1.0),
+                },
+            ),
+            (
+                Property::Fill,
+                TrackValues::Color {
+                    from: Some(noon_core::Color::WHITE),
+                    to: Some(noon_core::Color::RED),
+                },
+            ),
+            (
+                Property::Morph,
+                TrackValues::PreparedMorph {
+                    from: 0.0,
+                    to: 1.0,
+                    geometry: GeometryRef::path(source.with_morph_target(target)),
+                    render_frame: Some(noon_core::MorphRenderFrame {
+                        from: Transform2D::IDENTITY,
+                        to_translation: Vec2::new(3.0, -1.0),
+                    }),
+                    source_transform: Transform2D::IDENTITY,
+                },
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (property, values))| {
+            ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(first_id + index as u64),
+                object,
+                property,
+                values,
+                timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            })
+        })
+        .collect()
+    }
+
+    fn same_visible_frame(left: &SceneInstance, right: &SceneInstance) {
+        let a = left.frame();
+        let b = right.frame();
+        assert_eq!(a.objects, b.objects);
+        assert_eq!(a.presences, b.presences);
+        assert_eq!(a.reveals, b.reveals);
+        assert_eq!(a.morphs, b.morphs);
+        assert_eq!(a.render_geometries, b.render_geometries);
+        assert_eq!(a.render_transforms, b.render_transforms);
+        assert_eq!(left.painter_order(), right.painter_order());
+    }
+
+    #[test]
+    fn atomic_track_additions_refresh_each_affected_row_once_and_match_direct_playback() {
+        let (mut batch, [a, b, _]) = semantic_instances([1.0, 1.0, 2.0]);
+        let mut direct = batch.clone();
+        let untouched = batch.frame().objects[2].clone();
+        let before = batch.publication_context();
+        batch.take_frame_changes();
+        let left = animated_channels(a, 10);
+        let right = animated_channels(b, 20);
+        let patches = left.into_iter().zip(right).flat_map(|(a, b)| [a, b]);
+        let transaction = ExecutionMutationTransaction::from_mutations(patches);
+        for patch in transaction.mutations() {
+            direct.apply_execution_patch(patch).unwrap();
+        }
+        batch.apply_execution_transaction(&transaction).unwrap();
+        assert_eq!(batch.last_patch_stats().objects_recomputed, 2);
+        assert_eq!(batch.take_frame_changes().object_indices(), &[0, 1]);
+        assert_eq!(batch.frame().objects[2], untouched);
+        assert_eq!(
+            batch.publication_context().frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        same_visible_frame(&batch, &direct);
+        for time in [0.5, 1.0, 1.25, 1.75, 2.0, 2.5] {
+            batch.advance_to(time).unwrap();
+            direct.advance_to(time).unwrap();
+            same_visible_frame(&batch, &direct);
+        }
+        batch.seek(1.4).unwrap();
+        direct.seek(1.4).unwrap();
+        same_visible_frame(&batch, &direct);
+    }
+
+    #[test]
+    fn non_track_edits_keep_their_ordered_frame_boundary() {
+        let (mut batch, object) = semantic_instance();
+        let mut direct = batch.clone();
+        let mut patches = animated_channels(object, 10);
+        patches.insert(
+            2,
+            ExecutionPatch::SetStyle {
+                object,
+                style: Style {
+                    stroke_width: 0.125,
+                    opacity: 0.4,
+                    ..Style::default()
+                },
+            },
+        );
+        let transaction = ExecutionMutationTransaction::from_mutations(patches);
+        for patch in transaction.mutations() {
+            direct.apply_execution_patch(patch).unwrap();
+        }
+        batch.apply_execution_transaction(&transaction).unwrap();
+        same_visible_frame(&batch, &direct);
+        batch.advance_to(1.6).unwrap();
+        direct.advance_to(1.6).unwrap();
+        same_visible_frame(&batch, &direct);
+        assert_eq!(batch.frame().objects[0].style.opacity, 0.4);
+        assert_eq!(batch.frame().objects[0].style.stroke_width, 0.125);
+    }
+
+    #[test]
+    fn primitive_track_batch_preserves_an_independent_effective_component() {
+        let (mut instance, object) = semantic_instance();
+        let frame = instance.prepare_advance_to(0.0).unwrap();
+        let effective = instance
+            .prepare_effective_property_batch(&[crate::EffectivePropertyWrite::Translation {
+                object,
+                translation: Vec2::new(4.0, 2.0),
+            }])
+            .unwrap();
+        instance.commit_prepared_frame(frame, effective).unwrap();
+        let fill = animated_channels(object, 10).remove(1);
+        let opacity = ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(20),
+            object,
+            property: Property::Opacity,
+            values: TrackValues::Scalar { from: 1.0, to: 0.5 },
+            timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        });
+        instance
+            .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+                fill, opacity,
+            ]))
+            .unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(4.0, 2.0)
+        );
+        assert_eq!(instance.last_patch_stats().objects_recomputed, 1);
+    }
+
+    #[test]
+    fn track_batch_retains_replay_order_and_a_late_failure_publishes_nothing() {
+        let (mut batch, object) = semantic_instance();
+        let mut direct = batch.clone();
+        for runtime in [&mut batch, &mut direct] {
+            runtime
+                .begin_replay_retention(crate::ReplayLimits::default())
+                .unwrap();
+            runtime.advance_to(1.0).unwrap();
+        }
+        let mut invalid = animated_channels(object, 10);
+        let ExecutionPatch::AddTrack(last) = invalid.last_mut().unwrap() else {
+            unreachable!()
+        };
+        last.object = ObjectId::new(u64::MAX);
+        let before = batch.frame().clone();
+        let publication = batch.publication_context();
+        assert!(batch
+            .apply_execution_transaction(&ExecutionMutationTransaction::from_mutations(invalid))
+            .is_err());
+        assert_eq!(batch.frame(), &before);
+        assert_eq!(batch.publication_context(), publication);
+        assert_eq!(batch.replay_stats().revisions_retained, 0);
+        let transaction =
+            ExecutionMutationTransaction::from_mutations(animated_channels(object, 10));
+        batch.apply_execution_transaction(&transaction).unwrap();
+        for patch in transaction.mutations() {
+            direct.apply_execution_patch(patch).unwrap();
+        }
+        for runtime in [&mut batch, &mut direct] {
+            runtime.advance_to(3.0).unwrap();
+            runtime.seal_replay().unwrap();
+        }
+        assert_eq!(batch.replay_stats(), direct.replay_stats());
+        for time in [0.5, 1.3, 2.5, 0.75, 1.8] {
+            batch.seek(time).unwrap();
+            direct.seek(time).unwrap();
+            same_visible_frame(&batch, &direct);
+        }
     }
 
     #[test]
