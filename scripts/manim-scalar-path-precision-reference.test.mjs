@@ -5,6 +5,9 @@ import test from 'node:test';
 const fixture=JSON.parse(readFileSync(new URL('../fixtures/manim-v0.21/scalar-path-precision.json',import.meta.url)));
 test('scalar precision controls pin the shared observer, CE methods and generator',()=>{
  assert.equal(fixture.manimVersion,'0.21.0');
+ assert.equal(fixture.mutableStrideClosingObserverSha256,createHash('sha256').update(readFileSync(new URL('./manim_mutable_stride_closing_observation.py',import.meta.url))).digest('hex'));
+ assert.deepEqual(fixture.mutableStrideClosingCases.map(row=>row.pointCount),[10,11]);
+ assert.ok(fixture.mutableStrideClosingCases.every(row=>row.stride===5&&row.returnsSelf));
  for(const [field,file] of [['generatorSha256','./manim-scalar-path-precision-reference.py'],['observerSha256','./manim_scalar_path_observation.py']]){
   assert.equal(fixture[field],createHash('sha256').update(readFileSync(new URL(file,import.meta.url))).digest('hex'));
  }

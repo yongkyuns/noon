@@ -14,4 +14,13 @@ class ScalarPathPrecisionControls(m.Scene):
                 np.testing.assert_allclose(actual['pointsXY'], expected['pointsXY'],
                                            rtol=1e-12, atol=1e-12,
                                            err_msg=phase + ': ' + expected['method'])
+            assert len(MUTABLE_STRIDE_CLOSING_CASES) == 2
+            for expected in MUTABLE_STRIDE_CLOSING_CASES:
+                actual = observe_mutable_stride_closing(m, expected['pointCount'])
+                for field in ('pointCount', 'stride', 'returnsSelf'):
+                    assert actual[field] == expected[field]
+                for field in ('samples', 'inputPointsXY', 'lastSubpathStartXY', 'pointsXY'):
+                    np.testing.assert_allclose(actual[field], expected[field],
+                                               rtol=1e-12, atol=1e-12,
+                                               err_msg=phase + ': closing stride: ' + field)
             await self.wait(.25)

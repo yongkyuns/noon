@@ -61,7 +61,9 @@ const scalarPathFixture = JSON.parse(await readFile(
   path.join(repoRoot, "fixtures/manim-v0.21/scalar-path-precision.json"), "utf8"));
 const scalarPathSource = `import json
 SCALAR_PATH_PRECISION_CASES = json.loads(${JSON.stringify(JSON.stringify(scalarPathFixture.cases))})
+MUTABLE_STRIDE_CLOSING_CASES = json.loads(${JSON.stringify(JSON.stringify(scalarPathFixture.mutableStrideClosingCases))})
 ${await readFile(path.join(repoRoot, "scripts/manim_scalar_path_observation.py"), "utf8")}
+${await readFile(path.join(repoRoot, "scripts/manim_mutable_stride_closing_observation.py"), "utf8")}
 ${await readFile(path.join(repoRoot, "web/python/examples/manim_parity_scalar_path_precision.py"), "utf8")}`;
 const queryHooksSource = `import json\nQUERY_HOOK_CASES = json.loads(${JSON.stringify(JSON.stringify(queryHookFixture.cases))})\n${await readFile(
   path.join(repoRoot, "web/python/examples/manim_parity_query_hooks.py"), "utf8")}`;
@@ -1092,7 +1094,7 @@ result = Scene()
   console.log(`Pinned ordinary membership controls passed: ${objectMemberControlsFixture.cases.length} cases in authored/live phases; backend ${reportFor(objectMemberControlsSource).metrics.backend}.`);
   console.log(`Pinned path keyword controls passed: ${pathKeywordFixture.cases.length} keyword and ${pathKeywordFixture.quadraticPrecisionCases.length} precision cases in authored/live phases; backend ${reportFor(pathKeywordSource).metrics.backend}.`);
   console.log(`Pinned point-list insertion controls passed: ${pointListFixture.cases.length} same-platform cases in authored/live phases; backend ${reportFor(pointListSource).metrics.backend}.`);
-  console.log(`Pinned scalar path precision controls passed: ${scalarPathFixture.cases.length} cases in authored/live phases; backend ${reportFor(scalarPathSource).metrics.backend}.`);
+  console.log(`Pinned scalar path precision controls passed: ${scalarPathFixture.cases.length} scalar and ${scalarPathFixture.mutableStrideClosingCases.length} mutable-stride closing cases in authored/live phases; backend ${reportFor(scalarPathSource).metrics.backend}.`);
   assert.deepEqual(
     sharedText.results.map((result) => result.duration),
     [2, 2, 1, 1.5, 0.4, 0.75, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],

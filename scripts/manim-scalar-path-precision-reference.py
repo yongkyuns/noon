@@ -7,6 +7,7 @@ from pathlib import Path
 
 import manim as m
 from manim_scalar_path_observation import SCALAR_PATH_PRECISION_METHODS, observe_scalar_path_precision
+from manim_mutable_stride_closing_observation import observe_mutable_stride_closing
 
 
 def main():
@@ -23,6 +24,8 @@ def main():
         'methodSourceSha256': {name: hashlib.sha256(inspect.getsource(getattr(m.VMobject, name)).encode()).hexdigest()
                               for name in SCALAR_PATH_PRECISION_METHODS},
         'cases': rows,
+        'mutableStrideClosingObserverSha256': hashlib.sha256(Path(__file__).with_name('manim_mutable_stride_closing_observation.py').read_bytes()).hexdigest(),
+        'mutableStrideClosingCases': [observe_mutable_stride_closing(m, count) for count in (10, 11)],
         'scope': 'Pinned scalar/corner edit precision requirements; no Noon implementation/support claim.',
     }
     args.output.write_text(json.dumps(result, indent=2) + '\n')
