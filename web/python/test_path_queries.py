@@ -22,6 +22,30 @@ def _path_observation(query):
 
 
 class PathQueryTests(unittest.TestCase):
+    def test_xyz_snapshots_without_numpy_support_index_only_typed_arrays(self):
+        class IndexOnlyArray:
+            def __init__(self, values):
+                self.values = values
+
+            def __len__(self):
+                return len(self.values)
+
+            def __getitem__(self, index):
+                if isinstance(index, slice):
+                    raise NotImplementedError("Slice subscripting isn't implemented for typed arrays")
+                return self.values[index]
+
+        points = [(1.0 + 2.0 ** -40, -2.0, .25), (3.0, 4.0, -.75)]
+        for cls in (compat.VMobject, compat.VGroup):
+            for count in (0, 1, 2):
+                with self.subTest(cls=cls.__name__, count=count):
+                    value = identity_only_wrapper(cls)
+                    expected = points[:count]
+                    coordinates = IndexOnlyArray([number for point in expected for number in point])
+                    with patch.object(queries, "_all_points_observation", return_value=coordinates), \
+                         patch.dict("sys.modules", {"numpy": None}):
+                        self.assertEqual(value.get_all_points(), expected)
+
     def test_single_anchor_array_precedes_mutable_stride_validation(self):
         try:
             import numpy as np

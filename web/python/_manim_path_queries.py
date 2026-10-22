@@ -618,7 +618,8 @@ def _format_points(coordinates, dimensions=2):
     except ImportError:
         if dimensions == 2:
             return _points(coordinates)
-        return [tuple(float(value) for value in coordinates[index:index + dimensions])
+        # Pyodide typed arrays support scalar indexing but not Python slices.
+        return [tuple(float(coordinates[index + offset]) for offset in range(dimensions))
                 for index in range(0, len(coordinates), dimensions)]
     return np.asarray(coordinates, dtype=np.float64).reshape((-1, dimensions))
 
