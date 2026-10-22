@@ -1,5 +1,41 @@
 //! Depth pivots read canonical semantic controls; no projected geometry is retained.
 use super::*;
+use noon_core::{GeometryResource, SemanticObjectContent, StoredGeometry, VectorPath};
+
+/// Canonical point edits can retain the existing Z scale when it multiplies
+/// only zero local coordinates. Translation still applies around the requested
+/// world pivot. Inspect all controls and latent morph data, not just anchors.
+pub(super) fn scale_changes_local_depth(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+) -> Result<bool, AuthoringError> {
+    match content {
+        SemanticObjectContent::Text(_)
+        | SemanticObjectContent::Image(_)
+        | SemanticObjectContent::Geometry(
+            StoredGeometry::Circle { .. }
+            | StoredGeometry::Rectangle { .. }
+            | StoredGeometry::Line { .. },
+        ) => Ok(false),
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
+            match store
+                .geometry_resources()
+                .get(handle)
+                .ok_or(AuthoringError::MissingGeometryResource(handle))?
+            {
+                GeometryResource::VectorPath(path) => Ok(path_has_local_depth(path)),
+                // Mesh coordinates and their spatial lowering remain authoritative.
+                GeometryResource::Mesh(_) => Ok(true),
+            }
+        }
+    }
+}
+
+fn path_has_local_depth(path: &VectorPath) -> bool {
+    path.manim_points()
+        .is_some_and(|points| points.iter().any(|point| point.z != 0.0))
+        || path.morph_target().is_some_and(path_has_local_depth)
+}
 
 pub(super) fn resolve_pivot(
     store: &SemanticStore,

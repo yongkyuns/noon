@@ -395,7 +395,16 @@ fn all_points_preserves_recursive_preorder_and_repeated_family_aliases() {
     let empty_center = MobjectTarget::from(&empty).center_of_mass().unwrap();
     assert!(empty_center.0.is_nan());
     assert!(empty_center.1.is_nan());
-    assert_eq!(MobjectTarget::from(&empty).length_over_dim(3).unwrap(), 0.);
+    for dimension in 0..3 {
+        assert_eq!(
+            MobjectTarget::from(&empty)
+                .length_over_dim(dimension)
+                .unwrap(),
+            0.
+        );
+    }
+    // CE validates the dimension before observing an empty point array.
+    assert!(MobjectTarget::from(&empty).length_over_dim(3).is_err());
     assert!(MobjectTarget::from(&empty).boundary_point(1., 0.).is_err());
 }
 

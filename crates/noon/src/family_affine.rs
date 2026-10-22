@@ -163,7 +163,11 @@ impl FamilyAffine {
                     )?;
                     next.transform.scale.x *= local_x;
                     next.transform.scale.y *= local_y;
-                    next.transform.scale.z *= factors.z;
+                    if factors.z != 1.0
+                        && depth::scale_changes_local_depth(store, previous.content)?
+                    {
+                        next.transform.scale.z *= factors.z;
+                    }
                     next.transform.translation.x =
                         (previous.transform.translation.x - pivot.0) * factors.x + pivot.0;
                     next.transform.translation.y =

@@ -256,3 +256,107 @@ fn depth_xyz_invalid_shifts_roll_back_all_aliased_leaves() {
         }
     }
 }
+
+#[test]
+fn inert_depth_scale_preserves_real_controls_tails_and_morph_targets_in_all_hosts() {
+    for host in 0..3 {
+        for profile in 0..5 {
+            let mut controls = vec![
+                SemanticVec3::new(-1., 0., 0.),
+                SemanticVec3::new(0., 1., 0.),
+                SemanticVec3::new(0., -1., 0.),
+                SemanticVec3::new(1., 0., 0.),
+            ];
+            if profile == 1 {
+                controls[1].z = 2.;
+            } else if profile == 2 {
+                controls.push(SemanticVec3::new(2., 0., 4.));
+            }
+            let mut path = VectorPath::from_manim_points_3d(controls.clone());
+            if profile == 3 {
+                let mut target = controls.clone();
+                target[1].z = 2.;
+                path = path.with_morph_target(VectorPath::from_manim_points_3d(target));
+            } else if profile == 4 {
+                path = VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1., 0.))
+                    .line_to(noon_core::Vec2::new(1., 0.));
+            }
+            let mut scene = Scene::new();
+            let object = scene.path(path, Default::default()).unwrap();
+            scene.add(&object).unwrap();
+            let anchor = LayoutAnchor::from(&object);
+            let mut borrowed = None;
+            if host == 1 {
+                let execution = scene.execution_session().unwrap();
+                scene.install_execution(execution);
+            } else if host == 2 {
+                borrowed = Some(scene.execution_session().unwrap());
+            }
+            let before = object.state().unwrap();
+            let revision = scene.revision();
+            if host == 0 {
+                anchor
+                    .stretch(
+                        3.,
+                        LayoutDimension::Depth,
+                        ManimRotationPivot::Point3d(SemanticVec3::ZERO),
+                    )
+                    .unwrap();
+            } else {
+                let mut live = if let Some(execution) = borrowed.as_mut() {
+                    scene.live(execution)
+                } else {
+                    scene.owned_live()
+                };
+                live.stretch(
+                    &anchor,
+                    3.,
+                    LayoutDimension::Depth,
+                    ManimRotationPivot::Point3d(SemanticVec3::ZERO),
+                )
+                .unwrap();
+            }
+            let state = object.state().unwrap();
+            let has_depth = matches!(profile, 1..=3);
+            if has_depth {
+                assert_eq!(state.transform.scale.z, 3., "host={host},profile={profile}");
+                assert_eq!(scene.revision(), revision.checked_next().unwrap());
+            } else {
+                assert_eq!(state, before, "host={host},profile={profile}");
+                assert_eq!(scene.revision(), revision);
+            }
+            let query =
+                if let Some(execution) = borrowed.as_ref().or_else(|| scene.running_execution()) {
+                    crate::path_queries::effective_path_query(
+                        scene.integration_store(),
+                        execution,
+                        &object,
+                    )
+                    .unwrap()
+                } else {
+                    object.path_query().unwrap()
+                };
+            let points = query.points_3d().unwrap();
+            if profile != 4 {
+                let expected = controls
+                    .iter()
+                    .map(|point| SemanticVec3::new(point.x, point.y, point.z * 3.))
+                    .collect::<Vec<_>>();
+                assert_eq!(points, expected, "host={host},profile={profile}");
+            } else {
+                assert!(points.iter().all(|point| point.z == 0.));
+            }
+            if profile == 3 {
+                let store = scene.integration_store().borrow();
+                let path = crate::path_queries::content_path(&store, state.content).unwrap();
+                let target = crate::PathQuery::prepare(
+                    path.morph_target().unwrap(),
+                    state.transform.as_planar().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(target.points_3d().unwrap()[1].z, 6.);
+            }
+        }
+    }
+}
