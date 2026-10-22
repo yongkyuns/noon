@@ -12,5 +12,5 @@ class OrdinaryPathConstruction(Scene):
         curves.close_path()
         polygon = Square(side_length=1).set_fill(YELLOW, opacity=0.3).shift(LEFT * 2 + DOWN * 2)
         self.add(curves, polygon)
-        polygon.add_line_to(point(0, -2)).close_path()
+        polygon.add_points_as_corners([point(0, -2)]).close_path()
         self.wait(0.2)

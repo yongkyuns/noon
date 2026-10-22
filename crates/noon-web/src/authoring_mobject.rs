@@ -3375,8 +3375,10 @@ mod wasm {
         /// Replace world-space corners through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPointsAsCorners)]
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.set_points_as_corners(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle
+                .set_points_as_corners_f64(&points)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setPointsAsCornersWithSamples)]
@@ -3385,14 +3387,14 @@ mod wasm {
             values: Vec<f64>,
             sample_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
                 JsValue::from(js_sys::TypeError::new(
                     "set_points_as_corners requires four samples",
                 ))
             })?;
             self.handle
-                .set_points_as_corners_with_samples(&points, &sample_values)
+                .set_points_as_corners_f64_with_samples(&points, &sample_values)
                 .map_err(js_error)
         }
 
@@ -3403,8 +3405,8 @@ mod wasm {
 
         #[wasm_bindgen(js_name = startNewPath)]
         pub fn start_new_path(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
-            self.handle.start_new_path(point).map_err(js_error)
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
+            self.handle.start_new_path_f64(point).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = startNewPathWithStride)]
@@ -3414,9 +3416,9 @@ mod wasm {
             point_y: f64,
             stride: i32,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             self.handle
-                .start_new_path_with_stride(point, stride)
+                .start_new_path_f64_with_stride(point, stride)
                 .map_err(js_error)
         }
 
@@ -3427,9 +3429,9 @@ mod wasm {
             point_y: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             self.handle
-                .add_line_to_with_stride(point, stride.unwrap_or(4))
+                .add_line_to_f64_with_stride(point, stride.unwrap_or(4))
                 .map_err(js_error)
         }
 
@@ -3441,12 +3443,12 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
             self.handle
-                .add_line_to_with_stride_and_samples(point, stride, &bezier_t_values)
+                .add_line_to_f64_with_stride_and_samples(point, stride, &bezier_t_values)
                 .map_err(js_error)
         }
 
@@ -3477,11 +3479,11 @@ mod wasm {
             anchor_y: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
-            let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
-            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            let control1 = crate::authoring_geometry::point_f64(control1_x, control1_y)?;
+            let control2 = crate::authoring_geometry::point_f64(control2_x, control2_y)?;
+            let anchor = crate::authoring_geometry::point_f64(anchor_x, anchor_y)?;
             self.handle
-                .add_cubic_bezier_curve_to_with_stride(
+                .add_cubic_bezier_curve_to_f64_with_stride(
                     control1,
                     control2,
                     anchor,
@@ -3530,35 +3532,37 @@ mod wasm {
             anchor2_x: f64,
             anchor2_y: f64,
         ) -> Result<(), JsValue> {
-            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
-            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
-            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
-            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            let anchor1 = crate::authoring_geometry::point_f64(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point_f64(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point_f64(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point_f64(anchor2_x, anchor2_y)?;
             self.handle
-                .add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                .add_cubic_bezier_curve_f64(anchor1, handle1, handle2, anchor2)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addCubicBezierCurves)]
         pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
             self.handle
-                .add_cubic_bezier_curves(&curves)
+                .add_cubic_bezier_curves_f64(&curves)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setCubicBezierCurves)]
         pub fn set_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
             self.handle
-                .set_cubic_bezier_curves(&curves)
+                .set_cubic_bezier_curves_f64(&curves)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addPointsAsCorners)]
         pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
-            self.handle.add_points_as_corners(&points).map_err(js_error)
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.handle
+                .add_points_as_corners_f64(&points)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
@@ -3568,9 +3572,9 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.handle
-                .add_points_as_corners_with_stride(&points, stride, &bezier_t_values)
+                .add_points_as_corners_f64_with_stride(&points, stride, &bezier_t_values)
                 .map_err(js_error)
         }
 
