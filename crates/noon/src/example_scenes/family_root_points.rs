@@ -7,8 +7,13 @@ use crate::{
 pub struct FamilyRootPoints {
     group: MobjectFamily,
     vector: MobjectFamily,
+    left: Mobject,
+    right: Mobject,
+    left_seed: Mobject,
+    right_seed: Mobject,
     alignment_peer: MobjectFamily,
     alignment_leaf: Mobject,
+    left_source_points: Vec<noon_core::SemanticVec3>,
     left_points: Vec<noon_core::SemanticVec3>,
     right_points: Vec<(f64, f64)>,
     stage: u8,
@@ -33,6 +38,11 @@ impl LiveContinuation for FamilyRootPoints {
                     )?;
                 }
                 2 => {
+                    // Replay the same authored data and child presentation;
+                    // clearing the roots did not undo their family transforms.
+                    live.become_mobject(&self.left, &self.left_seed, Default::default())?;
+                    live.become_mobject(&self.right, &self.right_seed, Default::default())?;
+                    self.left_points.clone_from(&self.left_source_points);
                     live.set_family_points_3d(&self.group, &self.left_points)?;
                     live.stretch(
                         &LayoutAnchor::from(&self.group),
@@ -132,6 +142,8 @@ pub fn program() -> Result<LiveProgram<FamilyRootPoints>, String> {
             child.set_fill(1.0, 1.0, 0.0, 1.0)?;
             child.set_stroke_width(0.0)?;
         }
+        let left_seed = left.copy_handle()?;
+        let right_seed = right.copy_handle()?;
         let mut left_square = scene.square(1.2)?;
         let mut right_square = scene.square(1.2)?;
         left_square.shift(-2.0, 0.0)?;
@@ -146,6 +158,7 @@ pub fn program() -> Result<LiveProgram<FamilyRootPoints>, String> {
                 point
             })
             .collect::<Vec<_>>();
+        let left_source_points = left_points.clone();
         let right_points = right_square.path_query()?.points()?;
         let group = scene.family_with_presentation(&[(&left).into()], 0.0, Color::WHITE, false)?;
         let vector = scene.family_with_presentation(&[(&right).into()], 0.0, Color::WHITE, true)?;
@@ -201,8 +214,13 @@ pub fn program() -> Result<LiveProgram<FamilyRootPoints>, String> {
         Ok(scene.into_live_program(FamilyRootPoints {
             group,
             vector,
+            left,
+            right,
+            left_seed,
+            right_seed,
             alignment_peer,
             alignment_leaf,
+            left_source_points,
             left_points,
             right_points,
             stage: 0,
