@@ -57,7 +57,7 @@ original startup-failure attribution.
 
 PR [#2261](https://github.com/yongkyuns/noon/pull/2261) merged as
 `184724af9c9ecd0976648adca5cce15e1f4f83e9`, exactly the qualified tree
-`973fd71c84a17065dcfdc68b0029a6d6f1e28806`. All20 selected PR checks pass.
+`973fd71c84a17065dcfdc68b0029a6d6f1e28806`. All20 selected PR checks and all9 normal post-merge workflows pass on their first attempts.
 The tested producer `a410151cad330c31a108214bc74a6a31f60ff621` has parents982c13/38f860
 and the same tree as the pushed candidate. Only two existing CI files change
 (+140/-5), with no product runtime patch, new module, dependency or migration seam.
@@ -98,9 +98,10 @@ separate982 WebKit checks passed Field (627objects/19s), Math Create/Write and
 explicit no-JSPI Math, with live intermediate publications and an inspected
 endpoint. The earlier b0 CPU trace remains evidence for b0 only.
 
-At this checkpoint, 7/9 normal post-merge workflows have succeeded; the
-same remaining handles are live: Playground playback controls [39712911145](https://github.com/yongkyuns/noon/actions/runs/39712911145); Playground cross-browser matrix [39712911160](https://github.com/yongkyuns/noon/actions/runs/39712911160).
-Observe them without restarting. Current follow-up root:
+All nine normal post-merge workflows succeeded in their first attempts, including
+CI, coverage, differential, cross-browser, public playback and deployment. All
+owning local observers and hosted qualification runs are terminal; no test or
+measurement cohort was retried. Current follow-up root:
 `post-merge-2261-20261022T0245Z/`. Full Phase D remains incomplete; the goal is
 active. The phone is explicitly unavailable, native Screen Recording preflight
 remains false, and no phone/access question is pending. Strict physical limits,
@@ -114,13 +115,25 @@ all needed qualification logs/packages remain outside the checkout. The primary
 WIP and other-owner checkouts were untouched. Recover source from master/PR or
 managed archive only if actual code work requires it.
 
-Candidate, original failure, validation, merge and cleanup evidence under
-`current-master-continuation-20261022T0204Z/` is now sealed. All prior20,634 catalog
-rows were fully rehashed, and exact prior canonical gzip snapshots are retained.
-`remote-handoff-update-20261022T0150Z/` is also now enrolled. The newer post-merge
-root above remains mutable and unenrolled while its CI handles finish; do not
-edit older sealed roots or pretend the catalog includes those live observations.
-Raw evidence remains outside Git and requires a separate transfer.
+Candidate/merge evidence under `current-master-continuation-20261022T0204Z/` and
+post-merge/publication evidence under `post-merge-2261-20261022T0245Z/` are now
+sealed. All prior20,754 catalog rows were fully rehashed at the latest seal, with
+exact prior canonical gzip snapshots retained. Earlier handoff receipts are also
+enrolled. The next mutable root is `frozen594-host-audit-20261022T0318Z/`, currently
+holding only a read-only prior-diagnostic inventory and postseal handoff receipts.
+Raw evidence remains outside Git and needs a separate transfer.
+
+The next independent action is to audit whether an original-host frozen-runtime
+diagnostic would add genuinely new evidence. Prior hosted run39504435250 used the
+exact original package and matching macOS26.6.2/WebKit26.5, but injected an active
+startup sample and selected one stress-grid case. The later uninstrumented local
+case used macOS15.5. The tracked web/scripts trees of original producerbd044 and
+failing trigger594 are unchanged. Confirm the original full shard queue and every
+later hosted uninstrumented boundary before deciding on a new run. A branch-only
+variant of the existing manual workflow can be considered only after an explicit
+one-shot protocol/admission; no new diagnostic, workflow branch or source
+execution has been registered or launched. Do not repeat either completed
+one-case diagnostic or use a passing new diagnostic to erase the old failure.
 
 ## Completed changes and validation
 
@@ -294,11 +307,11 @@ Original Mac evidence root:
 /Users/ykshin/.codex/task-evidence/noon/remaining-phase-d-20261018
 ```
 
-The sealed catalog `editor-native-source-evidence-manifest.json` has **20,754
-entries / 4,128,621,289 cataloged bytes**, SHA-256:
+The sealed catalog `editor-native-source-evidence-manifest.json` has **20,800
+entries / 4,131,327,596 cataloged bytes**, SHA-256:
 
 ```text
-38c02b3746c140d6e47d228cc851f5146830bb16c2b2405be795733fc5485675
+0bcf9157812f0069c9854fb28df8de882ee1a2a59b61a8b84d38456acc68539c
 ```
 
 Before independently auditing historical results on another PC, transfer the
