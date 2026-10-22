@@ -227,7 +227,80 @@ test("invalid trace configuration and phase are rejected", () => {
 test("captures attempted scene state rather than reporting last successful source", async () => {
   const data = { patchState: "running", selectedExampleId: "showcase-dynamic-scene", runDisabled: true };
   const result = await captureAttemptedPage({ evaluate: async () => data });
-  assert.deepEqual(result, { state: "captured", observed: data });
+  assert.deepEqual(result, { state: "captured", observed: data,
+    executionMetrics: { state: "unavailable", reason: "execution not initialized" } });
+});
+
+test("an unresponsive page observation is bounded without retrying it", async () => {
+  let calls = 0;
+  const result = await captureAttemptedPage({
+    evaluate: () => { calls++; return new Promise(() => {}); },
+    isClosed: () => false,
+  }, { timeoutMs: 10 });
+  assert.equal(result.state, "unavailable");
+  assert.match(result.reason, /timed out/);
+  assert.equal(calls, 1);
+});
+
+test("failed or unresponsive renderer observations preserve the attempted DOM state", async () => {
+  for (const observe of [() => Promise.reject(new Error("worker closed")), () => new Promise(() => {})]) {
+    const data = { patchState: "running", executionMode: "retained", selectedExampleId: "current" };
+    let calls = 0;
+    const result = await captureAttemptedPage({
+      evaluate: () => ++calls === 1 ? Promise.resolve(data) : observe(),
+    }, { timeoutMs: 10 });
+    assert.equal(result.state, "captured");
+    assert.deepEqual(result.observed, data);
+    assert.equal(result.executionMetrics.state, "unavailable");
+    assert.match(result.executionMetrics.reason, /worker closed|timed out/);
+    assert.equal(calls, 2);
+  }
+});
+
+function attemptedPageFixture(executionMetrics, diagnostics = { runGeneration: 7 }) {
+  const status = { dataset: { executionMode: "retained", runtimeStartup: "started-on-demand", state: "running" } };
+  const globals = {
+    location: { href: "http://localhost/current" },
+    document: { visibilityState: "visible", hasFocus: () => true,
+      querySelector: selector => selector === "#status" ? status : null },
+    window: { __noonExampleGallery: { generationDiagnostics: diagnostics, executionMetrics } },
+  };
+  return { evaluate: async (callback, argument) => runInNewContext(`(${callback.toString()})(argument)`,
+    { ...globals, argument }) };
+}
+
+test("failure metrics retain bounded renderer progress without consuming profiles", async () => {
+  const result = await captureAttemptedPage(attemptedPageFixture(function (...args) {
+    assert.deepEqual(args, []);
+    return Promise.resolve({ metrics: { ready: true, backend: "WebGL2", time: 0.932,
+      needsPresent: true, bufferedDeltas: 2, lastFrameTimestamp: 123, presentedFrames: 45,
+      publicationStageSamples: Array(1000).fill({ large: "payload" }) } });
+  }));
+  assert.equal(result.observed.visibilityState, "visible");
+  assert.equal(result.observed.documentHasFocus, true);
+  assert.equal(result.executionMetrics.state, "captured");
+  assert.equal(result.executionMetrics.observed.time, 0.932);
+  assert.equal(result.executionMetrics.observed.needsPresent, true);
+  assert.equal(result.executionMetrics.observed.bufferedDeltas, 2);
+  assert.equal(Object.hasOwn(result.executionMetrics.observed, "publicationStageSamples"), false);
+});
+
+test("metrics from another run cannot be attached to the failed scene", async () => {
+  const diagnostics = { runGeneration: 7 };
+  const result = await captureAttemptedPage(attemptedPageFixture(async () => {
+    diagnostics.runGeneration++;
+    return { metrics: { time: 9 } };
+  }, diagnostics));
+  assert.equal(result.state, "captured");
+  assert.equal(result.executionMetrics.state, "unavailable");
+  assert.match(result.executionMetrics.reason, /changed/);
+  assert.equal(Object.hasOwn(result.executionMetrics, "observed"), false);
+});
+
+test("invalid failure-observation deadlines are rejected before browser work", async () => {
+  for (const timeoutMs of [0, -1, NaN, Infinity, 5001, "10"]) {
+    await assert.rejects(captureAttemptedPage({ evaluate: () => assert.fail("must not observe") }, { timeoutMs }), RangeError);
+  }
 });
 
 test("captures bounded playback commands without querying an unavailable engine", async () => {
@@ -250,6 +323,8 @@ test("captures bounded playback commands without querying an unavailable engine"
   assert.equal(result.observed.playbackControls.toggle.ariaLabel, "Pause animation");
   assert.deepEqual(Array.from(result.observed.playbackTrace, event => event.id),
     Array.from({ length: 32 }, (_, index) => index + 8));
+  assert.deepEqual(result.executionMetrics,
+    { state: "unavailable", reason: "execution not initialized" });
 });
 
 test("closed page stays unavailable even if an earlier scene was successful", async () => {

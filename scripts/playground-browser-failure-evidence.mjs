@@ -92,21 +92,45 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   }) });
 }
 
+async function observePage(page, callback, argument, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => page.evaluate(callback, argument)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`page observation timed out after ${timeoutMs} ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Failure-only observations: preserve the DOM even when the render worker cannot
+// answer. Each protocol call has its own deadline; neither retries nor starts a
+// deferred execution, and metrics never consume optional profiling samples.
 /** Obtain the precise attempted page state, never substitute a prior scene. */
-export async function captureAttemptedPage(page) {
+export async function captureAttemptedPage(page, { timeoutMs = 2000 } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000) {
+    throw new RangeError("invalid page observation deadline");
+  }
   if (page === null) return { state: "unavailable", reason: "page not created" };
   try {
-    const observed = await page.evaluate(() => {
+    const observed = await observePage(page, () => {
       const controls = document.querySelector(".playback-controls");
       const toggle = controls?.querySelector(".playback-toggle");
       return {
         url: location.href,
+        visibilityState: document.visibilityState ?? null,
+        documentHasFocus: document.hasFocus?.() ?? null,
+        runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
         runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
         selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
         patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
         patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
         runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
         runtimeState: document.querySelector("#status")?.dataset.state ?? null,
+        executionMode: document.querySelector("#status")?.dataset.executionMode ?? null,
         playbackControls: controls == null ? null : {
           data: { ...controls.dataset },
           toggle: toggle == null ? null : {
@@ -119,8 +143,44 @@ export async function captureAttemptedPage(page) {
         // RPCs. A failed playback query must not erase the attempted interaction.
         playbackTrace: window.__matrixPlaybackTrace?.events?.slice(-32) ?? [],
       };
-    });
-    return { state: "captured", observed };
+    }, undefined, timeoutMs);
+    let executionMetrics = { state: "unavailable", reason: "execution not initialized" };
+    if (observed.executionMode) {
+      try {
+        executionMetrics = await observePage(page, async expected => {
+          const gallery = window.__noonExampleGallery;
+          const sameRun = () => gallery === window.__noonExampleGallery && location.href === expected.url &&
+            (gallery?.generationDiagnostics?.runGeneration ?? null) === expected.runGeneration &&
+            (document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null) === expected.selectedExampleId &&
+            (document.querySelector("#status")?.dataset.executionMode ?? null) === expected.executionMode;
+          if (!sameRun()) return { state: "unavailable", reason: "scene changed during observation" };
+          if (typeof gallery?.executionMetrics !== "function") {
+            return { state: "unavailable", reason: "execution metrics unavailable" };
+          }
+          const response = await gallery.executionMetrics();
+          if (!sameRun()) return { state: "unavailable", reason: "scene changed during observation" };
+          const metrics = response?.metrics;
+          if (metrics === null || typeof metrics !== "object" || Array.isArray(metrics)) {
+            return { state: "unavailable", reason: "execution metrics unavailable" };
+          }
+          // Fixed scalar projection: no scene rows, resource payloads or trace arrays.
+          const progress = {};
+          for (const key of ["ready", "mode", "backend", "time", "objectCount", "presentedFrames",
+            "presentedSession", "lastFrameTimestamp", "bufferedDeltas", "needsPresent",
+            "lastDeltaApplyMs", "lastRendererCallMs", "sampledAtMs", "performanceTimeOriginMs",
+            "gpuGeneration", "rendererRebuilds", "transitionMode", "resourceBundlePending"]) {
+            const value = metrics[key];
+            if (value === null || typeof value === "boolean" ||
+                (typeof value === "number" && Number.isFinite(value)) ||
+                (typeof value === "string" && value.length <= 128)) progress[key] = value;
+          }
+          return { state: "captured", observed: progress };
+        }, observed, timeoutMs);
+      } catch (error) {
+        executionMetrics = { state: "unavailable", reason: short(String(error)) };
+      }
+    }
+    return { state: "captured", observed, executionMetrics };
   } catch (error) {
     let pageClosed = null;
     try { pageClosed = page.isClosed(); } catch { /* browser is already gone */ }
