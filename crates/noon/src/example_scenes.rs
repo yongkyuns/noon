@@ -6,6 +6,7 @@ pub mod analytic_profile;
 pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+pub mod background_audio;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]

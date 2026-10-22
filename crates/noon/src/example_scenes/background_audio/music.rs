@@ -8,7 +8,8 @@
 //!
 //! Software implementation: MIT, as declared by the Noon crate. The original
 //! composition represented by CHORDS and PHRASES, and audio rendered from it,
-//! are dedicated under CC0-1.0; see README.md in this directory for the notice.
+//! are dedicated under CC0-1.0; see the scoped notice in
+//! `crates/noon/examples/render_background_music/README.md`.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::fmt;
@@ -30,6 +31,10 @@ impl MusicPcm {
     }
     pub fn samples(&self) -> &[f32] {
         &self.samples
+    }
+    /// Consume prepared PCM so scene resource admission does not retain a second buffer.
+    pub fn into_samples(self) -> Box<[f32]> {
+        self.samples
     }
     pub fn frames(&self) -> usize {
         self.samples.len() / CHANNELS

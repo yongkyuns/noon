@@ -89,7 +89,7 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
         match self {
             Self::AudioOutputUnavailable { index } => write!(
                 f,
-                "audio mutation {index} requires audio execution/output support, which is not available yet (#2263)"
+                "audio mutation {index} cannot be published during execution; declare audio before execution starts (#2263)"
             ),
             Self::Resource(error) => error.fmt(f),
             Self::UnsupportedMutation { index } => write!(

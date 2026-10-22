@@ -166,6 +166,12 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::AudioResource(_) => {
+                Self::new("invalid_input", "authoring.audio_resource", message)
+            }
+            AuthoringError::AudioClip(_) => {
+                Self::new("invalid_input", "authoring.audio_clip", message)
+            }
             AuthoringError::GlowParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
             }
@@ -792,6 +798,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::AudioExecutionImmutable => Self::new(
+                "unsupported",
+                "publication.audio_execution_immutable",
+                message,
+            ),
             E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)

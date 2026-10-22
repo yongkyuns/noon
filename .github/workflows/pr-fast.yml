@@ -212,6 +212,18 @@ jobs:
       - name: Check typed WASM/Python error boundary
         run: node scripts/typed-authoring-errors-smoke.mjs
 
+      - name: Check direct background audio and scene controls
+        run: timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
+
+      - name: Retain direct background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: background-audio-${{ github.event.pull_request.number }}
+          path: browser-smoke-artifacts/background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Check Manim-style authoring
         id: manim-authoring
         run: |

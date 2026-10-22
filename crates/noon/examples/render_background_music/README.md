@@ -7,10 +7,11 @@ instrument samples, vocals, drums, downloaded music, or model-generated audio.
 The score was composed for this example; it does not intentionally quote an
 existing melody.
 
-This example prepares a WAV asset. It does not add scene audio playback, an
-audio device, a scheduler, or synchronized export. Those remain tracked in the
-issue. Prepare the asset once and reuse it; do not run this generator on every
-scene update or seek.
+This command prepares a WAV asset from the same shared score used by the
+finite direct Rust/WASM background-audio example. The command itself opens no
+audio device. Prepare the asset once and reuse it; do not run this generator on
+every scene update or seek. Native device output, Python worker playback, and
+synchronized export remain tracked in the issue.
 
 ## Render and test
 
@@ -18,18 +19,13 @@ From the repository root:
 
 ```sh
 cargo run -p noon --no-default-features --release --example render_background_music -- /tmp/a-small-discovery.wav
-cargo test -p noon --no-default-features --example render_background_music
+cargo test -p noon --no-default-features --lib example_scenes::background_audio
 ```
 
-The example itself uses only Rust's standard library. It can also be rendered
-without building Noon or downloading any crate dependencies:
-
-```sh
-rustc --edition=2021 -O crates/noon/examples/render_background_music/main.rs -o /tmp/render-background-music
-/tmp/render-background-music /tmp/a-small-discovery.wav
-rustc --edition=2021 --test -O crates/noon/examples/render_background_music/main.rs -o /tmp/background-music-tests
-/tmp/background-music-tests
-```
+The synthesizer lives in
+`crates/noon/src/example_scenes/background_audio/music.rs` and uses only Rust’s
+standard library. The CLI and direct scene builder import that one module, so
+they share the original score and synthesis.
 
 The optional second argument to the renderer selects a sample rate between
 8,000 and 96,000 Hz. The default output is 48,000 Hz, PCM16 stereo WAV, exactly
@@ -47,8 +43,9 @@ small byte differences across platforms.
 ## Levels and looping
 
 The source peak is scaled to 0.22 (about -13.15 dBFS). The initial 48 kHz render
-measures about -26.4 LUFS integrated. A later scene mixer can start with a
-separate gain of 0.5 for a quiet bed; narration can duck it further.
+measures about -26.4 LUFS integrated. The direct scene example uses a separate
+authored gain of 0.5 for a quiet bed, with a 1.5-second entrance and 2.5-second
+exit fade over its 30-second scene interval.
 
 Note tails and reflections wrap into the beginning of the buffer. Loop the
 complete WAV/PCM without dropping a frame or fading each cycle. The first and
@@ -61,10 +58,51 @@ transition handling, separate from authored timeline fades. Compressed listening
 previews may include intro/outro fades and encoder padding; use the full WAV/PCM
 as the canonical loop.
 
+## Declare audio in a Rust scene
+
+Prepare one immutable PCM resource, then attach it before lowering the scene:
+
+```rust
+use noon::{AudioClipOptions, AudioResource, Scene, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET};
+use noon::example_scenes::background_audio::music;
+
+let mut scene = Scene::new();
+let pcm = music::render_music(24_000)?;
+let resource = AudioResource::from_interleaved(
+    pcm.sample_rate(),
+    music::CHANNELS as u16,
+    pcm.into_samples(),
+    DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+)?;
+let clip = scene.audio(resource, AudioClipOptions {
+    start_time: 0.0,
+    duration: Some(30.0),
+    gain: 0.5,
+    fade_in: 1.5,
+    fade_out: 2.5,
+    ..AudioClipOptions::default()
+})?;
+```
+
+`start_time` is absolute authored time; the call does not advance `scene.time()`
+or insert a wait. A looping clip uses `looped: true` with an explicit finite
+duration. Source trim uses PCM frame indices, and fades span the whole clip.
+Viewer mute and volume belong to playback controls and do not change authored
+gain. The returned clip is an ordinary semantic identity owned by this scene’s
+root scope.
+
+The full `background_audio::scene()` builder returns a Scene and its declared
+animation root. Its sections at 0, 10 and 20 seconds align with the moving point’s
+three vertices. Native Rust can lower and inspect the same animation and audio;
+the direct Rust/WASM example supplies browser audio output. Live clip edits,
+Python worker output, native device output and movie audio muxing are explicitly
+outside this initial execution profile.
+
 ## Composition and audio dedication
 
 **CC0 1.0 Universal (CC0-1.0)** applies specifically to the original musical
-composition represented by `CHORDS` and `PHRASES` in `music.rs`, and to audio
+composition represented by `CHORDS` and `PHRASES` in
+`crates/noon/src/example_scenes/background_audio/music.rs`, and to audio
 rendered from this example. To the extent possible under law, the Noon
 contributors waive copyright and related rights in that composition and audio
 under the [CC0 1.0 dedication](https://creativecommons.org/publicdomain/zero/1.0/).

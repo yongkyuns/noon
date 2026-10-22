@@ -5,7 +5,7 @@
 //! An optional second argument selects the sample rate (default: 48,000 Hz).
 //! See README.md beside this file for the scoped composition/audio dedication.
 
-mod music;
+use noon::example_scenes::background_audio::music;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};

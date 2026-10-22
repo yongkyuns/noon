@@ -76,6 +76,7 @@ impl Default for NativeViewportConfig {
 
 #[derive(Debug)]
 pub enum NativeHostError {
+    AudioOutputUnavailable,
     Platform(String),
     Gpu(String),
     Runtime(EvaluationError),
@@ -90,6 +91,9 @@ pub enum NativeHostError {
 impl std::fmt::Display for NativeHostError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioOutputUnavailable => formatter.write_str(
+                "native device audio output is not available yet; this scene requires an audio-capable host (#2263)",
+            ),
             Self::Platform(message) => write!(formatter, "native platform error: {message}"),
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
             Self::Runtime(error) => error.fmt(formatter),
@@ -227,6 +231,10 @@ fn run_source(
     source: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
+    // Fail before window/device allocation rather than silently omit a soundtrack.
+    if source.session().has_audio() {
+        return Err(NativeHostError::AudioOutputUnavailable);
+    }
     if config.width == 0 || config.height == 0 {
         return Err(NativeHostError::Platform(
             "initial viewport dimensions must be positive".to_owned(),
@@ -1155,6 +1163,22 @@ mod tests {
     use noon_core::{AnimationOptions, RateFunction};
 
     use super::*;
+
+    #[test]
+    fn native_host_rejects_audio_before_opening_a_window() {
+        let mut scene = Scene::new();
+        scene
+            .audio(
+                noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.0; 8_000], 32_000)
+                    .unwrap(),
+                noon_core::AudioClipOptions::default(),
+            )
+            .unwrap();
+        assert!(matches!(
+            run(scene.execution_session().unwrap()),
+            Err(NativeHostError::AudioOutputUnavailable)
+        ));
+    }
 
     struct NativeWaitContinuation {
         resumes: Rc<Cell<usize>>,

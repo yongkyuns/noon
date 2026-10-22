@@ -57,6 +57,8 @@ pub(super) struct PreparedScalarPublicationContract {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
+    /// The first audio execution profile is a finite, pre-authored plan.
+    AudioExecutionImmutable,
     RequiredCallbackPending,
     SegmentCompletionPending,
     TranslationDragActive,
@@ -78,6 +80,9 @@ pub enum ExecutionSessionPublicationError {
 impl std::fmt::Display for ExecutionSessionPublicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioExecutionImmutable => f.write_str(
+                "audio execution currently requires a pre-authored immutable scene; declare all clips and animation before execution (#2263)",
+            ),
             Self::ReplaySealed => f.write_str("discard sealed replay before authored mutation"),
             Self::RequiredCallbackPending => {
                 f.write_str("a required callback publication is pending")
@@ -121,7 +126,8 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::NumericText(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
-            Self::RequiredCallbackPending
+            Self::AudioExecutionImmutable
+            | Self::RequiredCallbackPending
             | Self::ReplaySealed
             | Self::SegmentCompletionPending
             | Self::TranslationDragActive
@@ -184,6 +190,12 @@ impl ExecutionSession {
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
+        // Until audio participates in live structural/history publication, a
+        // scope detach or removal must not leave an obsolete audible plan alive.
+        // Reject the whole batch before resource admission or semantic staging.
+        if self.runtime.has_audio() {
+            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
+        }
         if self.runtime.replay_is_sealed() {
             return Err(ExecutionSessionPublicationError::ReplaySealed);
         }

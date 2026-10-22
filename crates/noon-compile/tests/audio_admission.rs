@@ -1,10 +1,10 @@
 use noon_compile::{
     lower_semantic_execution, lower_semantic_execution_root, validate_semantic_publication,
-    SemanticExecutionIndex, SemanticExecutionLoweringError, SemanticLoweringError,
+    CompiledResourceError, CompiledScene, SemanticCompiledSceneError, SemanticExecutionIndex,
     SemanticPublicationLoweringError,
 };
 use noon_core::{
-    AudioClipDefinition, AudioClipOptions, AudioResource, ObjectId, SemanticMutationTransaction,
+    AudioClipDefinition, AudioClipOptions, AudioResource, SemanticMutationTransaction,
     SemanticNodeCreation, SemanticNodeId, SemanticObjectState, SemanticStore, StoredGeometry,
 };
 
@@ -35,131 +35,141 @@ fn audio_clip(store: &mut SemanticStore, scope: SemanticNodeId) -> SemanticNodeI
     transaction.apply(store).unwrap().resolve(pending).unwrap()
 }
 
-fn assert_only_prior_object_indexed(
-    index: &SemanticExecutionIndex,
-    prior: SemanticNodeId,
-    prior_execution: ObjectId,
-    rejected: SemanticNodeId,
-    clip: SemanticNodeId,
-) {
-    assert_eq!(index.len(), 1);
-    assert_eq!(index.execution_object_id(prior), Some(prior_execution));
-    assert_eq!(index.execution_object_id(rejected), None);
-    assert_eq!(index.execution_object_id(clip), None);
-}
-
-fn assert_initial_audio_rejection(nested: bool) {
+#[test]
+fn initial_audio_lowers_without_drawable_rows_or_another_identity() {
     let mut store = SemanticStore::new();
-    let (prior_root, prior) = visual_family(&mut store);
+    let (root, visual) = visual_family(&mut store);
+    let empty = store.insert_family();
+    store.add_member(root, empty).unwrap();
+    let clip = audio_clip(&mut store, empty);
     let mut index = SemanticExecutionIndex::new();
-    index.lower_root(&store, prior_root).unwrap();
-    let prior_execution = index.execution_object_id(prior).unwrap();
-
-    let (root, visual) = visual_family(&mut store);
-    let scope = if nested {
-        let branch = store.insert_family();
-        let empty_scope = store.insert_family();
-        store.add_member(root, branch).unwrap();
-        store.add_member(branch, empty_scope).unwrap();
-        empty_scope
-    } else {
-        root
-    };
-    let clip = audio_clip(&mut store, scope);
-    if nested {
-        assert_eq!(store.node(scope).unwrap().member_count(), 0);
-    }
-    store.attach_to_scene(root).unwrap();
-    let revision = store.scene_revision();
-    let expected = SemanticLoweringError::AudioOutputUnavailable { clip };
-
-    assert_eq!(index.lower_root(&store, root).unwrap_err(), expected);
-    assert_only_prior_object_indexed(&index, prior, prior_execution, visual, clip);
-    assert_eq!(index.lower_scene(&store).unwrap_err(), expected);
-    assert_only_prior_object_indexed(&index, prior, prior_execution, visual, clip);
-    assert_eq!(
-        lower_semantic_execution_root(&store, root, &mut index).unwrap_err(),
-        SemanticExecutionLoweringError::Object(expected.clone())
-    );
-    assert_only_prior_object_indexed(&index, prior, prior_execution, visual, clip);
-    assert_eq!(
-        lower_semantic_execution(&store, &mut index).unwrap_err(),
-        SemanticExecutionLoweringError::Object(expected)
-    );
-    assert_only_prior_object_indexed(&index, prior, prior_execution, visual, clip);
-    assert_eq!(store.scene_revision(), revision);
+    let lowered = lower_semantic_execution_root(&store, root, &mut index).unwrap();
+    assert_eq!(lowered.compiled().live_object_count(), 1);
+    assert_eq!(lowered.compiled().audio_clips().len(), 1);
+    let compiled = &lowered.compiled().audio_clips()[0];
+    assert_eq!(compiled.clip(), clip);
+    assert_eq!(compiled.scope(), empty);
+    assert_eq!(lowered.compiled().audio_end_time(), Some(0.1));
+    assert_eq!(index.len(), 1);
+    assert!(index.execution_object_id(visual).is_some());
+    assert_eq!(index.execution_object_id(clip), None);
+    assert_eq!(lowered.compiled().resources().audio_count(), 1);
+    assert_eq!(lowered.compiled().resources().audio_pcm_bytes(), 3_200);
 }
 
 #[test]
-fn root_audio_is_rejected_before_initial_index_mutation() {
-    assert_initial_audio_rejection(false);
-}
-
-#[test]
-fn audio_on_an_empty_nested_family_is_rejected_before_initial_index_mutation() {
-    assert_initial_audio_rejection(true);
-}
-
-#[test]
-fn only_audio_reachable_from_the_selected_roots_blocks_lowering() {
+fn only_audio_reachable_from_selected_roots_enters_execution() {
     let mut store = SemanticStore::new();
-    let (root, visual) = visual_family(&mut store);
+    let (root, _) = visual_family(&mut store);
     store.attach_to_scene(root).unwrap();
     let audio_scope = store.insert_family();
     let clip = audio_clip(&mut store, audio_scope);
-    assert!(store.has_audio_clips());
-
     let mut index = SemanticExecutionIndex::new();
-    let projection = index.lower_root(&store, root).unwrap();
-    assert_eq!(projection.objects().len(), 1);
-    assert_eq!(projection.objects()[0].semantic_id, visual);
-    let projection = index.lower_scene(&store).unwrap();
-    assert_eq!(projection.objects().len(), 1);
-    assert_eq!(projection.objects()[0].semantic_id, visual);
-    assert_eq!(
-        lower_semantic_execution_root(&store, root, &mut index)
-            .unwrap()
-            .compiled()
-            .live_object_count(),
-        1
-    );
-    assert_eq!(
-        lower_semantic_execution(&store, &mut index)
-            .unwrap()
-            .compiled()
-            .live_object_count(),
-        1
-    );
-    let execution = index.execution_object_id(visual).unwrap();
-    let expected = SemanticLoweringError::AudioOutputUnavailable { clip };
-
-    // An independent attached audio scope blocks a full-scene handoff while
-    // leaving an explicitly selected visual sibling runnable.
+    assert!(!lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .compiled()
+        .has_audio());
     store.attach_to_scene(audio_scope).unwrap();
-    assert_eq!(index.lower_scene(&store).unwrap_err(), expected);
-    assert_eq!(
-        lower_semantic_execution(&store, &mut index).unwrap_err(),
-        SemanticExecutionLoweringError::Object(expected.clone())
-    );
-    assert_eq!(index.lower_root(&store, root).unwrap().len(), 1);
-    assert_eq!(
-        lower_semantic_execution_root(&store, root, &mut index)
-            .unwrap()
-            .compiled()
-            .live_object_count(),
-        1
-    );
-
-    // Making that same scope a descendant puts the audio inside the selected
-    // root even though the scope still has no drawable leaves.
+    assert!(lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .compiled()
+        .has_audio());
+    assert!(!lower_semantic_execution_root(&store, root, &mut index)
+        .unwrap()
+        .compiled()
+        .has_audio());
     store.detach_from_scene(audio_scope).unwrap();
     store.add_member(root, audio_scope).unwrap();
-    assert_eq!(index.lower_root(&store, root).unwrap_err(), expected);
+    let lowered = lower_semantic_execution_root(&store, root, &mut index).unwrap();
+    assert_eq!(lowered.compiled().audio_clips()[0].clip(), clip);
+}
+
+#[test]
+fn captured_pcm_is_shared_and_survives_semantic_retirement_and_compaction() {
+    let mut store = SemanticStore::new();
+    let (root, _) = visual_family(&mut store);
+    let first = audio_clip(&mut store, root);
+    let definition = *store.semantic_audio_clip_state(first).unwrap().definition();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.create_audio_clip(root, definition);
+    tx.apply(&mut store).unwrap();
+    let pointer = store
+        .audio_resources()
+        .get(definition.resource())
+        .unwrap()
+        .samples()
+        .as_ptr();
+    let mut compiled =
+        lower_semantic_execution_root(&store, root, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .into_parts()
+            .0;
+    assert_eq!(compiled.audio_clips().len(), 2);
+    assert_eq!(compiled.resources().audio_count(), 1);
     assert_eq!(
-        lower_semantic_execution_root(&store, root, &mut index).unwrap_err(),
-        SemanticExecutionLoweringError::Object(expected)
+        compiled
+            .resources()
+            .audio(definition.resource())
+            .unwrap()
+            .samples()
+            .as_ptr(),
+        pointer
     );
-    assert_only_prior_object_indexed(&index, visual, execution, audio_scope, clip);
+    let mut retire = SemanticMutationTransaction::new();
+    for clip in compiled.audio_clips() {
+        retire.remove_node(clip.clip());
+    }
+    retire.apply(&mut store).unwrap();
+    assert_eq!(store.audio_resources().len(), 0);
+    drop(store);
+    let cloned = compiled.clone();
+    let object = compiled.objects()[0].id;
+    compiled
+        .apply_execution_patch(&noon_compile::ExecutionPatch::RemoveObject(object))
+        .unwrap();
+    let stats = compiled.compact_retired_object_slots().unwrap();
+    assert_eq!(stats.object_slots_reclaimed, 1);
+    assert_eq!(compiled.audio_clips().len(), 2);
+    assert_eq!(
+        compiled
+            .resources()
+            .audio(definition.resource())
+            .unwrap()
+            .samples()
+            .as_ptr(),
+        pointer
+    );
+    assert_eq!(
+        cloned
+            .resources()
+            .audio(definition.resource())
+            .unwrap()
+            .samples()
+            .as_ptr(),
+        pointer
+    );
+}
+
+#[test]
+fn standalone_materialization_cannot_silently_drop_audio_resources() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let clip = audio_clip(&mut store, root);
+    let resource = store
+        .semantic_audio_clip_state(clip)
+        .unwrap()
+        .definition()
+        .resource();
+    let projection = SemanticExecutionIndex::new()
+        .lower_root(&store, root)
+        .unwrap();
+    assert_eq!(
+        CompiledScene::from_semantic_projection(&projection),
+        Err(SemanticCompiledSceneError::Resource {
+            node: clip,
+            error: CompiledResourceError::MissingAudio(resource),
+        })
+    );
 }
 
 #[test]
@@ -222,4 +232,21 @@ fn audio_replacement_is_rejected_at_its_publication_mutation_index() {
         *store.semantic_audio_clip_state(clip).unwrap().definition(),
         replacement
     );
+}
+
+#[test]
+fn shared_scope_is_lowered_once_when_multiple_roots_reach_it() {
+    let mut store = SemanticStore::new();
+    let first = store.insert_family();
+    let second = store.insert_family();
+    let shared = store.insert_family();
+    store.add_member(first, shared).unwrap();
+    store.add_member(second, shared).unwrap();
+    let clip = audio_clip(&mut store, shared);
+    store.attach_to_scene(first).unwrap();
+    store.attach_to_scene(second).unwrap();
+    let lowered = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
+    assert_eq!(lowered.compiled().audio_clips().len(), 1);
+    assert_eq!(lowered.compiled().audio_clips()[0].clip(), clip);
+    assert_eq!(lowered.compiled().resources().audio_count(), 1);
 }

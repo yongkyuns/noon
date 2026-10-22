@@ -11,6 +11,42 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
+## Background audio and scene navigation
+
+Open <http://localhost:8080/background-audio.html> for the direct Rust/WASM audio
+example. **Play with sound** unlocks browser audio after a user gesture. Pause,
+restart, the time slider, previous/next controls, and the three named key points
+seek picture and music together. Viewer mute and volume do not change the
+authored scene or its clip gains. Preparation is silent; closing or leaving the
+page retires the output.
+
+The shared builder is `noon::example_scenes::background_audio::scene()`. It
+declares immutable PCM with `Scene::audio(resource, AudioClipOptions { ... })`
+and section markers at 0, 10, and 20 seconds. Clip start time is absolute scene
+time; declaring audio does not advance the authoring cursor. Lower the returned
+animation with `scene.execution_session_with_animation_root(&animation)`.
+`scene.section_navigation()` provides immutable marker metadata for a host's
+controls. The existing runtime and direct host clock own playback time; the
+Web Audio adapter only consumes shared Rust playback descriptors.
+
+The 30-second example uses an original synthesized score, **A Small Discovery**,
+whose composition and generated audio are dedicated under **CC0-1.0**. It uses
+no external recordings or samples. The generator remains MIT-licensed source;
+see [the music example](../crates/noon/examples/render_background_music/README.md)
+for provenance and offline rendering instructions.
+
+This first audible profile accepts finite, predeclared direct Rust/WASM scenes.
+Live authored mutation, source continuations, retained source history, native
+device playback, Python/render-worker playback, and audio in MP4 export remain
+explicitly gated under [#2263](https://github.com/yongkyuns/noon/issues/2263).
+Frame capture remains a visual-only API. Text-to-speech is a later milestone.
+
+Run `node scripts/background-audio-smoke.mjs` after building the browser package
+to qualify actual device output, playback controls, key-point picture/audio
+sync, and retirement. It writes its report and screenshots under
+`browser-smoke-artifacts/background-audio/`; it does not establish subjective
+music quality or production audio latency budgets.
+
 | Direct Rust/WASM qualification | Shared Rust builder | Browser-owned input |
 | --- | --- | --- |
 | Sequential ordinary affine play | `noon::example_scenes::ordinary_affine_play()` | None; the typed Rust session owns both plays, the wait, and the authored edit |

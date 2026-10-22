@@ -9,7 +9,40 @@ pub enum SectionNavigation {
     Next,
 }
 
+/// Immutable navigation metadata copied from one authored Scene.
+///
+/// Hosts may retain this small value when they move the execution session into a
+/// player. It contains no playhead and never seeks or schedules execution.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SceneSectionNavigation {
+    sections: Vec<SceneSection>,
+}
+
+impl SceneSectionNavigation {
+    pub fn sections(&self) -> &[SceneSection] {
+        &self.sections
+    }
+
+    /// The same strict, non-wrapping query as [`Scene::section_target`].
+    pub fn target(
+        &self,
+        time: f64,
+        direction: SectionNavigation,
+    ) -> Result<Option<(usize, &SceneSection)>, String> {
+        target(&self.sections, time, direction)
+    }
+}
+
 impl Scene {
+    /// Capture immutable section labels for a host without retaining the Scene
+    /// or constructing another timeline. Later authored declarations do not
+    /// change this value; replace it explicitly when replacing the scene.
+    pub fn section_navigation(&self) -> SceneSectionNavigation {
+        SceneSectionNavigation {
+            sections: self.sections.clone(),
+        }
+    }
+
     /// Find the nearest section boundary strictly before or after `time`.
     ///
     /// The returned index refers to [`Self::sections`]. When several declarations
@@ -45,27 +78,32 @@ impl Scene {
         time: f64,
         direction: SectionNavigation,
     ) -> Result<Option<(usize, &SceneSection)>, String> {
-        if !time.is_finite() || time < 0.0 {
-            return Err("section navigation time must be finite and non-negative".into());
-        }
-
-        let index = match direction {
-            SectionNavigation::Next => self
-                .sections
-                .partition_point(|section| section.time <= time),
-            SectionNavigation::Previous => {
-                let before = self.sections.partition_point(|section| section.time < time);
-                let Some(last) = before.checked_sub(1) else {
-                    return Ok(None);
-                };
-                let target_time = self.sections[last].time;
-                self.sections
-                    .partition_point(|section| section.time < target_time)
-            }
-        };
-
-        Ok(self.sections.get(index).map(|section| (index, section)))
+        target(&self.sections, time, direction)
     }
+}
+
+fn target(
+    sections: &[SceneSection],
+    time: f64,
+    direction: SectionNavigation,
+) -> Result<Option<(usize, &SceneSection)>, String> {
+    if !time.is_finite() || time < 0.0 {
+        return Err("section navigation time must be finite and non-negative".into());
+    }
+
+    let index = match direction {
+        SectionNavigation::Next => sections.partition_point(|section| section.time <= time),
+        SectionNavigation::Previous => {
+            let before = sections.partition_point(|section| section.time < time);
+            let Some(last) = before.checked_sub(1) else {
+                return Ok(None);
+            };
+            let target_time = sections[last].time;
+            sections.partition_point(|section| section.time < target_time)
+        }
+    };
+
+    Ok(sections.get(index).map(|section| (index, section)))
 }
 
 #[cfg(test)]
@@ -91,6 +129,47 @@ mod tests {
                 assert_eq!(target(&scene, time, direction), None);
             }
         }
+    }
+
+    #[test]
+    fn host_navigation_retains_only_its_captured_declarations() {
+        let mut scene = Scene::new();
+        scene
+            .next_section_at("begin", SectionType::Normal, 0.0)
+            .unwrap();
+        scene
+            .next_section_at("discover", SectionType::Normal, 10.0)
+            .unwrap();
+        let navigation = scene.section_navigation();
+        scene
+            .next_section_at("resolve", SectionType::Normal, 20.0)
+            .unwrap();
+        assert_eq!(navigation.sections().len(), 2);
+        assert_eq!(
+            navigation
+                .target(0.0, SectionNavigation::Next)
+                .unwrap()
+                .unwrap()
+                .1
+                .time,
+            10.0
+        );
+        assert!(navigation
+            .target(10.0, SectionNavigation::Next)
+            .unwrap()
+            .is_none());
+        assert!(navigation
+            .target(f64::NAN, SectionNavigation::Next)
+            .is_err());
+        assert_eq!(
+            scene
+                .section_target(10.0, SectionNavigation::Next)
+                .unwrap()
+                .unwrap()
+                .1
+                .time,
+            20.0
+        );
     }
 
     #[test]

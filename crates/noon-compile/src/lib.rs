@@ -5,6 +5,8 @@
 pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
+mod audio;
+pub use audio::CompiledAudioClip;
 mod compaction;
 mod execution_patch;
 mod glow_attachment;
@@ -267,6 +269,7 @@ impl CompiledObject {
 /// Dependency-closed immutable resources retained by one compiled execution plan.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CompiledResources {
+    audio: BTreeMap<noon_core::AudioResourceHandle, Arc<noon_core::AudioResource>>,
     images: BTreeMap<RasterImageResourceHandle, Arc<RasterImageResource>>,
     texts: BTreeMap<TextResourceHandle, Arc<TextResource>>,
     fonts: BTreeMap<FontResourceHandle, Arc<FontResource>>,
@@ -311,6 +314,9 @@ impl GeometryResourceLookup for CompiledResources {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledResourceError {
+    MissingAudio(noon_core::AudioResourceHandle),
+    AudioDefinitionMismatch(noon_core::AudioResourceHandle),
+    ConflictingAudio(noon_core::AudioResourceHandle),
     MissingImage(RasterImageResourceHandle),
     ImageDimensionsMismatch(RasterImageResourceHandle),
     ConflictingImage(RasterImageResourceHandle),
@@ -326,6 +332,14 @@ pub enum CompiledResourceError {
 impl std::fmt::Display for CompiledResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingAudio(handle) => write!(formatter, "missing audio resource {handle:?}"),
+            Self::AudioDefinitionMismatch(handle) => write!(
+                formatter,
+                "audio definition differs from resource {handle:?}"
+            ),
+            Self::ConflictingAudio(handle) => {
+                write!(formatter, "conflicting audio payload for {handle:?}")
+            }
             Self::MissingImage(handle) => {
                 write!(formatter, "missing raster image resource {handle:?}")
             }
@@ -455,6 +469,13 @@ impl CompiledResources {
     /// Reject a prepared resource closure that would retarget an immutable
     /// handle already visible through this compiled projection.
     pub fn preflight_merge(&self, additions: &Self) -> Result<(), CompiledResourceError> {
+        for (handle, resource) in &additions.audio {
+            if self.audio.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingAudio(*handle));
+            }
+        }
         for (handle, resource) in &additions.images {
             if self.images.get(handle).is_some_and(|existing| {
                 !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
@@ -515,9 +536,13 @@ impl CompiledResources {
     /// Call only after `preflight_merge` has ruled out handle conflicts.
     pub fn contains_all(&self, additions: &Self) -> bool {
         additions
-            .texts
-            .iter()
-            .all(|(handle, _)| self.texts.contains_key(handle))
+            .audio
+            .keys()
+            .all(|handle| self.audio.contains_key(handle))
+            && additions
+                .texts
+                .iter()
+                .all(|(handle, _)| self.texts.contains_key(handle))
             && additions
                 .fonts
                 .iter()
@@ -574,6 +599,7 @@ impl CompiledResources {
     /// Handles are immutable resource identities, so insertion is infallible after
     /// preparation has resolved every dependency against the owning semantic store.
     pub(crate) fn merge(&mut self, additions: Self) {
+        self.audio.extend(additions.audio);
         self.images.extend(additions.images);
         self.texts.extend(additions.texts);
         self.fonts.extend(additions.fonts);
@@ -924,6 +950,8 @@ pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
+    audio_clips: Vec<CompiledAudioClip>,
+    audio_end_time: Option<f64>,
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
     // of the same execution identity revives that row in place. A future compaction
     // generation may reclaim other retired capacity off the live-edit path.
@@ -1481,6 +1509,8 @@ impl CompiledScene {
             painter_ranks[index as usize] = Some(rank as u32);
         }
         let mut compiled = Self {
+            audio_clips: Vec::new(),
+            audio_end_time: None,
             family_order: (0..objects.len() as u32).collect(),
             family_ranks: (0..objects.len() as u32).map(Some).collect(),
             painter_order,

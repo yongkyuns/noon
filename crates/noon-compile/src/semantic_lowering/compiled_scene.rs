@@ -168,6 +168,23 @@ fn materialize_semantic_projection(
     let mut object_indices = BTreeMap::new();
     let mut resources = CompiledResources::default();
     let mut numeric_text_drivers = Vec::new();
+    for clip in &projection.audio_clips {
+        let store = store.ok_or(SemanticCompiledSceneError::Resource {
+            node: clip.clip(),
+            error: CompiledResourceError::MissingAudio(clip.definition().resource()),
+        })?;
+        resources
+            .capture_audio(store, clip.definition())
+            .map_err(|error| SemanticCompiledSceneError::Resource {
+                node: clip.clip(),
+                error,
+            })?;
+    }
+    let audio_end_time = projection
+        .audio_clips
+        .iter()
+        .map(|clip| clip.definition().end_time())
+        .reduce(f64::max);
 
     for (index, object) in ordered.into_iter().enumerate() {
         if !reactive_bindings_lowered && !object.signal_bindings.is_empty() {
@@ -348,6 +365,8 @@ fn materialize_semantic_projection(
     );
 
     let mut compiled = CompiledScene {
+        audio_clips: projection.audio_clips.clone(),
+        audio_end_time,
         family_order,
         family_ranks,
         live_object_count: objects.len(),

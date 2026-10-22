@@ -129,6 +129,14 @@ pub fn export_file<C: LiveContinuation>(
     capture_options: CaptureOptions,
     output: OutputOptions,
 ) -> Result<FileExportSummary, FileExportError<C::Error>> {
+    // MP4 currently has only a video track. Preserve frame-only capture, but
+    // never report a complete movie export after silently dropping scene audio.
+    if output.format == OutputFormat::Mp4 && program.session().has_audio() {
+        return Err(FileExportError::Output(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "MP4 audio mixing and muxing are not available yet (#2263)",
+        )));
+    }
     capture_options
         .layout()
         .map_err(|e| FileExportError::Output(io::Error::other(e)))?;

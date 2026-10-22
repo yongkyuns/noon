@@ -8,6 +8,32 @@ use noon_core::{
     SemanticVec3, StoredGeometry, TextResourceLookup, TrackTiming,
 };
 
+#[test]
+fn worker_player_rejects_audio_before_allocating_transport_resources() {
+    let mut scene = noon::Scene::new();
+    let resource =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.0; 8_000], 32_000).unwrap();
+    scene
+        .audio(resource, noon_core::AudioClipOptions::default())
+        .unwrap();
+    let session = scene.execution_session().unwrap();
+    let error = SemanticExecutionPlayer::from_session(session, 1.0, 99)
+        .err()
+        .expect("worker audio needs an explicit output path");
+    assert!(error.contains("Python/render worker channel"));
+    let session = scene.execution_session().unwrap();
+    let error = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        100,
+    )
+    .err()
+    .expect("live worker entry must have the same gate");
+    assert!(error.contains("Python/render worker channel"));
+}
+
 fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNodeId) {
     let mut store = SemanticStore::new();
     let root = store.insert_family();

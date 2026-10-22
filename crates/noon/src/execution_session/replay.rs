@@ -10,6 +10,11 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
+        // Immutable audio plans already support direct seek. Live revision
+        // retention needs its own audio resource/history qualification (#2263).
+        if self.has_audio() {
+            return Err(ReplayError::UnsupportedDomain);
+        }
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()
             || self.translation_drag_active()

@@ -72,6 +72,9 @@ impl SemanticExecutionLoweringOutput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticExecutionLoweringError {
+    AudioExecutionUnavailable {
+        operation: &'static str,
+    },
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
@@ -106,6 +109,10 @@ impl From<SemanticCompiledSceneError> for SemanticExecutionLoweringError {
 impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioExecutionUnavailable { operation } => write!(
+                formatter,
+                "audio execution does not support {operation} yet (#2263)"
+            ),
             Self::Object(error) => write!(formatter, "semantic object lowering failed: {error}"),
             Self::Reactive(error) => {
                 write!(formatter, "semantic reactive lowering failed: {error}")

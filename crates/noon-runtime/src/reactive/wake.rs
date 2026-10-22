@@ -78,6 +78,14 @@ impl TimelineEventScheduler {
 }
 
 impl SceneInstance {
+    /// Last nonnegative event in a finite immutable timeline, including audio.
+    /// Returns `None` for unbounded intervals, and `Some(0.0)` for a static plan.
+    /// This O(events) capability query belongs at host admission/reconfiguration;
+    /// ordinary wakeups keep using the indexed `wake_state()` observation.
+    pub fn finite_timeline_end_time(&self) -> Option<f64> {
+        self.timeline_scheduler.finite_end_time()
+    }
+
     /// Whether the current execution projection retains any authored timeline channel.
     ///
     /// This is an O(1) derived query over the scheduler's existing channel index. It is
@@ -168,6 +176,38 @@ mod tests {
             scheduler.live_group_count(),
             1,
             "settling a presence event must not erase deterministic loop history"
+        );
+    }
+    #[test]
+    fn finite_endpoint_comes_from_all_indexed_events_and_rejects_unbounded_motion() {
+        let mut scheduler = TimelineEventScheduler::new(&[position_track(5.0, 2.0)]);
+        assert_eq!(scheduler.finite_end_time(), Some(7.0));
+        let channel = noon_compile::CompiledChannelKey::new(1, Property::CameraProfile);
+        let motion = noon_core::CameraAngularMotion::new(
+            noon_core::ManimCamera3DProfile {
+                phi: 0.0,
+                theta: 0.0,
+                gamma: 0.0,
+                focal_distance: 20.0,
+                zoom: 1.0,
+                frame_height: 8.0,
+                frame_center: noon_core::SemanticVec3::ZERO,
+            },
+            noon_core::CameraRotationAxis::Theta,
+            0.1,
+            3.0,
+            None,
+            0.1,
+            1_000.0,
+        )
+        .unwrap();
+        scheduler.relower_camera_motion_channel(channel, &[motion], &[]);
+        assert_eq!(scheduler.finite_end_time(), None);
+        scheduler.relower_camera_motion_channel(channel, &[], &[]);
+        assert_eq!(scheduler.finite_end_time(), Some(7.0));
+        assert_eq!(
+            TimelineEventScheduler::new(&[]).finite_end_time(),
+            Some(0.0)
         );
     }
 }
