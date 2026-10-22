@@ -98,6 +98,14 @@ impl PrefixBatch {
     pub fn required_object_capacity(&self) -> usize {
         self.from_object_slots + self.new_objects.len()
     }
+    /// Inspect only the newly delivered physical rows, in storage order.
+    /// These keys are not live targets or proof of stream membership. A session
+    /// must validate the batch before staging identity slots and must still use
+    /// the displayed revision for picking. No existing rows are scanned.
+    pub fn new_object_ids(&self) -> impl ExactSizeIterator<Item = ObjectId> + '_ {
+        self.new_objects.iter().map(|object| object.id)
+    }
+
     pub fn stats(&self) -> PrefixBatchStats {
         self.stats
     }
@@ -260,10 +268,19 @@ impl PrefixReader {
         self.runtime.take_renderer_publication()
     }
 
-    /// Install only future history. The displayed frame, runtime identity,
-    /// evaluation cursor and renderer dirty state are unchanged. All fallible
-    /// validation precedes moving revisions into the already-reserved history.
-    pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+    /// Validate a borrowed batch without consuming it or changing the reader.
+    /// Capacity can be reserved explicitly after `CapacityRequired`, then the
+    /// same owned batch can be checked and delivered without another bootstrap.
+    /// An out-of-order or foreign batch likewise remains with its caller.
+    ///
+    /// This is an observation, not a reservation or a reusable admission token.
+    /// `append` always validates against the then-current stream and budgets.
+    /// Reuses existing resource validation without scanning frames or history.
+    pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        self.validate_append(batch).map(|_| batch.stats)
+    }
+
+    fn validate_append(&self, batch: &PrefixBatch) -> Result<(usize, usize), PrefixError> {
         if !Arc::ptr_eq(&self.stream, &batch.stream)
             || batch.from_revision != self.received_revisions
             || batch.from_frontier != self.frontier
@@ -287,7 +304,7 @@ impl PrefixReader {
         let history = self
             .runtime
             .replay_history
-            .as_mut()
+            .as_ref()
             .expect("private reader history");
         let count = history
             .revisions
@@ -302,6 +319,21 @@ impl PrefixReader {
         if count > self.limits.revisions || payloads > self.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
         }
+        Ok((count, payloads))
+    }
+
+    /// Install only future history. The displayed frame, runtime identity,
+    /// evaluation cursor and renderer dirty state are unchanged. All fallible
+    /// validation precedes moving revisions into the already-reserved history.
+    /// This consumes the batch even on failure; use `preflight_append` first
+    /// when delivery must remain recoverable after capacity/order rejection.
+    pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        let (count, payloads) = self.validate_append(&batch)?;
+        let history = self
+            .runtime
+            .replay_history
+            .as_mut()
+            .expect("private reader history");
         // Only this sealed reader owns its history; capacity was reserved once.
         debug_assert!(count <= history.revisions.capacity());
         self.runtime

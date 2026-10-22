@@ -9,6 +9,8 @@ use noon_core::{
 };
 use noon_runtime::{PrefixBatch, ReplayLimits};
 
+mod admission;
+
 const A: SemanticClickIndicate = SemanticClickIndicate::new(1.25, Color::YELLOW, 0.5);
 const B: SemanticClickIndicate = SemanticClickIndicate::new(1.75, Color::RED, 1.0);
 
@@ -207,10 +209,7 @@ fn prefix_identity_new_slot_delivery_preserves_active_effect_and_displayed_publi
     let (mut publisher, mut reader) = source.bootstrap();
     reader.seek(0.5).unwrap();
     let baseline = reader.frame().clone();
-    let prepared = reader
-        .prepare_bound_click_indicate(old)
-        .unwrap()
-        .unwrap();
+    let prepared = reader.prepare_bound_click_indicate(old).unwrap().unwrap();
     reader.start_transient_animation(prepared).unwrap();
     reader.advance_interactions(10.0).unwrap();
     reader.advance_interactions(10.125).unwrap();
@@ -250,10 +249,7 @@ fn prefix_identity_unavailable_time_does_not_materialize_future_slots_or_cancel_
     let old = source.object;
     let (mut publisher, mut reader) = source.bootstrap();
     reader.seek(0.5).unwrap();
-    let prepared = reader
-        .prepare_bound_click_indicate(old)
-        .unwrap()
-        .unwrap();
+    let prepared = reader.prepare_bound_click_indicate(old).unwrap().unwrap();
     reader.start_transient_animation(prepared).unwrap();
     reader.advance_interactions(10.0).unwrap();
     reader.advance_interactions(10.125).unwrap();
@@ -301,10 +297,7 @@ fn prefix_identity_unavailable_time_does_not_materialize_future_slots_or_cancel_
 fn prefix_identity_old_preparation_cannot_act_on_the_replacement_generation() {
     let (mut reader, old, new) = delivered_replacement();
     reader.seek(0.5).unwrap();
-    let prepared = reader
-        .prepare_bound_click_indicate(old)
-        .unwrap()
-        .unwrap();
+    let prepared = reader.prepare_bound_click_indicate(old).unwrap().unwrap();
     reader.seek(2.5).unwrap();
     let frame = reader.frame().clone();
     let history = reader.replay_stats();
@@ -326,10 +319,7 @@ fn prefix_identity_foreign_stream_rejection_preserves_the_active_reader() {
     let old = source.object;
     let (mut publisher, mut reader) = source.bootstrap();
     reader.seek(0.5).unwrap();
-    let prepared = reader
-        .prepare_bound_click_indicate(old)
-        .unwrap()
-        .unwrap();
+    let prepared = reader.prepare_bound_click_indicate(old).unwrap().unwrap();
     reader.start_transient_animation(prepared).unwrap();
     reader.advance_interactions(10.0).unwrap();
     reader.advance_interactions(10.125).unwrap();
