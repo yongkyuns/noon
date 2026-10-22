@@ -1,7 +1,9 @@
 //! Immutable authored family observations and atomic relative placement.
 
 mod placement;
+mod point_queries;
 use crate::AuthoringError;
+pub(crate) use point_queries::effective_layout_critical_point_3d;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{

@@ -24,6 +24,11 @@ impl WasmManimGeometryOptions {
         self.options.resolved_start_angle()
     }
 
+    #[wasm_bindgen(js_name = setDrawEnabled)]
+    pub fn set_draw_enabled(&mut self, enabled: bool) {
+        self.options.set_draw_enabled(enabled);
+    }
+
     #[wasm_bindgen(js_name = setZIndex)]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), JsValue> {
         self.options.set_z_index(value).map_err(js_error)

@@ -11,6 +11,43 @@ impl PathQuery {
             .collect()
     }
 
+    /// Full-coordinate boundary anchors with the same exact pairing admission.
+    pub fn anchors_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        noon_geometry::manim_anchor_indices(self.manim_points.len())
+            .map_err(AuthoringError::PathQuery)?
+            .map(|index| self.point_3d(self.manim_points[index]))
+            .collect()
+    }
+
+    fn curve_column_3d(&self, column: usize) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.manim_points
+            .iter()
+            .skip(column)
+            .step_by(4)
+            .map(|&point| self.point_3d(point))
+            .collect()
+    }
+
+    /// Full-coordinate column, including retained incomplete trailing rows.
+    pub fn start_anchors_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.curve_column_3d(0)
+    }
+
+    /// Full-coordinate column, including retained incomplete trailing rows.
+    pub fn first_handles_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.curve_column_3d(1)
+    }
+
+    /// Full-coordinate column, including retained incomplete trailing rows.
+    pub fn second_handles_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.curve_column_3d(2)
+    }
+
+    /// Full-coordinate column, including retained incomplete trailing rows.
+    pub fn end_anchors_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.curve_column_3d(3)
+    }
+
     /// Full cubic controls; incomplete trailing points do not invent a curve.
     pub fn curve_points_3d(&self, index: usize) -> Result<[SemanticVec3; 4], AuthoringError> {
         if index >= self.curve_count() {
@@ -95,6 +132,10 @@ mod tests {
         assert_eq!(moved.end_3d().unwrap(), SemanticVec3::new(6.5, 3.5, 7.25));
         assert_eq!(moved.point_count(), 5);
         assert_eq!(moved.curve_count(), 1);
+        assert_eq!(snapshot.start_anchors_3d().unwrap(), [points[0], points[4]]);
+        assert_eq!(snapshot.first_handles_3d().unwrap(), [points[1]]);
+        assert_eq!(snapshot.second_handles_3d().unwrap(), [points[2]]);
+        assert_eq!(snapshot.end_anchors_3d().unwrap(), [points[3]]);
         assert_eq!(
             moved.points().unwrap(),
             moved
@@ -144,6 +185,46 @@ mod tests {
 }
 
 impl MobjectTarget<'_> {
+    /// Unique ordered vector anchors, including point-bearing family roots.
+    pub fn vector_boundary_points_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.validate()?;
+        let store = self.integration_store().borrow();
+        let occurrences = FamilyPointObservation::VectorBoundary.nodes(&store, self.node_id())?;
+        authored_points_for_occurrences(&store, &occurrences, PathQuery::anchors_3d)
+    }
+
+    /// Vector anchors for an object; recursive raw data for an ordinary family.
+    pub fn path_boundary_points_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        match self {
+            Self::Object(_) => self.vector_boundary_points_3d(),
+            Self::Family(_) => self.all_points_3d(),
+        }
+    }
+
+    /// Critical point of vector anchors, or recursive raw points for a family.
+    pub fn path_critical_point_3d(
+        &self,
+        direction: SemanticVec3,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        critical_point_for_xyz_points(&self.path_boundary_points_3d()?, direction)
+    }
+
+    /// Critical point of unique ordered vector anchors, including owned roots.
+    pub fn vector_critical_point_3d(
+        &self,
+        direction: SemanticVec3,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        critical_point_for_xyz_points(&self.vector_boundary_points_3d()?, direction)
+    }
+
+    /// Critical point of every recursive raw point occurrence.
+    pub fn critical_point_3d(
+        &self,
+        direction: SemanticVec3,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        critical_point_for_xyz_points(&self.all_points_3d()?, direction)
+    }
+
     /// Full-coordinate points in the same recursive order and alias multiplicity
     /// as the planar convenience. Traversal stays in the semantic store.
     pub fn all_points_3d(&self) -> Result<Vec<SemanticVec3>, AuthoringError> {
@@ -169,5 +250,66 @@ pub fn effective_all_points_3d(
     )
 }
 
+/// Full vector anchors from one coherent execution publication.
+pub fn effective_vector_boundary_points_3d(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<Vec<SemanticVec3>, AuthoringError> {
+    effective_point_observation_map(
+        store,
+        execution,
+        target,
+        FamilyPointObservation::VectorBoundary,
+        PathQuery::anchors_3d,
+    )
+}
+
+/// Full-coordinate counterpart of the explicit planar boundary observation.
+pub fn effective_path_boundary_points_3d(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+) -> Result<Vec<SemanticVec3>, AuthoringError> {
+    match target {
+        MobjectTarget::Object(_) => effective_vector_boundary_points_3d(store, execution, target),
+        MobjectTarget::Family(_) => effective_all_points_3d(store, execution, target),
+    }
+}
+
 #[cfg(test)]
 mod family_tests;
+
+/// Critical point of one coherent raw or vector-boundary observation.
+pub fn effective_critical_point_3d(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: MobjectTarget<'_>,
+    direction: SemanticVec3,
+    vector_boundary: bool,
+) -> Result<SemanticVec3, AuthoringError> {
+    let points = if vector_boundary {
+        effective_vector_boundary_points_3d(store, execution, target)?
+    } else {
+        effective_all_points_3d(store, execution, target)?
+    };
+    critical_point_for_xyz_points(&points, direction)
+}
+
+fn critical_point_for_xyz_points(
+    points: &[SemanticVec3],
+    direction: SemanticVec3,
+) -> Result<SemanticVec3, AuthoringError> {
+    if points.is_empty() {
+        return Ok(SemanticVec3::ZERO);
+    }
+    let coordinates = points
+        .iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect::<Vec<_>>();
+    Ok(SemanticVec3::new(
+        reduce_point_extremum(&coordinates, 3, 0, direction.x)?,
+        reduce_point_extremum(&coordinates, 3, 1, direction.y)?,
+        reduce_point_extremum(&coordinates, 3, 2, direction.z)?,
+    ))
+}

@@ -2,7 +2,10 @@
 mod point_counts;
 mod point_values;
 pub use point_counts::effective_mobject_point_count;
-pub use point_values::effective_all_points_3d;
+pub use point_values::{
+    effective_all_points_3d, effective_critical_point_3d, effective_path_boundary_points_3d,
+    effective_vector_boundary_points_3d,
+};
 
 use crate::{
     AuthoringError, ExecutionSession, Mobject, MobjectTarget, UnsupportedAuthoringOperation,
@@ -30,7 +33,7 @@ pub struct PathQuery {
     unfinished_anchor: Option<(f64, f64)>,
 }
 
-/// A recursive snapshot of owned planar points in Manim family order.
+/// A recursive snapshot of owned XYZ points in Manim family order.
 ///
 /// Unlike [`MobjectTarget::all_points`], this preserves object boundaries so
 /// language adapters can invoke their caller-owned reducer once per object and
@@ -38,17 +41,30 @@ pub struct PathQuery {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointReductionTree {
     /// The object's own points in its current coordinate space.
-    pub points: Vec<(f64, f64)>,
+    pub points: Vec<SemanticVec3>,
     /// Direct family members in semantic membership order.
     pub children: Vec<Self>,
 }
 
 impl PointReductionTree {
-    /// Flatten every owned point array in semantic pre-order, retaining aliases.
+    /// Planar projection of every owned point array in semantic pre-order.
     pub fn flattened_points(&self) -> Vec<(f64, f64)> {
-        let mut points = self.points.clone();
+        let mut points = self
+            .points
+            .iter()
+            .map(|point| point.xy())
+            .collect::<Vec<_>>();
         for child in &self.children {
             points.extend(child.flattened_points());
+        }
+        points
+    }
+
+    /// Flatten full semantic coordinates in pre-order, retaining repeated aliases.
+    pub fn flattened_points_3d(&self) -> Vec<SemanticVec3> {
+        let mut points = self.points.clone();
+        for child in &self.children {
+            points.extend(child.flattened_points_3d());
         }
         points
     }
@@ -1008,10 +1024,10 @@ impl FamilyPointObservation {
                 .map_err(AuthoringError::from)?
                 .into_iter()
                 .filter(|id| {
-                    matches!(
-                        store.node(*id).map(|node| node.kind()),
-                        Some(SemanticNodeKind::AuthoringObject)
-                    )
+                    store
+                        .node(*id)
+                        .and_then(|node| node.semantic_object_state())
+                        .is_some()
                 })
                 .collect()),
         }
@@ -1084,7 +1100,7 @@ fn point_reduction_topology(
 
 fn point_reduction_tree_from_topology(
     topology: &PointReductionTopology,
-    point_query: &mut impl FnMut(SemanticNodeId) -> Result<Vec<(f64, f64)>, AuthoringError>,
+    point_query: &mut impl FnMut(SemanticNodeId) -> Result<Vec<SemanticVec3>, AuthoringError>,
 ) -> Result<PointReductionTree, AuthoringError> {
     Ok(PointReductionTree {
         points: topology
@@ -1137,7 +1153,7 @@ impl MobjectTarget<'_> {
                 .transform
                 .as_planar()
                 .ok_or(AuthoringError::NonFiniteObjectState)?;
-            prepare_content(&store, state.content, transform)?.points()
+            prepare_content(&store, state.content, transform)?.points_3d()
         })
     }
 
@@ -1176,7 +1192,7 @@ impl MobjectTarget<'_> {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringError> {
-        extremum_for_xy_points(&self.path_boundary_points()?, dim, key)
+        extremum_for_xyz_points(&self.path_boundary_points_3d()?, dim, key)
     }
 
     /// Return the vector-path boundary anchor with the greatest projection.
@@ -1191,7 +1207,7 @@ impl MobjectTarget<'_> {
     /// Return a Manim-style min, midpoint, or max coordinate across this
     /// object's or family's boundary points.
     pub fn extremum_along_dim(&self, dim: usize, key: f64) -> Result<f64, AuthoringError> {
-        extremum_for_xy_points(&self.all_points()?, dim, key)
+        extremum_for_xyz_points(&self.all_points_3d()?, dim, key)
     }
 
     /// Return the arithmetic mean of this object's or family's points.
@@ -1233,7 +1249,7 @@ pub fn effective_point_reduction_tree(
         point_reduction_topology(&semantics, target.node_id())?
     };
     point_reduction_tree_from_topology(&topology, &mut |id| {
-        family_point_path_query(store, execution, id)?.points()
+        family_point_path_query(store, execution, id)?.points_3d()
     })
 }
 
@@ -1341,8 +1357,8 @@ pub fn effective_path_boundary_extremum_along_dim(
     dim: usize,
     key: f64,
 ) -> Result<f64, AuthoringError> {
-    extremum_for_xy_points(
-        &effective_path_boundary_points(store, execution, target)?,
+    extremum_for_xyz_points(
+        &effective_path_boundary_points_3d(store, execution, target)?,
         dim,
         key,
     )
@@ -1371,7 +1387,11 @@ pub fn effective_extremum_along_dim(
     dim: usize,
     key: f64,
 ) -> Result<f64, AuthoringError> {
-    extremum_for_xy_points(&effective_all_points(store, execution, target)?, dim, key)
+    extremum_for_xyz_points(
+        &effective_all_points_3d(store, execution, target)?,
+        dim,
+        key,
+    )
 }
 
 /// Observe the average point position from the current execution publication.
@@ -1609,23 +1629,16 @@ fn manim_numpy_isclose(a: f64, b: f64, absolute_tolerance: f64) -> bool {
     b.is_finite() && (a - b).abs() <= absolute_tolerance + 1.0e-5 * b.abs()
 }
 
-fn extremum_for_xy_points(
-    points: &[(f64, f64)],
+fn extremum_for_xyz_points(
+    points: &[SemanticVec3],
     dim: usize,
     key: f64,
 ) -> Result<f64, AuthoringError> {
-    if dim == 2 {
-        return if points.is_empty() {
-            Err(AuthoringError::PathQuery(PathProportionError::EmptyPath))
-        } else {
-            Ok(0.0)
-        };
-    }
-    if dim > 2 {
-        return Err(AuthoringError::InvalidPointDimension(dim as u32));
-    }
-    let coordinates = points.iter().flat_map(|&(x, y)| [x, y]).collect::<Vec<_>>();
-    reduce_point_extremum(&coordinates, 2, dim, key)
+    let coordinates = points
+        .iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect::<Vec<_>>();
+    reduce_point_extremum(&coordinates, 3, dim, key)
 }
 
 fn center_of_mass_for_xy_points(points: &[(f64, f64)]) -> Result<(f64, f64), AuthoringError> {

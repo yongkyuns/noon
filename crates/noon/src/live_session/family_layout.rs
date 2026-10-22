@@ -4,6 +4,21 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
+    /// Observe retained-content critical coordinates from a coherent layout read.
+    pub fn layout_critical_point_3d(
+        &self,
+        source: &crate::LayoutAnchor,
+        direction: crate::SemanticVec3,
+    ) -> Result<crate::SemanticVec3, LiveSessionError> {
+        crate::family_layout::effective_layout_critical_point_3d(
+            self.store,
+            self.session,
+            source,
+            direction,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
     /// Observe a fitting extent from this session's coherent layout snapshot.
     pub fn dimension_length(
         &self,

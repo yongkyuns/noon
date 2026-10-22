@@ -1,6 +1,37 @@
 //! Geometry layout bounds read directly from immutable semantic resources.
 use super::*;
 
+/// Boundary depth of the addressed semantic content, including opaque text and
+/// images. Callers supply Rust-selected unique leaves from their layout read.
+pub(crate) fn boundary_depth_for_leaves(
+    store: &SemanticStore,
+    leaves: &[SemanticNodeId],
+    direction: f64,
+) -> Result<f64, AuthoringError> {
+    let mut bounds: Option<(f64, f64)> = None;
+    for &leaf in leaves {
+        let state = store.semantic_object_state_checked(leaf)?;
+        let transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        if let Some((min, max)) = depth_for_content(store, state.content, transform, false)? {
+            bounds = Some(bounds.map_or((min, max), |(old_min, old_max)| {
+                (old_min.min(min), old_max.max(max))
+            }));
+        }
+    }
+    Ok(bounds.map_or(0.0, |(min, max)| {
+        if direction < 0.0 {
+            min
+        } else if direction > 0.0 {
+            max
+        } else {
+            (min + max) * 0.5
+        }
+    }))
+}
+
 /// Depth uses the same canonical controls as point queries. Dimensions include
 /// handles; deferred center/edge pivots select only paired cubic anchors.
 pub(crate) fn depth_for_content(

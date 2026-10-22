@@ -20,8 +20,8 @@ use bounds::transform_layout_xy;
 #[cfg(feature = "latex")]
 pub(crate) use bounds::transformed_rect_layout_bounds;
 pub(crate) use bounds::{
-    boundary_center, boundary_for_content, depth_for_content, layout_for_content,
-    transformed_path_layout_bounds,
+    boundary_center, boundary_depth_for_leaves, boundary_for_content, depth_for_content,
+    layout_for_content, transformed_path_layout_bounds,
 };
 pub(crate) use style::{
     edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
@@ -60,12 +60,18 @@ pub struct ManimGeometryOptions {
     style: SemanticStyle,
     sheen_direction: SemanticSheenDirection,
     z_index: f64,
+    draw_enabled: bool,
     role: noon_core::SemanticObjectRole,
     explicit_angle_radius: Option<f64>,
     resolved_start_angle: Option<f64>,
 }
 
 impl ManimGeometryOptions {
+    /// Select root drawing eligibility before the constructor publishes anything.
+    pub fn set_draw_enabled(&mut self, enabled: bool) {
+        self.draw_enabled = enabled;
+    }
+
     /// Attach shared semantic query metadata before this inert request is published.
     pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
         self.role = role;
@@ -236,6 +242,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction: SemanticSheenDirection::DEFAULT,
             z_index: 0.0,
+            draw_enabled: true,
             role: noon_core::SemanticObjectRole::Ordinary,
             explicit_angle_radius: None,
             resolved_start_angle: None,
@@ -438,6 +445,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction,
             z_index,
+            draw_enabled,
             role,
             explicit_angle_radius: _,
             resolved_start_angle: _,
@@ -457,6 +465,7 @@ impl ManimGeometryOptions {
                     role,
                 );
                 state.sheen_direction = sheen_direction;
+                state.set_draw_enabled(draw_enabled);
                 publish(store, state)
             }),
             GeometryRef::External(_) => Err(AuthoringError::Unsupported(
@@ -489,6 +498,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction,
             z_index,
+            draw_enabled,
             role,
             explicit_angle_radius: _,
             resolved_start_angle: _,
@@ -505,6 +515,9 @@ impl ManimGeometryOptions {
         let node = transaction.create_node(SemanticNodeCreation::pending_path_object(
             resource, transform, style, z_index, role,
         ));
+        if !draw_enabled {
+            transaction.set_draw_enabled(node, false);
+        }
         if sheen_direction != SemanticSheenDirection::DEFAULT {
             transaction.set_sheen_direction(node, sheen_direction);
         }
@@ -552,6 +565,7 @@ impl ManimGeometryOptions {
             self.role,
         );
         state.sheen_direction = self.sheen_direction;
+        state.set_draw_enabled(self.draw_enabled);
         Ok(Some(state))
     }
 
@@ -734,6 +748,7 @@ impl Mobject {
                 style,
                 sheen_direction: SemanticSheenDirection::DEFAULT,
                 z_index: 0.0,
+                draw_enabled: true,
                 role: noon_core::SemanticObjectRole::Ordinary,
                 explicit_angle_radius: None,
                 resolved_start_angle: None,

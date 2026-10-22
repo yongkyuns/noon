@@ -55,7 +55,7 @@ class PathQueryTests(unittest.TestCase):
         for stride in (4, 0, -2, 3.5, None):
             value.n_points_per_cubic_curve = stride
             query = Mock(pointCount=1)
-            query.anchors.return_value = [1.0 + 2.0 ** -40, -2.0]
+            query.anchors3D.return_value = [1.0 + 2.0 ** -40, -2.0, 7.125]
             with patch.object(queries, "_query", return_value=query):
                 result = value.get_anchors()
             self.assertEqual(float(result[0][0]), 1.0 + 2.0 ** -40)
@@ -64,14 +64,14 @@ class PathQueryTests(unittest.TestCase):
             else:
                 self.assertIsInstance(result, list)
             query.points.assert_not_called()
-            query.anchors.assert_called_once_with()
+            query.anchors3D.assert_called_once_with()
             query.free.assert_called_once_with()
 
     def test_default_anchor_pairing_error_is_engine_owned_and_frees_snapshot(self):
         value = identity_only_wrapper(compat.VMobject)
         query = Mock(pointCount=2)
         error = ValueError("zip() argument 2 is shorter than argument 1")
-        query.anchors.side_effect = error
+        query.anchors3D.side_effect = error
         with patch.object(queries, "_query", return_value=query):
             with self.assertRaises(ValueError) as raised:
                 value.get_anchors()
@@ -462,7 +462,7 @@ class PathQueryTests(unittest.TestCase):
         value.n_points_per_cubic_curve = 3
         self.assertEqual(value.n_points_per_curve, 3)
 
-    def test_all_points_preserves_xyz_and_boundary_uses_its_planar_profile(self):
+    def test_all_points_and_boundary_preserve_xyz(self):
         try:
             import numpy as np
         except ImportError:
@@ -475,17 +475,31 @@ class PathQueryTests(unittest.TestCase):
         ) as observe, patch.object(
             queries,
             "_path_boundary_points_observation",
-            return_value=[0., 0., 3., 0.],
+            return_value=[0., 0., .25, 3., 0., 1.],
         ) as boundary_observe:
             points = value.get_all_points()
             self.assertIsInstance(points, np.ndarray)
             self.assertEqual(points.shape, (4, 3))
             np.testing.assert_array_equal(points, [[0., 0., .25], [1., 0., .5], [2., 0., .75], [3., 0., 1.]])
             boundary = value.get_points_defining_boundary()
-            self.assertEqual(boundary.shape, (2, 2))
-            np.testing.assert_array_equal(boundary, [[0., 0.], [3., 0.]])
+            self.assertEqual(boundary.shape, (2, 3))
+            np.testing.assert_array_equal(boundary, [[0., 0., .25], [3., 0., 1.]])
         self.assertEqual(observe.call_count, 1)
         boundary_observe.assert_called_once_with(value)
+
+    def test_custom_stride_boundary_preserves_nonzero_xyz_snapshot_rows(self):
+        value = identity_only_wrapper(compat.VMobject)
+        value.n_points_per_cubic_curve = 2
+        value.get_family = Mock(return_value=[value])
+        points = [(0., 1., 1.25), (2., 3., -0.75), (4., 5., 7.5), (6., 7., 0.)]
+        query = Mock()
+        query.points.side_effect = AssertionError("planar snapshot")
+        query.points3D.return_value = [component for point in points for component in point]
+        with patch.object(queries, "_typed_manim_observation", return_value=query):
+            result = value.get_points_defining_boundary()
+        self.assertEqual([tuple(point) for point in result], points)
+        query.points3D.assert_called_once_with()
+        query.free.assert_called_once_with()
 
     def test_vector_boundary_points_follow_mutable_stride_anchors(self):
         try:
@@ -497,13 +511,14 @@ class PathQueryTests(unittest.TestCase):
         value.get_family = Mock(return_value=[value])
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        query.points3D.return_value = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0]
 
         with patch.object(queries, "_typed_manim_observation", return_value=query):
             boundary = value.get_points_defining_boundary()
 
         np.testing.assert_array_equal(
             boundary,
-            [[0., 0.], [1., 0.], [2., 0.], [3., 0.]],
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
         )
         value.get_family.assert_called_once_with()
         self.assertEqual(query.free.call_count, 1)
@@ -527,7 +542,7 @@ class PathQueryTests(unittest.TestCase):
 
         np.testing.assert_array_equal(
             boundary,
-            [[0, 0], [2, 0], [3, 1], [6, 1]],
+            [[0, 0, 0], [2, 0, 0], [3, 1, 0], [6, 1, 0]],
         )
         group.get_family.assert_called_once_with()
         first.get_anchors.assert_called_once_with()
@@ -555,7 +570,7 @@ class PathQueryTests(unittest.TestCase):
 
         np.testing.assert_array_equal(
             boundary,
-            [[3, 1], [6, 1], [0, 0], [2, 0]],
+            [[3, 1, 0], [6, 1, 0], [0, 0, 0], [2, 0, 0]],
         )
         root.get_family.assert_called_once_with()
 
@@ -587,7 +602,7 @@ class PathQueryTests(unittest.TestCase):
         with patch.dict("sys.modules", {"numpy": None}):
             boundary = group.get_points_defining_boundary()
 
-        self.assertEqual(boundary, [noon.Vec2(1, 2), noon.Vec2(3, 4)])
+        self.assertEqual([list(point) for point in boundary], [[1., 2., 0.], [3., 4., 0.]])
 
     def test_vector_boundary_points_without_numpy_keep_vec2_values(self):
         import noon
@@ -597,6 +612,7 @@ class PathQueryTests(unittest.TestCase):
         value.get_family = Mock(return_value=[value])
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        query.points3D.return_value = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0]
         with (
             patch.object(queries, "_typed_manim_observation", return_value=query),
             patch.dict("sys.modules", {"numpy": None}),
@@ -604,8 +620,8 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(
                 value.get_points_defining_boundary(),
                 [
-                    noon.Vec2(0., 0.), noon.Vec2(1., 0.),
-                    noon.Vec2(2., 0.), noon.Vec2(3., 0.),
+                    (0.0, 0.0, 0.0), (1.0, 0.0, 0.0),
+                    (2.0, 0.0, 0.0), (3.0, 0.0, 0.0),
                 ],
             )
         self.assertEqual(query.free.call_count, 1)
@@ -741,7 +757,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryMobjectCenterOfMass.return_value = [5.0, 6.0]
         context.queryMobjectPathBoundaryPoint.return_value = [7.0, 8.0]
         context.queryMobjectPathBoundaryExtremumAlongDim.return_value = 9.0
-        context.queryMobjectPathBoundaryPoints.return_value = [0.0, 0.0, 1.0, 1.0]
+        context.queryMobjectPathBoundaryPoints3D.return_value = [0.0, 0.0, 1.0, 1.0]
         context.queryMobjectLengthOverDim.return_value = 4.5
         scene = Mock()
         scene._canonical_authoring_context = context
@@ -764,7 +780,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryMobjectCenterOfMass.assert_called_once_with(handle)
         context.queryMobjectPathBoundaryPoint.assert_called_once_with(handle, 0.0, 1.0)
         context.queryMobjectPathBoundaryExtremumAlongDim.assert_called_once_with(handle, 1, 1.0)
-        context.queryMobjectPathBoundaryPoints.assert_called_once_with(handle)
+        context.queryMobjectPathBoundaryPoints3D.assert_called_once_with(handle)
         context.queryMobjectLengthOverDim.assert_called_once_with(handle, 2)
 
     def test_custom_stride_boundary_point_uses_rust_anchor_reducer(self):
@@ -807,6 +823,7 @@ class PathQueryTests(unittest.TestCase):
             1.0, 0.0,
             2.0, 0.0,
         ]
+        path_query.points3D.return_value = [0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0]
         context = Mock()
         context.queryMobjectPath.return_value = path_query
         scene = Mock()
@@ -837,7 +854,7 @@ class PathQueryTests(unittest.TestCase):
             (expected_anchor_coordinates, 2, 1.0, 0.0),
         )
         self.assertEqual(context.queryMobjectPath.call_count, 2)
-        self.assertEqual(path_query.points.call_count, 2)
+        self.assertEqual(path_query.points3D.call_count, 2)
         self.assertEqual(path_query.free.call_count, 2)
 
     def test_custom_stride_extrema_and_boundary_reject_staged_callbacks(self):
@@ -873,7 +890,7 @@ class PathQueryTests(unittest.TestCase):
             self.assertEqual(value.get_z(noon.OUT), 0.0)
             self.assertEqual(value.get_coord(-1), 0.0)
         self.assertEqual(extremum.call_args_list[0].kwargs, {"dim": 2, "key": 0})
-        self.assertEqual(extremum.call_args_list[1].kwargs, {"dim": 2, "key": 0})
+        self.assertEqual(extremum.call_args_list[1].kwargs, {"dim": 2, "key": 1.})
         self.assertEqual(extremum.call_args_list[2].kwargs, {"dim": 2, "key": 0})
         with self.assertRaises(IndexError):
             value.get_coord(3)
@@ -882,7 +899,7 @@ class PathQueryTests(unittest.TestCase):
         self.assertEqual(value.get_zenith(), noon.Vec2(1.0, 2.0))
         self.assertEqual(value.get_nadir(), noon.Vec2(1.0, 2.0))
         self.assertEqual(value.get_critical_point.call_count, 2)
-        value.get_critical_point.assert_called_with(noon.ORIGIN)
+        value.get_critical_point.assert_called_with((0., 0., -1.))
 
     def test_get_coord_selects_each_point_extremum_from_its_direction_axis(self):
         import noon
@@ -951,34 +968,26 @@ class PathQueryTests(unittest.TestCase):
 
         value = identity_only_wrapper(compat.VMobject)
         with patch.object(
-            semantic_handles, "_vmobject_path_boundary_queries_available", return_value=True
+            semantic_handles, "_point_boundary_queries_available", return_value=True
         ), patch.object(
-            semantic_handles,
-            "_get_critical_point",
+            queries,
+            "critical_point",
             return_value=noon.Vec2(0.5, 1.0),
         ) as critical_point:
             self.assertEqual(semantic_handles._get_center(value), noon.Vec2(0.5, 1.0))
-        critical_point.assert_called_once_with(value, noon.ORIGIN)
+        critical_point.assert_called_once_with(value, (0., 0., 0.))
 
-    def test_extremum_along_dim_routes_default_points_to_rust(self):
+    def test_extremum_along_dim_reduces_one_xyz_boundary_in_rust(self):
+        import numpy as np
         value = identity_only_wrapper(compat.VMobject)
-        value.get_points_defining_boundary = Mock(side_effect=AssertionError("Python bounds query"))
-        with patch.object(
-            queries,
-            "_extremum_along_dim_observation",
-            return_value=3.5,
-        ) as observe:
-            self.assertEqual(value.get_extremum_along_dim(dim=1, key=1), 3.5)
-        observe.assert_called_once_with(value, 1, 1.0)
-
-        with patch.object(
-            queries,
-            "_extremum_along_dim_observation",
-            return_value=0.0,
-        ) as observe:
-            self.assertEqual(value.get_extremum_along_dim(dim=-1, key=1), 0.0)
-        observe.assert_called_once_with(value, 2, 1.0)
-        value.get_points_defining_boundary.assert_not_called()
+        points = np.array([[1., 2., -7.25], [3., 4., 11.125]])
+        value.get_points_defining_boundary = Mock(return_value=points)
+        with patch.object(queries, "_extremum_from_points_observation", return_value=11.125) as observe:
+            result = value.get_extremum_along_dim(dim=-1, key=1)
+        self.assertIsInstance(result, np.float64)
+        self.assertEqual(result, 11.125)
+        observe.assert_called_once_with(value, [-7.25, 11.125], 1, 0, 1.)
+        value.get_points_defining_boundary.assert_called_once_with()
         with self.assertRaises(IndexError):
             value.get_extremum_along_dim(dim=3)
 
@@ -1229,6 +1238,7 @@ class PathQueryTests(unittest.TestCase):
         value.n_points_per_cubic_curve = 2
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        query.points3D.return_value = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0]
 
         with patch.object(queries, "_typed_manim_observation", return_value=query):
             starts = value.get_start_anchors()
@@ -1236,26 +1246,26 @@ class PathQueryTests(unittest.TestCase):
             anchors = value.get_anchors()
             handles = value.get_anchors_and_handles()
             if np is None:
-                self.assertEqual(starts, [(0., 0.), (2., 0.)])
-                self.assertEqual(ends, [(1., 0.), (3., 0.)])
-                self.assertEqual(anchors, [(0., 0.), (1., 0.), (2., 0.), (3., 0.)])
+                self.assertEqual(starts, [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
+                self.assertEqual(ends, [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)])
+                self.assertEqual(anchors, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (3.0, 0.0, 0.0)])
                 self.assertEqual(
                     handles,
-                    [[(0., 0.), (2., 0.)], [(1., 0.), (3., 0.)]],
+                    [[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)]],
                 )
             else:
                 self.assertIsInstance(starts, np.ndarray)
                 self.assertIsInstance(ends, np.ndarray)
-                np.testing.assert_array_equal(starts, [[0., 0.], [2., 0.]])
-                np.testing.assert_array_equal(ends, [[1., 0.], [3., 0.]])
+                np.testing.assert_array_equal(starts, [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+                np.testing.assert_array_equal(ends, [[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
                 self.assertTrue(all(isinstance(point, np.ndarray) for point in anchors))
                 np.testing.assert_array_equal(
                     anchors,
-                    [[0., 0.], [1., 0.], [2., 0.], [3., 0.]],
+                    [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
                 )
                 self.assertTrue(all(isinstance(group, np.ndarray) for group in handles))
-                np.testing.assert_array_equal(handles[0], [[0., 0.], [2., 0.]])
-                np.testing.assert_array_equal(handles[1], [[1., 0.], [3., 0.]])
+                np.testing.assert_array_equal(handles[0], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+                np.testing.assert_array_equal(handles[1], [[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
         self.assertEqual(query.free.call_count, 4)
 
     def test_anchor_queries_fall_back_to_point_lists_without_numpy(self):
@@ -1263,18 +1273,19 @@ class PathQueryTests(unittest.TestCase):
         value.n_points_per_cubic_curve = 2
         query = Mock()
         query.points.return_value = [0., 0., 1., 0., 2., 0., 3., 0.]
+        query.points3D.return_value = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0]
         with patch.dict("sys.modules", {"numpy": None}), patch.object(
             queries, "_typed_manim_observation", return_value=query
         ):
-            self.assertEqual(value.get_start_anchors(), [(0., 0.), (2., 0.)])
-            self.assertEqual(value.get_end_anchors(), [(1., 0.), (3., 0.)])
+            self.assertEqual(value.get_start_anchors(), [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
+            self.assertEqual(value.get_end_anchors(), [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)])
             self.assertEqual(
                 value.get_anchors(),
-                [(0., 0.), (1., 0.), (2., 0.), (3., 0.)],
+                [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (3.0, 0.0, 0.0)],
             )
             self.assertEqual(
                 value.get_anchors_and_handles(),
-                [[(0., 0.), (2., 0.)], [(1., 0.), (3., 0.)]],
+                [[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)]],
             )
 
     def test_anchor_handle_groups_keep_empty_and_fractional_stride_behavior(self):
@@ -1589,11 +1600,11 @@ class PathQueryTests(unittest.TestCase):
         ]
         handle = Mock()
         handle.cubicBezierPointRanges.return_value = [0, 4, 4, 8]
-        query.startAnchors.return_value = [0., 0., 3., 0.]
-        query.endAnchors.return_value = [3., 0., 4., 0.]
-        query.firstHandles.return_value = [1., 2., 3.3, 0.]
-        query.secondHandles.return_value = [2., 2., 3.6, 0.]
-        query.anchors.return_value = [0., 0., 3., 0., 3., 0., 4., 0.]
+        query.startAnchors3D.return_value = [0.0, 0.0, 0.0, 3.0, 0.0, 0.0]
+        query.endAnchors3D.return_value = [3.0, 0.0, 0.0, 4.0, 0.0, 0.0]
+        query.firstHandles3D.return_value = [1.0, 2.0, 0.0, 3.3, 0.0, 0.0]
+        query.secondHandles3D.return_value = [2.0, 2.0, 0.0, 3.6, 0.0, 0.0]
+        query.anchors3D.return_value = [0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 0.0, 4.0, 0.0, 0.0]
         with patch.object(queries, '_typed_manim_observation', side_effect=_path_observation(query)) as observe, patch.object(
             queries, "_handle_for", return_value=handle
         ):
@@ -1611,18 +1622,18 @@ class PathQueryTests(unittest.TestCase):
             ends = value.get_end_anchors()
             anchors = value.get_anchors()
             if np is None:
-                self.assertEqual(starts, [(0., 0.), (3., 0.)])
-                self.assertEqual(ends, [(3., 0.), (4., 0.)])
+                self.assertEqual(starts, [(0., 0., 0.), (3., 0., 0.)])
+                self.assertEqual(ends, [(3., 0., 0.), (4., 0., 0.)])
             else:
-                np.testing.assert_array_equal(starts, [[0., 0.], [3., 0.]])
-                np.testing.assert_array_equal(ends, [[3., 0.], [4., 0.]])
+                np.testing.assert_array_equal(starts, [[0., 0., 0.], [3., 0., 0.]])
+                np.testing.assert_array_equal(ends, [[3., 0., 0.], [4., 0., 0.]])
                 self.assertTrue(all(isinstance(point, np.ndarray) for point in anchors))
             self.assertEqual(len(anchors), 4)
             columns = value.get_anchors_and_handles()
             if np is None:
-                self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
+                self.assertEqual(columns[1], [(1., 2., 0.), (3.3, 0., 0.)])
             else:
-                np.testing.assert_array_equal(columns[1], [[1., 2.], [3.3, 0.]])
+                np.testing.assert_array_equal(columns[1], [[1., 2., 0.], [3.3, 0., 0.]])
             self.assertEqual(observe.call_count, 8)
             self.assertEqual(query.free.call_count, 7)
             with self.assertRaises(AssertionError):

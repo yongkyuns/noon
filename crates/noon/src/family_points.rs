@@ -335,7 +335,13 @@ mod tests {
         assert_eq!(scene.integration_store().borrow().len(), count);
         assert_eq!(child.state().unwrap(), child_before);
         let tree = MobjectTarget::from(&group).point_reduction_tree().unwrap();
-        assert_eq!(tree.points, points);
+        assert_eq!(
+            tree.points
+                .iter()
+                .map(|point| point.xy())
+                .collect::<Vec<_>>(),
+            points
+        );
         assert_eq!(tree.children.len(), 1);
         group.clear_points().unwrap();
         assert_eq!(group.get_num_points().unwrap(), 0);

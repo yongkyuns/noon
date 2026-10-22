@@ -65,30 +65,7 @@ pub(super) fn resolve_pivot(
         }
         ManimRotationPivot::Center => 0.0,
     };
-    let mut bounds: Option<(f64, f64)> = None;
-    for &leaf in leaves {
-        let state = store.semantic_object_state_checked(leaf)?;
-        let transform = state
-            .transform
-            .as_planar()
-            .ok_or(AuthoringError::NonFiniteObjectState)?;
-        if let Some((min, max)) =
-            crate::semantic_mobject::depth_for_content(store, state.content, transform, false)?
-        {
-            bounds = Some(bounds.map_or((min, max), |(old_min, old_max)| {
-                (old_min.min(min), old_max.max(max))
-            }));
-        }
-    }
-    Ok(bounds.map_or(0.0, |(min, max)| {
-        if direction < 0.0 {
-            min
-        } else if direction > 0.0 {
-            max
-        } else {
-            (min + max) * 0.5
-        }
-    }))
+    crate::semantic_mobject::boundary_depth_for_leaves(store, leaves, direction)
 }
 
 #[cfg(test)]

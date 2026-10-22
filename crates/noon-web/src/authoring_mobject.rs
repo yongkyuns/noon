@@ -99,7 +99,11 @@ use noon_core::SemanticStore;
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_sys::Array {
     let result = js_sys::Array::new();
-    let coordinates: Vec<_> = tree.points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+    let coordinates: Vec<_> = tree
+        .points
+        .into_iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect();
     result.push(&wasm_bindgen::JsValue::from(js_sys::Float64Array::from(
         coordinates.as_slice(),
     )));
@@ -711,6 +715,23 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = contentCriticalPoint3D)]
+        pub fn content_critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.anchor
+                .critical_point_3d(noon::SemanticVec3::new(
+                    direction_x,
+                    direction_y,
+                    direction_z,
+                ))
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = scale3d)]
         #[allow(clippy::too_many_arguments)]
         pub fn scale_3d(
@@ -1589,6 +1610,36 @@ mod wasm {
             let family = self.semantic_family()?;
             noon::MobjectTarget::from(&family)
                 .all_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = criticalPoint3D)]
+        pub fn critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            let target = noon::MobjectTarget::from(&family);
+            let direction = noon_core::SemanticVec3::new(direction_x, direction_y, direction_z);
+            let point = if vector_boundary {
+                target.vector_critical_point_3d(direction)
+            } else {
+                target.critical_point_3d(direction)
+            };
+            point
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = vectorBoundaryPoints3D)]
+        pub fn vector_boundary_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            let family = self.semantic_family()?;
+            noon::MobjectTarget::from(&family)
+                .vector_boundary_points_3d()
                 .map(crate::authoring_geometry::flat_points_3d)
                 .map_err(js_error)
         }
@@ -2615,6 +2666,46 @@ mod wasm {
         pub fn vertex_groups(&self) -> js_sys::Array {
             point_groups(self.value.vertex_groups())
         }
+        #[wasm_bindgen(js_name = startAnchors3D)]
+        pub fn start_anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .start_anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = firstHandles3D)]
+        pub fn first_handles_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .first_handles_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = secondHandles3D)]
+        pub fn second_handles_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .second_handles_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = endAnchors3D)]
+        pub fn end_anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .end_anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = anchors3D)]
+        pub fn anchors_3d(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .anchors_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = startAnchors)]
         pub fn start_anchors(&self) -> Vec<f64> {
             self.value
@@ -2951,6 +3042,34 @@ mod wasm {
         pub fn extremum_along_dim(&self, dim: u32, key: f64) -> Result<f64, JsValue> {
             noon::MobjectTarget::from(&self.handle)
                 .extremum_along_dim(dim as usize, key)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = criticalPoint3D)]
+        pub fn critical_point_3d(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let target = noon::MobjectTarget::from(&self.handle);
+            let direction = noon_core::SemanticVec3::new(direction_x, direction_y, direction_z);
+            let point = if vector_boundary {
+                target.vector_critical_point_3d(direction)
+            } else {
+                target.critical_point_3d(direction)
+            };
+            point
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pathBoundaryPoints3D)]
+        pub fn path_boundary_points_3d(&self) -> Result<Vec<f64>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .path_boundary_points_3d()
+                .map(crate::authoring_geometry::flat_points_3d)
                 .map_err(js_error)
         }
 

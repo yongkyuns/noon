@@ -440,6 +440,8 @@ def _empty_path_init(
     _apply_shared_constructor_options(
         options, kwargs, allow_sheen_direction=(kind == "VMobject")
     )
+    if kind == "Mobject":
+        engine_call(options.setDrawEnabled, False)
     _attach_geometry_options(self, options, kind)
 
 
@@ -714,12 +716,62 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     return _clone_mobject(self, target_state=True)
 
 
-def _get_center(self: _base.Mobject) -> _base.Vec2:
-    if (
-        isinstance(self, _compat.VMobject)
-        and _vmobject_path_boundary_queries_available(self)
-    ):
-        return _get_critical_point(self, _base.ORIGIN)
+def _uses_content_layout(value: _base.Mobject) -> bool:
+    # Class dispatch only: Rust owns both retained-content bounds and points.
+    for module_name, type_name in (("_manim_typst", "_RetainedTextMobject"),
+                                   ("_noon_spatial", "_WorldMobject")):
+        content_type = getattr(sys.modules.get(module_name), type_name, ())
+        if isinstance(value, content_type):
+            return True
+    return False
+
+
+def _default_point_query_hooks(value: _base.Mobject) -> bool:
+    from inspect import getattr_static
+    boundary = (_compat.VMobject.get_points_defining_boundary
+                if isinstance(value, _compat.VMobject)
+                else _base.Mobject.get_points_defining_boundary)
+    return (
+        getattr_static(value, "get_family", None) is _base.Mobject.get_family
+        and getattr_static(value, "get_all_points", None) is _base.Mobject.get_all_points
+        and getattr_static(value, "get_points_defining_boundary", None) is boundary
+        and getattr_static(value, "get_extremum_along_dim", None) is _base.Mobject.get_extremum_along_dim
+    )
+
+
+def _point_boundary_queries_available(value: _base.Mobject) -> bool:
+    if _uses_content_layout(value):
+        return False
+    if _is_shared_family(value):
+        from _manim_updaters import canonical_callback_phase_active
+        if canonical_callback_phase_active():
+            # Keep family layout reads behind their existing staged guard;
+            # selecting a point route must not inspect callback membership.
+            return False
+        handle = value._semantic_family_handle
+        available = hasattr(handle, "allPoints3D")
+    else:
+        handle = _handle_for(value)
+        if _is_bound(value):
+            context = getattr(value._scene, "_canonical_authoring_context", None)
+            available = getattr(context, "queryMobjectAllPoints3D", None) is not None
+        else:
+            available = handle is not None and hasattr(handle, "allPoints3D")
+    if not available:
+        return False
+    if _default_point_query_hooks(value) and handle is not None and hasattr(handle, "familyKeys"):
+        # Membership/order come from Rust. Inspect wrapper types, never geometry
+        # or a cached Python membership list, before choosing the content path.
+        members = _base.Mobject.get_family(value)
+        if any(_uses_content_layout(member) for member in members):
+            return False
+    return True
+
+
+def _get_center(self: _base.Mobject) -> Any:
+    if _point_boundary_queries_available(self):
+        from _manim_path_queries import critical_point
+        return critical_point(self, (0.0, 0.0, 0.0))
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
@@ -732,8 +784,13 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
-def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
-    """Read a leaf critical point from the authoritative semantic layout."""
+def _get_critical_point(self: _base.Mobject, direction: object) -> Any:
+    """Read a critical point through shared Rust point or content bounds."""
+    if _point_boundary_queries_available(self):
+        from _manim_path_queries import critical_point
+        return critical_point(self, direction)
+    if not isinstance(direction, _base.Vec2) and len(direction) == 3 and direction[2] != 0:
+        return _content_critical_point_3d(self, direction)
     axis = _base._as_vec2(direction)
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
@@ -753,6 +810,22 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
             float(engine_call(observed.criticalY, axis.x, axis.y)),
         )
     return _critical(self, axis)
+
+
+def _content_critical_point_3d(value: _base.Mobject, direction):
+    """Forward opaque-content XYZ queries without constructing point geometry."""
+    coordinates = _compat._manim_point3(direction)
+    anchor = _layout_anchor(value)
+    if anchor is None:
+        raise RuntimeError("content critical points require a current shared Rust layout handle")
+    context = (_group_live_layout_context(value) if _is_shared_family(value)
+               else _live_mutation_context(value))
+    try:
+        result = (engine_call(anchor.contentCriticalPoint3D, *coordinates) if context is None
+                  else engine_call(context.queryLayoutContentCriticalPoint3D, anchor, *coordinates))
+        return _compat._manim_point3(result)
+    finally:
+        anchor.free()
 
 
 def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
@@ -1499,8 +1572,8 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
     outer = _compat._as_color("outer gradient color", outer_color)
     radius = _compat._ir._finite_number("radius", radius)
     if center is None:
-        center = (*self.get_center(), 0.0)
-    elif isinstance(center, _base.Vec2):
+        center = self.get_center()
+    if isinstance(center, _base.Vec2):
         center = (center.x, center.y, 0.0)
     else:
         try:
@@ -2699,17 +2772,6 @@ def _point_reduction_tree_observation(value: _base.Mobject):
     return engine_call(family.pointReductionTree)
 
 
-def _merged_points_observation(value: _base.Mobject):
-    """Return Rust-flattened recursive points for one object or family."""
-    if not _is_shared_family(value):
-        return _typed_manim_observation(value, "allPoints", "queryMobjectAllPoints")
-    family = value._semantic_family_handle
-    context = _group_live_layout_context(value)
-    if context is not None:
-        return engine_call(context.queryFamilyMergedPoints, family)
-    return engine_call(family.mergedPoints)
-
-
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
     if not _is_shared_family(value):
         return None
@@ -2863,12 +2925,16 @@ def _boundary_point_observation(
     )
 
 
+def _critical_point_observation(value: _base.Mobject, direction, vector_boundary):
+    return _point_query_observation(value, "CriticalPoint3D", *direction, vector_boundary)
+
+
 def _vector_boundary_points_observation(value: _base.Mobject):
-    return _point_query_observation(value, "VectorBoundaryPoints")
+    return _point_query_observation(value, "VectorBoundaryPoints3D")
 
 
 def _path_boundary_points_observation(value: _base.Mobject):
-    return _point_query_observation(value, "PathBoundaryPoints")
+    return _point_query_observation(value, "PathBoundaryPoints3D")
 
 
 def _path_boundary_extremum_along_dim_observation(

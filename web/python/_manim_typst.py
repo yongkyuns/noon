@@ -720,7 +720,10 @@ class Text(_RetainedTextMobject):
             raise ValueError("cannot set height of zero-height Text")
         self.scale(target / current)
 
-    def get_critical_point(self, direction: object) -> _base.Vec2:
+    def get_critical_point(self, direction: object) -> Any:
+        if not isinstance(direction, _base.Vec2) and len(direction) == 3 and direction[2] != 0:
+            from _manim_semantic_handles import _content_critical_point_3d
+            return _content_critical_point_3d(self, direction)
         axis = _base._as_vec2(direction)
         handle = _native_layout_handle(self._semantic_handle)
         return _base.Vec2(

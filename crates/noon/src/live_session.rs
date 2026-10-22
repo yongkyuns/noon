@@ -1483,6 +1483,16 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Capture full-coordinate owned points and ordered child occurrences from
+    /// this session's coherent publication, retaining recursive alias order.
+    pub fn point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointReductionTree, LiveSessionError> {
+        crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(

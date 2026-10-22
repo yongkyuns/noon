@@ -27,7 +27,7 @@ class SlowHostUpdaterScene(Scene):
             nonlocal ordered_calls
             ordered_calls += 1
             assert ordered_calls == slow_calls
-            assert abs(mobject.get_center().x - (-2.0 + elapsed)) < 1e-6
+            assert abs(mobject.get_center()[0] - (-2.0 + elapsed)) < 1e-6
 
         dot.add_updater(slow_update)
         dot.add_updater(observe_update)
@@ -36,5 +36,5 @@ class SlowHostUpdaterScene(Scene):
         assert slow_calls == ordered_calls and slow_calls >= 2
         assert abs(elapsed - 0.4) < 1e-6
         assert abs(self.time - 0.4) < 1e-6
-        assert abs(dot.get_center().x + 1.6) < 1e-6
-        assert abs(native.get_center().x - 2.0) < 1e-6
+        assert abs(dot.get_center()[0] + 1.6) < 1e-6
+        assert abs(native.get_center()[0] - 2.0) < 1e-6

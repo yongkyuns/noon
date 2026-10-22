@@ -74,9 +74,22 @@ fn build() -> Result<ExecutionSession, Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
     assert_eq!(target.all_points()?, expected_points);
     let tree = target.point_reduction_tree()?;
-    assert_eq!(tree.points, own_points);
+    assert_eq!(
+        tree.points
+            .iter()
+            .map(|point| point.xy())
+            .collect::<Vec<_>>(),
+        own_points
+    );
     assert_eq!(tree.children.len(), 1);
-    assert_eq!(tree.children[0].points, child_points);
+    assert_eq!(
+        tree.children[0]
+            .points
+            .iter()
+            .map(|point| point.xy())
+            .collect::<Vec<_>>(),
+        child_points
+    );
     assert_eq!(tree.flattened_points(), expected_points);
     let expected_anchors = parent
         .path_query()?

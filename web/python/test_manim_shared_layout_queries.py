@@ -23,10 +23,74 @@ class Observation:
 
 
 class ManimSharedLayoutQueryTests(unittest.TestCase):
+    def test_staged_family_center_keeps_layout_guard_before_point_membership(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        import _manim_updaters
+        value = identity_only_wrapper(noon.VGroup)
+        point_read = Mock(side_effect=AssertionError("staged query read point membership"))
+        value._semantic_family_handle = SimpleNamespace(allPoints3D=point_read, familyKeys=point_read)
+        with patch.object(_manim_updaters, "canonical_callback_phase_active", return_value=True), patch.object(
+            shared, "_group_layout_observation",
+            side_effect=NotImplementedError("family layout query during active callback phase"),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "active callback phase"):
+                value.get_center()
+        point_read.assert_not_called()
+
+    def test_content_depth_queries_forward_to_authored_and_live_rust_layout(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        from _manim_typst import Text
+        value = identity_only_wrapper(Text)
+        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(7., -3., 1.125)), free=Mock())
+        context = SimpleNamespace(queryLayoutContentCriticalPoint3D=Mock(return_value=(7., -3., -2.5)))
+        with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
+            shared, "_live_mutation_context", return_value=None
+        ):
+            self.assertEqual(list(value.get_zenith()), [7., -3., 1.125])
+        anchor.contentCriticalPoint3D.assert_called_once_with(0., 0., 1.)
+        with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
+            shared, "_live_mutation_context", return_value=context
+        ):
+            self.assertEqual(list(value.get_nadir()), [7., -3., -2.5])
+        context.queryLayoutContentCriticalPoint3D.assert_called_once_with(anchor, 0., 0., -1.)
+        self.assertEqual(anchor.free.call_count, 2)
+
     def wrapper(self, handle):
         value = object.__new__(noon.Mobject)
         shared._attach_shared_handle(value, handle)
         return value
+
+    def test_mixed_text_families_keep_shared_content_bounds(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        from _manim_typst import Text
+        for kind in (noon.Group, noon.VGroup):
+            with self.subTest(kind=kind.__name__):
+                value = identity_only_wrapper(kind)
+                text = identity_only_wrapper(Text)
+                text._semantic_handle = SimpleNamespace(semanticSlot=1, semanticGeneration=0)
+                text._semantic_handle_fresh = True
+                point_query = Mock(side_effect=AssertionError("opaque content is not a point array"))
+                value._semantic_family_handle = SimpleNamespace(
+                    semanticSlot=2, semanticGeneration=0,
+                    allPoints3D=point_query,
+                    familyKeys=Mock(return_value=['2:0', '1:0']),
+                    memberKeys=Mock(return_value=['1:0']))
+                value._semantic_member_wrappers = {'1:0': text}
+                with patch.object(shared, "_group_layout_observation", return_value=Observation()):
+                    self.assertEqual(shared._get_center(value), (7., -3.))
+                    self.assertEqual(shared._get_critical_point(value, noon.RIGHT), (12., -3.))
+                point_query.assert_not_called()
+                self.assertEqual(value._semantic_family_handle.familyKeys.call_count, 2)
+
+    def test_custom_family_query_is_not_replaced_by_content_layout_routing(self):
+        from _typed_geometry_test_support import identity_only_wrapper
+        value = identity_only_wrapper(noon.VGroup)
+        value._semantic_family_handle = SimpleNamespace(
+            allPoints3D=Mock(), familyKeys=Mock(side_effect=AssertionError("custom selector")))
+        value.get_family = Mock(return_value=[])
+        self.assertTrue(shared._point_boundary_queries_available(value))
+        value.get_family.assert_not_called()
+        value._semantic_family_handle.familyKeys.assert_not_called()
 
     def test_detached_layout_delegates_without_materializing_geometry(self):
         value = self.wrapper(Observation())

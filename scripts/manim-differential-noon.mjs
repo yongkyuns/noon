@@ -997,21 +997,26 @@ json.dumps({
   ];
   assert.deepEqual(liveSubpathArrays, expectedSubpathArrays);
   assert.deepEqual(authoredSubpathArrays, liveSubpathArrays);
+  // These checks retain Noon's original planar-input convenience, separate
+  // from the pinned CE fixtures below. Selected anchor/boundary/critical queries
+  // now expose canonical XYZ values. Exact two-column input shape/dtype fidelity
+  // remains partial under #2011: CE retains Nx2/int64 and its dim-2 query fails.
+  // Endpoints, curve slices and subpaths still exercise their bounded XY profile.
   const expectedAnchorArrays = {
     start: { type: "ndarray", shape: [2], dtype: "float64" },
     end: { type: "ndarray", shape: [2], dtype: "float64" },
-    starts: { type: "ndarray", shape: [2, 2], dtype: "float64" },
-    ends: { type: "ndarray", shape: [2, 2], dtype: "float64" },
+    starts: { type: "ndarray", shape: [2, 3], dtype: "float64" },
+    ends: { type: "ndarray", shape: [2, 3], dtype: "float64" },
     anchors_type: "list",
     anchors: Array.from({ length: 4 }, () => ({
       type: "ndarray",
-      shape: [2],
+      shape: [3],
       dtype: "float64",
     })),
     groups_type: "list",
     groups: Array.from({ length: 2 }, () => ({
       type: "ndarray",
-      shape: [2, 2],
+      shape: [2, 3],
       dtype: "float64",
     })),
   };
@@ -1020,15 +1025,15 @@ json.dumps({
   assert.deepEqual(liveQueryValues, {
     x_max: 30,
     boundary_point: [30, 0],
-    boundary_points: [[0, 0], [30, 0], [1, 0], [2, 0]],
-    critical_point: [30, 0],
-    center: [15, 0],
+    boundary_points: [[0, 0, 0], [30, 0, 0], [1, 0, 0], [2, 0, 0]],
+    critical_point: [30, 0, 0],
+    center: [15, 0, 0],
     num_curves: 2,
     nth_curve_points: [[0, 0], [30, 0]],
-    start_anchors: [[0, 0], [1, 0]],
-    end_anchors: [[30, 0], [2, 0]],
-    anchors: [[0, 0], [30, 0], [1, 0], [2, 0]],
-    anchors_and_handles: [[[0, 0], [1, 0]], [[30, 0], [2, 0]]],
+    start_anchors: [[0, 0, 0], [1, 0, 0]],
+    end_anchors: [[30, 0, 0], [2, 0, 0]],
+    anchors: [[0, 0, 0], [30, 0, 0], [1, 0, 0], [2, 0, 0]],
+    anchors_and_handles: [[[0, 0, 0], [1, 0, 0]], [[30, 0, 0], [2, 0, 0]]],
     subpaths: [[[0, 0], [30, 0]], [[1, 0], [2, 0]]],
     curve_function_midpoints: [[15, 0, 0], [1.5, 0, 0]],
     curve_function_lengths: [30, 1],

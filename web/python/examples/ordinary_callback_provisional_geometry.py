@@ -45,8 +45,8 @@ class OrdinaryCallbackProvisionalGeometry(Scene):
         # before the endpoint returns the player lease at segment completion.
         assert len(created) == 3
         assert all(candidate._scene is self for candidate in created)
-        assert created[0].get_center() == (2.0, -1.0)
-        assert created[1].get_center() == (3.0, -1.0)
-        assert created[2].get_center() == (4.0, -1.0)
-        assert anchor.get_center() == (0.5, 0.0)
+        assert tuple(created[0].get_center()) == (2.0, -1.0, 0.0)
+        assert tuple(created[1].get_center()) == (3.0, -1.0, 0.0)
+        assert tuple(created[2].get_center()) == (4.0, -1.0, 0.0)
+        assert tuple(anchor.get_center()) == (0.5, 0.0, 0.0)
         assert self.mobjects == [anchor, *created]

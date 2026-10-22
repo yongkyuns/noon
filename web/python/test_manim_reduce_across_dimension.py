@@ -15,13 +15,13 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         calls = []
 
         class Handle:
-            def allPoints(self):
+            def allPoints3D(self):
                 calls.append("points")
-                return (1.0, 2.0, 4.0, 5.0, 7.0, 8.0)
+                return (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
 
             def pointReductionTree(self):
                 calls.append("tree")
-                return ((1.0, 2.0), (((4.0, 5.0), ()), ((7.0, 8.0), ())))
+                return ((1.0, 2.0, 3.0), (((4.0, 5.0, 6.0), ()), ((7.0, 8.0, 9.0), ())))
 
         value = object.__new__(noon.Mobject)
         value._scene = None
@@ -32,7 +32,7 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         points = merged_array(value, "points")
         self.assertEqual(
             [[float(component) for component in point] for point in points],
-            [[1.0, 2.0], [4.0, 5.0], [7.0, 8.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
         )
         reductions = []
 
@@ -52,7 +52,7 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         class Context:
             def queryMobjectPointReductionTree(self, source):
                 calls.append(source)
-                return ((1.0, 2.0), (((4.0, 5.0), ()),))
+                return ((1.0, 2.0, 3.0), (((4.0, 5.0, 6.0), ()),))
 
         value = object.__new__(noon.Mobject)
         value._scene = SimpleNamespace(_canonical_authoring_context=Context())
@@ -63,8 +63,8 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         self.assertEqual(calls, [handle])
 
     def test_reduces_owned_points_then_combines_children_in_order(self):
-        first = ((-2.0, 1.0, -1.0, 3.0), ())
-        second = ((4.0, -2.0, 5.0, 2.0), ())
+        first = ((-2.0, 1.0, 0.0, -1.0, 3.0, 0.0), ())
+        second = ((4.0, -2.0, 0.0, 5.0, 2.0, 0.0), ())
         nested = ((), (first, second))
         root = ((), (nested, first))
         calls = []
@@ -80,9 +80,21 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
             [[-2.0, -1.0], [4.0, 5.0], [9.0, -3.0], [-2.0, -1.0], [-3.0, 6.0]],
         )
 
+    def test_xyz_depth_reducer_keeps_alias_call_order_and_nonassociative_values(self):
+        first = ((1., 2., 7., 4., 5., -3.), ())
+        second = ((3., 4., 11.), ())
+        root = ((), (((), (first, second)), first))
+        trace = []
+        def weighted(values):
+            observed = [float(value) for value in values]
+            trace.append(observed)
+            return sum((index + 1) * value for index, value in enumerate(observed))
+        self.assertEqual(_reduce_point_reduction_tree(root, weighted, 2), 27.)
+        self.assertEqual(trace, [[7., -3.], [11.], [11., 1.], [7., -3.], [1., 13.]])
+
     def test_empty_and_planar_depth_profiles(self):
         empty = ((), ())
-        point = ((-2.0, 1.0, -1.0, 3.0), ())
+        point = ((-2.0, 1.0, 0.0, -1.0, 3.0, 0.0), ())
         self.assertIsNone(_reduce_point_reduction_tree(empty, max, 0))
         self.assertEqual(_reduce_point_reduction_tree(point, max, 2), 0.0)
         self.assertEqual(_reduce_point_reduction_tree(point, min, 2), 0.0)
@@ -108,16 +120,16 @@ class ManimReduceAcrossDimensionTests(unittest.TestCase):
         self.assertIn("reduce_across_dimension", noon.Mobject.__dict__)
 
     def test_get_merged_array_returns_rust_ordered_points(self):
-        coordinates = (10.0, 1.0, 2.0, 3.0)
-        with patch("_manim_path_queries._merged_points_observation", return_value=coordinates):
+        coordinates = (10.0, 1.0, -7.0, 2.0, 3.0, 8.0)
+        with patch("_manim_path_queries._all_points_observation", return_value=coordinates):
             points = merged_array(object(), "points")
         self.assertEqual(
             [[float(component) for component in point] for point in points],
-            [[10.0, 1.0], [2.0, 3.0]],
+            [[10.0, 1.0, -7.0], [2.0, 3.0, 8.0]],
         )
 
     def test_get_merged_array_rejects_unmodeled_attributes_before_query(self):
-        with patch("_manim_path_queries._merged_points_observation") as query:
+        with patch("_manim_path_queries._all_points_observation") as query:
             with self.assertRaisesRegex(NotImplementedError, "only the shared Rust points"):
                 merged_array(object(), "rgbas")
         query.assert_not_called()

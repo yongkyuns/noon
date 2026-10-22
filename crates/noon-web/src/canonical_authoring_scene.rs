@@ -1002,6 +1002,43 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn mobject_critical_point_3d(
+        &mut self,
+        handle: &noon::Mobject,
+        direction: noon_core::SemanticVec3,
+        vector_boundary: bool,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| {
+                let target = noon::MobjectTarget::from(handle);
+                if vector_boundary {
+                    target.vector_critical_point_3d(direction)
+                } else {
+                    target.critical_point_3d(direction)
+                }
+            },
+            |player, handle| {
+                player.live_effective_critical_point_3d(handle.into(), direction, vector_boundary)
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_path_boundary_points_3d(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).path_boundary_points_3d(),
+            |player, handle| {
+                player.live_effective_path_boundary_points_3d(noon::MobjectTarget::from(handle))
+            },
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_points(
         &mut self,
         handle: &noon::Mobject,
@@ -1184,6 +1221,40 @@ impl CanonicalAuthoringScene {
             family,
             |target| target.point_reduction_tree(),
             crate::SemanticExecutionPlayer::live_effective_point_reduction_tree,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_critical_point_3d(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction: noon_core::SemanticVec3,
+        vector_boundary: bool,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| {
+                if vector_boundary {
+                    target.vector_critical_point_3d(direction)
+                } else {
+                    target.critical_point_3d(direction)
+                }
+            },
+            |player, target| {
+                player.live_effective_critical_point_3d(target, direction, vector_boundary)
+            },
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_vector_boundary_points_3d(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.vector_boundary_points_3d(),
+            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points_3d,
         )
     }
 
@@ -7476,6 +7547,36 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyCriticalPoint3D)]
+        pub fn query_family_critical_point_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_critical_point_3d(
+                    &handle.semantic_family()?,
+                    noon_core::SemanticVec3::new(direction_x, direction_y, direction_z),
+                    vector_boundary,
+                )
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyVectorBoundaryPoints3D)]
+        pub fn query_family_vector_boundary_points_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_vector_boundary_points_3d(&handle.semantic_family()?)
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyVectorBoundaryPoints)]
         pub fn query_family_vector_boundary_points(
             &mut self,
@@ -7644,6 +7745,25 @@ mod wasm {
                     &source.anchor,
                     dimension.try_into().map_err(typed_js_error)?,
                 )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryLayoutContentCriticalPoint3D)]
+        pub fn query_layout_content_critical_point_3d(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_layout_critical_point_3d(
+                    &source.anchor,
+                    noon::SemanticVec3::new(direction_x, direction_y, direction_z),
+                )
+                .map(|point| vec![point.x, point.y, point.z])
                 .map_err(typed_js_error)
         }
 
@@ -7997,6 +8117,36 @@ mod wasm {
             self.inner
                 .mobject_point_reduction_tree(handle.semantic_mobject())
                 .map(crate::authoring_mobject::point_reduction_tree_to_js)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectCriticalPoint3D)]
+        pub fn query_mobject_critical_point_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            vector_boundary: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_critical_point_3d(
+                    handle.semantic_mobject(),
+                    noon_core::SemanticVec3::new(direction_x, direction_y, direction_z),
+                    vector_boundary,
+                )
+                .map(|point| vec![point.x, point.y, point.z])
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectPathBoundaryPoints3D)]
+        pub fn query_mobject_path_boundary_points_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_path_boundary_points_3d(handle.semantic_mobject())
+                .map(crate::authoring_geometry::flat_points_3d)
                 .map_err(typed_js_error)
         }
 
@@ -14741,10 +14891,13 @@ mod tests {
     #[test]
     fn vector_family_points_use_live_leaves_without_requiring_root_admission() {
         let mut context = CanonicalAuthoringScene::default();
-        let circle = context.scene.circle(1.0).unwrap();
+        let mut circle = context.scene.circle(1.0).unwrap();
+        circle.shift_3d(SemanticVec3::new(0., 0., 2.125)).unwrap();
         let family = context.scene.family(&[(&circle).into()]).unwrap();
         let empty = context.scene.family(&[]).unwrap();
         let authored = context.family_vector_boundary_points(&family).unwrap();
+        let authored_xyz = context.family_vector_boundary_points_3d(&family).unwrap();
+        assert!(authored_xyz.iter().all(|point| point.z == 2.125));
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
@@ -14765,6 +14918,19 @@ mod tests {
         }
         let observed = context.family_vector_boundary_points(&family).unwrap();
         assert_eq!(observed.len(), authored.len());
+        let observed_xyz = context.family_vector_boundary_points_3d(&family).unwrap();
+        assert_eq!(
+            context
+                .family_critical_point_3d(&family, SemanticVec3::ZERO, true)
+                .unwrap(),
+            SemanticVec3::new(2., -1., 2.125)
+        );
+        assert_eq!(observed_xyz.len(), authored_xyz.len());
+        for (actual, expected) in observed_xyz.into_iter().zip(authored_xyz) {
+            assert!((actual.x - expected.x - 2.0).abs() < 1e-6);
+            assert!((actual.y - expected.y + 1.0).abs() < 1e-6);
+            assert_eq!(actual.z, expected.z);
+        }
         for (actual, expected) in observed.into_iter().zip(authored) {
             assert!((actual.0 - expected.0 - 2.0).abs() < 1e-6);
             assert!((actual.1 - expected.1 + 1.0).abs() < 1e-6);
