@@ -5,11 +5,12 @@ use crate::execution_session::{
 };
 use noon_core::{
     Color, NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
-    NativePointerPosition, SemanticClickIndicate, SemanticMutationTransaction,
-    SemanticNodeCreation, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry,
-    Vec2,
+    NativePointerPosition, SemanticClickIndicate, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
 };
 use noon_runtime::ReplayLimits;
+
+mod hover;
 
 const A: SemanticClickIndicate = SemanticClickIndicate::new(1.25, Color::YELLOW, 0.5);
 const B: SemanticClickIndicate = SemanticClickIndicate::new(1.75, Color::RED, 1.0);
@@ -66,14 +67,8 @@ impl Fixture {
             .unwrap();
         assert!(self.store.node(self.node).is_none());
         assert_eq!(self.session.execution_object_id(self.node), None);
-        assert_eq!(
-            self.session.interaction_execution_object_id(self.node),
-            None
-        );
-        assert_eq!(
-            self.session.interaction_semantic_object_id(self.object),
-            None
-        );
+        assert_eq!(self.session.interaction_execution_object_id(self.node), None);
+        assert_eq!(self.session.interaction_semantic_object_id(self.object), None);
     }
 
     fn replacement(&mut self) -> (SemanticNodeId, ObjectId) {
@@ -176,7 +171,10 @@ fn exercise_action(
     assert!(!session.interactions_active());
     assert_eq!(session.frame(), &baseline);
     assert_eq!(session.replay_stats(), history);
-    assert_eq!(session.publication_context().scene_revision(), context.scene_revision());
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        context.scene_revision()
+    );
     assert_eq!(
         session.publication_context().execution_revision(),
         context.execution_revision()
@@ -282,7 +280,10 @@ fn historical_pointer_identity_seek_cancels_gestures_and_stale_input_is_atomic()
     // Rejection consumed no sequence; seek cancelled the earlier press.
     assert!(submit(&mut session, 1, false).selection_click().is_none());
     assert!(!session.interactions_active());
-    assert_eq!(click(&mut session, 2).selection_click().unwrap().target(), Some(node));
+    assert_eq!(
+        click(&mut session, 2).selection_click().unwrap().target(),
+        Some(node)
+    );
     session.seek(0.75).unwrap();
     assert!(!session.interactions_active());
     assert_eq!(session.selected_pointer_target(), None);
@@ -311,9 +312,15 @@ fn historical_pointer_identity_queries_do_not_publish_or_admit_future_rows() {
         assert_eq!(session.interaction_execution_object_id(node), Some(object));
         assert_eq!(session.interaction_semantic_object_id(object), Some(node));
         assert_eq!(session.interaction_execution_object_id(replacement), None);
-        assert_eq!(session.interaction_semantic_object_id(replacement_object), None);
+        assert_eq!(
+            session.interaction_semantic_object_id(replacement_object),
+            None
+        );
         assert_eq!(session.interaction_execution_object_id(root), None);
-        assert_eq!(session.interaction_semantic_object_id(ObjectId::new(u64::MAX)), None);
+        assert_eq!(
+            session.interaction_semantic_object_id(ObjectId::new(u64::MAX)),
+            None
+        );
     }
     assert_eq!(session.frame(), &baseline);
     assert_eq!(session.publication_context(), context);
@@ -363,13 +370,23 @@ fn historical_pointer_identity_discard_returns_to_current_source_membership() {
     assert!(!fixture.session.interactions_active());
     assert_eq!(fixture.session.selected_pointer_target(), None);
     assert_eq!(fixture.session.frame().time, 3.0);
-    assert_eq!(fixture.session.interaction_execution_object_id(fixture.node), None);
+    assert_eq!(
+        fixture.session.interaction_execution_object_id(fixture.node),
+        None
+    );
     assert_eq!(
         fixture.session.interaction_execution_object_id(replacement),
         Some(replacement_object)
     );
     assert_eq!(fixture.session.execution_object_id(fixture.node), None);
     assert!(fixture.store.node(fixture.node).is_none());
-    let index = fixture.session.runtime.frame_index_for_object(replacement_object).unwrap();
-    assert_eq!(fixture.session.frame().objects[index].style.fill, Some(Color::BLUE));
+    let index = fixture
+        .session
+        .runtime
+        .frame_index_for_object(replacement_object)
+        .unwrap();
+    assert_eq!(
+        fixture.session.frame().objects[index].style.fill,
+        Some(Color::BLUE)
+    );
 }
