@@ -1,21 +1,17 @@
 //! Shared multi-subpath construction with line, quadratic and cubic segments.
 use crate::{ExecutionSession, ManimGeometryOptions, Scene};
-use noon_core::{Vec2, VectorPath};
+use noon_core::VectorPath;
 
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut curves = scene.geometry(ManimGeometryOptions::path(VectorPath::new())?)?;
         curves.set_stroke_color(88. / 255., 196. / 255., 221. / 255., 1.)?;
-        curves.start_new_path(Vec2::new(-3., -1.))?;
-        curves.add_line_to(Vec2::new(-2., 0.))?;
-        curves.add_quadratic_bezier_curve_to(Vec2::new(-1., 2.), Vec2::new(0., 0.))?;
-        curves.start_new_path(Vec2::new(1., -1.))?;
-        curves.add_cubic_bezier_curve_to(
-            Vec2::new(1., 2.),
-            Vec2::new(3., 2.),
-            Vec2::new(3., -1.),
-        )?;
+        curves.start_new_path_f64((-3., -1.))?;
+        curves.add_line_to_f64((-2., 0.))?;
+        curves.add_quadratic_bezier_curve_to_f64((-1., 2.), (0., 0.))?;
+        curves.start_new_path_f64((1., -1.))?;
+        curves.add_cubic_bezier_curve_to_f64((1., 2.), (3., 2.), (3., -1.))?;
         curves.close_path()?;
         let mut polygon = scene.square(1.)?;
         polygon.set_fill(
@@ -31,9 +27,9 @@ pub fn session() -> Result<ExecutionSession, String> {
             scene.integration_store(),
             scene.root(),
             &mut session,
-            crate::integration::BorrowedPathEdit::Line {
+            crate::integration::BorrowedPathEdit::AppendCornersF64 {
                 object: &polygon,
-                point: Vec2::new(0., -2.),
+                points: &[(0., -2.)],
             },
         )?;
         crate::integration::publish_borrowed_path_edit(
