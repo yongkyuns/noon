@@ -1,10 +1,14 @@
 //! Own point content stays on the addressed family node and uses normal path edits.
+mod append;
+mod xyz;
 use crate::{AuthoringError, Mobject, MobjectFamily, PathQuery};
+pub use append::publish_append_family_points;
 use noon_core::{
     SemanticMutationTransaction, SemanticStore, SemanticTransform2_5D, StoredGeometry, Vec2,
     VectorPath,
 };
 use std::rc::Rc;
+pub use xyz::{publish_append_family_points_3d, publish_family_points_3d};
 
 /// Publish root point content through an integration-owned coherent execution.
 /// The existing family identity, presentation and member edges stay in place.
@@ -15,28 +19,12 @@ pub fn publish_family_points(
     family: &MobjectFamily,
     points: &[(f64, f64)],
 ) -> Result<(), AuthoringError> {
-    crate::MobjectTarget::from(family).require_store(store)?;
-    if let Some(object) = family.own_object()? {
-        return crate::path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            &object,
-            crate::path_editing::PathEdit::RawPoints(points),
-        );
-    }
-    crate::path_editing::require_running_path_resource_admission(store, root, execution)?;
-    let path = crate::path_editing::raw_points_path(points)?;
-    publish_initial_family_path(
-        &mut store.borrow_mut(),
-        family.node_id(),
-        path,
-        |store, tx| {
-            execution
-                .apply_semantic_transaction_at_root(store, root, tx)
-                .map(|_| ())
-                .map_err(AuthoringError::from)
-        },
+    publish_family_points_3d(
+        store,
+        root,
+        execution,
+        family,
+        &crate::path_editing::promote_raw_points_3d(points),
     )
 }
 
@@ -122,21 +110,7 @@ impl MobjectFamily {
     /// existing root style, presentation, identity and members are retained.
     /// Use Scene/LiveSession publication for changes after execution bootstrap.
     pub fn set_points_f64(&self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
-        if let Some(mut object) = self.own_object()? {
-            return object.set_points_f64(points);
-        }
-        let path = crate::path_editing::raw_points_path(points)?;
-        publish_initial_family_path(
-            &mut self.integration_store().borrow_mut(),
-            self.node_id(),
-            path,
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map(|_| ())
-                    .map_err(AuthoringError::from)
-            },
-        )
+        self.set_points_3d(&crate::path_editing::promote_raw_points_3d(points))
     }
 
     pub fn set_points(&self, points: &[Vec2]) -> Result<(), AuthoringError> {

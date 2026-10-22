@@ -438,7 +438,7 @@ class PathQueryTests(unittest.TestCase):
         value.n_points_per_cubic_curve = 3
         self.assertEqual(value.n_points_per_curve, 3)
 
-    def test_all_points_returns_a_two_column_array_and_boundary_aliases_it(self):
+    def test_all_points_preserves_xyz_and_boundary_uses_its_planar_profile(self):
         try:
             import numpy as np
         except ImportError:
@@ -447,7 +447,7 @@ class PathQueryTests(unittest.TestCase):
         with patch.object(
             queries,
             "_all_points_observation",
-            return_value=[0., 0., 1., 0., 2., 0., 3., 0.],
+            return_value=[0., 0., .25, 1., 0., .5, 2., 0., .75, 3., 0., 1.],
         ) as observe, patch.object(
             queries,
             "_path_boundary_points_observation",
@@ -455,8 +455,8 @@ class PathQueryTests(unittest.TestCase):
         ) as boundary_observe:
             points = value.get_all_points()
             self.assertIsInstance(points, np.ndarray)
-            self.assertEqual(points.shape, (4, 2))
-            np.testing.assert_array_equal(points, [[0., 0.], [1., 0.], [2., 0.], [3., 0.]])
+            self.assertEqual(points.shape, (4, 3))
+            np.testing.assert_array_equal(points, [[0., 0., .25], [1., 0., .5], [2., 0., .75], [3., 0., 1.]])
             boundary = value.get_points_defining_boundary()
             self.assertEqual(boundary.shape, (2, 2))
             np.testing.assert_array_equal(boundary, [[0., 0.], [3., 0.]])
@@ -586,7 +586,7 @@ class PathQueryTests(unittest.TestCase):
             )
         self.assertEqual(query.free.call_count, 1)
 
-    def test_all_points_uses_vec2_list_when_numpy_is_unavailable(self):
+    def test_all_points_preserves_xyz_without_numpy(self):
         import noon
 
         value = identity_only_wrapper(compat.VMobject)
@@ -594,37 +594,37 @@ class PathQueryTests(unittest.TestCase):
             patch.object(
                 queries,
                 "_all_points_observation",
-                return_value=[0., 0., 1., 2.],
+                return_value=[0., 0., .5, 1., 2., .75],
             ),
             patch.dict("sys.modules", {"numpy": None}),
         ):
-            self.assertEqual(value.get_all_points(), [noon.Vec2(0., 0.), noon.Vec2(1., 2.)])
+            self.assertEqual(value.get_all_points(), [(0., 0., .5), (1., 2., .75)])
 
     def test_shared_family_all_points_uses_live_or_authored_rust_handle(self):
         value = identity_only_wrapper(compat.Group)
         family = Mock()
         value._semantic_family_handle = family
-        coordinates = [0., 0., 1., 2.]
+        coordinates = [0., 0., .5, 1., 2., .75]
 
         context = Mock()
-        context.queryFamilyAllPoints.return_value = coordinates
+        context.queryFamilyAllPoints3D.return_value = coordinates
         with patch.object(
             semantic_handles,
             "_group_live_layout_context",
             return_value=context,
         ):
             self.assertIs(semantic_handles._all_points_observation(value), coordinates)
-        context.queryFamilyAllPoints.assert_called_once_with(family)
-        family.allPoints.assert_not_called()
+        context.queryFamilyAllPoints3D.assert_called_once_with(family)
+        family.allPoints3D.assert_not_called()
 
-        family.allPoints.return_value = coordinates
+        family.allPoints3D.return_value = coordinates
         with patch.object(
             semantic_handles,
             "_group_live_layout_context",
             return_value=None,
         ):
             self.assertIs(semantic_handles._all_points_observation(value), coordinates)
-        family.allPoints.assert_called_once_with()
+        family.allPoints3D.assert_called_once_with()
 
     def test_group_point_count_excludes_descendant_points(self):
         for cls in (compat.Group, compat.VGroup):

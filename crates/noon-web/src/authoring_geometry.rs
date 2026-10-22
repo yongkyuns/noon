@@ -1,7 +1,7 @@
 //! Inert typed geometry inputs for optional language wrappers.
 #![cfg(target_arch = "wasm32")]
 
-use noon_core::{Vec2, VectorPath};
+use noon_core::{SemanticVec3, Vec2, VectorPath};
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::js_error;
@@ -451,6 +451,36 @@ pub(crate) fn point_f64(x: f64, y: f64) -> Result<(f64, f64), JsValue> {
     Ok((value.x, value.y))
 }
 
+/// Decode full raw coordinates at the language boundary. Rust validates and
+/// publishes the complete array through its ordinary semantic transaction.
+pub(crate) fn point_3d(x: f64, y: f64, z: f64) -> Result<SemanticVec3, JsValue> {
+    let point = SemanticVec3::new(x, y, z);
+    point
+        .lower_xy_f32()
+        .map_err(noon::AuthoringError::from)
+        .map_err(js_error)?;
+    Ok(point)
+}
+
+pub(crate) fn points_3d(values: &[f64]) -> Result<Vec<SemanticVec3>, JsValue> {
+    if values.len() % 3 != 0 {
+        return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+            values.len(),
+        )));
+    }
+    Ok(values
+        .chunks_exact(3)
+        .map(|point| SemanticVec3::new(point[0], point[1], point[2]))
+        .collect())
+}
+
+pub(crate) fn flat_points_3d(points: Vec<SemanticVec3>) -> Vec<f64> {
+    points
+        .into_iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect()
+}
+
 pub(crate) fn points_f64(values: &[f64]) -> Result<Vec<(f64, f64)>, JsValue> {
     if values.len() % 2 != 0 {
         return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
@@ -479,8 +509,8 @@ pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
         .collect()
 }
 
-pub(crate) fn cubic_curves_f64(values: &[f64]) -> Result<Vec<[(f64, f64); 4]>, JsValue> {
-    let points = points_f64(values)?;
+pub(crate) fn cubic_curves_3d(values: &[f64]) -> Result<Vec<[SemanticVec3; 4]>, JsValue> {
+    let points = points_3d(values)?;
     if points.len() % 4 != 0 {
         return Err(js_error(
             "cubic Bézier point data must contain complete groups of four",
@@ -624,5 +654,20 @@ impl WasmManimGeometryOptions {
         noon::ManimGeometryOptions::boolean_geometry(boolean_operation(name)?, &operands.objects)
             .map(Self::from_options)
             .map_err(js_error)
+    }
+}
+
+/// Coercion only: Rust affine operations resolve deferred center/edge pivots.
+pub(crate) fn affine_pivot_3d(
+    x: f64,
+    y: f64,
+    z: f64,
+    about_point: bool,
+) -> noon::ManimRotationPivot {
+    let value = SemanticVec3::new(x, y, z);
+    if about_point {
+        noon::ManimRotationPivot::Point3d(value)
+    } else {
+        noon::ManimRotationPivot::Edge3d(value)
     }
 }

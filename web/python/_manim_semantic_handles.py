@@ -767,6 +767,8 @@ def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
         return float(observed)
     handle = _handle_for(self)
     if handle is not None:
+        if dimension == 2:
+            return float(engine_call(engine_call(handle.layoutAnchor, None).dimensionLength, dimension))
         return float(handle.width if dimension == 0 else handle.height)
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
@@ -791,15 +793,17 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    offset = _base._as_vec2(direction)
+    from _manim_path_editing import _raw_point3
+    offset = _raw_point3(direction)
+    arguments = offset if offset[2] != 0.0 else offset[:2]
     context = _live_mutation_context(self)
     if context is not None:
         try:
-            engine_call(context.liveShift, handle, offset.x, offset.y)
+            engine_call(context.liveShift, handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self
-    engine_call(handle.shift, offset.x, offset.y)
+    engine_call(handle.shift, *arguments)
     return self
 
 
@@ -843,7 +847,7 @@ def _move_to(
 
 def _dimension_fit_source(self, dim, *, planar_depth=False):
     if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
-        raise NotImplementedError("Noon currently exposes width/height fitting only")
+        raise NotImplementedError("dimension fitting requires X, Y or Z")
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
@@ -853,10 +857,13 @@ def _dimension_fit_source(self, dim, *, planar_depth=False):
 
 
 def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
-    _dimension_fit_source(self, dim)
-    factor = float(factor)
-    factors = (factor, 1.0) if dim == 0 else (1.0, factor)
-    return _planar_affine(self, "scale", factors, about_point, about_edge)
+    anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
+    arguments = (float(factor), dim, *_pivot_arguments_3d(about_point, about_edge))
+    if context is None:
+        engine_call(anchor.stretch, *arguments)
+    else:
+        engine_call(context.liveStretchLayout, anchor, *arguments)
+    return self
 
 
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
@@ -866,8 +873,8 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
     # zero. Avoid coercing them, but still let Rust validate the anchor and own
     # the no-op decision from its coherent fitting snapshot.
     zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., False) if zero_extent
-             else _pivot_arguments(about_point, about_edge))
+    pivot = ((0., 0., 0., False) if zero_extent
+             else _pivot_arguments_3d(about_point, about_edge))
     length = 0.0 if zero_extent else float(length)
     try:
         if context is None:
@@ -875,7 +882,7 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
         else:
             engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch), *pivot)
     except Exception as error:
-        raise_engine_error(error)
+        _raise_boundary_error(error)
     return self
 
 
@@ -885,8 +892,8 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
     dim = _fitting_dimension_index(dim)
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
     zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., False) if zero_extent
-             else _pivot_arguments(about_point, about_edge))
+    pivot = ((0., 0., 0., False) if zero_extent
+             else _pivot_arguments_3d(about_point, about_edge))
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("dimension matching requires a shared Rust target")
@@ -896,8 +903,18 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
         else:
             engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch), *pivot)
     except Exception as error:
-        raise_engine_error(error)
+        _raise_boundary_error(error)
     return self
+
+
+def _raise_boundary_error(error):
+    diagnostic = error
+    while diagnostic is not None:
+        if getattr(diagnostic, "code", None) == "path.unpaired_anchors":
+            raise ValueError("zip() argument 2 is shorter than argument 1") from error
+        diagnostic = (getattr(error, "rust_cause", None) if diagnostic is error
+                      else diagnostic.cause)
+    raise_engine_error(error)
 
 
 def _dimension_fit_extent(anchor, context, dim):
@@ -918,24 +935,44 @@ def _fitting_dimension_index(dim):
 
 
 def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is None:
+    if _handle_for(self) is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    if isinstance(factor, (tuple, list, _base.Vec2)):
-        value = _base._as_vec2(factor)
-    else:
+    return _scale_xyz(self, factor, about_point, about_edge)
+
+
+def _scale_factors_xyz(factor):
+    # Preserve Vec2/two-component authoring ergonomics; scalar and three-axis
+    # factors use the complete Manim coordinates. This is argument adaptation,
+    # never a frontend transform or family/bounds calculation.
+    if isinstance(factor, _base.Vec2):
+        return float(factor.x), float(factor.y), 1.0
+    try:
+        count = len(factor)
+    except (TypeError, AttributeError):
         scalar = float(factor)
-        value = _base.Vec2(scalar, scalar)
-    if about_point is not None or about_edge is not None:
-        return _planar_affine(self, "scale", (value.x, value.y), about_point, about_edge)
-    context = _live_mutation_context(self)
-    if context is not None:
-        try:
-            engine_call(context.liveScale, handle, value.x, value.y)
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-    engine_call(handle.scale, value.x, value.y)
+        return scalar, scalar, scalar
+    if count == 1:
+        scalar = float(factor[0])
+        return scalar, scalar, scalar
+    if count in (2, 3):
+        return float(factor[0]), float(factor[1]), float(factor[2]) if count == 3 else 1.0
+    raise ValueError("scale factor must be scalar or have one, two or three components")
+
+
+def _scale_xyz(self, factor, about_point, about_edge):
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("scale requires the shared Rust authoring host")
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
+               else _live_mutation_context(self))
+    arguments = (*_scale_factors_xyz(factor), *_pivot_arguments_3d(about_point, about_edge))
+    try:
+        if context is None:
+            engine_call(anchor.scale3d, *arguments)
+        else:
+            engine_call(context.liveScaleLayout3d, anchor, *arguments)
+    except Exception as error:
+        _raise_boundary_error(error)
     return self
 
 
@@ -967,6 +1004,12 @@ def _rotate(
     if kwargs:
         raise NotImplementedError(f"unsupported Manim rotate option(s): {', '.join(sorted(kwargs))}")
     return _planar_affine(self, "rotate", (_compat._rotation_angle_2d(angle, axis),), about_point, about_edge)
+
+
+def _pivot_arguments_3d(about_point, about_edge):
+    from _manim_path_editing import _raw_point3
+    value = about_point if about_point is not None else (_base.ORIGIN if about_edge is None else about_edge)
+    return (*_raw_point3(value), about_point is not None)
 
 
 def _pivot_arguments(about_point, about_edge):
@@ -2421,22 +2464,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
 
 
 def _group_scale(self: _compat.Group, factor: object, *, about_point=None, about_edge=None) -> _compat.Group:
-    scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
-             else _base.Vec2(float(factor), float(factor)))
-    if about_point is not None or about_edge is not None:
-        return _planar_affine(self, "scale", (scale.x, scale.y), about_point, about_edge)
-    handle = getattr(self, "_semantic_family_handle", None)
-    if handle is None:
-        raise RuntimeError("Group scale requires the shared Rust authoring host")
-    context = _group_live_layout_context(self)
-    try:
-        if context is not None:
-            engine_call(context.liveScaleFamily, handle, scale.x, scale.y)
-        else:
-            engine_call(handle.scale, scale.x, scale.y)
-    except Exception as error:
-        raise_engine_error(error)
-    return self
+    return _scale_xyz(self, factor, about_point, about_edge)
 
 
 def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
@@ -2455,20 +2483,20 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
             raise RuntimeError("Group shift requires the shared Rust authoring host")
         phase.shift_family(handle, _base._as_vec2(direction))
         return self
+    from _manim_path_editing import _raw_point3
+    offset = _raw_point3(direction)
+    arguments = offset if offset[2] != 0.0 else offset[:2]
     context = _group_target_context(self)
     if context is not None:
-        offset = _base._as_vec2(direction)
         try:
-            engine_call(context.liveShiftFamily, self._semantic_family_handle, offset.x, offset.y)
+            engine_call(context.liveShiftFamily, self._semantic_family_handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self
-    shared = _shared_family_layout(self, mutation=True)
-    if shared is None:
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
         raise RuntimeError("Group shift requires the shared Rust authoring host")
-    session = shared
-    offset = _base._as_vec2(direction)
-    engine_call(session.shiftBy, offset.x, offset.y)
+    engine_call(handle.shift, *arguments)
     return self
 
 
@@ -2647,12 +2675,12 @@ def _all_points_observation(value: _base.Mobject):
         family = value._semantic_family_handle
         context = _group_live_layout_context(value)
         if context is not None:
-            return engine_call(context.queryFamilyAllPoints, family)
-        return engine_call(family.allPoints)
+            return engine_call(context.queryFamilyAllPoints3D, family)
+        return engine_call(family.allPoints3D)
     return _typed_manim_observation(
         value,
-        "allPoints",
-        "queryMobjectAllPoints",
+        "allPoints3D",
+        "queryMobjectAllPoints3D",
     )
 
 
@@ -2674,7 +2702,7 @@ def _point_reduction_tree_observation(value: _base.Mobject):
 def _merged_points_observation(value: _base.Mobject):
     """Return Rust-flattened recursive points for one object or family."""
     if not _is_shared_family(value):
-        return _all_points_observation(value)
+        return _typed_manim_observation(value, "allPoints", "queryMobjectAllPoints")
     family = value._semantic_family_handle
     context = _group_live_layout_context(value)
     if context is not None:

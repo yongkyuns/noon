@@ -7,23 +7,38 @@ pub(super) fn append_quadratic_f64(
     anchor: (f64, f64),
     stride: i32,
 ) -> Result<VectorPath, AuthoringError> {
-    validate_raw_points(&[control, anchor])?;
-    let points = manim_points_f64_for_path(&path)?;
+    append_quadratic_3d(
+        path,
+        SemanticVec3::new(control.0, control.1, 0.0),
+        SemanticVec3::new(anchor.0, anchor.1, 0.0),
+        stride,
+    )
+}
+
+pub(super) fn append_quadratic_3d(
+    path: VectorPath,
+    control: SemanticVec3,
+    anchor: SemanticVec3,
+    stride: i32,
+) -> Result<VectorPath, AuthoringError> {
+    point_arrays::validate(&[control, anchor])?;
+    let points = point_arrays::points(&path)?;
     let start = points.last().copied().ok_or(AuthoringError::PathQuery(
         noon_geometry::PathProportionError::EmptyPath,
     ))?;
-    // Match CE's degree-elevation arithmetic before renderer lowering.
-    let elevate = |end: (f64, f64)| {
-        (
-            (2.0 / 3.0) * control.0 + (1.0 / 3.0) * end.0,
-            (2.0 / 3.0) * control.1 + (1.0 / 3.0) * end.1,
+    // Match CE's degree-elevation arithmetic independently on all three axes.
+    let elevate = |end: SemanticVec3| {
+        SemanticVec3::new(
+            (2.0 / 3.0) * control.x + (1.0 / 3.0) * end.x,
+            (2.0 / 3.0) * control.y + (1.0 / 3.0) * end.y,
+            (2.0 / 3.0) * control.z + (1.0 / 3.0) * end.z,
         )
     };
     append_manim_cubic_points_with_stride(
         points,
         [elevate(start), elevate(anchor), anchor],
         stride,
-        VectorPath::from_manim_points_f64,
+        VectorPath::from_manim_points_3d,
     )
 }
 

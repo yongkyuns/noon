@@ -295,7 +295,7 @@ def all_points(value):
     coordinates = _all_points_observation(value)
     if coordinates is None:
         raise NotImplementedError("get_all_points requires a valid shared Rust handle")
-    return _format_points(coordinates)
+    return _format_points(coordinates, dimensions=3)
 
 
 def merged_array(value, array_attr):
@@ -612,12 +612,15 @@ def cubic_bezier_tuples(value):
     return cubic_bezier_tuples_from_points(value, _format_points(coordinates))
 
 
-def _format_points(coordinates):
+def _format_points(coordinates, dimensions=2):
     try:
         import numpy as np
     except ImportError:
-        return _points(coordinates)
-    return np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
+        if dimensions == 2:
+            return _points(coordinates)
+        return [tuple(float(value) for value in coordinates[index:index + dimensions])
+                for index in range(0, len(coordinates), dimensions)]
+    return np.asarray(coordinates, dtype=np.float64).reshape((-1, dimensions))
 
 
 def center_of_mass(value):

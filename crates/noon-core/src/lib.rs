@@ -698,7 +698,8 @@ mod tests {
 
         let expected = points
             .iter()
-            .map(|p| (p.x as f64, p.y as f64))
+            .copied()
+            .map(SemanticVec3::from_vec2)
             .collect::<Vec<_>>();
         assert_eq!(path.manim_points(), Some(expected.as_slice()));
         assert_eq!(
@@ -712,7 +713,10 @@ mod tests {
             translation: Vec2::new(5.0, -3.0),
             ..Transform2D::IDENTITY
         });
-        assert_eq!(transformed.manim_points().unwrap()[6], (11.0, 9.0));
+        assert_eq!(
+            transformed.manim_points().unwrap()[6],
+            SemanticVec3::new(11.0, 9.0, 0.0)
+        );
         assert!(transformed.is_finite());
     }
 

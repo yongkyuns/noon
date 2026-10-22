@@ -25,6 +25,11 @@ impl SemanticVec3 {
         Self::new(value.x as f64, value.y as f64, 0.0)
     }
 
+    /// An explicit planar projection; the semantic value retains all three axes.
+    pub const fn xy(self) -> (f64, f64) {
+        (self.x, self.y)
+    }
+
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
@@ -88,6 +93,13 @@ pub struct SemanticTransform2_5D {
 }
 
 impl SemanticTransform2_5D {
+    /// Apply the authored transform to a full semantic point. The rotation is
+    /// around z; scale and translation retain their third-axis components.
+    pub fn transform_xyz(self, point: SemanticVec3) -> SemanticVec3 {
+        let (x, y) = self.transform_xy(point.x, point.y);
+        SemanticVec3::new(x, y, point.z * self.scale.z + self.translation.z)
+    }
+
     /// Transform one local 2D point through the authored scale, rotation, and
     /// translation without lowering it to renderer precision.
     pub fn transform_xy(self, x: f64, y: f64) -> (f64, f64) {

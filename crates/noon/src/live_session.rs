@@ -2770,13 +2770,22 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_3d(mobject, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_3d(
+        &mut self,
+        mobject: &Mobject,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
-        if !x.is_finite() || !y.is_finite() {
+        if !delta.is_finite() {
             // Invalid live property values use the canonical publication validator
             // and its structured diagnostic, before any root/descendant edit.
             let mut translation = self.authored(mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
             return self.set_property(mobject, SemanticObjectProperty::Translation, translation);
         }
         crate::family_layout::publish_shift_root(
@@ -2784,8 +2793,7 @@ impl<'a> LiveSession<'a> {
             self.root,
             self.session,
             mobject.node_id(),
-            x,
-            y,
+            delta,
         )
         .map_err(|error| match error {
             // The shared authoring helper retains the publication cause; the
@@ -2808,13 +2816,20 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_family_3d(family, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_family_3d(
+        &mut self,
+        family: &MobjectFamily,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         crate::family_layout::publish_shift_family(
             self.store,
             self.root,
             self.session,
             family,
-            x,
-            y,
+            delta,
         )
         .map_err(LiveSessionError::from)
     }

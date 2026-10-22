@@ -573,8 +573,6 @@ class Mobject:
         return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
 
     def scale_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
-        if self.depth == 0:
-            return self
         return self.rescale_to_fit(depth, 2, stretch=False, **kwargs)
 
     def stretch(self, factor: float, dim: int, *, about_point=None, about_edge=None) -> Mobject:
@@ -591,8 +589,6 @@ class Mobject:
         return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
 
     def stretch_to_fit_depth(self: Mobject, depth: float, **kwargs: Any) -> Mobject:
-        if self.depth == 0:
-            return self
         return self.rescale_to_fit(depth, 2, stretch=True, **kwargs)
 
     def match_width(
@@ -608,10 +604,7 @@ class Mobject:
     def match_depth(
         self: Mobject, mobject: Mobject, **kwargs: Any
     ) -> Mobject:
-        target_depth = mobject.depth
-        if self.depth == 0:
-            return self
-        return self.rescale_to_fit(target_depth, 2, stretch=False, **kwargs)
+        return self.match_dim_size(mobject, 2, **kwargs)
 
     def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
         from _manim_semantic_handles import _rescale_to_fit
@@ -963,8 +956,7 @@ class Mobject:
 
     @property
     def depth(self) -> float:
-        """Return the zero z extent of Noon’s planar geometry profile."""
-        return 0.0
+        return _semantic_operations()._layout_dimension(self, 2)
 
     @depth.setter
     def depth(self, value: float) -> None:

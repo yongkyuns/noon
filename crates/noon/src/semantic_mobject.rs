@@ -20,7 +20,8 @@ use bounds::transform_layout_xy;
 #[cfg(feature = "latex")]
 pub(crate) use bounds::transformed_rect_layout_bounds;
 pub(crate) use bounds::{
-    boundary_center, boundary_for_content, layout_for_content, transformed_path_layout_bounds,
+    boundary_center, boundary_for_content, depth_for_content, layout_for_content,
+    transformed_path_layout_bounds,
 };
 pub(crate) use style::{
     edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
@@ -1151,9 +1152,17 @@ impl Mobject {
 
     /// Shift own content and every unique descendant in one validated transaction.
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.shift_3d(SemanticVec3::new(x, y, 0.0))
+    }
+
+    /// Translate all three semantic coordinates without changing planar orientation.
+    pub fn shift_3d(&mut self, delta: SemanticVec3) -> Result<(), AuthoringError> {
         self.validate()?;
-        let translation =
-            crate::family_authoring::FamilyTranslation::begin(&self.store.borrow(), self.id, x, y)?;
+        let translation = crate::family_authoring::FamilyTranslation::begin_3d(
+            &self.store.borrow(),
+            self.id,
+            delta,
+        )?;
         translation.apply(&mut self.store.borrow_mut())
     }
 
@@ -1252,11 +1261,15 @@ pub(crate) fn semantic_transform_with_effective_affine(
     mut authored: SemanticTransform2_5D,
     effective: Transform2D,
 ) -> SemanticTransform2_5D {
-    authored.translation.x = f64::from(effective.translation.x);
-    authored.translation.y = f64::from(effective.translation.y);
-    authored.scale.x = f64::from(effective.scale.x);
-    authored.scale.y = f64::from(effective.scale.y);
-    authored.rotation_z = f64::from(effective.rotation);
+    for (authored, effective) in [
+        (&mut authored.translation.x, effective.translation.x),
+        (&mut authored.translation.y, effective.translation.y),
+        (&mut authored.scale.x, effective.scale.x),
+        (&mut authored.scale.y, effective.scale.y),
+        (&mut authored.rotation_z, effective.rotation),
+    ] {
+        crate::effective_capture::preserve_or_capture_f32(authored, effective);
+    }
     authored
 }
 

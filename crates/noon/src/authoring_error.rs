@@ -288,6 +288,11 @@ pub enum AuthoringError {
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
     GeometryResource(noon_core::GeometryResourceError),
+    /// A nonempty point array has no complete subpath for a closing line.
+    NoSubpathForClose {
+        point_count: usize,
+        stride: i32,
+    },
     /// A path observation received invalid geometry or sampling parameters.
     PathQuery(noon_geometry::PathProportionError),
     /// Current path controls cannot be observed with the active correspondence.
@@ -440,6 +445,8 @@ impl std::fmt::Display for AuthoringError {
             Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
+            Self::NoSubpathForClose { point_count, stride } => write!(f,
+                "path with {point_count} points and stride {stride} has no complete subpath to close"),
             Self::PathQuery(error) => error.fmt(f),
             Self::MorphQuery(error) => error.fmt(f),
             Self::Boolean(error) => error.fmt(f),

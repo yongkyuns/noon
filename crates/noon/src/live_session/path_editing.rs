@@ -2,6 +2,37 @@ use super::*;
 use crate::{path_editing::publish_running_path_edits, LayoutAnchor};
 
 impl LiveSession<'_> {
+    /// Publish full-coordinate root data without touching its members.
+    pub fn set_family_points_3d(
+        &mut self,
+        family: &MobjectFamily,
+        points: &[noon_core::SemanticVec3],
+    ) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_family_points_3d(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            points,
+        )?;
+        Ok(())
+    }
+
+    pub fn append_family_points_3d(
+        &mut self,
+        family: &MobjectFamily,
+        points: &[noon_core::SemanticVec3],
+    ) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_append_family_points_3d(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            points,
+        )?;
+        Ok(())
+    }
+
     /// Align root-owned paths, including first content on a family, atomically.
     pub fn align_path_points(
         &mut self,
@@ -26,6 +57,22 @@ impl LiveSession<'_> {
         points: &[(f64, f64)],
     ) -> Result<(), LiveSessionError> {
         crate::family_points::publish_family_points(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            points,
+        )?;
+        Ok(())
+    }
+
+    /// Append only a family's own points, retaining its identity and members.
+    pub fn append_family_points_f64(
+        &mut self,
+        family: &MobjectFamily,
+        points: &[(f64, f64)],
+    ) -> Result<(), LiveSessionError> {
+        crate::family_points::publish_append_family_points(
             self.store,
             self.root,
             self.session,

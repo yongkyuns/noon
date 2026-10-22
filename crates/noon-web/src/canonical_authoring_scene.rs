@@ -976,6 +976,18 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn mobject_all_points_3d(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            |handle| noon::MobjectTarget::from(handle).all_points_3d(),
+            |player, handle| player.live_effective_all_points_3d(noon::MobjectTarget::from(handle)),
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn mobject_point_reduction_tree(
         &mut self,
         handle: &noon::Mobject,
@@ -1114,27 +1126,28 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn family_all_points(
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let target = noon::MobjectTarget::from(family);
-        let root = target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&root) {
-            return Err("family is not bound to this canonical Scene".into());
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_all_points(target);
-            }
-        }
-        target.all_points().map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |target| target.all_points(),
+            crate::SemanticExecutionPlayer::live_effective_all_points,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_all_points_3d(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.all_points_3d(),
+            crate::SemanticExecutionPlayer::live_effective_all_points_3d,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3180,11 +3193,12 @@ impl CanonicalAuthoringScene {
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
+        z: f64,
     ) -> Result<(), AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_shift_family(family, x, y)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_shift_family(family, x, y, z),
             PlayerOwnership::Unstarted => {
                 Err("live family shift requires an active canonical session".into())
             }
@@ -7451,6 +7465,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyAllPoints3D)]
+        pub fn query_family_all_points_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .family_all_points_3d(&handle.semantic_family()?)
+                .map(crate::authoring_geometry::flat_points_3d)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyVectorBoundaryPoints)]
         pub fn query_family_vector_boundary_points(
             &mut self,
@@ -7632,13 +7657,10 @@ mod wasm {
             stretch: bool,
             x: f64,
             y: f64,
+            z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
+            let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -7704,13 +7726,10 @@ mod wasm {
             stretch: bool,
             x: f64,
             y: f64,
+            z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
+            let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -7956,6 +7975,17 @@ mod wasm {
             self.inner
                 .mobject_all_points(handle.semantic_mobject())
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectAllPoints3D)]
+        pub fn query_mobject_all_points_3d(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.inner
+                .mobject_all_points_3d(handle.semantic_mobject())
+                .map(crate::authoring_geometry::flat_points_3d)
                 .map_err(typed_js_error)
         }
 
@@ -8529,6 +8559,48 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyPoints3D)]
+        pub fn live_set_family_points_3d(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_points_3d(&source.semantic_family()?, &points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAppendFamilyPoints)]
+        pub fn live_append_family_points(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_f64(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_append_family_points(&source.semantic_family()?, &points)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAppendFamilyPoints3D)]
+        pub fn live_append_family_points_3d(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_append_family_points_3d(&source.semantic_family()?, &points)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveClearFamilyPoints)]
         pub fn live_clear_family_points(
             &mut self,
@@ -8555,6 +8627,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetPoints3D)]
+        pub fn live_set_points_3d(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_points_3d(source.semantic_mobject(), &points)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAppendPoints)]
         pub fn live_append_points(
             &mut self,
@@ -8569,13 +8655,27 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAppendPoints3D)]
+        pub fn live_append_points_3d(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points_3d(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_append_points_3d(source.semantic_mobject(), &points)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetPointsAsCorners)]
         pub fn live_set_points_as_corners(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8590,7 +8690,7 @@ mod wasm {
             values: Vec<f64>,
             sample_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
                 JsValue::from(js_sys::TypeError::new(
                     "set_points_as_corners requires four samples",
@@ -8625,8 +8725,9 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8640,9 +8741,10 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: i32,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8656,9 +8758,10 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8672,10 +8775,11 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
             point_y: f64,
+            point_z: f64,
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
@@ -8697,12 +8801,14 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             control_x: f64,
             control_y: f64,
+            control_z: f64,
             anchor_x: f64,
             anchor_y: f64,
+            anchor_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control = crate::authoring_geometry::point_f64(control_x, control_y)?;
-            let anchor = crate::authoring_geometry::point_f64(anchor_x, anchor_y)?;
+            let control = crate::authoring_geometry::point_3d(control_x, control_y, control_z)?;
+            let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8721,15 +8827,18 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             control1_x: f64,
             control1_y: f64,
+            control1_z: f64,
             control2_x: f64,
             control2_y: f64,
+            control2_z: f64,
             anchor_x: f64,
             anchor_y: f64,
+            anchor_z: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control1 = crate::authoring_geometry::point_f64(control1_x, control1_y)?;
-            let control2 = crate::authoring_geometry::point_f64(control2_x, control2_y)?;
-            let anchor = crate::authoring_geometry::point_f64(anchor_x, anchor_y)?;
+            let control1 = crate::authoring_geometry::point_3d(control1_x, control1_y, control1_z)?;
+            let control2 = crate::authoring_geometry::point_3d(control2_x, control2_y, control2_z)?;
+            let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8791,17 +8900,21 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             anchor1_x: f64,
             anchor1_y: f64,
+            anchor1_z: f64,
             handle1_x: f64,
             handle1_y: f64,
+            handle1_z: f64,
             handle2_x: f64,
             handle2_y: f64,
+            handle2_z: f64,
             anchor2_x: f64,
             anchor2_y: f64,
+            anchor2_z: f64,
         ) -> Result<(), JsValue> {
-            let anchor1 = crate::authoring_geometry::point_f64(anchor1_x, anchor1_y)?;
-            let handle1 = crate::authoring_geometry::point_f64(handle1_x, handle1_y)?;
-            let handle2 = crate::authoring_geometry::point_f64(handle2_x, handle2_y)?;
-            let anchor2 = crate::authoring_geometry::point_f64(anchor2_x, anchor2_y)?;
+            let anchor1 = crate::authoring_geometry::point_3d(anchor1_x, anchor1_y, anchor1_z)?;
+            let handle1 = crate::authoring_geometry::point_3d(handle1_x, handle1_y, handle1_z)?;
+            let handle2 = crate::authoring_geometry::point_3d(handle2_x, handle2_y, handle2_z)?;
+            let anchor2 = crate::authoring_geometry::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8821,7 +8934,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8835,7 +8948,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8849,7 +8962,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8865,7 +8978,7 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
+            let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -9977,6 +10090,7 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
+            z: Option<f64>,
         ) -> Result<(), JsValue> {
             handle.id_in_store(
                 self.inner.scene.integration_store(),
@@ -9985,7 +10099,7 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_shift(handle.semantic_mobject(), x, y)
+                .live_shift(handle.semantic_mobject(), x, y, z.unwrap_or(0.0))
                 .map_err(typed_js_error)
         }
 
@@ -10243,6 +10357,7 @@ mod wasm {
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
             y: f64,
+            z: Option<f64>,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             if !std::rc::Rc::ptr_eq(
@@ -10254,7 +10369,7 @@ mod wasm {
                 ));
             }
             self.inner
-                .live_shift_family(&family, x, y)
+                .live_shift_family(&family, x, y, z.unwrap_or(0.0))
                 .map_err(typed_js_error)
         }
 
@@ -11077,6 +11192,54 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_rotation(handle.semantic_mobject(), angle)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveStretchLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_stretch_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            factor: f64,
+            dimension: u32,
+            x: f64,
+            y: f64,
+            z: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_stretch_layout(
+                    &source.anchor,
+                    factor,
+                    dimension.try_into().map_err(js_error)?,
+                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveScaleLayout3d)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_scale_layout_3d(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            scale_x: f64,
+            scale_y: f64,
+            scale_z: f64,
+            x: f64,
+            y: f64,
+            z: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_scale_layout_3d(
+                    &source.anchor,
+                    noon::SemanticVec3::new(scale_x, scale_y, scale_z),
+                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                )
                 .map_err(typed_js_error)
         }
 
@@ -12573,7 +12736,9 @@ mod tests {
         assert_ne!(left_target.node_id(), left.node_id());
         assert_ne!(right_target.node_id(), right.node_id());
         let target_pair = copied.root().clone();
-        context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
+        context
+            .live_shift_family(&target_pair, 0.0, 1.0, 0.0)
+            .unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,
@@ -12724,7 +12889,7 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&circle, 1.0, 0.0)
+            .live_shift(&circle, 1.0, 0.0, 0.0)
             .unwrap();
         assert_eq!(
             context
@@ -12869,7 +13034,7 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&target, 2.0, -1.0)
+            .live_shift(&target, 2.0, -1.0, 0.0)
             .unwrap();
         let options = AnimationOptions::new()
             .run_time(1.0)
@@ -15253,7 +15418,7 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&next_target, 2.0, 0.0)
+            .live_shift(&next_target, 2.0, 0.0, 0.0)
             .unwrap();
         let next_endpoint = begin_request(
             &mut context,
@@ -16317,3 +16482,6 @@ mod matching_family_selector_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod xyz_tests;

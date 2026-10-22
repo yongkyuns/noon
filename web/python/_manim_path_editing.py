@@ -64,7 +64,7 @@ def apply_over_attr_arrays(value, func):
     for attr in attrs:
         query = _query(value)
         try:
-            coordinates = engine_call(query.points)
+            coordinates = engine_call(query.points3D)
         finally:
             query.free()
 
@@ -72,15 +72,14 @@ def apply_over_attr_arrays(value, func):
             import numpy as np
         except ImportError:
             rows = [
-                [float(coordinates[index]), float(coordinates[index + 1]), 0.0]
-                for index in range(0, len(coordinates), 2)
+                [float(value) for value in coordinates[index:index + 3]]
+                for index in range(0, len(coordinates), 3)
             ]
         else:
-            xy = np.asarray(coordinates, dtype=np.float64).reshape((-1, 2))
-            rows = np.column_stack((xy, np.zeros(len(xy), dtype=np.float64)))
+            rows = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
 
         mapped = func(rows)
-        mapped = _mapped_planar_points(mapped)
+        mapped = _mapped_points(mapped)
         edit_points(
             value,
             "setPoints",
@@ -266,8 +265,8 @@ def _point3_array(point, numpy):
     )
 
 
-def _mapped_planar_points(points):
-    """Validate the planar Rust path boundary before publishing mapped rows."""
+def _mapped_points(points):
+    """Validate mapped row shape without discarding the third coordinate."""
     try:
         import numpy as np
     except ImportError:
@@ -276,22 +275,27 @@ def _mapped_planar_points(points):
             return []
         if any(len(row) not in (2, 3) for row in rows):
             raise ValueError("mapped points must have two or three coordinates")
-        if any(len(row) == 3 and float(row[2]) != 0.0 for row in rows):
-            raise NotImplementedError("nonzero-z mapped points are unsupported")
-        return [(float(row[0]), float(row[1])) for row in rows]
+        return [_raw_point3(row) for row in rows]
 
     mapped = np.asarray(points, dtype=np.float64)
     if mapped.ndim == 1 and mapped.size == 0:
         return []
     if mapped.ndim != 2 or mapped.shape[1] not in (2, 3):
         raise ValueError("mapped points must be a two-dimensional point array")
-    if mapped.shape[1] == 3 and np.any(mapped[:, 2] != 0.0):
-        raise NotImplementedError("nonzero-z mapped points are unsupported")
-    return mapped[:, :2]
+    if mapped.shape[1] == 2:
+        return np.column_stack((mapped, np.zeros(len(mapped), dtype=np.float64)))
+    return mapped
 
 
 def append_points(value, points):
-    return edit_points(value, "appendPoints", "liveAppendPoints", points, array=True)
+    _check_path_edit_phase()
+    import numpy as np
+
+    # Only normalize the new argument. Rust retains and appends the existing
+    # semantic prefix through the ordinary atomic path transaction.
+    prepared = np.empty((len(points), getattr(value, "dim", 3)))
+    prepared[:] = points
+    return edit_points(value, "appendPoints", "liveAppendPoints", prepared, array=True)
 
 
 def start_new_path(value, point):
@@ -328,30 +332,19 @@ def resize_points(value, new_length, resize_func=None):
         point_count = int(query.pointCount)
         if point_count == length:
             return value
-        coordinates = engine_call(query.points)
+        coordinates = engine_call(query.points3D)
     finally:
         query.free()
 
     import numpy as np
-    xy_points = np.asarray(coordinates, dtype=float).reshape((-1, 2))
-    # Manim's point array has three columns. Noon stores planar XY internally,
-    # so present an equivalent zero-Z array to caller-supplied resize functions.
-    points = np.column_stack((xy_points, np.zeros(len(xy_points))))
+    points = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
     return set_points(value, resize_func(points, length))
 
 
 def add_cubic_bezier_curves(value, curves):
-    curves = list(curves)
-    if curves and _looks_like_point(curves[0]):
-        curves = [curves]
-    points = [point for curve in curves for point in curve]
-    return edit_points(
-        value,
-        "addCubicBezierCurves",
-        "liveAddCubicBezierCurves",
-        points,
-        array=True,
-    )
+    _check_path_edit_phase()
+    value.append_points(curves.flatten())
+    return value
 
 
 def add_points_as_corners(value, points):
@@ -405,8 +398,8 @@ def add_points_as_corners(value, points):
 
 def add_subpath(value, points):
     assert len(points) % 4 == 0
-    curves = [points[index : index + 4] for index in range(0, len(points), 4)]
-    return add_cubic_bezier_curves(value, curves)
+    value.append_points(points)
+    return value
 
 
 def add_smooth_curve_to(value, *points):
@@ -653,13 +646,20 @@ def close_path(value):
         raise TypeError("close_path requires three constructor interpolation samples")
     from pyodide.ffi import to_js
 
-    return edit_points(
-        value,
-        "closePathWithStride",
-        "liveClosePathWithStride",
-        (),
-        suffix=(stride, tolerance, to_js(sample_values)),
-    )
+    try:
+        return edit_points(
+            value,
+            "closePathWithStride",
+            "liveClosePathWithStride",
+            (),
+            suffix=(stride, tolerance, to_js(sample_values)),
+        )
+    except IndexError as error:
+        if getattr(error, "code", None) == "path.close_without_subpath":
+            # CE indexes the empty subpath list. Keep Python's exact exception
+            # while retaining the typed engine diagnosis as its cause.
+            raise IndexError("list index out of range") from error
+        raise
 
 
 def _looks_like_point(value):
@@ -672,12 +672,38 @@ def _looks_like_point(value):
     return size in (2, 3) and all(not hasattr(component, "__len__") for component in value)
 
 
-def edit_points(value, method, live_method, points, *, array=False, suffix=()):
+def _check_path_edit_phase():
     from _manim_updaters import canonical_callback_phase_active
     if canonical_callback_phase_active():
         raise NotImplementedError("callback path editing requires shared transient resource publication")
-    coordinates = [_base._as_vec2(point) for point in points]
-    values = [component for point in coordinates for component in (point.x, point.y)]
+
+
+def _raw_point3(point):
+    """Preserve all caller coordinates across the raw-point language boundary."""
+    if isinstance(point, _base.Vec2):
+        return (float(point.x), float(point.y), 0.0)
+    if len(point) not in (2, 3):
+        raise TypeError("expected a two- or three-component vector")
+    return (float(point[0]), float(point[1]), float(point[2]) if len(point) == 3 else 0.0)
+
+
+def edit_points(value, method, live_method, points, *, array=False, suffix=()):
+    _check_path_edit_phase()
+    raw_points = method in ("setPoints", "appendPoints")
+    xyz_points = raw_points or method in (
+        "setPointsAsCorners", "setPointsAsCornersWithSamples",
+        "startNewPath", "startNewPathWithStride", "addLineTo", "addLineToWithSamples",
+        "addQuadraticBezierCurveTo", "addCubicBezierCurveTo", "addCubicBezierCurve",
+        "addCubicBezierCurves", "setCubicBezierCurves",
+        "addPointsAsCorners", "addPointsAsCornersWithStride",
+    )
+    if xyz_points:
+        # Coordinate coercion belongs to Python; complete point state and
+        # publication stay in the shared Rust operation.
+        values = [component for point in points for component in _raw_point3(point)]
+    else:
+        coordinates = [_base._as_vec2(point) for point in points]
+        values = [component for point in coordinates for component in (point.x, point.y)]
     if array:
         from pyodide.ffi import to_js
         values = [to_js(values)]
@@ -687,9 +713,17 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
     if shared_family:
-        if method not in ("setPoints", "clearPoints"):
+        if method == "setPoints":
+            live_method = "liveSetFamilyPoints"
+        elif method == "appendPoints":
+            live_method = "liveAppendFamilyPoints"
+        elif method == "clearPoints":
+            live_method = "liveClearFamilyPoints"
+        else:
             raise NotImplementedError("this family root path edit requires shared Rust support")
-        live_method = "liveSetFamilyPoints" if method == "setPoints" else "liveClearFamilyPoints"
+    if raw_points:
+        method += "3D"
+        live_method += "3D"
     context = _live_mutation_context(value) or _live_constructor_context("path")
     if context is None:
         engine_call(

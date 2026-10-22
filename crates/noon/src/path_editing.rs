@@ -1,13 +1,18 @@
 //! Persistent vector edits publish new immutable content through one transaction.
+mod point_arrays;
+pub(crate) use point_arrays::{
+    promote_xyz as promote_raw_points_3d, raw_path as raw_points_path_3d,
+};
 mod quadratic;
 mod scalar;
 mod scalar_authoring;
+mod scalar_authoring_3d;
 pub(crate) use scalar::{ScalarPathEdit, LINE_SAMPLES};
 mod transaction;
 use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
 use noon_core::{
     SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
-    SemanticStore, StoredGeometry, Vec2, VectorPath,
+    SemanticStore, SemanticVec3, StoredGeometry, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 pub(crate) use transaction::PreparedPathEdits;
@@ -1033,9 +1038,12 @@ pub(crate) fn path_is_unchanged(
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
     Scalar(ScalarPathEdit<'a>),
+    Scalar3d(ScalarPathEdit<'a, SemanticVec3>),
     Clear,
     RawPoints(&'a [(f64, f64)]),
     AppendRawPoints(&'a [(f64, f64)]),
+    RawPoints3d(&'a [SemanticVec3]),
+    AppendRawPoints3d(&'a [SemanticVec3]),
     Corners(&'a [Vec2]),
     CornersWithSamples {
         points: &'a [Vec2],
@@ -1056,6 +1064,7 @@ pub(crate) enum PathEdit<'a> {
     },
     AppendCorners(&'a [Vec2]),
     QuadraticWithStride((f64, f64), (f64, f64), i32),
+    Quadratic3dWithStride(SemanticVec3, SemanticVec3, i32),
     Cubic(Vec2, Vec2, Vec2),
     CubicWithStride(Vec2, Vec2, Vec2, i32),
     CubicCurve(Vec2, Vec2, Vec2, Vec2),
@@ -1116,17 +1125,25 @@ impl PathEdit<'_> {
                 };
                 scalar::prepare(path, edit)
             }
+            Self::Scalar3d(edit) => {
+                let path = if matches!(
+                    edit,
+                    Edit::Corners { .. } | Edit::Cubics { replace: true, .. }
+                ) {
+                    VectorPath::new()
+                } else {
+                    current()?
+                };
+                scalar::prepare(path, edit)
+            }
             Self::Clear => Ok(Some(VectorPath::new())),
             Self::RawPoints(points) => raw_points_path(points).map(Some),
             Self::AppendRawPoints(points) => {
-                validate_raw_points(points)?;
-                if points.is_empty() {
-                    return Ok(None);
-                }
-                let mut raw = manim_points_f64_for_path(&current()?)?;
-                raw.extend_from_slice(points);
-                Ok(Some(VectorPath::from_manim_points_f64(raw)))
+                let points = point_arrays::promote_xyz(points);
+                point_arrays::append(&points, current)
             }
+            Self::RawPoints3d(points) => point_arrays::raw_path(points).map(Some),
+            Self::AppendRawPoints3d(points) => point_arrays::append(points, current),
             Self::Corners(points) => scalar::prepare(
                 VectorPath::new(),
                 Edit::Corners {
@@ -1189,6 +1206,9 @@ impl PathEdit<'_> {
             ),
             Self::QuadraticWithStride(control, anchor, stride) => {
                 quadratic::append_quadratic_f64(current()?, control, anchor, stride).map(Some)
+            }
+            Self::Quadratic3dWithStride(control, anchor, stride) => {
+                quadratic::append_quadratic_3d(current()?, control, anchor, stride).map(Some)
             }
             Self::Cubic(c1, c2, anchor) => scalar::prepare(
                 current()?,
@@ -1282,7 +1302,7 @@ impl PathEdit<'_> {
             } => append_smooth_curve_path(current()?, handle2, anchor, stride).map(Some),
             Self::Close => scalar::prepare(
                 current()?,
-                Edit::Close {
+                Edit::<(f64, f64)>::Close {
                     stride: 4,
                     tolerance: 1e-6,
                     samples: &LINE_SAMPLES,
@@ -1294,7 +1314,7 @@ impl PathEdit<'_> {
                 bezier_t_values,
             } => scalar::prepare(
                 current()?,
-                Edit::Close {
+                Edit::<(f64, f64)>::Close {
                     stride,
                     tolerance,
                     samples: bezier_t_values,
@@ -1330,8 +1350,8 @@ impl PathEdit<'_> {
 pub(crate) fn manim_points_f64_for_path(
     path: &VectorPath,
 ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-    if let Some(points) = path.manim_points() {
-        return Ok(points.to_vec());
+    if let Some(points) = path.manim_points_xy() {
+        return Ok(points);
     }
     crate::path_queries::PathQuery::prepare(path, noon_core::SemanticTransform2_5D::default())?
         .points()
@@ -1446,19 +1466,67 @@ pub(crate) fn prepare_object_edit(
     let before = store
         .semantic_object_state_checked(object)
         .map_err(AuthoringError::from)?;
-    let after = path_replacement_state(captured.clone())?;
+    let mut replacement = captured.clone();
+    if matches!(
+        &edit,
+        PathEdit::RawPoints(_)
+            | PathEdit::AppendRawPoints(_)
+            | PathEdit::RawPoints3d(_)
+            | PathEdit::AppendRawPoints3d(_)
+            | PathEdit::Scalar(_)
+            | PathEdit::Scalar3d(_)
+            | PathEdit::QuadraticWithStride(..)
+            | PathEdit::Quadratic3dWithStride(..)
+            | PathEdit::Corners(_)
+            | PathEdit::CornersWithSamples { .. }
+            | PathEdit::Start { .. }
+            | PathEdit::Line(_)
+            | PathEdit::LineWithStride(..)
+            | PathEdit::LineWithSamples { .. }
+            | PathEdit::Cubic(..)
+            | PathEdit::CubicWithStride(..)
+            | PathEdit::CubicCurve(..)
+            | PathEdit::CubicCurves(_)
+            | PathEdit::SetCubicCurves(_)
+            | PathEdit::AppendCorners(_)
+            | PathEdit::AppendCornersWithStride { .. }
+            | PathEdit::Close
+            | PathEdit::CloseWithStride { .. }
+    ) {
+        // These edits publish world XYZ coordinates. Their full affine is
+        // baked into the replacement data, so publication must not apply Z twice.
+        replacement.transform.translation.z = 0.0;
+        replacement.transform.scale.z = 1.0;
+    }
+    let after = path_replacement_state(replacement.clone())?;
     let Some(path) = edit.prepare(store, &captured)? else {
         return Ok(None);
     };
     if path_is_unchanged(store, before, &after, &path) {
         return Ok(None);
     }
-    PreparedPathEdits::prepare(store, [(object, captured, path)]).map(Some)
+    PreparedPathEdits::prepare(store, [(object, replacement, path)]).map(Some)
 }
 
 pub(crate) fn world_path(
     store: &SemanticStore,
     state: &SemanticObjectState,
+) -> Result<VectorPath, AuthoringError> {
+    prepared_world_path(store, state, false)
+}
+
+/// Preserve semantic controls before world deformation creates a new resource.
+pub(crate) fn canonical_world_path(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<VectorPath, AuthoringError> {
+    prepared_world_path(store, state, true)
+}
+
+fn prepared_world_path(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+    canonical_points: bool,
 ) -> Result<VectorPath, AuthoringError> {
     let transform = state
         .transform
@@ -1473,7 +1541,13 @@ pub(crate) fn world_path(
     ] {
         crate::semantic_mobject::authoring_render_f64(name, value)?;
     }
-    Ok(crate::path_queries::content_path(store, state.content)?.transformed_semantic(transform))
+    let path = crate::path_queries::content_path(store, state.content)?;
+    let path = if canonical_points || transform.translation.z != 0.0 || transform.scale.z != 1.0 {
+        point_arrays::with_canonical_points(&path)?
+    } else {
+        path.as_ref().clone()
+    };
+    Ok(path.transformed_semantic(transform))
 }
 
 /// Scale each cubic handle around its associated anchor, promoting lines and

@@ -369,6 +369,12 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::GeometryResource(cause) => {
                 Self::caused_by("authoring.geometry_resource", message, cause.into())
             }
+            AuthoringError::NoSubpathForClose { .. } => {
+                Self::new("index_error", "path.close_without_subpath", message)
+            }
+            AuthoringError::PathQuery(noon_geometry::PathProportionError::UnpairedAnchors {
+                ..
+            }) => Self::new("invalid_input", "path.unpaired_anchors", message),
             AuthoringError::PathQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_query", cause)
             }
@@ -1332,6 +1338,24 @@ mod tests {
     }
 
     #[test]
+    fn fitting_xyz_unpaired_anchors_have_a_typed_language_projection() {
+        let mut scene = noon::Scene::new();
+        let points = (0..5)
+            .map(|n| noon_core::SemanticVec3::new(f64::from(n), 0.0, 1.0))
+            .collect();
+        let object = scene
+            .path(
+                noon_core::VectorPath::from_manim_points_3d(points),
+                Default::default(),
+            )
+            .unwrap();
+        let error = noon::LayoutAnchor::from(&object)
+            .rescale_to_fit(2.0, noon::LayoutDimension::Width, false)
+            .unwrap_err();
+        assert_authoring_projection(error, "invalid_input", &["path.unpaired_anchors"]);
+    }
+
+    #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
         use noon::{LayoutAnchor, MobjectTarget, Scene};
         let mut scene = Scene::new();
@@ -1469,5 +1493,18 @@ mod tests {
         scene.remove_glow(&object).unwrap();
         let stale = handle.authored_definition().unwrap_err();
         assert_eq!(AuthoringFailure::from(stale).category, "stale_handle");
+    }
+    #[test]
+    fn closing_an_array_without_a_complete_subpath_has_a_typed_index_diagnosis() {
+        let failure = AuthoringFailure::from(noon::AuthoringError::NoSubpathForClose {
+            point_count: 4,
+            stride: 5,
+        });
+        assert_eq!(failure.category, "index_error");
+        assert_eq!(failure.code, "path.close_without_subpath");
+        assert_eq!(
+            failure.message,
+            "path with 4 points and stride 5 has no complete subpath to close"
+        );
     }
 }

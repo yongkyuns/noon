@@ -1,6 +1,34 @@
 //! Geometry layout bounds read directly from immutable semantic resources.
 use super::*;
 
+/// Depth uses the same canonical controls as point queries. Dimensions include
+/// handles; deferred center/edge pivots select only paired cubic anchors.
+pub(crate) fn depth_for_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    transform: SemanticTransform2_5D,
+    include_handles: bool,
+) -> Result<Option<(f64, f64)>, AuthoringError> {
+    if !matches!(content, SemanticObjectContent::Geometry(_)) {
+        return Ok(boundary_for_content(store, content, transform)?
+            .map(|_| (transform.translation.z, transform.translation.z)));
+    }
+    let path = crate::path_queries::content_path(store, content)?;
+    let points = crate::PathQuery::prepare(&path, transform)?.points_3d()?;
+    let indices: Box<dyn Iterator<Item = usize>> = if include_handles {
+        Box::new(0..points.len())
+    } else {
+        Box::new(
+            noon_geometry::manim_anchor_indices(points.len()).map_err(AuthoringError::PathQuery)?,
+        )
+    };
+    Ok(indices
+        .map(|index| points[index].z)
+        .fold(None, |bounds, z| {
+            Some(bounds.map_or((z, z), |(min, max): (f64, f64)| (min.min(z), max.max(z))))
+        }))
+}
+
 /// Empty geometry has no layout anchor, even when its authored pose is nonzero.
 /// Preserve the precision-sensitive translation offset only for actual bounds.
 pub(crate) fn boundary_center(bounds: Option<Bounds2D64>, offset: (f64, f64)) -> (f64, f64) {
@@ -92,14 +120,14 @@ pub(crate) fn transformed_path_layout_bounds(
     let mut bounds = None;
     if let Some(points) = path.manim_points() {
         if include_handles {
-            for &(x, y) in points {
+            for (x, y) in points.iter().copied().map(noon_core::SemanticVec3::xy) {
                 include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
             }
         } else {
             for index in noon_geometry::manim_anchor_indices(points.len())
                 .map_err(AuthoringError::PathQuery)?
             {
-                let (x, y) = points[index];
+                let (x, y) = points[index].xy();
                 include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
             }
         }
