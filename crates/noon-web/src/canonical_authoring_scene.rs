@@ -8575,7 +8575,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8590,7 +8590,7 @@ mod wasm {
             values: Vec<f64>,
             sample_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
                 JsValue::from(js_sys::TypeError::new(
                     "set_points_as_corners requires four samples",
@@ -8626,7 +8626,7 @@ mod wasm {
             point_x: f64,
             point_y: f64,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8642,7 +8642,7 @@ mod wasm {
             point_y: f64,
             stride: i32,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8658,7 +8658,7 @@ mod wasm {
             point_y: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8675,7 +8675,7 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            let point = crate::authoring_geometry::point_f64(point_x, point_y)?;
             let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
@@ -8727,9 +8727,9 @@ mod wasm {
             anchor_y: f64,
             stride: Option<i32>,
         ) -> Result<(), JsValue> {
-            let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
-            let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
-            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            let control1 = crate::authoring_geometry::point_f64(control1_x, control1_y)?;
+            let control2 = crate::authoring_geometry::point_f64(control2_x, control2_y)?;
+            let anchor = crate::authoring_geometry::point_f64(anchor_x, anchor_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8798,10 +8798,10 @@ mod wasm {
             anchor2_x: f64,
             anchor2_y: f64,
         ) -> Result<(), JsValue> {
-            let anchor1 = crate::authoring_geometry::point(anchor1_x, anchor1_y)?;
-            let handle1 = crate::authoring_geometry::point(handle1_x, handle1_y)?;
-            let handle2 = crate::authoring_geometry::point(handle2_x, handle2_y)?;
-            let anchor2 = crate::authoring_geometry::point(anchor2_x, anchor2_y)?;
+            let anchor1 = crate::authoring_geometry::point_f64(anchor1_x, anchor1_y)?;
+            let handle1 = crate::authoring_geometry::point_f64(handle1_x, handle1_y)?;
+            let handle2 = crate::authoring_geometry::point_f64(handle2_x, handle2_y)?;
+            let anchor2 = crate::authoring_geometry::point_f64(anchor2_x, anchor2_y)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8821,7 +8821,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8835,7 +8835,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let curves = crate::authoring_geometry::cubic_curves(&values)?;
+            let curves = crate::authoring_geometry::cubic_curves_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8849,7 +8849,7 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -8865,7 +8865,7 @@ mod wasm {
             stride: i32,
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points(&values)?;
+            let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?

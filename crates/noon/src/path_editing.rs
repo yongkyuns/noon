@@ -1,5 +1,8 @@
 //! Persistent vector edits publish new immutable content through one transaction.
 mod quadratic;
+mod scalar;
+mod scalar_authoring;
+pub(crate) use scalar::{ScalarPathEdit, LINE_SAMPLES};
 mod transaction;
 use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
 use noon_core::{
@@ -973,61 +976,26 @@ pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError
     Ok(path)
 }
 
-fn corners_path_with_samples(
-    points: &[Vec2],
-    bezier_t_values: &[f64; 4],
-) -> Result<VectorPath, AuthoringError> {
-    if points
-        .iter()
-        .any(|point| !point.x.is_finite() || !point.y.is_finite())
-        || bezier_t_values.iter().any(|t| !t.is_finite())
-    {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    if points.len() < 2 {
-        return Ok(VectorPath::new());
-    }
-    let mut raw_points = Vec::with_capacity((points.len() - 1) * bezier_t_values.len());
-    for pair in points.windows(2) {
-        let start = pair[0];
-        let delta = pair[1] - start;
-        raw_points.extend(bezier_t_values.iter().map(|t| start + delta * (*t as f32)));
-    }
-    if raw_points
-        .iter()
-        .any(|point| !point.x.is_finite() || !point.y.is_finite())
-    {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    Ok(VectorPath::from_manim_points(raw_points))
-}
-
-fn append_cubic_curve(path: VectorPath, curve: [Vec2; 4]) -> VectorPath {
-    let [anchor1, handle1, handle2, anchor2] = curve;
-    if path.endpoints().is_some_and(|(_, last)| last == anchor1) {
-        path.cubic_to(handle1, handle2, anchor2)
-    } else {
-        path.move_to(anchor1).cubic_to(handle1, handle2, anchor2)
-    }
-}
-
 fn append_vectorized_path_with_stride(
     destination: &VectorPath,
     source: &VectorPath,
     stride: i32,
 ) -> Result<VectorPath, AuthoringError> {
-    let mut destination_points = manim_points_for_path(destination)?;
+    let mut destination_points = manim_points_f64_for_path(destination)?;
     if crate::path_queries::point_array_has_new_path_started(destination_points.len(), stride) {
         destination_points.pop();
     }
-    destination_points.extend(manim_points_for_path(source)?);
-    let mut path = VectorPath::from_manim_points(destination_points);
+    destination_points.extend(manim_points_f64_for_path(source)?);
+    let mut path = VectorPath::from_manim_points_f64(destination_points);
 
     if destination.morph_target().is_some() || source.morph_target().is_some() {
         let destination_target = destination.morph_target().unwrap_or(destination);
         let source_target = source.morph_target().unwrap_or(source);
         let target = append_vectorized_path_with_stride(destination_target, source_target, stride)?;
         path = path.with_morph_target(target);
+    }
+    if !path.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
     }
     Ok(path)
 }
@@ -1064,6 +1032,7 @@ pub(crate) fn path_is_unchanged(
 /// Inputs to shared authoring preparation, published using the normal content
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
+    Scalar(ScalarPathEdit<'a>),
     Clear,
     RawPoints(&'a [(f64, f64)]),
     AppendRawPoints(&'a [(f64, f64)]),
@@ -1133,336 +1102,228 @@ impl PathEdit<'_> {
         store: &SemanticStore,
         state: &SemanticObjectState,
     ) -> Result<Option<VectorPath>, AuthoringError> {
-        if matches!(self, Self::Clear) {
-            return Ok(Some(VectorPath::new()));
-        }
-        if let Self::CloseWithStride {
-            stride,
-            tolerance,
-            bezier_t_values,
-        } = self
-        {
-            let path = world_path(store, state)?;
-            return close_path_with_stride(path, stride, tolerance, bezier_t_values);
-        }
-        if let Self::LineWithSamples {
-            point,
-            stride,
-            bezier_t_values,
-        } = self
-        {
-            return append_manim_line_to_path_with_samples(
-                world_path(store, state)?,
+        use scalar::{ScalarPathEdit as Edit, LINE_SAMPLES};
+        let current = || world_path(store, state);
+        match self {
+            Self::Scalar(edit) => {
+                let path = if matches!(
+                    edit,
+                    Edit::Corners { .. } | Edit::Cubics { replace: true, .. }
+                ) {
+                    VectorPath::new()
+                } else {
+                    current()?
+                };
+                scalar::prepare(path, edit)
+            }
+            Self::Clear => Ok(Some(VectorPath::new())),
+            Self::RawPoints(points) => raw_points_path(points).map(Some),
+            Self::AppendRawPoints(points) => {
+                validate_raw_points(points)?;
+                if points.is_empty() {
+                    return Ok(None);
+                }
+                let mut raw = manim_points_f64_for_path(&current()?)?;
+                raw.extend_from_slice(points);
+                Ok(Some(VectorPath::from_manim_points_f64(raw)))
+            }
+            Self::Corners(points) => scalar::prepare(
+                VectorPath::new(),
+                Edit::Corners {
+                    points: &promote_points(points),
+                    samples: &LINE_SAMPLES,
+                },
+            ),
+            Self::CornersWithSamples {
+                points,
+                bezier_t_values,
+            } => scalar::prepare(
+                VectorPath::new(),
+                Edit::Corners {
+                    points: &promote_points(points),
+                    samples: bezier_t_values,
+                },
+            ),
+            Self::SmoothCorners(points) => {
+                noon_geometry::change_path_anchor_mode(&corners_path(points)?, true)
+                    .map(Some)
+                    .map_err(AuthoringError::PathQuery)
+            }
+            Self::AnchorMode(smooth) => noon_geometry::change_path_anchor_mode(&current()?, smooth)
+                .map(Some)
+                .map_err(AuthoringError::PathQuery),
+            Self::Start { point, stride } => scalar::prepare(
+                current()?,
+                Edit::Start {
+                    point: promote_point(point),
+                    stride,
+                },
+            ),
+            Self::Line(point) => scalar::prepare(
+                current()?,
+                Edit::Line {
+                    point: promote_point(point),
+                    stride: 4,
+                    samples: &LINE_SAMPLES,
+                },
+            ),
+            Self::LineWithStride(point, stride) => scalar::prepare(
+                current()?,
+                Edit::Line {
+                    point: promote_point(point),
+                    stride,
+                    samples: &LINE_SAMPLES,
+                },
+            ),
+            Self::LineWithSamples {
                 point,
                 stride,
                 bezier_t_values,
-            )
-            .map(Some);
-        }
-        if let Self::QuadraticWithStride(control, anchor, stride) = self {
-            return quadratic::append_quadratic_f64(
-                world_path(store, state)?,
-                control,
-                anchor,
-                stride,
-            )
-            .map(Some);
-        }
-        if let Self::RawPoints(points) = self {
-            return raw_points_path(points).map(Some);
-        }
-        if let Self::AppendRawPoints(points) = self {
-            validate_raw_points(points)?;
-            if points.is_empty() {
-                return Ok(None);
+            } => scalar::prepare(
+                current()?,
+                Edit::Line {
+                    point: promote_point(point),
+                    stride,
+                    samples: bezier_t_values,
+                },
+            ),
+            Self::QuadraticWithStride(control, anchor, stride) => {
+                quadratic::append_quadratic_f64(current()?, control, anchor, stride).map(Some)
             }
-            let path = world_path(store, state)?;
-            let mut raw_points = manim_points_f64_for_path(&path)?;
-            raw_points.extend_from_slice(points);
-            return Ok(Some(VectorPath::from_manim_points_f64(raw_points)));
-        }
-        if matches!(&self, Self::ScaleHandles(factor) if *factor == 1.0) {
-            return Ok(None);
-        }
-        if let Self::CubicCurve(anchor1, handle1, handle2, anchor2) = self {
-            let path = append_cubic_curve(
-                world_path(store, state)?,
-                [anchor1, handle1, handle2, anchor2],
-            );
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
+            Self::Cubic(c1, c2, anchor) => scalar::prepare(
+                current()?,
+                Edit::CubicTo {
+                    controls: [c1, c2, anchor].map(promote_point),
+                    stride: 4,
+                },
+            ),
+            Self::CubicWithStride(c1, c2, anchor, stride) => scalar::prepare(
+                current()?,
+                Edit::CubicTo {
+                    controls: [c1, c2, anchor].map(promote_point),
+                    stride,
+                },
+            ),
+            Self::CubicCurve(a1, h1, h2, a2) => {
+                scalar::prepare(current()?, Edit::Cubic([a1, h1, h2, a2].map(promote_point)))
             }
-            return Ok(Some(path));
-        }
-        if let Self::CubicCurves(curves) = self {
-            if curves.is_empty() {
-                return Ok(None);
+            Self::CubicCurves(curves) => {
+                if curves.is_empty() {
+                    return Ok(None);
+                }
+                let curves = curves
+                    .iter()
+                    .map(|curve| (*curve).map(promote_point))
+                    .collect::<Vec<_>>();
+                scalar::prepare(
+                    current()?,
+                    Edit::Cubics {
+                        curves: &curves,
+                        replace: false,
+                    },
+                )
             }
-            let path = curves
-                .iter()
-                .copied()
-                .fold(world_path(store, state)?, append_cubic_curve);
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
+            Self::SetCubicCurves(curves) => {
+                let curves = curves
+                    .iter()
+                    .map(|curve| (*curve).map(promote_point))
+                    .collect::<Vec<_>>();
+                scalar::prepare(
+                    VectorPath::new(),
+                    Edit::Cubics {
+                        curves: &curves,
+                        replace: true,
+                    },
+                )
             }
-            return Ok(Some(path));
-        }
-        if let Self::SetCubicCurves(curves) = self {
-            if curves
-                .iter()
-                .flatten()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
+            Self::AppendCorners(points) => {
+                if points.is_empty() {
+                    current()?.endpoints().ok_or(AuthoringError::PathQuery(
+                        noon_geometry::PathProportionError::EmptyPath,
+                    ))?;
+                    return Ok(None);
+                }
+                scalar::prepare(
+                    current()?,
+                    Edit::AppendCorners {
+                        points: &promote_points(points),
+                        stride: 4,
+                        samples: &LINE_SAMPLES,
+                    },
+                )
             }
-            let path = curves
-                .iter()
-                .copied()
-                .fold(VectorPath::new(), append_cubic_curve);
-            return Ok(Some(path));
-        }
-        if let Self::AppendCorners(points) = self {
-            let mut path = world_path(store, state)?;
-            let Some((_, _)) = path.endpoints() else {
-                return Err(AuthoringError::PathQuery(
-                    noon_geometry::PathProportionError::EmptyPath,
-                ));
-            };
-            if points.is_empty() {
-                return Ok(None);
-            }
-            if points
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            path = path.open_last_subpath();
-            for point in points {
-                path = path.line_to(*point);
-            }
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            return Ok(Some(path));
-        }
-        if let Self::AppendCornersWithStride {
-            points,
-            stride,
-            bezier_t_values,
-        } = self
-        {
-            return append_corners_with_stride(
-                world_path(store, state)?,
+            Self::AppendCornersWithStride {
                 points,
                 stride,
                 bezier_t_values,
-            )
-            .map(Some);
-        }
-        if let Self::AppendVectorized(source) = self {
-            let destination = world_path(store, state)?;
-            let source = world_path(store, source)?;
-            let path = append_vectorized_path_with_stride(&destination, &source, 4)?;
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
+            } => scalar::prepare(
+                current()?,
+                Edit::AppendCorners {
+                    points: &promote_points(points),
+                    stride,
+                    samples: bezier_t_values,
+                },
+            ),
+            Self::AppendVectorized(source) => {
+                append_vectorized_path_with_stride(&current()?, &world_path(store, source)?, 4)
+                    .map(Some)
             }
-            return Ok(Some(path));
-        }
-        if let Self::AppendVectorizedWithStride { source, stride } = self {
-            let destination = world_path(store, state)?;
-            let source = world_path(store, source)?;
-            let path = append_vectorized_path_with_stride(&destination, &source, stride)?;
-            if !path.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
+            Self::AppendVectorizedWithStride { source, stride } => {
+                append_vectorized_path_with_stride(&current()?, &world_path(store, source)?, stride)
+                    .map(Some)
             }
-            return Ok(Some(path));
-        }
-        if let Self::SmoothCurve { handle2, anchor } = self {
-            let path = world_path(store, state)?;
-            return append_smooth_curve_path(path, handle2, anchor, 4).map(Some);
-        }
-        if let Self::SmoothCurveWithStride {
-            handle2,
-            anchor,
-            stride,
-        } = self
-        {
-            let path = world_path(store, state)?;
-            return append_smooth_curve_path(path, handle2, anchor, stride).map(Some);
-        }
-        if let Self::Corners(points) = self {
-            return corners_path(points).map(Some);
-        }
-        if let Self::CornersWithSamples {
-            points,
-            bezier_t_values,
-        } = self
-        {
-            return corners_path_with_samples(points, bezier_t_values).map(Some);
-        }
-        if let Self::SmoothCorners(points) = self {
-            return noon_geometry::change_path_anchor_mode(&corners_path(points)?, true)
+            Self::SmoothCurve { handle2, anchor } => {
+                append_smooth_curve_path(current()?, handle2, anchor, 4).map(Some)
+            }
+            Self::SmoothCurveWithStride {
+                handle2,
+                anchor,
+                stride,
+            } => append_smooth_curve_path(current()?, handle2, anchor, stride).map(Some),
+            Self::Close => scalar::prepare(
+                current()?,
+                Edit::Close {
+                    stride: 4,
+                    tolerance: 1e-6,
+                    samples: &LINE_SAMPLES,
+                },
+            ),
+            Self::CloseWithStride {
+                stride,
+                tolerance,
+                bezier_t_values,
+            } => scalar::prepare(
+                current()?,
+                Edit::Close {
+                    stride,
+                    tolerance,
+                    samples: bezier_t_values,
+                },
+            ),
+            Self::Reverse => Ok(Some(noon_geometry::reverse_path(&current()?))),
+            Self::Subdivide(0) => Ok(None),
+            Self::Subdivide(additional) => noon_geometry::subdivide_path(&current()?, additional)
                 .map(Some)
-                .map_err(AuthoringError::PathQuery);
-        }
-        if let Self::Partial { source, a, b } = self {
-            let path = world_path(store, source)?;
-            // Manim leaves the destination unchanged when the source has no
-            // complete curve, except when the whole point set was requested.
-            if !(a == 0. && b == 1.)
-                && !path.commands().iter().any(|command| {
-                    matches!(
-                        command,
-                        noon_core::PathCommand::LineTo { .. }
-                            | noon_core::PathCommand::QuadraticTo { .. }
-                            | noon_core::PathCommand::CubicTo { .. }
-                    )
-                })
-            {
-                return Ok(None);
-            }
-            return Ok(Some(noon_geometry::authored_partial_path(&path, a, b)));
-        }
-        if let Self::Subdivide(0) = self {
-            return Ok(None);
-        }
-        let mut path = world_path(store, state)?;
-        if let Self::AnchorMode(smooth) = self {
-            return noon_geometry::change_path_anchor_mode(&path, smooth)
-                .map(Some)
-                .map_err(AuthoringError::PathQuery);
-        }
-        if let Self::Subdivide(additional) = self {
-            return noon_geometry::subdivide_path(&path, additional)
-                .map(Some)
-                .map_err(AuthoringError::PathQuery);
-        }
-        if let Self::ScaleHandles(factor) = self {
-            return scale_handle_distances(&path, factor).map(Some);
-        }
-        if let Self::Reverse = self {
-            return Ok(Some(noon_geometry::reverse_path(&path)));
-        }
-        if let Self::Start { point, stride } = self {
-            if !point.x.is_finite() || !point.y.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            if stride == 0 {
-                return Err(AuthoringError::NonPositiveNumber {
-                    name: "n_points_per_cubic_curve".to_owned(),
-                    value: 0.0,
-                });
-            }
-
-            // Manim's start_new_path is a raw point-array append. Preserve an
-            // existing raw array (including a partial tail), or derive the
-            // point array once from the current shared path when it was built
-            // from compact path commands.
-            let mut points = manim_points_for_path(&path)?;
-
-            // For positive strides, pad a partial final curve by repeating
-            // its last start anchor until the next curve boundary. A negative
-            // Python slice stride makes Manim's computed repeat count
-            // non-positive, so it appends only the new point.
-            if stride > 0 {
-                let stride = stride as usize;
-                let remainder = points.len() % stride;
-                if remainder != 0 {
-                    let anchor_index = ((points.len() - 1) / stride) * stride;
-                    let anchor = points[anchor_index];
-                    points.extend(std::iter::repeat_n(anchor, stride - remainder));
+                .map_err(AuthoringError::PathQuery),
+            Self::ScaleHandles(1.0) => Ok(None),
+            Self::ScaleHandles(factor) => scale_handle_distances(&current()?, factor).map(Some),
+            Self::Partial { source, a, b } => {
+                let path = world_path(store, source)?;
+                if !(a == 0.0 && b == 1.0)
+                    && !path.commands().iter().any(|command| {
+                        matches!(
+                            command,
+                            noon_core::PathCommand::LineTo { .. }
+                                | noon_core::PathCommand::QuadraticTo { .. }
+                                | noon_core::PathCommand::CubicTo { .. }
+                        )
+                    })
+                {
+                    return Ok(None);
                 }
+                Ok(Some(noon_geometry::authored_partial_path(&path, a, b)))
             }
-            points.push(point);
-            path = VectorPath::from_manim_points(points);
-        } else if let Self::Line(to) = self {
-            if !to.x.is_finite() || !to.y.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
-                noon_geometry::PathProportionError::EmptyPath,
-            ))?;
-            let (control1, control2) = cubic_line_controls(start, to);
-            path = append_manim_cubic_to_path(points, control1, control2, to)?;
-        } else if let Self::LineWithStride(to, stride) = self {
-            if !to.x.is_finite() || !to.y.is_finite() {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            let start = points.last().copied().ok_or(AuthoringError::PathQuery(
-                noon_geometry::PathProportionError::EmptyPath,
-            ))?;
-            let (control1, control2) = cubic_line_controls(start, to);
-            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
-        } else if let Self::Cubic(control1, control2, to) = self {
-            if [control1, control2, to]
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            path = append_manim_cubic_to_path(points, control1, control2, to)?;
-        } else if let Self::CubicWithStride(control1, control2, to, stride) = self {
-            if [control1, control2, to]
-                .iter()
-                .any(|point| !point.x.is_finite() || !point.y.is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            let points = manim_points_for_path(&path)?;
-            path = append_manim_cubic_to_path_with_stride(points, control1, control2, to, stride)?;
-        } else {
-            path.endpoints().ok_or(AuthoringError::PathQuery(
-                noon_geometry::PathProportionError::EmptyPath,
-            ))?;
-            path = match self {
-                Self::Line(to) => path.open_last_subpath().line_to(to),
-                Self::LineWithStride(to, _) => path.open_last_subpath().line_to(to),
-                Self::LineWithSamples { point, .. } => path.open_last_subpath().line_to(point),
-                Self::Cubic(c1, c2, to) => path.open_last_subpath().cubic_to(c1, c2, to),
-                Self::CubicWithStride(c1, c2, to, _) => {
-                    path.open_last_subpath().cubic_to(c1, c2, to)
-                }
-                Self::Close => {
-                    // The default native operation and Python's constructor
-                    // defaults must publish the same cubic geometry, including
-                    // endpoint rounding and the closing join.
-                    return close_path_with_stride(path, 4, 1e-6, &[0., 1. / 3., 2. / 3., 1.]);
-                }
-                Self::QuadraticWithStride(..)
-                | Self::Corners(_)
-                | Self::CornersWithSamples { .. }
-                | Self::SmoothCorners(_)
-                | Self::Clear
-                | Self::RawPoints(_)
-                | Self::AppendRawPoints(_)
-                | Self::AnchorMode(_)
-                | Self::Start { .. }
-                | Self::Reverse
-                | Self::Subdivide(_)
-                | Self::ScaleHandles(_)
-                | Self::CubicCurve(_, _, _, _)
-                | Self::SmoothCurve { .. }
-                | Self::SmoothCurveWithStride { .. }
-                | Self::CubicCurves(_)
-                | Self::SetCubicCurves(_)
-                | Self::AppendCorners(_)
-                | Self::AppendCornersWithStride { .. }
-                | Self::AppendVectorized(_)
-                | Self::AppendVectorizedWithStride { .. }
-                | Self::CloseWithStride { .. }
-                | Self::Partial { .. } => {
-                    unreachable!()
-                }
-            };
         }
-        if !path.is_finite() {
-            return Err(AuthoringError::NonFiniteGeometry);
-        }
-        Ok(Some(path))
     }
 }
 
@@ -1483,83 +1344,9 @@ pub(crate) fn manim_points_for_path(path: &VectorPath) -> Result<Vec<Vec2>, Auth
         .collect())
 }
 
-fn close_path_with_stride(
-    path: VectorPath,
-    stride: i32,
-    tolerance: f64,
-    bezier_t_values: &[f64],
-) -> Result<Option<VectorPath>, AuthoringError> {
-    let morph_target = path.morph_target().cloned();
-    let mut points = manim_points_for_path(&path)?;
-    let Some(first) = points.first().copied() else {
-        return Err(AuthoringError::PathQuery(
-            noon_geometry::PathProportionError::EmptyPath,
-        ));
-    };
-    let last = *points.last().expect("non-empty point array was checked");
-    if crate::path_queries::manim_points_2d_close(
-        [f64::from(first.x), f64::from(first.y)],
-        [f64::from(last.x), f64::from(last.y)],
-        tolerance,
-    ) {
-        return Ok(None);
-    }
-
-    let coordinates = points
-        .iter()
-        .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
-        .collect::<Vec<_>>();
-    let ranges = crate::path_queries::manim_subpath_ranges(
-        &coordinates,
-        points.len(),
-        2,
-        2,
-        f64::from(stride),
-        tolerance,
-        true,
-    )?;
-    let Some(start_index) = ranges.get(ranges.len().saturating_sub(2)).copied() else {
-        return Err(AuthoringError::PathQuery(
-            noon_geometry::PathProportionError::EmptyPath,
-        ));
-    };
-    let target = points[start_index];
-    let start = last;
-    let line_points = bezier_t_values
-        .iter()
-        .skip(1)
-        .map(|t| start + (target - start) * (*t as f32))
-        .collect::<Vec<_>>();
-
-    if !crate::path_queries::point_array_has_new_path_started(points.len(), stride) {
-        points.push(last);
-    }
-    points.extend(line_points);
-    let mut result = VectorPath::from_manim_points(points);
-    if let Some(target) = morph_target {
-        let closed_target =
-            close_path_with_stride(target.clone(), stride, tolerance, bezier_t_values)?
-                .unwrap_or(target);
-        result = result.with_morph_target(closed_target);
-    }
-    if !result.is_finite() {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    Ok(Some(result))
-}
-
 fn cubic_line_controls(start: Vec2, end: Vec2) -> (Vec2, Vec2) {
     let direction = end - start;
     (start + direction / 3.0, start + direction * (2.0 / 3.0))
-}
-
-fn append_manim_cubic_to_path(
-    points: Vec<Vec2>,
-    control1: Vec2,
-    control2: Vec2,
-    anchor: Vec2,
-) -> Result<VectorPath, AuthoringError> {
-    append_manim_cubic_to_path_with_stride(points, control1, control2, anchor, 4)
 }
 
 fn append_smooth_curve_path(
@@ -1641,106 +1428,6 @@ fn append_manim_cubic_points_with_stride<T: Copy>(
     }
     points.extend(tail);
     let path = build(points);
-    if !path.is_finite() {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    Ok(path)
-}
-
-fn append_manim_line_to_path_with_samples(
-    path: VectorPath,
-    point: Vec2,
-    stride: i32,
-    bezier_t_values: &[f64; 4],
-) -> Result<VectorPath, AuthoringError> {
-    if !point.x.is_finite()
-        || !point.y.is_finite()
-        || bezier_t_values.iter().any(|value| !value.is_finite())
-    {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-
-    let morph_target = path.morph_target().cloned();
-    let mut points = manim_points_for_path(&path)?;
-    let start = points.last().copied().ok_or(AuthoringError::PathQuery(
-        noon_geometry::PathProportionError::EmptyPath,
-    ))?;
-    if !manim_remainder_is_one(points.len(), stride) {
-        points.push(start);
-    }
-    points.extend(
-        bezier_t_values
-            .iter()
-            .skip(1)
-            .map(|t| start + (point - start) * (*t as f32)),
-    );
-
-    let mut result = VectorPath::from_manim_points(points);
-    if let Some(target) = morph_target {
-        let target =
-            append_manim_line_to_path_with_samples(target, point, stride, bezier_t_values)?;
-        result = result.with_morph_target(target);
-    }
-    if !result.is_finite() {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    Ok(result)
-}
-
-fn append_corners_with_stride(
-    path: VectorPath,
-    corners: &[Vec2],
-    stride: i32,
-    bezier_t_values: &[f64],
-) -> Result<VectorPath, AuthoringError> {
-    let Some((_, _)) = path.endpoints() else {
-        return Err(AuthoringError::PathQuery(
-            noon_geometry::PathProportionError::EmptyPath,
-        ));
-    };
-    if corners.is_empty() {
-        return Ok(path);
-    }
-    if corners
-        .iter()
-        .any(|point| !point.x.is_finite() || !point.y.is_finite())
-        || bezier_t_values.iter().any(|value| !value.is_finite())
-    {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    if stride <= 0 {
-        return Err(AuthoringError::NonPositiveNumber {
-            name: "n_points_per_cubic_curve".to_owned(),
-            value: f64::from(stride),
-        });
-    }
-    let stride = stride as usize;
-    let mut points = manim_points_for_path(&path)?;
-    let mut start = points.last().copied().ok_or(AuthoringError::PathQuery(
-        noon_geometry::PathProportionError::EmptyPath,
-    ))?;
-    if manim_remainder_is_one(points.len(), stride as i32) {
-        // Manim computes the first start corner before removing a pending
-        // anchor from the existing point array, then emits it in the new run.
-        points.pop();
-    }
-    for end in corners {
-        for index in 0..stride {
-            // Manim initializes the final slot to the endpoint, then overlays
-            // each constructor-time interpolation sample. If a mutable stride
-            // leaves an unsampled interior slot, choosing the endpoint keeps
-            // Rust's stored geometry deterministic; Python gates that unstable
-            // source profile before it reaches this helper.
-            let mut point = *end;
-            if let Some(t) = bezier_t_values.get(index) {
-                let t = *t as f32;
-                point = start + (*end - start) * t;
-            }
-            points.push(point);
-        }
-        start = *end;
-    }
-    let path = VectorPath::from_manim_points(points);
     if !path.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }

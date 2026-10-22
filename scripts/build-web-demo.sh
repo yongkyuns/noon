@@ -90,6 +90,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-object-members-reference.test.mjs
   node --test scripts/manim-path-keyword-reference.test.mjs
   node --test scripts/manim-point-list-insertion-reference.test.mjs
+  node --test scripts/manim-scalar-path-precision-reference.test.mjs
   node --test scripts/manim-query-hooks-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs
