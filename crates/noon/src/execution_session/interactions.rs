@@ -29,7 +29,7 @@ impl ExecutionSession {
         if self.pending_callback.is_some() {
             return Ok(None);
         }
-        let Some(object) = self.execution_object_id(node) else {
+        let Some(object) = self.interaction_execution_object_id(node) else {
             return Ok(None);
         };
         let Some(binding) = self.runtime.click_indicate_binding(object) else {

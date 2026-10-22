@@ -156,21 +156,23 @@ impl ExecutionSession {
     /// Current generation-safe selection. Unrelated edits, compatible property
     /// changes and reordering preserve the selected semantic identity. Detachment
     /// or deletion clears it at publication, so reattachment cannot revive it.
-    /// Successful seek/backward evaluation clears transient session state.
+    /// Sealed replay observes membership in the selected historical revision,
+    /// without reviving the object in the authored store. Successful seek/backward
+    /// evaluation clears transient session state.
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
         if !self.pointer_selection.enabled() {
             return None;
         }
         let selected = self.pointer_selection.selected?;
-        self.semantic_object_is_reachable(selected)
-            .then_some(selected)
+        self.interaction_execution_object_id(selected)
+            .map(|_| selected)
     }
 
     pub(super) fn reconcile_pointer_selection(&mut self) {
         if self
             .pointer_selection
             .selected
-            .is_some_and(|node| !self.semantic_object_is_reachable(node))
+            .is_some_and(|node| self.interaction_execution_object_id(node).is_none())
         {
             self.pointer_selection.selected = None;
         }
@@ -181,7 +183,7 @@ impl ExecutionSession {
     /// Invisible or no-longer-supported effective geometry has no highlight.
     pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
         let target = self.selected_pointer_target()?;
-        let object = self.execution_object_id(target)?;
+        let object = self.interaction_execution_object_id(target)?;
         let index = self.runtime.frame_index_for_object(object)?;
         let frame = self.frame();
         let state = &frame.objects[index];
