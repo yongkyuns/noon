@@ -117,11 +117,12 @@ managed archive only if actual code work requires it.
 
 Candidate/merge evidence under `current-master-continuation-20261022T0204Z/` and
 post-merge/publication evidence under `post-merge-2261-20261022T0245Z/` are now
-sealed. All prior20,754 catalog rows were fully rehashed at the latest seal, with
+sealed. All prior20,800 catalog rows were fully rehashed at the latest seal, with
 exact prior canonical gzip snapshots retained. Earlier handoff receipts are also
-enrolled. The next mutable root is `frozen594-host-audit-20261022T0318Z/`, currently
-holding the completed read-only host audit, its retrieved original/later log
-comparison, artifact-availability receipts and postseal handoff receipts.
+enrolled. The completed host audit under `frozen594-host-audit-20261022T0318Z/`
+is now sealed too. The next mutable root is
+`phase-d-native-evidence-continuation-20261022T0338Z/`, reserved for future
+native evidence and the postseal handoff push receipt; no diagnostic is running.
 Raw evidence remains outside Git and needs a separate transfer.
 
 The original-host diagnostic novelty audit is complete. Hosted run39504274080,
@@ -320,11 +321,11 @@ Original Mac evidence root:
 /Users/ykshin/.codex/task-evidence/noon/remaining-phase-d-20261018
 ```
 
-The sealed catalog `editor-native-source-evidence-manifest.json` has **20,800
-entries / 4,131,327,596 cataloged bytes**, SHA-256:
+The sealed catalog `editor-native-source-evidence-manifest.json` has **20,825
+entries / 4,132,467,702 cataloged bytes**, SHA-256:
 
 ```text
-0bcf9157812f0069c9854fb28df8de882ee1a2a59b61a8b84d38456acc68539c
+49e6d38a2bc92a91d2e6594f1d2691f66aeb7411aab11036ae5169799a2e19e6
 ```
 
 Before independently auditing historical results on another PC, transfer the
