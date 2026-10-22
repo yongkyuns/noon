@@ -16,7 +16,10 @@ fn observe(
         .refresh_pointer_hover(&displayed, view)
         .unwrap()
         .unwrap();
-    assert_eq!((transition.previous, transition.current), (previous, current));
+    assert_eq!(
+        (transition.previous, transition.current),
+        (previous, current)
+    );
     assert_eq!(transition.publication, publication);
     assert_eq!(transition.spatial_stats.full_scan_fallbacks, 0);
     assert_eq!(transition.precise_tests, usize::from(current.is_some()));

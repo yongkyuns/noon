@@ -5,8 +5,8 @@ use crate::execution_session::{
 };
 use noon_core::{
     Color, NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
-    NativePointerPosition, SemanticClickIndicate, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
+    NativePointerPosition, SemanticClickIndicate, SemanticMutationTransaction,
+    SemanticNodeCreation, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
 };
 use noon_runtime::ReplayLimits;
 
@@ -67,8 +67,14 @@ impl Fixture {
             .unwrap();
         assert!(self.store.node(self.node).is_none());
         assert_eq!(self.session.execution_object_id(self.node), None);
-        assert_eq!(self.session.interaction_execution_object_id(self.node), None);
-        assert_eq!(self.session.interaction_semantic_object_id(self.object), None);
+        assert_eq!(
+            self.session.interaction_execution_object_id(self.node),
+            None
+        );
+        assert_eq!(
+            self.session.interaction_semantic_object_id(self.object),
+            None
+        );
     }
 
     fn replacement(&mut self) -> (SemanticNodeId, ObjectId) {
@@ -246,7 +252,12 @@ fn historical_pointer_identity_slot_reuse_never_aliases_old_and_future_targets()
         assert_eq!(receipt.selection_click().unwrap().target(), target);
         assert_eq!(session.selected_pointer_target(), target);
         if let Some((_, object, binding)) = expected {
-            exercise_action(&mut session, object, binding, 100.0 + iteration as f64 * 10.0);
+            exercise_action(
+                &mut session,
+                object,
+                binding,
+                100.0 + iteration as f64 * 10.0,
+            );
         } else {
             assert!(!session.interactions_active());
             assert!(session.pointer_selection_highlight().is_none());
@@ -371,7 +382,9 @@ fn historical_pointer_identity_discard_returns_to_current_source_membership() {
     assert_eq!(fixture.session.selected_pointer_target(), None);
     assert_eq!(fixture.session.frame().time, 3.0);
     assert_eq!(
-        fixture.session.interaction_execution_object_id(fixture.node),
+        fixture
+            .session
+            .interaction_execution_object_id(fixture.node),
         None
     );
     assert_eq!(
