@@ -907,7 +907,12 @@ impl WasmGraphHandle {
             NativeGraph::Undirected(graph) => graph.edge_keys(),
             NativeGraph::Directed(graph) => graph.edge_keys(),
         }
-        .map_err(js_error)?;
+        .map_err(|error| {
+            js_error(crate::authoring_error::AuthoringFailure::unclassified(
+                "graph.edge_keys",
+                &error,
+            ))
+        })?;
         Ok(pairs
             .into_iter()
             .flat_map(|(start, end)| [*start, *end])
