@@ -202,6 +202,27 @@ test("generic geometry inputs cross the optional wrapper as typed values", () =>
   assert.doesNotMatch(source, /noonCreateAuthoringMobjectHandle|\.createMobject\(/);
 });
 
+test("Graph options factory preserves shared label sizing without allocating options", () => {
+  const worker = {}, calls = [];
+  let constructions = 0;
+  class Options {
+    constructor() { constructions += 1; }
+    static labeledDotRadius(...values) { calls.push(values); return 913.25; }
+  }
+  const begin = source.indexOf("  self.noonAuthoringGraphOptions =");
+  const end = source.indexOf("  self.noonAuthoringCoordinateOptions =", begin);
+  assert.ok(begin >= 0 && end > begin);
+  new Function("self", "WasmGraphOptions", source.slice(begin, end))(worker, Options);
+  assert.equal(worker.noonAuthoringGraphOptions.labeledDotRadius(0.6, 0.8, 0.1), 913.25);
+  assert.deepEqual(calls, [[0.6, 0.8, 0.1]]);
+  assert.equal(constructions, 0);
+  const first = worker.noonAuthoringGraphOptions();
+  const second = worker.noonAuthoringGraphOptions();
+  assert.ok(first instanceof Options && second instanceof Options);
+  assert.notEqual(first, second);
+  assert.equal(constructions, 2);
+});
+
 test("image inputs cross the worker as typed retained resources with bounded URL bytes", () => {
   assert.match(source, /WasmImageMobjectOptions/);
   assert.match(source, /noonAuthoringImageOptions\s*=\s*WasmImageMobjectOptions/);

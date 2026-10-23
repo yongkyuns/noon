@@ -236,6 +236,7 @@ async function initializePyodide() {
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
   self.noonAuthoringArrowOptions = WasmManimArrowOptions;
   self.noonAuthoringGraphOptions = () => new WasmGraphOptions();
+  self.noonAuthoringGraphOptions.labeledDotRadius = WasmGraphOptions.labeledDotRadius;
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
   self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
   self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
