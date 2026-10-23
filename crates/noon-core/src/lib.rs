@@ -19,7 +19,7 @@ mod resources;
 mod semantic_store;
 mod spatial3d;
 mod vector_path;
-pub use vector_path::VectorPath;
+pub use vector_path::{SemanticPathSegment, VectorPath};
 mod planar_math;
 pub use planar_math::{DRect, DVec2, Rect, Vec2};
 mod point_array_shape;

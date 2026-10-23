@@ -28,7 +28,7 @@ use typst_svg::{svg, SvgOptions};
 
 pub const TYPST_BACKEND_VERSION: &str = "0.15.1";
 /// Deterministic identity of Noon's Typst normalization template.
-pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v3-f64";
+pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v4-f64-lines";
 const TEMPLATE_PREFIX: &str =
     "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(size: 10pt)\n";
 
@@ -630,7 +630,7 @@ fn transformed_typst_rect(
 }
 
 fn geometry_path(geometry: &Geometry) -> VectorPath {
-    use noon_core::SemanticVec3;
+    use noon_core::{SemanticPathSegment, SemanticVec3};
     let point = |p: Point| SemanticVec3::new(p.x.to_pt(), p.y.to_pt(), 0.0);
     match geometry {
         Geometry::Line(end) => {
@@ -660,12 +660,17 @@ fn geometry_path(geometry: &Geometry) -> VectorPath {
                     }
                     CurveItem::Line(p) => {
                         let end = point(*p);
-                        curves.push(VectorPath::manim_line_controls(current, end));
+                        curves.push(SemanticPathSegment::Line([current, end]));
                         current = end;
                     }
                     CurveItem::Cubic(a, b, p) => {
                         let end = point(*p);
-                        curves.push([current, point(*a), point(*b), end]);
+                        curves.push(SemanticPathSegment::Cubic([
+                            current,
+                            point(*a),
+                            point(*b),
+                            end,
+                        ]));
                         current = end;
                     }
                     CurveItem::Close => contours.push((std::mem::take(&mut curves), true)),
@@ -674,7 +679,7 @@ fn geometry_path(geometry: &Geometry) -> VectorPath {
             if !curves.is_empty() {
                 contours.push((curves, false));
             }
-            VectorPath::from_manim_cubic_contours(contours)
+            VectorPath::from_semantic_contours(contours)
         }
     }
 }
@@ -768,6 +773,42 @@ fn fingerprint_hex(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod contour_tests {
+    use super::*;
+    use noon_core::PathCommand;
+    use typst_library::{layout::Abs, visualize::Curve};
+
+    #[test]
+    fn retained_native_lines_typst_curve_retains_line_and_cubic_topology() {
+        let point = |x, y| Point::new(Abs::pt(x), Abs::pt(y));
+        let start = point(1.0 + 1e-12, 2.);
+        let path = geometry_path(&Geometry::Curve(Curve(vec![
+            CurveItem::Move(start),
+            CurveItem::Line(point(3., 4.)),
+            CurveItem::Cubic(point(5., 6.), point(7., 8.), point(9., 10.)),
+            CurveItem::Close,
+        ])));
+        assert_eq!(
+            path.commands()
+                .iter()
+                .filter(|command| matches!(command, PathCommand::LineTo { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            path.commands()
+                .iter()
+                .filter(|command| matches!(command, PathCommand::CubicTo { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(path.commands().last(), Some(PathCommand::Close)));
+        assert_eq!(path.manim_points().unwrap().len(), 12);
+        assert_eq!(path.manim_points().unwrap()[0].x, 1.0 + 1e-12);
+    }
 }
 
 #[cfg(all(test, feature = "bundled-fonts"))]

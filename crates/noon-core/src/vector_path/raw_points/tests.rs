@@ -90,3 +90,55 @@ fn corner_interpolation_and_closing_compare_all_three_axes() {
         Some(PathCommand::Close)
     ));
 }
+
+#[test]
+fn retained_native_lines_preserve_mixed_contours_and_canonical_transforms() {
+    let a = SemanticVec3::new(1.0 + 1e-12, 2., 3.);
+    let b = SemanticVec3::new(4., 5., 6.);
+    let c = SemanticVec3::new(7., 8., 9.);
+    let d = SemanticVec3::new(10., 11., 12.);
+    let e = SemanticVec3::new(13., 14., 15.);
+    let path = VectorPath::from_semantic_contours([
+        (
+            vec![
+                SemanticPathSegment::Line([a, b]),
+                SemanticPathSegment::Cubic([b, c, d, e]),
+            ],
+            true,
+        ),
+        (vec![SemanticPathSegment::Line([c, d])], false),
+    ]);
+    let mut expected = VectorPath::manim_line_controls(a, b).to_vec();
+    expected.extend([b, c, d, e]);
+    expected.extend(VectorPath::manim_line_controls(e, a));
+    expected.extend(VectorPath::manim_line_controls(c, d));
+    assert_eq!(path.manim_points().unwrap(), expected);
+    assert_eq!(path.manim_points().unwrap()[0].x, 1.0 + 1e-12);
+    let topology = |path: &VectorPath| {
+        path.commands()
+            .iter()
+            .map(|command| match command {
+                PathCommand::MoveTo { .. } => "move",
+                PathCommand::LineTo { .. } => "line",
+                PathCommand::CubicTo { .. } => "cubic",
+                PathCommand::Close => "close",
+                _ => panic!("unexpected contour recipe"),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        topology(&path),
+        ["move", "line", "cubic", "line", "close", "move", "line"]
+    );
+    let transform = SemanticTransform2_5D {
+        translation: SemanticVec3::new(0.125, -0.25, 0.5),
+        ..Default::default()
+    };
+    let moved = path.transformed_semantic(transform);
+    assert_eq!(topology(&moved), topology(&path));
+    let expected = expected
+        .into_iter()
+        .map(|point| transform.transform_xyz(point))
+        .collect::<Vec<_>>();
+    assert_eq!(moved.manim_points().unwrap(), expected);
+}

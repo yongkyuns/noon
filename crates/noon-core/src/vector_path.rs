@@ -370,6 +370,7 @@ fn semantic_transform(transform: Transform2D) -> SemanticTransform2_5D {
 }
 
 mod raw_points;
+pub use raw_points::SemanticPathSegment;
 
 #[cfg(test)]
 mod corner_tests;

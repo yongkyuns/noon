@@ -1,5 +1,5 @@
 //! Cairo fixed-path construction in the retained layout coordinate space.
-use noon_core::{SemanticVec3, VectorPath};
+use noon_core::{SemanticPathSegment, SemanticVec3, VectorPath};
 use skrifa::outline::pen::PathElement;
 type Point = [i32; 2];
 #[derive(Clone, Copy)]
@@ -134,12 +134,17 @@ fn path_on_grid(commands: &[PathElement], coretext_scale: Option<f64>) -> Vector
             }
             FixedCommand::Line(point) => {
                 let end = native(point);
-                curves.push(VectorPath::manim_line_controls(current, end));
+                curves.push(SemanticPathSegment::Line([current, end]));
                 current = end;
             }
             FixedCommand::Cubic(a, b, point) => {
                 let end = native(point);
-                curves.push([current, native(a), native(b), end]);
+                curves.push(SemanticPathSegment::Cubic([
+                    current,
+                    native(a),
+                    native(b),
+                    end,
+                ]));
                 current = end;
             }
             FixedCommand::Close => contours.push((std::mem::take(&mut curves), true)),
@@ -148,7 +153,7 @@ fn path_on_grid(commands: &[PathElement], coretext_scale: Option<f64>) -> Vector
     if !curves.is_empty() {
         contours.push((curves, false));
     }
-    VectorPath::from_manim_cubic_contours(contours)
+    VectorPath::from_semantic_contours(contours)
 }
 
 fn fixed_commands(commands: &[PathElement], coretext_scale: Option<f64>) -> Vec<FixedCommand> {
@@ -249,6 +254,46 @@ mod tests {
     fn v(x: f32, y: f32) -> Vec2 {
         Vec2::new((f64::from(x) * 3.6) as f32, (-f64::from(y) * 3.6) as f32)
     }
+    #[test]
+    fn retained_native_lines_keep_the_line_lowering_recipe_and_precise_controls() {
+        let path = native_path(&[
+            MoveTo { x: 0., y: 0. },
+            LineTo { x: 1., y: 0. },
+            LineTo { x: 1., y: 1. },
+            Close,
+        ]);
+        let lines = |path: &VectorPath| {
+            path.commands()
+                .iter()
+                .filter(|command| matches!(command, noon_core::PathCommand::LineTo { .. }))
+                .count()
+        };
+        assert_eq!(
+            lines(&path),
+            3,
+            "straight retained contours must not become cubic draw work"
+        );
+        assert!(!path
+            .commands()
+            .iter()
+            .any(|command| matches!(command, noon_core::PathCommand::CubicTo { .. })));
+        let mut expected = Vec::new();
+        for (from, to) in [
+            (native([0, 0]), native([256, 0])),
+            (native([256, 0]), native([256, 256])),
+            (native([256, 256]), native([0, 0])),
+        ] {
+            expected.extend(VectorPath::manim_line_controls(from, to));
+        }
+        assert_eq!(path.manim_points().unwrap(), expected);
+        let transformed = path.transformed_semantic(noon_core::SemanticTransform2_5D {
+            translation: SemanticVec3::new(1.125, -2.5, 3.25),
+            ..Default::default()
+        });
+        assert_eq!(lines(&transformed), 3);
+        assert_eq!(transformed.manim_points().unwrap().len(), 12);
+    }
+
     #[test]
     fn duplicate_and_forward_lines_compact_but_backtracking_and_turns_remain() {
         let cases: Vec<(Vec<PathElement>, VectorPath)> = vec![

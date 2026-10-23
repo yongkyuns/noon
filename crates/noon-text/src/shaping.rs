@@ -18,7 +18,7 @@ use swash::{scale::ScaleContext, zeno::PathData};
 use swash::{shape::ShapeContext, text::Script, FontRef, GlyphId};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10/skrifa-0.44.0";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v7-f64";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v8-f64-lines";
 const MANIM_DEFAULT_LINE_SPACING: f64 = 0.3;
 // `Text` sends its line step through ManimPango after dividing by 4.8. Pango
 // uses 96 device units per inch for its point-sized font metrics, so the SVG

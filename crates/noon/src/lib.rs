@@ -291,7 +291,7 @@ pub use noon_core::{
     PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
     SemanticFadeDirection, SemanticFunctionPlotRole, SemanticGraphDeclaration,
     SemanticGraphEdgeBinding, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticPaint, SemanticSheenDirection, SemanticSignalValue, SemanticStyle,
+    SemanticPaint, SemanticPathSegment, SemanticSheenDirection, SemanticSignalValue, SemanticStyle,
     SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, SourceIdentity,
     StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError,
     TextSourceFill, TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK,

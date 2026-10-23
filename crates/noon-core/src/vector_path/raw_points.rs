@@ -1,6 +1,23 @@
 //! Full semantic point storage and explicit planar drawing projection.
 use super::*;
 
+/// Authored contour topology in canonical semantic precision. A straight edge
+/// retains cubic controls for CE queries and a line recipe for renderer lowering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticPathSegment {
+    Line([SemanticVec3; 2]),
+    Cubic([SemanticVec3; 4]),
+}
+
+impl SemanticPathSegment {
+    fn controls(self) -> [SemanticVec3; 4] {
+        match self {
+            Self::Line([start, end]) => VectorPath::manim_line_controls(start, end),
+            Self::Cubic(points) => points,
+        }
+    }
+}
+
 impl VectorPath {
     /// Preserve a zero-row caller array without inventing XYZ dimensions.
     /// Native typed XYZ constructors keep their ordinary [0, 3] empty shape.
@@ -45,8 +62,8 @@ impl VectorPath {
 
     /// Retain complete high-precision cubic contours and explicitly lower drawing.
     /// Contour closure remains part of the path topology, including after transforms.
-    pub fn from_manim_cubic_contours(
-        contours: impl IntoIterator<Item = (Vec<[SemanticVec3; 4]>, bool)>,
+    pub fn from_semantic_contours(
+        contours: impl IntoIterator<Item = (Vec<SemanticPathSegment>, bool)>,
     ) -> Self {
         let lower = |point: SemanticVec3| Vec2::new(point.x as f32, point.y as f32);
         let mut path = Self::new();
@@ -58,18 +75,24 @@ impl VectorPath {
             // Use the existing canonical line controls for an implicit close.
             // The final Close command is only the explicitly lowered join recipe.
             if closed {
-                let first = curves[0][0];
-                let last = curves.last().expect("nonempty contour")[3];
+                let first = curves[0].controls()[0];
+                let last = curves.last().expect("nonempty contour").controls()[3];
                 if first != last {
-                    curves.push(Self::manim_line_controls(last, first));
+                    curves.push(SemanticPathSegment::Line([last, first]));
                 }
             }
             let mut previous = None;
-            for curve in curves {
+            for segment in curves {
+                let curve = segment.controls();
                 if previous != Some(curve[0]) {
                     path = path.move_to(lower(curve[0]));
                 }
-                path = path.cubic_to(lower(curve[1]), lower(curve[2]), lower(curve[3]));
+                path = match segment {
+                    SemanticPathSegment::Line(_) => path.line_to(lower(curve[3])),
+                    SemanticPathSegment::Cubic(_) => {
+                        path.cubic_to(lower(curve[1]), lower(curve[2]), lower(curve[3]))
+                    }
+                };
                 previous = Some(curve[3]);
                 points.extend(curve);
             }
