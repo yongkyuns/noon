@@ -1,11 +1,8 @@
 //! Opt-in experimental prefix delivery over the existing finite replay history.
 //! One execution bootstrap is followed by changed-payload batches, not snapshots.
 //! The reader accepts future revisions without seeking to the producer frontier.
-use super::{ReplayError, ReplayLimits, ReplayStats, Revision};
-use crate::{
-    EvaluationError, FrameState, PreparedTransientAnimation, RendererPublication, RuntimeIdentity,
-    SceneInstance,
-};
+use super::{ReplayError, ReplayLimits, Revision};
+use crate::{EvaluationError, PreparedTransientAnimation, RuntimeIdentity, SceneInstance};
 use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
 use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
 use std::sync::Arc;
@@ -17,6 +14,8 @@ pub enum PrefixError {
     Replay(ReplayError),
     Evaluation(EvaluationError),
     SourceChanged,
+    ReaderChanged,
+    Slots(crate::ExecutionSlotError),
     NotReady,
     UnexpectedBatch,
     OutsideRange {
@@ -128,14 +127,17 @@ impl PrefixBatch {
     }
 }
 
-/// A derived historical reader, with no mutable/source/runtime escape hatch.
-/// Presentation-only interaction uses the existing runtime without editing history.
-/// The interval is [start, frontier) while preparation can still change the
-/// frontier. Adopting an explicitly terminal batch closes it to [start, frontier].
-/// Finalization does not seek, publish a displayed frame, or retire session effects.
+/// Ordered receive cursor for one independent historical runtime incarnation.
+///
+/// The cursor owns no scene, evaluator, frame, or input policy. The enclosing
+/// session owns the returned `SceneInstance` and borrows it for checked delivery
+/// and readiness admission. It must not expose unguarded authored-time mutation
+/// through its public reader facade. A foreign, cloned, or unsealed runtime is
+/// rejected rather than silently rebinding this cursor.
 #[derive(Debug)]
-pub struct PrefixReader {
-    runtime: SceneInstance,
+pub struct PrefixReceiver {
+    runtime: RuntimeIdentity,
+    scope: Arc<()>,
     stream: Arc<()>,
     start: f64,
     frontier: f64,
@@ -145,7 +147,22 @@ pub struct PrefixReader {
     object_capacity: usize,
     initial_object_slots: usize,
 }
-impl PrefixReader {
+impl PrefixReceiver {
+    fn validate_runtime(&self, runtime: &SceneInstance) -> Result<(), PrefixError> {
+        let valid = runtime.runtime_identity() == self.runtime
+            && runtime.replay_history.as_ref().is_some_and(|history| {
+                Arc::ptr_eq(&history.scope, &self.scope)
+                    && history.failure.is_none()
+                    && history.end == Some(self.frontier)
+                    && history.revisions.len() == self.received_revisions
+            });
+        if valid {
+            Ok(())
+        } else {
+            Err(PrefixError::ReaderChanged)
+        }
+    }
+
     pub fn frontier(&self) -> f64 {
         self.frontier
     }
@@ -155,28 +172,25 @@ impl PrefixReader {
         self.finished.then_some(self.frontier)
     }
 
-    pub fn frame(&self) -> &FrameState {
-        self.runtime.frame()
-    }
-    pub fn replay_stats(&self) -> ReplayStats {
-        self.runtime.replay_stats()
+    /// Admit an explicit seek before the session evaluates it through its ordinary
+    /// seek path. All rejection precedes storage growth or interaction cancellation.
+    pub fn prepare_seek(&self, runtime: &mut SceneInstance, time: f64) -> Result<(), PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.validate_time(time)?;
+        runtime.extend_prefix_frame_storage();
+        Ok(())
     }
 
-    pub fn seek(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
+    /// Admit monotonic forward playback. The session still owns evaluation and
+    /// gesture/selection reconciliation; this cursor owns readiness, not a clock.
+    pub fn prepare_advance(
+        &self,
+        runtime: &mut SceneInstance,
+        time: f64,
+    ) -> Result<(), PrefixError> {
+        self.validate_runtime(runtime)?;
         self.validate_time(time)?;
-        self.runtime.extend_prefix_frame_storage();
-        self.runtime.seek(time)?;
-        Ok(self.runtime.frame())
-    }
-
-    /// Advance a ready historical interval without treating every frame as a seek.
-    /// Within one execution revision, disjoint session effects keep running;
-    /// authored-driver conflicts and historical revision changes retain precedence.
-    /// Use `seek` explicitly to rewind or cancel those effects.
-    /// Invalid or unavailable times leave the displayed frame and effects intact.
-    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
-        self.validate_time(time)?;
-        let current = self.runtime.frame().time;
+        let current = runtime.frame().time;
         if time < current {
             return Err(EvaluationError::NonMonotonicPreparedAdvance {
                 current,
@@ -184,9 +198,8 @@ impl PrefixReader {
             }
             .into());
         }
-        self.runtime.extend_prefix_frame_storage();
-        self.runtime.advance_to(time)?;
-        Ok(self.runtime.frame())
+        runtime.extend_prefix_frame_storage();
+        Ok(())
     }
 
     fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
@@ -219,10 +232,11 @@ impl PrefixReader {
     /// Newly appended future slots are not interaction targets until displayed.
     pub fn prepare_click_indicate(
         &self,
+        runtime: &SceneInstance,
         object: ObjectId,
         binding: SemanticClickIndicate,
     ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
-        let row = self.displayed_interaction_target(object)?;
+        let row = self.displayed_interaction_target(runtime, object)?;
         // SceneInstance preparation normally follows semantic binding admission.
         // This direct reader API must preserve that bounded target domain itself.
         if row.style.fill.is_none()
@@ -235,7 +249,7 @@ impl PrefixReader {
                 "prefix Indicate requires a filled analytic circle or rectangle".into(),
             ));
         }
-        self.runtime
+        runtime
             .prepare_click_indicate(object, binding)
             .map_err(PrefixError::Interaction)
     }
@@ -246,59 +260,35 @@ impl PrefixReader {
     /// picking, and trigger synthesis remain owned by the common input session.
     pub fn prepare_bound_click_indicate(
         &self,
+        runtime: &SceneInstance,
         object: ObjectId,
     ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
-        self.displayed_interaction_target(object)?;
-        let Some(binding) = self.runtime.click_indicate_binding(object) else {
+        self.displayed_interaction_target(runtime, object)?;
+        let Some(binding) = runtime.click_indicate_binding(object) else {
             return Ok(None);
         };
-        self.prepare_click_indicate(object, binding)
+        self.prepare_click_indicate(runtime, object, binding)
     }
 
-    fn displayed_interaction_target(
+    fn displayed_interaction_target<'a>(
         &self,
+        runtime: &'a SceneInstance,
         object: ObjectId,
-    ) -> Result<&crate::FrameObjectState, PrefixError> {
-        self.runtime
+    ) -> Result<&'a crate::FrameObjectState, PrefixError> {
+        self.validate_runtime(runtime)?;
+        runtime
             .frame_index_for_object(object)
             .filter(|&index| {
-                self.runtime.object_slot_is_live(index)
-                    && self.runtime.frame().presences.get(index) == Some(&true)
+                runtime.object_slot_is_live(index)
+                    && runtime.frame().presences.get(index) == Some(&true)
             })
-            .and_then(|index| self.runtime.frame().objects.get(index))
+            .and_then(|index| runtime.frame().objects.get(index))
             .filter(|row| row.draw_enabled)
             .ok_or_else(|| {
                 PrefixError::Interaction(
                     "interaction target is not live in the displayed prefix".into(),
                 )
             })
-    }
-
-    /// Admit only a prepared effect belonging to this reader and its displayed
-    /// historical state. This does not publish a source or replay revision.
-    pub fn start_transient_animation(
-        &mut self,
-        prepared: PreparedTransientAnimation,
-    ) -> Result<(), PrefixError> {
-        self.runtime
-            .start_transient_animation(prepared)
-            .map_err(PrefixError::Interaction)
-    }
-
-    /// Advance session effects using platform monotonic seconds, including while
-    /// authored playback is paused. No authored time or retained history changes.
-    pub fn advance_interactions(&mut self, wall_time: f64) -> Result<(), PrefixError> {
-        self.runtime
-            .advance_interactions(wall_time)
-            .map_err(PrefixError::Interaction)
-    }
-
-    pub fn interactions_active(&self) -> bool {
-        self.runtime.interactions_active()
-    }
-
-    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.runtime.take_renderer_publication()
     }
 
     /// Validate a borrowed batch without consuming it or changing the reader.
@@ -309,11 +299,20 @@ impl PrefixReader {
     /// This is an observation, not a reservation or a reusable admission token.
     /// `append` always validates against the then-current stream and budgets.
     /// Reuses existing resource validation without scanning frames or history.
-    pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
-        self.validate_append(batch).map(|_| batch.stats)
+    pub fn preflight_append(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        self.validate_append(runtime, batch).map(|_| batch.stats)
     }
 
-    fn validate_append(&self, batch: &PrefixBatch) -> Result<(usize, usize), PrefixError> {
+    fn validate_append(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+    ) -> Result<(usize, usize), PrefixError> {
+        self.validate_runtime(runtime)?;
         if self.finished
             || !Arc::ptr_eq(&self.stream, &batch.stream)
             || batch.from_revision != self.received_revisions
@@ -323,7 +322,7 @@ impl PrefixReader {
         {
             return Err(PrefixError::UnexpectedBatch);
         }
-        if batch.from_object_slots != self.runtime.compiled.objects().len() {
+        if batch.from_object_slots != runtime.compiled.objects().len() {
             return Err(PrefixError::UnexpectedBatch);
         }
         let required = batch.required_object_capacity();
@@ -332,12 +331,11 @@ impl PrefixReader {
                 object_slots: required,
             });
         }
-        self.runtime
+        runtime
             .compiled
             .resources()
             .preflight_merge(&batch.resources)?;
-        let history = self
-            .runtime
+        let history = runtime
             .replay_history
             .as_ref()
             .expect("private reader history");
@@ -362,19 +360,20 @@ impl PrefixReader {
     /// validation precedes moving revisions into the already-reserved history.
     /// This consumes the batch even on failure; use `preflight_append` first
     /// when delivery must remain recoverable after capacity/order rejection.
-    pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
-        let (count, payloads) = self.validate_append(&batch)?;
-        let history = self
-            .runtime
+    pub fn append(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        let (count, payloads) = self.validate_append(runtime, &batch)?;
+        let history = runtime
             .replay_history
             .as_mut()
             .expect("private reader history");
         // Only this sealed reader owns its history; capacity was reserved once.
         debug_assert!(count <= history.revisions.capacity());
-        self.runtime
-            .compiled
-            .merge_prepared_resources(batch.resources);
-        self.runtime
+        runtime.compiled.merge_prepared_resources(batch.resources);
+        runtime
             .compiled
             .install_prefix_tombstones(batch.new_objects);
         history.revisions.extend(batch.revisions);
@@ -394,7 +393,9 @@ impl SceneInstance {
     /// This experimental path excludes native-reactive bindings and external
     /// input. It copies the existing execution projection exactly once.
     #[doc(hidden)]
-    pub fn create_prefix_reader(&self) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
+    pub fn create_prefix_projection(
+        &self,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
         let history = self
             .replay_history
             .as_ref()
@@ -443,8 +444,9 @@ impl SceneInstance {
             .map_err(|_| PrefixError::Allocation)?;
         runtime.seal_replay()?;
         runtime.seek(history.start)?;
-        let reader = PrefixReader {
-            runtime,
+        let receiver = PrefixReceiver {
+            runtime: runtime.runtime_identity(),
+            scope: history.scope.clone(),
             stream,
             start: history.start,
             frontier: self.frame.time,
@@ -454,7 +456,7 @@ impl SceneInstance {
             object_capacity: self.compiled.objects().len(),
             initial_object_slots: self.compiled.objects().len(),
         };
-        Ok((publisher, reader))
+        Ok((publisher, runtime, receiver))
     }
 
     /// Prepare an extension after the source owner validates another completed

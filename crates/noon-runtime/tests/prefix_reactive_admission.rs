@@ -1,5 +1,7 @@
 #![cfg(feature = "prepared-prefix")]
 
+mod prefix_support;
+
 use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
 use noon_core::{
     ReactiveValue, SemanticMutationTransaction, SemanticObjectProperty, SemanticObjectState,
@@ -55,7 +57,7 @@ fn assert_unsupported<T: std::fmt::Debug>(result: Result<T, PrefixError>) {
 #[test]
 fn empty_semantic_reactive_runtime_allows_bootstrap_and_quiet_extension() {
     let mut source = semantic_runtime(false, false);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     reader.seek(0.25).unwrap();
     let displayed = reader.frame().clone();
     source.advance_to(2.0).unwrap();
@@ -71,19 +73,19 @@ fn empty_semantic_reactive_runtime_allows_bootstrap_and_quiet_extension() {
 #[test]
 fn scoped_unbound_signal_is_not_mistaken_for_empty_reactive_scaffolding() {
     let source = semantic_runtime(true, false);
-    assert_unsupported(source.create_prefix_reader());
+    assert_unsupported(prefix_support::bootstrap(&source));
 }
 
 #[test]
 fn property_binding_remains_outside_prefix_admission() {
     let source = semantic_runtime(true, true);
-    assert_unsupported(source.create_prefix_reader());
+    assert_unsupported(prefix_support::bootstrap(&source));
 }
 
 #[test]
 fn later_single_signal_enrollment_blocks_extension_but_preserves_delivered_history() {
     let mut source = semantic_runtime(false, false);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let previous = reader.seek(0.5).unwrap().clone();
     let signal = SignalId::new(100);
     let prepared = source
@@ -108,7 +110,7 @@ fn later_single_signal_enrollment_blocks_extension_but_preserves_delivered_histo
 #[test]
 fn failed_and_empty_enrollment_leave_admission_open_but_committed_batch_closes_it() {
     let mut source = semantic_runtime(false, false);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let signal = SignalId::new(200);
     assert!(source
         .prepare_reactive_signal_enrollment_batch(&[(signal, ReactiveValue::Scalar(f32::NAN))])

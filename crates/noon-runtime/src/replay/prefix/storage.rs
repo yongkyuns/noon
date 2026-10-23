@@ -1,14 +1,19 @@
 //! Explicit capacity maintenance; append itself never relocates scene storage.
-use super::{PrefixError, PrefixReader, ReplayError};
+use super::{PrefixError, PrefixReceiver, ReplayError};
 use crate::{FrameObjectState, SceneInstance};
 
-impl PrefixReader {
+impl PrefixReceiver {
     /// Named O(existing storage) maintenance barrier, separate from ordinary
     /// prefix delivery. Reserve ahead using a bounded workload capacity or the
     /// next batch's required_object_capacity(). Returns requested total slots.
     /// Allocation failure changes capacity only, never frame/history/publication.
     /// Payload and revision limits are entry counts, not a physical-memory cap.
-    pub fn reserve_object_capacity(&mut self, total: usize) -> Result<usize, PrefixError> {
+    pub fn reserve_object_capacity(
+        &mut self,
+        runtime: &mut SceneInstance,
+        total: usize,
+    ) -> Result<usize, PrefixError> {
+        self.validate_runtime(runtime)?;
         if total <= self.object_capacity {
             return Ok(self.object_capacity);
         }
@@ -17,7 +22,6 @@ impl PrefixReader {
         {
             return Err(ReplayError::RetentionLimit.into());
         }
-        let runtime = &mut self.runtime;
         runtime
             .compiled
             .reserve_prefix_object_capacity(total)

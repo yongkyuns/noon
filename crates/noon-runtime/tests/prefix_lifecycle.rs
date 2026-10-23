@@ -1,9 +1,10 @@
 #![cfg(feature = "prepared-prefix")]
+mod prefix_support;
+
 use noon_compile::{CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
 use noon_runtime::{
-    FrameObjectState, PrefixError, PrefixReader, RendererPublication, ReplayError, ReplayLimits,
-    SceneInstance,
+    FrameObjectState, PrefixError, RendererPublication, ReplayError, ReplayLimits, SceneInstance,
 };
 
 fn object(id: u64) -> CompiledObject {
@@ -52,7 +53,11 @@ fn order(id: u64, before: Option<u64>) -> ExecutionPatch {
         before: before.map(ObjectId::new),
     }
 }
-fn check(reader: &mut PrefixReader, time: f64, expected: &[(FrameObjectState, bool, f32, f32)]) {
+fn check(
+    reader: &mut prefix_support::PrefixHarness,
+    time: f64,
+    expected: &[(FrameObjectState, bool, f32, f32)],
+) {
     reader.seek(time).unwrap();
     assert_eq!(
         visible(reader.take_renderer_publication()),
@@ -64,7 +69,7 @@ fn check(reader: &mut PrefixReader, time: f64, expected: &[(FrameObjectState, bo
 #[test]
 fn several_creates_removals_reorders_and_reentry_in_one_batch_preserve_every_interval() {
     let mut rt = source(3);
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     reader.reserve_object_capacity(12).unwrap();
     let old = visible(rt.take_renderer_publication());
     rt.advance_to(1.0).unwrap();
@@ -115,7 +120,7 @@ fn several_creates_removals_reorders_and_reentry_in_one_batch_preserve_every_int
 #[test]
 fn a_later_batch_reactivates_the_same_slot_without_replacing_old_identity() {
     let mut rt = source(2);
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     reader.reserve_object_capacity(3).unwrap();
     rt.apply_execution_patch(&remove(0)).unwrap();
     rt.advance_to(2.0).unwrap();
@@ -147,7 +152,7 @@ fn a_later_batch_reactivates_the_same_slot_without_replacing_old_identity() {
 #[test]
 fn capacity_requires_an_explicit_bounded_maintenance_barrier() {
     let mut rt = source(1);
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     rt.apply_execution_patch(&ExecutionPatch::CreateObject(object(1)))
         .unwrap();
     rt.advance_to(2.0).unwrap();
@@ -164,7 +169,7 @@ fn capacity_requires_an_explicit_bounded_maintenance_barrier() {
         Err(PrefixError::Replay(ReplayError::RetentionLimit))
     ));
     // Transport retries are outside this slice; dropping a batch needs a new stream.
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     rt.apply_execution_patch(&ExecutionPatch::CreateObject(object(2)))
         .unwrap();
     rt.advance_to(3.0).unwrap();
@@ -180,7 +185,7 @@ fn capacity_requires_an_explicit_bounded_maintenance_barrier() {
 #[test]
 fn failed_creation_transaction_does_not_allocate_or_publish_a_historical_slot() {
     let mut rt = source(1);
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     let bad = ExecutionMutationTransaction::from_mutations([
         ExecutionPatch::CreateObject(object(1)),
         ExecutionPatch::SetTransform {
@@ -204,7 +209,7 @@ fn failed_creation_transaction_does_not_allocate_or_publish_a_historical_slot() 
 #[test]
 fn content_replacements_do_not_collapse_intermediate_geometry() {
     let mut rt = source(1);
-    let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
     let mut expected = Vec::new();
     for step in 1..=4 {
         rt.apply_execution_patch(&ExecutionPatch::SetContent {
@@ -230,7 +235,7 @@ fn lifecycle_payload_scales_with_new_work_not_unrelated_objects() {
     let mut stats = Vec::new();
     for count in [10, 10_000] {
         let mut rt = source(count);
-        let (mut publisher, mut reader) = rt.create_prefix_reader().unwrap();
+        let (mut publisher, mut reader) = prefix_support::bootstrap(&rt).unwrap();
         reader.reserve_object_capacity(count + 1).unwrap();
         rt.apply_execution_patch(&ExecutionPatch::CreateObject(object(count as u64)))
             .unwrap();

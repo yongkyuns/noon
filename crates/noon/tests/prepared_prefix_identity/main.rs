@@ -1,6 +1,6 @@
 #![cfg(feature = "prepared-prefix")]
 //! Generation-qualified actions after delivery of genuinely new execution slots.
-//! This exercises the existing reader API, not automatic pointer dispatch.
+//! Direct effects and pointer dispatch share the same historical session.
 
 use noon::{ExecutionSession, PrefixError, PrefixPublisher, PrefixReader};
 use noon_core::{
@@ -10,6 +10,7 @@ use noon_core::{
 use noon_runtime::{PrefixBatch, ReplayLimits};
 
 mod admission;
+mod pointer;
 mod terminal;
 
 const A: SemanticClickIndicate = SemanticClickIndicate::new(1.25, Color::YELLOW, 0.5);

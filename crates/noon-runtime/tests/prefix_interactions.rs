@@ -1,5 +1,7 @@
 #![cfg(feature = "prepared-prefix")]
 
+mod prefix_support;
+
 use std::sync::Arc;
 
 use noon_compile::{CompiledObject, CompiledResources, CompiledScene, ExecutionPatch};
@@ -9,7 +11,7 @@ use noon_core::{
     TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
     VectorPath,
 };
-use noon_runtime::{EvaluationError, PrefixError, PrefixReader, ReplayLimits, SceneInstance};
+use noon_runtime::{EvaluationError, PrefixError, ReplayLimits, SceneInstance};
 
 fn object(id: u64) -> CompiledObject {
     CompiledObject::new(
@@ -40,7 +42,7 @@ fn binding() -> SemanticClickIndicate {
     SemanticClickIndicate::new(1.5, Color::YELLOW, 2.0)
 }
 
-fn start(reader: &mut PrefixReader, wall_time: f64) {
+fn start(reader: &mut prefix_support::PrefixHarness, wall_time: f64) {
     let effect = reader
         .prepare_click_indicate(ObjectId::new(0), binding())
         .unwrap()
@@ -72,7 +74,7 @@ fn paused_effect_changes_only_reader_presentation_and_releases_to_the_same_histo
     let source = source(&[], 1.0);
     let source_frame = source.frame().clone();
     let source_context = source.publication_context();
-    let (_, mut reader) = source.create_prefix_reader().unwrap();
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let baseline = reader.seek(0.5).unwrap().clone();
     let history = reader.replay_stats();
     let context = reader.take_renderer_publication().context();
@@ -114,7 +116,7 @@ fn paused_effect_changes_only_reader_presentation_and_releases_to_the_same_histo
 #[test]
 fn append_keeps_effect_and_frame_while_forward_playback_advances_disjoint_channels() {
     let mut source = source(&[track(Property::Rotation, 0.0, 4.0)], 1.0);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     reader.seek(0.25).unwrap();
     start(&mut reader, 10.0);
     reader.advance_interactions(10.5).unwrap();
@@ -165,7 +167,7 @@ fn append_keeps_effect_and_frame_while_forward_playback_advances_disjoint_channe
 #[test]
 fn invalid_requests_preserve_active_effect_and_do_not_materialize_future_slots() {
     let mut source = source(&[], 1.0);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     reader.seek(0.5).unwrap();
     start(&mut reader, 10.0);
     reader.advance_interactions(10.5).unwrap();
@@ -232,8 +234,8 @@ fn invalid_requests_preserve_active_effect_and_do_not_materialize_future_slots()
 #[test]
 fn foreign_and_stale_prepared_effects_are_rejected_without_publication() {
     let source = source(&[], 2.0);
-    let (_, mut first) = source.create_prefix_reader().unwrap();
-    let (_, mut second) = source.create_prefix_reader().unwrap();
+    let (_, mut first) = prefix_support::bootstrap(&source).unwrap();
+    let (_, mut second) = prefix_support::bootstrap(&source).unwrap();
     first.seek(0.5).unwrap();
     second.seek(0.5).unwrap();
     let prepared = first
@@ -267,7 +269,7 @@ fn foreign_and_stale_prepared_effects_are_rejected_without_publication() {
 #[test]
 fn explicit_same_time_seek_cancels_effect_but_failed_seek_does_not() {
     let source = source(&[], 1.0);
-    let (_, mut reader) = source.create_prefix_reader().unwrap();
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let baseline = reader.seek(0.5).unwrap().clone();
     start(&mut reader, 10.0);
     reader.advance_interactions(11.0).unwrap();
@@ -291,7 +293,7 @@ fn explicit_same_time_seek_cancels_effect_but_failed_seek_does_not() {
 #[test]
 fn historical_target_remains_interactive_after_producer_removal_and_destruction() {
     let mut source = source(&[], 1.0);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let baseline = reader.seek(0.5).unwrap().clone();
     source
         .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(0)))
@@ -326,7 +328,7 @@ fn historical_target_remains_interactive_after_producer_removal_and_destruction(
 #[test]
 fn authored_scale_ownership_defers_or_supersedes_the_effect_without_stale_restore() {
     let authored = source(&[track(Property::Scale, 0.0, 3.0)], 3.0);
-    let (_, mut active) = authored.create_prefix_reader().unwrap();
+    let (_, mut active) = prefix_support::bootstrap(&authored).unwrap();
     active.seek(0.5).unwrap();
     assert!(active
         .prepare_click_indicate(ObjectId::new(0), binding())
@@ -335,8 +337,8 @@ fn authored_scale_ownership_defers_or_supersedes_the_effect_without_stale_restor
 
     for (duration, destination) in [(1.0, 1.5), (1.0, 2.5), (0.0, 2.5)] {
         let source = source(&[track(Property::Scale, 1.0, duration)], 3.0);
-        let (_, mut reader) = source.create_prefix_reader().unwrap();
-        let (_, mut reference) = source.create_prefix_reader().unwrap();
+        let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
+        let (_, mut reference) = prefix_support::bootstrap(&source).unwrap();
         reader.seek(0.5).unwrap();
         start(&mut reader, 10.0);
         reader.advance_interactions(10.5).unwrap();
@@ -350,7 +352,7 @@ fn authored_scale_ownership_defers_or_supersedes_the_effect_without_stale_restor
 #[test]
 fn nondrawable_historical_targets_cannot_acquire_a_presentation_effect() {
     let mut source = source(&[], 1.0);
-    let (mut publisher, mut reader) = source.create_prefix_reader().unwrap();
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     source
         .apply_execution_patch(&ExecutionPatch::SetDrawEnabled {
             object: ObjectId::new(0),
@@ -432,7 +434,7 @@ fn unsupported_displayed_targets_preserve_the_active_effect_and_publication() {
         })
         .unwrap();
     source.advance_to(1.0).unwrap();
-    let (_, mut reader) = source.create_prefix_reader().unwrap();
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let baseline = reader.seek(0.5).unwrap().clone();
     start(&mut reader, 10.0);
     reader.advance_interactions(10.5).unwrap();

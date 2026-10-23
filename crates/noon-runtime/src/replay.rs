@@ -403,4 +403,4 @@ mod family_tests;
 #[cfg(feature = "prepared-prefix")]
 mod prefix;
 #[cfg(feature = "prepared-prefix")]
-pub use prefix::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReader};
+pub use prefix::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReceiver};

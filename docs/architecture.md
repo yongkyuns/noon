@@ -711,9 +711,10 @@ payloads and ordering neighbours. Resource/payload limits count entries, not byt
 An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
 policy.
-Family channels, spatial/glow plans, reactive/native input, host callbacks,
-terminal endpoint publication and a realtime producer/player shell remain outside
-admission. It is disabled by default and does not change gallery
+Family channels, spatial/glow plans, reactive/causal native input, host callbacks
+and a realtime producer/player shell remain outside admission. Explicitly sealed
+source completion can publish a terminal batch; only reader adoption changes the
+ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
 presentation or establish physical-device performance. Implementation and
 qualification remain in #2211; this is not another scene or rendering authority.
 
@@ -735,10 +736,26 @@ same execution projection, with a maintained live-binding count for constant-tim
 input interest; it keeps no producer-current binding map. Future appended rows
 remain inactive until their creation revision is displayed.
 
-The prefix reader exposes typed target-based preparation. Automatic pointer
-dispatch still requires time-qualified semantic identity and integration with
-the shared session's input and picking contracts. General injected animations
-and causal edits require separate admission.
+The public prefix reader owns an ordinary `ExecutionSession`, not a second input
+engine. Its runtime-layer `PrefixReceiver` owns only stream/readiness metadata,
+bound to that runtime incarnation and sealed history scope. Bootstrap moves the
+one derived runtime into the session; it does not clone the producer session or
+retain its mutable semantic identity/reachability maps. Initial and newly delivered
+physical identities are pinned in the existing derived slot table. Those pins
+are not live membership: picking still observes the selected historical revision.
+New-slot map/storage reservation is explicit, and append registers only new rows.
+
+Pointer admission, picking, click synthesis, hover/selection, inspection and bound
+Indicate dispatch delegate to the existing session APIs. The public reader exposes
+neither mutable session/runtime access nor authoring/causal input operations.
+Readiness and monotonic advance are checked before ordinary session evaluation;
+explicit seeking cancels transient interaction through the same session policy.
+Future or terminal delivery preserves the displayed publication and pending
+pointer gesture. Frame snapshots retain the existing runtime/view/inspection
+qualification and do not assert that a host actually presented a frame. Hosts
+must keep that association themselves. General injected animations and causal
+edits require separate admission; browser/native shell adoption and end-to-end
+latency qualification are still outstanding in #2211.
 
 ### Identity generations, revisions, versions and sequences
 
