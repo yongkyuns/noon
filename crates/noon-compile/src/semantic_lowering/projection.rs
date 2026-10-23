@@ -1468,7 +1468,7 @@ mod tests {
                     vector_items: Arc::from([]),
                     render_items: Arc::from([]),
                     parts: Arc::from([]),
-                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)).into(),
                     baseline: 0.0,
                     layout_artifact: None,
                 },

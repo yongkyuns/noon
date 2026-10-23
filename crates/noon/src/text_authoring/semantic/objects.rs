@@ -4,8 +4,6 @@ use super::TextAuthoringError;
 use super::{MathTypst, Typst};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
-#[cfg(feature = "native-text")]
-use noon_core::Vec2;
 #[cfg(feature = "typst")]
 use noon_typst::TypstMode;
 
@@ -150,18 +148,15 @@ impl CompiledTextAdmission for TypstAdmission {
 
 #[cfg(feature = "native-text")]
 pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, TextAuthoringError> {
-    let mut transform = text.presentation.transform;
-    transform.scale = transform.scale.component_mul(Vec2::new(
-        NATIVE_POINT_TO_SCENE_SCALE,
-        NATIVE_POINT_TO_SCENE_SCALE,
-    ));
     let identity = super::super::compiler::native_identity(&text)?;
     let artifact = text.compile_artifact_with_fill(None)?;
-    let (transform, style) = text_artifact_presentation(
-        transform,
+    let (mut transform, style) = text_artifact_presentation(
+        text.presentation.transform,
         text.presentation.color,
         text.presentation.opacity,
     )?;
+    transform.scale.x *= NATIVE_POINT_TO_SCENE_SCALE;
+    transform.scale.y *= NATIVE_POINT_TO_SCENE_SCALE;
     Ok(NativeTextAdmission {
         identity,
         resource: artifact.resource.as_ref().clone(),
@@ -304,11 +299,14 @@ fn prepare_typst_spec(
     text.presentation.validate()?;
     let identity = super::super::compiler::typst_identity(&text, mode);
     let artifact = text.compile_artifact(mode)?;
-    let (transform, style) = text_artifact_presentation(
-        text.authored_transform(),
+    let (mut transform, style) = text_artifact_presentation(
+        text.presentation.transform,
         text.presentation.color,
         text.presentation.opacity,
     )?;
+    let font_scale = f64::from(text.font_size) * super::super::SCALE_FACTOR_PER_FONT_POINT;
+    transform.scale.x *= font_scale;
+    transform.scale.y *= font_scale;
     Ok(TypstAdmission {
         identity,
         resource: artifact.resource.as_ref().clone(),

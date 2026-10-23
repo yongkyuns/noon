@@ -9,6 +9,10 @@ pub enum ManimRotationPivot {
     Center,
     Point(f64, f64),
     Edge(f64, f64),
+    /// Full-coordinate pivot for depth-capable affine operations.
+    Point3d(noon_core::SemanticVec3),
+    /// Resolve each signed component against the shared boundary.
+    Edge3d(noon_core::SemanticVec3),
 }
 
 impl ManimRotationPivot {
@@ -32,7 +36,16 @@ impl ManimRotationPivot {
                 "procedural rotation requires geometry centered on its transform origin".into(),
             );
         }
-        let point = match self {
+        let planar = match self {
+            Self::Point3d(point) | Self::Edge3d(point) if !point.is_finite() => {
+                return Err("rotation pivot must be finite".into());
+            }
+            Self::Point3d(point) => Self::Point(point.x, point.y),
+            Self::Edge3d(edge) => Self::Edge(edge.x, edge.y),
+            other => other,
+        };
+        let point = match planar {
+            Self::Point3d(_) | Self::Edge3d(_) => unreachable!("projected above"),
             Self::Center => center,
             Self::Point(x, y) => (x, y),
             Self::Edge(x, y) => {

@@ -3276,6 +3276,43 @@ def _raw_point_mutations(api):
     }
 
 
+def _point_append_argument_profiles(api):
+    """Use the same complete argument/hook matrix as the pinned CE corpus."""
+    from manim_point_append_observation import (
+        METHODS, SPECS, observe_point_append, observe_point_append_hook,
+    )
+
+    batch_spec = {
+        "id": "two-complete-cubic-curves", "container": "array", "dtype": "float64",
+        "values": [
+            [[0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 1, 0]],
+            [[2, 1, 0], [3, 1, 0], [3, 2, 0], [4, 2, 0]],
+        ],
+    }
+    return {
+        "ordinary_batch": {
+            name: observe_point_append(
+                api, batch_spec, "add_cubic_bezier_curves", 0, getattr(api, name)
+            )
+            for name in ("VMobject", "VGroup")
+        },
+        "values": {
+            name: [
+                observe_point_append(api, spec, method, prefix, getattr(api, name))
+                for method in METHODS
+                for prefix in (0, 4)
+                for spec in SPECS
+            ]
+            for name in ("VMobject", "VGroup")
+        },
+        "hooks": [
+            observe_point_append_hook(api, spec, method)
+            for method in METHODS[1:]
+            for spec in SPECS
+        ],
+    }
+
+
 def _raw_point_curve_appends(api):
     import numpy as np
 
@@ -6193,6 +6230,7 @@ FIXTURES = [
             lambda: _inverse_endpoint_parameters(manim), 0.0),
     Fixture("curve_function_queries", lambda: _curve_function_queries(noon), lambda: _curve_function_queries(manim)),
     Fixture("raw_point_mutations", lambda: _raw_point_mutations(noon), lambda: _raw_point_mutations(manim)),
+    Fixture("point_append_argument_profiles", lambda: _point_append_argument_profiles(noon), lambda: _point_append_argument_profiles(manim), 1e-12),
     Fixture("raw_point_curve_appends", lambda: _raw_point_curve_appends(noon), lambda: _raw_point_curve_appends(manim), 1e-5),
     Fixture("raw_point_line_custom_samples", lambda: _raw_point_line_custom_samples(noon), lambda: _raw_point_line_custom_samples(manim), 1e-5),
     Fixture("raw_point_smooth_curve_appends", lambda: _raw_point_smooth_curve_appends(noon), lambda: _raw_point_smooth_curve_appends(manim), 1e-5),
@@ -6470,7 +6508,7 @@ FIXTURES = [
 # are never silently treated as mismatches or claimed as parity.
 UNSUPPORTED = {
     "circle_surround_extended_inputs": "The shared Rust Circle.surround scalar planar profile is enrolled in detached/live comparison, including aliases, signed buffers, stretched ellipses and zero-depth fitting. Staged callbacks, vector buffers, spatial geometry, and exact failure-class equivalence for empty targets remain unqualified under #2011/#2012. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/geometry/arc.py#L660-L711.",
-    "vmobject_add_cubic_bezier_curves": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 calls curves.flatten() and passes the one-dimensional result to append_points(), so ordinary four-point curve batches raise ValueError. Noon accepts complete batches through its atomic shared-Rust path edit; product Pyodide coverage is maintained separately because there is no common-success source result.",
+    "vmobject_add_cubic_bezier_curves": "Pinned incoming-argument and public append-hook profiles are differential-gated for VMobject/VGroup, including exact flatten/broadcast errors and successful scalar/three-value broadcasts. The former Noon-only successful batch extension is superseded by the CE argument contract. Writable ndarray identity/sharing, arbitrary dimensions and broader callback ordering remain unqualified under #2011.",
     "plain_group_save_restore": "Intentional Noon extension, not claimed parity: ManimCE 0.21.0 Group.restore() delegates to base Mobject.become(), whose base interpolate_color() raises NotImplementedError for a plain Group. Noon restores shared Rust family state for Group; scripts/manim-differential-noon.mjs separately checks root and child colors through actual product Pyodide. Pinned source: https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py#L2161-L2166 and #L3172-L3180.",
     "radial_gradient_edges": "Common-success qualification covers finite positive radii, including planar members measured from a 2D or 3D center. Noon rejects zero/negative radii and staged callback use; Text/Image/resource/spatial member parity remains unqualified. ManimCE permits zero/negative radii with non-finite or extrapolated colors.",
     "family_insert_assignment": "Duplicate direct-child Mobject.insert remains unsupported by Noon’s identity-unique Rust family edge model. The pinned Mobject class has no __setitem__; indexed assignment is not part of this API. See #74 for the family-edge identity constraint.",

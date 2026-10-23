@@ -17,7 +17,7 @@ import noon
 class ManimPositionFunctionMethodTests(unittest.TestCase):
     def test_apply_function_to_position_maps_a_point3d_then_uses_move_to(self):
         value = SimpleNamespace()
-        value.get_center = Mock(return_value=noon.Vec2(1.0, -2.0))
+        value.get_center = Mock(return_value=(1.0, -2.0, 7.125))
         value.move_to = Mock(return_value=value)
 
         def translate(point):
@@ -31,7 +31,7 @@ class ManimPositionFunctionMethodTests(unittest.TestCase):
 
         self.assertIs(noon.Mobject.apply_function_to_position(value, translate), value)
         value.get_center.assert_called_once_with()
-        self.assertEqual(tuple(value.move_to.call_args.args[0]), (3.0, 1.0, 0.0))
+        self.assertEqual(tuple(value.move_to.call_args.args[0]), (3.0, 1.0, 7.125))
 
     def test_apply_function_to_position_falls_back_when_numpy_is_not_loaded(self):
         value = SimpleNamespace()

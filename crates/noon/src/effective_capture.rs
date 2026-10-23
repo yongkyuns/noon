@@ -161,7 +161,7 @@ fn lowered_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Co
     })
 }
 
-fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
+pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     if *authored as f32 != effective {
         *authored = f64::from(effective);
     }

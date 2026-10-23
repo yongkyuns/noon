@@ -40,20 +40,20 @@ class OrdinaryTransformMatchingShapes(Scene):
         assert roots[0] is target
         assert tuple(source.submobjects) == (source_triangle, source_kite)
         assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
+        assert abs(target_kite.get_center()[0] + 3.5) < 1e-6
+        assert abs(target_triangle.get_center()[0] - 4) < 1e-6
+        assert abs(source_triangle.get_center()[0] + 2) < 1e-6
+        assert abs(source_kite.get_center()[0] - 2.5) < 1e-6
         self.play(Indicate(target, run_time=1.0))
         roots = self.mobjects
         assert len(roots) == 1
         assert roots[0] is target
         assert tuple(source.submobjects) == (source_triangle, source_kite)
         assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
+        assert abs(target_kite.get_center()[0] + 3.5) < 1e-6
+        assert abs(target_triangle.get_center()[0] - 4) < 1e-6
+        assert abs(source_triangle.get_center()[0] + 2) < 1e-6
+        assert abs(source_kite.get_center()[0] - 2.5) < 1e-6
         # Re-add the original source after replacement (readded=True).
         self.add(source)
         roots = self.mobjects
@@ -61,17 +61,17 @@ class OrdinaryTransformMatchingShapes(Scene):
         assert roots == [target, source]
         assert tuple(source.submobjects) == (source_triangle, source_kite)
         assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
+        assert abs(target_kite.get_center()[0] + 3.5) < 1e-6
+        assert abs(target_triangle.get_center()[0] - 4) < 1e-6
+        assert abs(source_triangle.get_center()[0] + 2) < 1e-6
+        assert abs(source_kite.get_center()[0] - 2.5) < 1e-6
         self.wait(0.1)
         roots = self.mobjects
         assert len(roots) == 2
         assert roots == [target, source]
         assert tuple(source.submobjects) == (source_triangle, source_kite)
         assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
+        assert abs(target_kite.get_center()[0] + 3.5) < 1e-6
+        assert abs(target_triangle.get_center()[0] - 4) < 1e-6
+        assert abs(source_triangle.get_center()[0] + 2) < 1e-6
+        assert abs(source_kite.get_center()[0] - 2.5) < 1e-6

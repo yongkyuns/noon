@@ -7,7 +7,7 @@ use crate::{
     path_editing::{self, PathEdit, ScalarPathEdit},
     AuthoringError, ExecutionSession, Mobject, MobjectFamily,
 };
-use noon_core::{SemanticNodeId, SemanticStore, Vec2};
+use noon_core::{SemanticNodeId, SemanticStore, SemanticVec3, Vec2};
 use std::{cell::RefCell, rc::Rc};
 
 /// One typed path mutation on an existing externally owned execution session.
@@ -73,6 +73,64 @@ pub enum BorrowedPathEdit<'a> {
         curves: &'a [[(f64, f64); 4]],
     },
 
+    Corners3d {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
+    },
+    Line3dWithStride {
+        object: &'a Mobject,
+        point: SemanticVec3,
+        stride: i32,
+    },
+    AppendCorners3d {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
+    },
+    Start3dWithStride {
+        object: &'a Mobject,
+        point: SemanticVec3,
+        stride: i32,
+    },
+    Line3dWithSamples {
+        object: &'a Mobject,
+        point: SemanticVec3,
+        stride: i32,
+        bezier_t_values: &'a [f64; 4],
+    },
+    Cubic3dWithStride {
+        object: &'a Mobject,
+        control1: SemanticVec3,
+        control2: SemanticVec3,
+        anchor: SemanticVec3,
+        stride: i32,
+    },
+    CubicCurve3d {
+        object: &'a Mobject,
+        anchor1: SemanticVec3,
+        handle1: SemanticVec3,
+        handle2: SemanticVec3,
+        anchor2: SemanticVec3,
+    },
+    Corners3dWithSamples {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
+        bezier_t_values: &'a [f64; 4],
+    },
+    AppendCorners3dWithStride {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
+        stride: i32,
+        bezier_t_values: &'a [f64],
+    },
+    CubicCurves3d {
+        object: &'a Mobject,
+        curves: &'a [[SemanticVec3; 4]],
+    },
+    SetCubicCurves3d {
+        object: &'a Mobject,
+        curves: &'a [[SemanticVec3; 4]],
+    },
+
     Clear {
         object: &'a Mobject,
     },
@@ -83,6 +141,14 @@ pub enum BorrowedPathEdit<'a> {
     AppendRawPoints {
         object: &'a Mobject,
         points: &'a [(f64, f64)],
+    },
+    RawPoints3d {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
+    },
+    AppendRawPoints3d {
+        object: &'a Mobject,
+        points: &'a [SemanticVec3],
     },
     SmoothCorners {
         object: &'a Mobject,
@@ -152,6 +218,12 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         control: (f64, f64),
         anchor: (f64, f64),
+        stride: i32,
+    },
+    Quadratic3dWithStride {
+        object: &'a Mobject,
+        control: SemanticVec3,
+        anchor: SemanticVec3,
         stride: i32,
     },
     Cubic {
@@ -370,7 +442,121 @@ pub fn publish_borrowed_path_edit(
             }),
         ),
 
+        BorrowedPathEdit::Corners3d { object, points } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Corners {
+                points,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::Line3dWithStride {
+            object,
+            point,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Line {
+                point,
+                stride,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::AppendCorners3d { object, points } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::AppendCorners {
+                points,
+                stride: 4,
+                samples: &path_editing::LINE_SAMPLES,
+            }),
+        ),
+        BorrowedPathEdit::Start3dWithStride {
+            object,
+            point,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Start { point, stride }),
+        ),
+        BorrowedPathEdit::Line3dWithSamples {
+            object,
+            point,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Line {
+                point,
+                stride,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::Cubic3dWithStride {
+            object,
+            control1,
+            control2,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::CubicTo {
+                controls: [control1, control2, anchor],
+                stride,
+            }),
+        ),
+        BorrowedPathEdit::CubicCurve3d {
+            object,
+            anchor1,
+            handle1,
+            handle2,
+            anchor2,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Cubic([anchor1, handle1, handle2, anchor2])),
+        ),
+        BorrowedPathEdit::Corners3dWithSamples {
+            object,
+            points,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Corners {
+                points,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::AppendCorners3dWithStride {
+            object,
+            points,
+            stride,
+            bezier_t_values,
+        } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::AppendCorners {
+                points,
+                stride,
+                samples: bezier_t_values,
+            }),
+        ),
+        BorrowedPathEdit::CubicCurves3d { object, curves } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Cubics {
+                curves,
+                replace: false,
+            }),
+        ),
+        BorrowedPathEdit::SetCubicCurves3d { object, curves } => (
+            object,
+            PathEdit::Scalar3d(ScalarPathEdit::Cubics {
+                curves,
+                replace: true,
+            }),
+        ),
+
         BorrowedPathEdit::Clear { object } => (object, PathEdit::Clear),
+        BorrowedPathEdit::RawPoints3d { object, points } => (object, PathEdit::RawPoints3d(points)),
+        BorrowedPathEdit::AppendRawPoints3d { object, points } => {
+            (object, PathEdit::AppendRawPoints3d(points))
+        }
         BorrowedPathEdit::RawPoints { object, points } => (object, PathEdit::RawPoints(points)),
         BorrowedPathEdit::AppendRawPoints { object, points } => {
             (object, PathEdit::AppendRawPoints(points))
@@ -464,6 +650,15 @@ pub fn publish_borrowed_path_edit(
         } => (
             object,
             PathEdit::QuadraticWithStride(control, anchor, stride),
+        ),
+        BorrowedPathEdit::Quadratic3dWithStride {
+            object,
+            control,
+            anchor,
+            stride,
+        } => (
+            object,
+            PathEdit::Quadratic3dWithStride(control, anchor, stride),
         ),
         BorrowedPathEdit::Cubic {
             object,

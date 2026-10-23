@@ -375,7 +375,7 @@ fn appended_corners_preserve_existing_morph_target_metadata() {
                 Some(&target),
                 "mode={mode}, precise={precise}"
             );
-            assert_eq!(&path.manim_points().unwrap()[..4], &PREFIX);
+            assert_eq!(&path.manim_points_xy().unwrap()[..4], &PREFIX);
         }
     }
 }
@@ -397,7 +397,7 @@ fn noncanonical_corner_samples_keep_their_cubic_geometry() {
         .iter()
         .any(|command| matches!(command, noon_core::PathCommand::CubicTo { .. })));
     assert_eq!(
-        path.manim_points().unwrap(),
+        path.manim_points_xy().unwrap(),
         &[(0.0, 0.0), (-0.25, 0.0), (1.25, 0.0), (1.0, 0.0)]
     );
 }

@@ -1,6 +1,65 @@
 //! Geometry layout bounds read directly from immutable semantic resources.
 use super::*;
 
+/// Boundary depth of the addressed semantic content, including opaque text and
+/// images. Callers supply Rust-selected unique leaves from their layout read.
+pub(crate) fn boundary_depth_for_leaves(
+    store: &SemanticStore,
+    leaves: &[SemanticNodeId],
+    direction: f64,
+) -> Result<f64, AuthoringError> {
+    let mut bounds: Option<(f64, f64)> = None;
+    for &leaf in leaves {
+        let state = store.semantic_object_state_checked(leaf)?;
+        let transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        if let Some((min, max)) = depth_for_content(store, state.content, transform, false)? {
+            bounds = Some(bounds.map_or((min, max), |(old_min, old_max)| {
+                (old_min.min(min), old_max.max(max))
+            }));
+        }
+    }
+    Ok(bounds.map_or(0.0, |(min, max)| {
+        if direction < 0.0 {
+            min
+        } else if direction > 0.0 {
+            max
+        } else {
+            (min + max) * 0.5
+        }
+    }))
+}
+
+/// Depth uses the same canonical controls as point queries. Dimensions include
+/// handles; deferred center/edge pivots select only paired cubic anchors.
+pub(crate) fn depth_for_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    transform: SemanticTransform2_5D,
+    include_handles: bool,
+) -> Result<Option<(f64, f64)>, AuthoringError> {
+    if !matches!(content, SemanticObjectContent::Geometry(_)) {
+        return Ok(boundary_for_content(store, content, transform)?
+            .map(|_| (transform.translation.z, transform.translation.z)));
+    }
+    let path = crate::path_queries::content_path(store, content)?;
+    let points = crate::PathQuery::prepare(&path, transform)?.points_3d()?;
+    let indices: Box<dyn Iterator<Item = usize>> = if include_handles {
+        Box::new(0..points.len())
+    } else {
+        Box::new(
+            noon_geometry::manim_anchor_indices(points.len()).map_err(AuthoringError::PathQuery)?,
+        )
+    };
+    Ok(indices
+        .map(|index| points[index].z)
+        .fold(None, |bounds, z| {
+            Some(bounds.map_or((z, z), |(min, max): (f64, f64)| (min.min(z), max.max(z))))
+        }))
+}
+
 /// Empty geometry has no layout anchor, even when its authored pose is nonzero.
 /// Preserve the precision-sensitive translation offset only for actual bounds.
 pub(crate) fn boundary_center(bounds: Option<Bounds2D64>, offset: (f64, f64)) -> (f64, f64) {
@@ -28,17 +87,18 @@ pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f
 
 /// Bounds of a retained text rectangle under the shared semantic transform.
 pub(crate) fn transformed_rect_layout_bounds(
-    local: noon_core::Rect,
+    local: impl Into<noon_core::DRect>,
     transform: SemanticTransform2_5D,
 ) -> Bounds2D64 {
+    let local = local.into();
     let mut bounds = None;
-    for point in [
-        local.min,
-        Vec2::new(local.min.x, local.max.y),
-        Vec2::new(local.max.x, local.min.y),
-        local.max,
+    for (x, y) in [
+        (local.min.x, local.min.y),
+        (local.min.x, local.max.y),
+        (local.max.x, local.min.y),
+        (local.max.x, local.max.y),
     ] {
-        include_layout_point(&mut bounds, transform_layout_point(transform, point));
+        include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
     }
     bounds.expect("a rectangle has four corners")
 }
@@ -92,14 +152,14 @@ pub(crate) fn transformed_path_layout_bounds(
     let mut bounds = None;
     if let Some(points) = path.manim_points() {
         if include_handles {
-            for &(x, y) in points {
+            for (x, y) in points.iter().copied().map(noon_core::SemanticVec3::xy) {
                 include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
             }
         } else {
             for index in noon_geometry::manim_anchor_indices(points.len())
                 .map_err(AuthoringError::PathQuery)?
             {
-                let (x, y) = points[index];
+                let (x, y) = points[index].xy();
                 include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
             }
         }

@@ -45,12 +45,12 @@ use swash::{FontRef, Stretch, StringId, Style as FontStyle, Weight};
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
 #[cfg(feature = "typst")]
-pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
+pub const SCALE_FACTOR_PER_FONT_POINT: f64 = 1.0 / 960.0;
 /// Swash reports its requested size in device pixels while Manim's public native
 /// Text font size is point-based. Convert 72 typographic points per scene-inch here;
 /// the renderer must not compensate for this semantic unit conversion.
 #[cfg(feature = "native-text")]
-pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 72.0;
+pub const NATIVE_POINT_TO_SCENE_SCALE: f64 = 1.0 / 72.0;
 #[cfg(feature = "typst")]
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 #[cfg(feature = "native-text")]
@@ -112,15 +112,6 @@ impl TypstSpec {
         mode: TypstMode,
     ) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
         compiler::compile_typst(self, mode)
-    }
-
-    fn authored_transform(&self) -> Transform2D {
-        let mut transform = self.presentation.transform;
-        let font_scale = self.font_size * SCALE_FACTOR_PER_FONT_POINT;
-        transform.scale = transform
-            .scale
-            .component_mul(Vec2::new(font_scale, font_scale));
-        transform
     }
 }
 

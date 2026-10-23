@@ -219,18 +219,11 @@ impl LatexSpec {
         }
         self.presentation.validate()
     }
-
-    pub(crate) fn authored_transform(&self) -> Transform2D {
-        let mut transform = self.presentation.transform;
-        let scale = self.font_size * LATEX_POINT_TO_SCENE_SCALE;
-        transform.scale = transform.scale.component_mul(Vec2::new(scale, scale));
-        transform
-    }
 }
 
 /// ManimCE 0.21 scales SVG big points by `font_size / 960`. DVI uses
 /// TeX points (72.27 per inch), so convert to SVG big points (72 per inch) first.
-pub const LATEX_POINT_TO_SCENE_SCALE: f32 = (72.0 / 72.27) / 960.0;
+pub const LATEX_POINT_TO_SCENE_SCALE: f64 = (72.0 / 72.27) / 960.0;
 pub const DEFAULT_LATEX_FONT_SIZE: f32 = 48.0;
 
 pub(crate) struct LatexAdmission {
@@ -412,23 +405,10 @@ pub(crate) fn finish_latex_parts(
 }
 
 fn transformed_rect_height(
-    bounds: noon_core::Rect,
+    bounds: noon_core::DRect,
     transform: noon_core::SemanticTransform2_5D,
 ) -> f64 {
-    let (sin, cos) = transform.rotation_z.sin_cos();
-    let transform_y = |point: noon_core::Vec2| {
-        let x = f64::from(point.x) * transform.scale.x;
-        let y = f64::from(point.y) * transform.scale.y;
-        x * sin + y * cos + transform.translation.y
-    };
-    let values = [
-        transform_y(bounds.min),
-        transform_y(noon_core::Vec2::new(bounds.min.x, bounds.max.y)),
-        transform_y(noon_core::Vec2::new(bounds.max.x, bounds.min.y)),
-        transform_y(bounds.max),
-    ];
-    values.into_iter().fold(f64::NEG_INFINITY, f64::max)
-        - values.into_iter().fold(f64::INFINITY, f64::min)
+    crate::semantic_mobject::transformed_rect_layout_bounds(bounds, transform).height()
 }
 
 pub(crate) fn prepare_tex(
@@ -450,12 +430,14 @@ fn prepare_latex(
     backend: &mut impl LatexBackend,
 ) -> Result<LatexAdmission, TextAuthoringError> {
     text.validate()?;
-    let transform = text.authored_transform();
-    let (transform, style) = latex_presentation(
-        transform,
+    let (mut transform, style) = latex_presentation(
+        text.presentation.transform,
         text.presentation.color,
         text.presentation.opacity,
     )?;
+    let scale = f64::from(text.font_size) * LATEX_POINT_TO_SCENE_SCALE;
+    transform.scale.x *= scale;
+    transform.scale.y *= scale;
     let document = text.document.render(backend.format())?;
     let backend_identity: Arc<str> = Arc::from(backend.identity());
     let identity = crate::text_authoring::compiler::latex_identity(

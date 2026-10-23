@@ -42,5 +42,5 @@ class OrdinaryCallbackMembershipAtomic(Scene):
         assert staged
         assert self.mobjects == [left, right, middle]
         assert middle._scene is self
-        assert abs(left.get_center().x + 0.5) < 1e-6
+        assert abs(left.get_center()[0] + 0.5) < 1e-6
         assert self.time == 0.25

@@ -49,24 +49,27 @@ class AlignDataTests(unittest.TestCase):
         own.align_points.assert_not_called()
         child.align_data.assert_called_once_with(other_child)
 
-    def test_null_point_alignment_rejects_leaf_to_family_promotion(self):
+    def test_null_point_alignment_promotes_through_the_public_hook(self):
         own = SimpleNamespace()
         other = SimpleNamespace()
         own.has_points = Mock(return_value=False)
         other.has_points = Mock(return_value=True)
+        own.has_no_points = Mock(return_value=True)
+        other.has_no_points = Mock(return_value=True)
+        other.push_self_into_submobjects = Mock()
+        self.assertIs(Mobject.null_point_align(own, other), own)
+        other.push_self_into_submobjects.assert_called_once_with()
 
-        with self.assertRaisesRegex(NotImplementedError, "point-to-family promotion"):
-            Mobject.null_point_align(own, other)
-
-    def test_align_data_rejects_point_ownership_mismatch_before_other_alignment(self):
+    def test_align_data_preserves_a_promotion_failure_before_other_alignment(self):
         own = object.__new__(Mobject)
         other = object.__new__(Mobject)
         own.has_points = Mock(return_value=False)
         other.has_points = Mock(return_value=True)
+        other.push_self_into_submobjects = Mock(side_effect=LookupError("promotion refused"))
         own.align_submobjects = Mock()
         own.align_points = Mock()
 
-        with self.assertRaisesRegex(NotImplementedError, "point-to-family promotion"):
+        with self.assertRaisesRegex(LookupError, "promotion refused"):
             Mobject.align_data(own, other)
 
         own.align_submobjects.assert_not_called()
@@ -77,6 +80,8 @@ class AlignDataTests(unittest.TestCase):
         other = SimpleNamespace()
         own.has_points = Mock(return_value=False)
         other.has_points = Mock(return_value=False)
+        own.has_no_points = Mock(return_value=True)
+        other.has_no_points = Mock(return_value=True)
 
         self.assertIs(Mobject.null_point_align(own, other), own)
 
