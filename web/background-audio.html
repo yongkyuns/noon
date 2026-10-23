@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A little discovery · Noon audio</title>
+  <link rel="stylesheet" href="./background-audio.css">
+</head>
+<body>
+  <main>
+    <header class="masthead"><a href="./index.html" class="wordmark">noon<span>●</span></a><span class="edition">SCENE STUDIES / 01</span></header>
+    <section class="intro">
+      <p class="eyebrow">PICTURE + SOUND, TOGETHER</p>
+      <h1>A little discovery.</h1>
+      <p class="dek">A quiet musical backdrop, three key points, one scene.<br>Play, pause, or jump ahead. The music follows.</p>
+    </section>
+    <section class="player" aria-label="Animation with background music">
+      <div class="stage">
+        <canvas id="scene" aria-label="A gold point traces a triangle through three stages"></canvas>
+        <div class="stage-caption"><span>01 — A STUDY IN MOTION</span><span id="stage-state">PREPARING</span></div>
+        <div id="loading" role="status">Preparing the scene and original music…</div>
+      </div>
+      <div class="transport">
+        <div class="transport-top">
+          <div class="buttons">
+            <button id="previous" class="icon" title="Previous key point" aria-label="Previous key point" disabled>↤</button>
+            <button id="play" class="play" disabled>Play with sound <span aria-hidden="true">▶</span></button>
+            <button id="next" class="icon" title="Next key point" aria-label="Next key point" disabled>↦</button>
+            <button id="restart" class="restart" disabled>Restart</button>
+          </div>
+          <div class="sound">
+            <button id="mute" aria-pressed="false" disabled>Sound on</button>
+            <input id="volume" type="range" min="0" max="1" step="0.01" value="0.7" aria-label="Listening volume" disabled>
+          </div>
+        </div>
+        <div class="scrub-row"><output id="elapsed">0:00</output><input id="scrubber" type="range" min="0" max="30" step="0.01" value="0" aria-label="Scene time" disabled><span>0:30</span></div>
+      </div>
+      <div class="key-points"><span class="key-label">KEY POINTS</span><div id="sections" aria-label="Scene key points"></div></div>
+    </section>
+    <section class="notes">
+      <div><span class="note-number">01</span><h2>Made for the background.</h2><p>Soft keys and a warm pad leave room for an explanation. The scene sets the music’s level and fades.</p></div>
+      <div><span class="note-number">02</span><h2>Every jump stays together.</h2><p>Key points move the animation and soundtrack to the same scene time. Your listening volume stays yours.</p></div>
+      <div><span class="note-number">03</span><h2>An original, open score.</h2><p><em>A Small Discovery</em> is synthesized from an original score. The composition and rendered audio are dedicated under CC0 1.0.</p></div>
+    </section>
+    <footer><span>NOON / ANIMATION WITH INTENTION</span><span id="status" role="status">Preparing a 30-second scene</span></footer>
+  </main>
+  <script type="module" src="./background-audio.js"></script>
+</body>
+</html>

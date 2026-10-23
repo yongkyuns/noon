@@ -131,6 +131,10 @@ impl From<noon_core::PointArrayShapeError> for AuthoringError {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    /// Immutable audio PCM preparation or resource admission failed.
+    AudioResource(noon_core::AudioResourceError),
+    /// A finite authored clip has invalid timing, trim, gain, or fades.
+    AudioClip(noon_core::AudioClipError),
     EffectStateReplacementUnavailable,
     GlowParameter(noon_core::GlowParameterError),
     EffectNotFound {
@@ -328,6 +332,8 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioResource(error) => error.fmt(f),
+            Self::AudioClip(error) => error.fmt(f),
             Self::GlowParameter(error) => error.fmt(f),
             Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
@@ -478,6 +484,8 @@ impl std::error::Error for AuthoringError {
         match self {
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
+            Self::AudioResource(error) => Some(error),
+            Self::AudioClip(error) => Some(error),
             Self::GlowParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
@@ -537,6 +545,18 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
+    }
+}
+
+impl From<noon_core::AudioResourceError> for AuthoringError {
+    fn from(error: noon_core::AudioResourceError) -> Self {
+        Self::AudioResource(error)
+    }
+}
+
+impl From<noon_core::AudioClipError> for AuthoringError {
+    fn from(error: noon_core::AudioClipError) -> Self {
+        Self::AudioClip(error)
     }
 }
 

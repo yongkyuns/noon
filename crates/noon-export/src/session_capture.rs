@@ -42,6 +42,8 @@ pub struct SessionFrame<'a> {
 /// This API does not sample time or invoke/complete callbacks. Its caller owns
 /// the shared runtime's continuation and publication-admission protocol. Calling
 /// it repeatedly renders the same state, not a series of animation frames.
+/// This is an explicitly visual capture API: authored audio is neither played
+/// nor encoded. Movie export requires a separately qualified audio mux path.
 /// Failure poisons this capture object; it cannot replay a consumed publication.
 pub struct SessionCapture {
     gpu: gpu::NativeCapture,

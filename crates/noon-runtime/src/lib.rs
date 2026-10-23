@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod audio;
+pub use audio::{
+    AudioGainEnvelope, AudioGainPoint, AudioLoopRegion, AudioPlaybackClip, AudioPlaybackError,
+};
 mod compaction;
 mod derived_display_evaluation;
 pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};

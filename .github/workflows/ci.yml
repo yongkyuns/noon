@@ -32,6 +32,8 @@ on:
       - "scripts/manim-family-*"
       - "fixtures/manim-v0.21/family-*"
       - "scripts/painter-order-browser-smoke.mjs"
+      - "scripts/background-audio-smoke.mjs"
+      - "web/background-audio*"
       - "scripts/manim-shape-matcher-current-bounds.mjs"
       - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"
       - "web/python/**"
@@ -341,6 +343,16 @@ jobs:
         run: node scripts/shared-authoring-smoke.mjs
       - name: Test native browser input signals
         run: node scripts/native-input-smoke.mjs
+      - name: Test direct background audio and scene controls
+        run: timeout --signal=TERM 240s node scripts/background-audio-smoke.mjs
+      - name: Retain direct background audio evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: background-audio-full-ci
+          path: browser-smoke-artifacts/background-audio/
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Test Python updater callback bridge
         run: node scripts/updater-callback-smoke.mjs
       - name: Test engine/render worker transports

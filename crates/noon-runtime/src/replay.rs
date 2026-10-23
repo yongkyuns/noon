@@ -72,6 +72,11 @@ impl SceneInstance {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
         }
+        // Initial audio pins its immutable resource closure but does not yet
+        // participate in bounded historical publication/retention (#2263).
+        if self.has_audio() {
+            return Err(ReplayError::UnsupportedDomain);
+        }
         let unsupported = self
             .reactive
             .as_ref()

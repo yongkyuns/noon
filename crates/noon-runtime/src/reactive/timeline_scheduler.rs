@@ -86,6 +86,7 @@ struct TimelineEventKey {
 enum EventOccurrence {
     Track(TrackId),
     CameraMotion(usize),
+    AudioClip,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +98,7 @@ struct ScheduledTrackGroup {
 enum ScheduledTimelineTarget {
     Track(CompiledChannelKey),
     FamilyAnimation(usize),
+    AudioClip,
 }
 
 /// Event-driven scheduler with stable channel slots.
@@ -190,6 +192,10 @@ impl TimelineEventScheduler {
                 .expect("compiled family animation retains a validated continuous time map");
             scheduler.append_family_animation(index, start_time, end_time);
         }
+        for clip in compiled.audio_clips() {
+            scheduler
+                .append_audio_clip(clip.definition().start_time(), clip.definition().end_time());
+        }
         scheduler.last_stats = TimelineSchedulerStats::default();
         scheduler
     }
@@ -236,6 +242,27 @@ impl TimelineEventScheduler {
             .range((Excluded(lower), Unbounded))
             .next()
             .map(|(key, _kind)| key.time.0)
+    }
+
+    /// Static-host admission query over the same scheduler event index. This
+    /// deliberately costs O(events) once at admission, not on ordinary frames.
+    /// An unmatched start is an authored unbounded interval (for example a
+    /// camera rotation), which a finite playback host must reject.
+    pub(crate) fn finite_end_time(&self) -> Option<f64> {
+        let mut starts = 0usize;
+        let mut ends = 0usize;
+        for kind in self.events.values() {
+            match kind {
+                EventKind::Start => starts += 1,
+                EventKind::End => ends += 1,
+                EventKind::Instant => {}
+            }
+        }
+        (starts == ends).then(|| {
+            self.events
+                .last_key_value()
+                .map_or(0.0, |(key, _)| key.time.0.max(0.0))
+        })
     }
 
     /// Replace the event/index lowering for exactly one object/property channel.
@@ -455,6 +482,25 @@ impl TimelineEventScheduler {
         }
     }
 
+    fn append_audio_clip(&mut self, start_time: f64, end_time: f64) {
+        let group = self.allocate_group(ScheduledTimelineTarget::AudioClip);
+        // The device realizes this immutable interval. Its boundaries wake the
+        // existing runtime, but it needs no continuously evaluated property or
+        // active-group slot between them. Static visuals can therefore sleep.
+        self.insert_event(
+            group,
+            EventOccurrence::AudioClip,
+            start_time,
+            EventKind::Instant,
+        );
+        self.insert_event(
+            group,
+            EventOccurrence::AudioClip,
+            end_time,
+            EventKind::Instant,
+        );
+    }
+
     /// Rebuild scheduler state for direct seek. Direct seek is intentionally
     /// allowed to be O(events); the ordinary forward frame path is not.
     pub fn seek(&mut self, time: f64) {
@@ -601,6 +647,7 @@ impl TimelineEventScheduler {
                 ScheduledTimelineTarget::FamilyAnimation(index) => {
                     requested_family_animations.push(index)
                 }
+                ScheduledTimelineTarget::AudioClip => {}
             }
         }
         TimelineAdvancePreview {
@@ -751,6 +798,7 @@ impl TimelineEventScheduler {
             ScheduledTimelineTarget::FamilyAnimation(index) => {
                 self.requested_family_animations.push(index)
             }
+            ScheduledTimelineTarget::AudioClip => {}
         }
     }
 

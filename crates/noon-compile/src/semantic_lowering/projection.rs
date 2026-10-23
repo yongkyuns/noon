@@ -282,20 +282,28 @@ impl SemanticExecutionIndex {
         // Scene entrypoint retains its admission guard until effect animation,
         // live publication and every host consumer support this column (#1897).
         let roots = roots.into_iter().collect::<Vec<_>>();
-        // Audio declarations use the semantic arena now, but execution/output is
-        // not implemented yet (#2263). A visual-only projection must not silently
-        // discard a soundtrack. Detached scopes belonging to another root do not
-        // prevent this root from running. The ordinary no-audio path is O(1).
+        // Audio shares the semantic attachment identity and initial projection.
+        // Resource capture occurs before the canonical handoff commits its index.
+        // Empty families are scopes too; overlapping roots must not duplicate clips.
+        let mut audio_clips = Vec::new();
         if store.has_audio_clips() {
+            let mut seen_scopes = HashSet::new();
             for &root in &roots {
                 for scope in store.ordered_authoring_nodes(root)? {
-                    if let Some(clip) = store
+                    if !seen_scopes.insert(scope) {
+                        continue;
+                    }
+                    for clip in store
                         .node(scope)
                         .expect("validated authoring traversal")
                         .scoped_audio_clips()
-                        .next()
                     {
-                        return Err(SemanticLoweringError::AudioOutputUnavailable { clip });
+                        let state = store.semantic_audio_clip_state(clip)?;
+                        audio_clips.push(crate::CompiledAudioClip {
+                            clip,
+                            scope,
+                            definition: *state.definition(),
+                        });
                     }
                 }
             }
@@ -369,6 +377,7 @@ impl SemanticExecutionIndex {
             .collect();
 
         Ok(SemanticExecutionProjection {
+            audio_clips,
             inset_2d_views,
             objects,
             graph_edges,
@@ -391,12 +400,17 @@ impl SemanticExecutionIndex {
 /// the existing `CompiledScene` / `ExecutionSlotTable` path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionProjection {
+    pub(super) audio_clips: Vec<crate::CompiledAudioClip>,
     objects: Vec<SemanticExecutionObject>,
     graph_edges: Vec<SemanticExecutionGraphEdgeDependency>,
     pub(super) inset_2d_views: std::collections::BTreeMap<ObjectId, crate::CompiledInset2DView>,
 }
 
 impl SemanticExecutionProjection {
+    pub fn audio_clips(&self) -> &[crate::CompiledAudioClip] {
+        &self.audio_clips
+    }
+
     pub fn objects(&self) -> &[SemanticExecutionObject] {
         &self.objects
     }
@@ -405,12 +419,13 @@ impl SemanticExecutionProjection {
         &self.graph_edges
     }
 
+    /// Number of executable object and audio declarations in this projection.
     pub fn len(&self) -> usize {
-        self.objects.len()
+        self.objects.len() + self.audio_clips.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
+        self.objects.is_empty() && self.audio_clips.is_empty()
     }
 }
 
@@ -579,7 +594,7 @@ impl std::fmt::Display for SemanticLoweringError {
         match self {
             Self::AudioOutputUnavailable { clip } => write!(
                 formatter,
-                "audio clip {}:{} requires audio execution/output support, which is not available yet (#2263)",
+                "audio clip {}:{} cannot be attached during execution; declare audio before execution starts (#2263)",
                 clip.slot(),
                 clip.generation()
             ),

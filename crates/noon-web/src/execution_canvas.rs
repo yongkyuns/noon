@@ -11,6 +11,7 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::audio_output::{ViewerAudioControls, WebAudioOutput};
     use crate::browser_pointer_input::{
         self, BrowserPointerBinding, BrowserPointerInput, BrowserPointerKind, BrowserPointerTarget,
     };
@@ -619,6 +620,15 @@ mod wasm {
         drawable: bool,
         source: DirectExecutionSource,
         direct_wake_clock: BrowserExecutionWakeClock,
+        section_navigation: noon::SceneSectionNavigation,
+        /// Explicit viewer transport control over the existing wake mapping.
+        /// Audio-bearing scenes start paused; preparation remains silent.
+        direct_paused: bool,
+        /// Admission-time bound borrowed from the immutable Runtime timeline.
+        /// Non-audio hosts retain their existing unbounded wake behavior.
+        finite_audio_end: Option<f64>,
+        audio_controls: ViewerAudioControls,
+        audio_output: Option<WebAudioOutput>,
         /// One observed wall-time target, not a second semantic scheduler.
         sampled_scene_target: Option<f64>,
         direct_preparer: RetainedFramePreparer,
@@ -653,6 +663,7 @@ mod wasm {
             {
                 return Ok(false);
             }
+            self.pause_audio_for_host_failure();
             self.invalidate_pointer_surface()?;
             let next_generation = self
                 .gpu_generation
@@ -719,6 +730,7 @@ mod wasm {
                 return Ok(false);
             }
 
+            self.pause_audio_for_host_failure();
             self.invalidate_pointer_surface()?;
             let lost_generation = self.gpu_generation;
             let next_generation = lost_generation
@@ -782,62 +794,82 @@ mod wasm {
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
-            if self.webgl_context_lifecycle.is_lost() {
-                self.pointer_presentation.invalidate();
-                return Ok(false);
-            }
-            if self.webgl_context_lifecycle.recovery_pending() {
-                self.pointer_presentation.invalidate();
-                return Ok(false);
-            }
-            if self.backend == wgpu::Backend::BrowserWebGpu
-                && self
-                    .gpu_diagnostics
-                    .device_loss_pending(self.gpu_generation)
-            {
-                self.pointer_presentation.invalidate();
-                return Ok(false);
-            }
-            let changes_pending = self.source.session().wake_state().frame_pending()
-                || self.surface_frame_pending
-                || self
-                    .pointer_presentation
-                    .needs_refresh(self.source.session())
-                || self.selection_pending();
-            if !self.drawable || !changes_pending {
-                return Ok(false);
-            }
+            let result = (|| {
+                if self.webgl_context_lifecycle.is_lost() {
+                    self.pointer_presentation.invalidate();
+                    self.pause_audio_for_host_failure();
+                    return Ok(false);
+                }
+                if self.webgl_context_lifecycle.recovery_pending() {
+                    self.pointer_presentation.invalidate();
+                    self.pause_audio_for_host_failure();
+                    return Ok(false);
+                }
+                if self.backend == wgpu::Backend::BrowserWebGpu
+                    && self
+                        .gpu_diagnostics
+                        .device_loss_pending(self.gpu_generation)
+                {
+                    self.pointer_presentation.invalidate();
+                    self.pause_audio_for_host_failure();
+                    return Ok(false);
+                }
+                let changes_pending = self.source.session().wake_state().frame_pending()
+                    || self.surface_frame_pending
+                    || self
+                        .pointer_presentation
+                        .needs_refresh(self.source.session())
+                    || self.selection_pending();
+                if !self.drawable {
+                    self.pause_audio_for_host_failure();
+                    return Ok(false);
+                }
+                if !changes_pending {
+                    return Ok(false);
+                }
 
-            let (surface_texture, reconfigure_after_present) =
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
-                    wgpu::CurrentSurfaceTexture::Timeout
-                    | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
-                    wgpu::CurrentSurfaceTexture::Outdated => {
-                        self.invalidate_pointer_surface()?;
-                        self.surface_frame_pending = true;
-                        self.surface.configure(&self.device, &self.config);
-                        return Ok(false);
-                    }
-                    wgpu::CurrentSurfaceTexture::Lost => {
-                        self.invalidate_pointer_surface()?;
-                        self.surface_frame_pending = true;
-                        if self.backend == wgpu::Backend::Gl {
-                            self.webgl_context_lifecycle.mark_recovery_pending();
-                        } else {
-                            self.surface = create_surface(&self.instance, &self.canvas)?;
-                            self.surface.configure(&self.device, &self.config);
+                let (surface_texture, reconfigure_after_present) =
+                    match self.surface.get_current_texture() {
+                        wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
+                        wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
+                        wgpu::CurrentSurfaceTexture::Timeout
+                        | wgpu::CurrentSurfaceTexture::Occluded => {
+                            self.pause_audio_for_host_failure();
+                            return Ok(false);
                         }
-                        return Ok(false);
-                    }
-                    // The device error callback owns validation diagnostics. Keep
-                    // the pending frame intact so a recoverable validation can be
-                    // reported once and presentation retried unchanged.
-                    wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
-                };
+                        wgpu::CurrentSurfaceTexture::Outdated => {
+                            self.invalidate_pointer_surface()?;
+                            self.surface_frame_pending = true;
+                            self.surface.configure(&self.device, &self.config);
+                            return Ok(false);
+                        }
+                        wgpu::CurrentSurfaceTexture::Lost => {
+                            self.pause_audio_for_host_failure();
+                            self.invalidate_pointer_surface()?;
+                            self.surface_frame_pending = true;
+                            if self.backend == wgpu::Backend::Gl {
+                                self.webgl_context_lifecycle.mark_recovery_pending();
+                            } else {
+                                self.surface = create_surface(&self.instance, &self.canvas)?;
+                                self.surface.configure(&self.device, &self.config);
+                            }
+                            return Ok(false);
+                        }
+                        // The device error callback owns validation diagnostics. Keep
+                        // the pending frame intact so a recoverable validation can be
+                        // reported once and presentation retried unchanged.
+                        wgpu::CurrentSurfaceTexture::Validation => {
+                            self.pause_audio_for_host_failure();
+                            return Ok(false);
+                        }
+                    };
 
-            self.render_direct(surface_texture, reconfigure_after_present)
+                self.render_direct(surface_texture, reconfigure_after_present)
+            })();
+            if result.is_err() {
+                self.pause_audio_for_host_failure();
+            }
+            result
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
@@ -851,6 +883,7 @@ mod wasm {
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
             if !self.drawable {
+                self.pause_audio_for_host_failure();
                 return Ok(());
             }
             if self.config.width != width || self.config.height != height {
@@ -942,6 +975,63 @@ mod wasm {
             self.source.session().frame().time
         }
 
+        #[wasm_bindgen(js_name = sectionCount)]
+        pub fn section_count(&self) -> usize {
+            self.section_navigation.sections().len()
+        }
+
+        #[wasm_bindgen(js_name = sectionName)]
+        pub fn section_name(&self, index: usize) -> Result<String, JsValue> {
+            self.section_navigation
+                .sections()
+                .get(index)
+                .map(|section| section.name.clone())
+                .ok_or_else(|| js_message("unknown scene section"))
+        }
+
+        #[wasm_bindgen(js_name = sectionTime)]
+        pub fn section_time(&self, index: usize) -> Result<f64, JsValue> {
+            self.section_navigation
+                .sections()
+                .get(index)
+                .map(|section| section.time)
+                .ok_or_else(|| js_message("unknown scene section"))
+        }
+
+        /// Resolve the authored marker in shared Rust and use the ordinary
+        /// coherent seek, including its audio stop/reschedule behavior.
+        #[wasm_bindgen(js_name = seekSectionDirect)]
+        pub fn seek_section(&mut self, previous: bool, wall_time_ms: f64) -> Result<bool, JsValue> {
+            if !wall_time_ms.is_finite() {
+                return Err(js_message(
+                    "section navigation requires a finite browser timestamp",
+                ));
+            }
+            let direction = if previous {
+                noon::SectionNavigation::Previous
+            } else {
+                noon::SectionNavigation::Next
+            };
+            let observed_time = if self.direct_paused {
+                self.time()
+            } else {
+                self.direct_wake_clock
+                    .scene_time_at(wall_time_ms)
+                    .map(|time| self.bound_audio_target(time).max(self.time()))
+                    .unwrap_or_else(|| self.time())
+            };
+            let target = self
+                .section_navigation
+                .target(observed_time, direction)
+                .map_err(|error| js_message(&error))?
+                .map(|(_, section)| section.time);
+            let Some(time) = target else {
+                return Ok(false);
+            };
+            self.seek(time)?;
+            Ok(true)
+        }
+
         /// Read-only diagnostic identity; never feeds back into engine execution.
         #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = directSceneRevision)]
@@ -954,6 +1044,14 @@ mod wasm {
         #[wasm_bindgen(js_name = seekDirect)]
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
+            if self
+                .finite_audio_end
+                .is_some_and(|end| !time.is_finite() || time < 0.0 || time > end)
+            {
+                return Err(js_message(
+                    "direct audio seek time must lie within the admitted finite timeline",
+                ));
+            }
             let (pending, camera) = {
                 let session = self.source.session_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
@@ -964,13 +1062,176 @@ mod wasm {
                     ));
                 }
                 session.seek(time).map_err(js_error)?;
-                let camera = session.inspection_camera().map_err(js_error)?;
-                (session.wake_state().frame_pending(), camera)
+                (
+                    session.wake_state().frame_pending(),
+                    session.inspection_camera().map_err(js_error),
+                )
             };
-            self.sync_camera(camera)?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
+            self.stop_audio();
+            let camera_result = camera.and_then(|camera| self.sync_camera(camera));
+            if let Err(error) = camera_result {
+                if self.source.session().has_audio() {
+                    self.direct_paused = true;
+                }
+                return Err(error);
+            }
+            if let Some(output) = &mut self.audio_output {
+                if let Err(error) = output.preload(self.source.session()) {
+                    self.direct_paused = true;
+                    return Err(error);
+                }
+            }
             Ok(pending || self.selection_pending())
+        }
+
+        /// Unlock browser audio from a user gesture without advancing the scene.
+        /// Await the returned promise, then call resumeDirect to start playback.
+        #[wasm_bindgen(js_name = enableAudio)]
+        pub fn enable_audio(&mut self) -> Result<js_sys::Promise, JsValue> {
+            self.ensure_audio_profile()?;
+            if !self.source.session().has_audio() {
+                return Err(js_message(
+                    "this execution session contains no authored audio",
+                ));
+            }
+            if !self.direct_paused {
+                return Err(js_message(
+                    "pause direct playback before enabling its audio device",
+                ));
+            }
+            if self.audio_output.is_none() {
+                self.audio_output = Some(WebAudioOutput::new(self.audio_controls)?);
+            }
+            let output = self.audio_output.as_mut().unwrap();
+            output.preload(self.source.session())?;
+            output.unlock()
+        }
+
+        /// Pause at one accepted authored-time observation, including an interval
+        /// whose unchanged visual frame has been sleeping on a runtime deadline.
+        #[wasm_bindgen(js_name = pauseDirect)]
+        pub fn pause_direct(&mut self, wall_time_ms: f64) -> Result<bool, JsValue> {
+            self.ensure_direct_transport_profile()?;
+            if !wall_time_ms.is_finite() {
+                return Err(js_message(
+                    "direct pause requires a finite browser timestamp",
+                ));
+            }
+            let target = (!self.direct_paused)
+                .then(|| self.direct_wake_clock.scene_time_at(wall_time_ms))
+                .flatten();
+            // Silence immediately even if a pending presentation prevents a
+            // newer observation. Its committed frame remains the resume point.
+            self.direct_paused = true;
+            self.stop_audio();
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
+            if let Some(target) = target {
+                if !self.source.session().wake_state().frame_pending() {
+                    let target = self
+                        .bound_audio_target(self.source.session().bounded_realtime_target(target));
+                    self.source.drive_to(target)?;
+                    let camera = self
+                        .source
+                        .session()
+                        .inspection_camera()
+                        .map_err(js_error)?;
+                    self.sync_camera(camera)?;
+                }
+            }
+            Ok(self.source.session().wake_state().frame_pending())
+        }
+
+        /// Resume at the next accepted browser wake using the existing direct
+        /// clock. No device or authored time advances during control latency.
+        #[wasm_bindgen(js_name = resumeDirect)]
+        pub fn resume_direct(&mut self) -> Result<(), JsValue> {
+            self.ensure_direct_transport_profile()?;
+            if !self.direct_paused {
+                return Ok(());
+            }
+            if self.source.session().has_audio()
+                && !self
+                    .audio_output
+                    .as_ref()
+                    .is_some_and(WebAudioOutput::is_ready)
+            {
+                return Err(js_message(
+                    "enable audio from a user gesture before resuming playback",
+                ));
+            }
+            self.stop_audio();
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
+            self.direct_paused = false;
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = isDirectPlaying)]
+        pub fn is_direct_playing(&self) -> bool {
+            !self.direct_paused
+                && (self.source.source_active()
+                    || !matches!(
+                        self.source.wake_plan().cadence(),
+                        BrowserExecutionCadence::Idle
+                    ))
+        }
+
+        /// Viewer gain is separate from authored clip gain and is never exported.
+        #[wasm_bindgen(js_name = setAudioVolume)]
+        pub fn set_audio_volume(&mut self, volume: f64) -> Result<(), JsValue> {
+            self.audio_controls.set_volume(volume).map_err(js_error)?;
+            if let Some(output) = &mut self.audio_output {
+                output.set_controls(self.audio_controls);
+            }
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = audioVolume)]
+        pub fn audio_volume(&self) -> f64 {
+            self.audio_controls.volume()
+        }
+
+        #[wasm_bindgen(js_name = setAudioMuted)]
+        pub fn set_audio_muted(&mut self, muted: bool) {
+            self.audio_controls.set_muted(muted);
+            if let Some(output) = &mut self.audio_output {
+                output.set_controls(self.audio_controls);
+            }
+        }
+
+        #[wasm_bindgen(js_name = audioMuted)]
+        pub fn audio_muted(&self) -> bool {
+            self.audio_controls.muted()
+        }
+
+        #[wasm_bindgen(js_name = audioEnabled)]
+        pub fn audio_enabled(&self) -> bool {
+            self.audio_output
+                .as_ref()
+                .is_some_and(WebAudioOutput::is_ready)
+        }
+
+        /// Count retained device voices, including scheduled future voices. This
+        /// read-only diagnostic never determines authored playback behavior.
+        #[wasm_bindgen(js_name = audioVoiceCount)]
+        pub fn audio_voice_count(&self) -> usize {
+            self.audio_output
+                .as_ref()
+                .map_or(0, WebAudioOutput::voice_count)
+        }
+
+        /// Retire every device node and pending unlock capability immediately.
+        #[wasm_bindgen(js_name = disposeAudio)]
+        pub fn dispose_audio(&mut self) {
+            self.audio_output = None;
+            if self.source.session().has_audio() {
+                self.direct_paused = true;
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+            }
         }
 
         /// Return one direct-session browser scheduling directive. JavaScript owns
@@ -978,11 +1239,13 @@ mod wasm {
         /// dirtiness remain derived from the authoritative ExecutionSession.
         #[wasm_bindgen(js_name = directWakeDirectiveJson)]
         pub fn direct_wake_directive_json(&mut self, wall_time_ms: f64) -> Result<String, JsValue> {
+            self.require_ready_audio_device()?;
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
                 .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            self.start_audio_at_anchor(plan)?;
             let (cadence, delay_ms) = if self.source.session().interactions_active() {
                 ("animation-frame", None)
             } else {
@@ -1012,11 +1275,13 @@ mod wasm {
         /// runtime-authored deadline is due. Idle observations never advance scene time.
         #[wasm_bindgen(js_name = advanceDirectRealtime)]
         pub fn advance_direct_realtime(&mut self, wall_time_ms: f64) -> Result<bool, JsValue> {
+            self.require_ready_audio_device()?;
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
                 .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            self.start_audio_at_anchor(plan)?;
 
             let target_time = match (directive.wake(), plan.cadence()) {
                 (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => {
@@ -1044,8 +1309,9 @@ mod wasm {
             };
             // Hold the original wall-derived sample across required endpoint
             // admissions. Initial work still clips at its first publication.
-            let wall_sample_target = target_time;
-            let target_time = self.source.session().bounded_realtime_target(target_time);
+            let wall_sample_target = self.bound_audio_target(target_time);
+            let target_time =
+                self.bound_audio_target(self.source.session().bounded_realtime_target(target_time));
             let (pending, camera) = {
                 let direct = &mut self.source;
                 direct.drive_to(target_time)?;
@@ -1066,6 +1332,7 @@ mod wasm {
                     self.source.source_active(),
                 )
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            self.start_audio_at_anchor(next_plan)?;
             Ok(pending)
         }
 
@@ -1304,6 +1571,12 @@ mod wasm {
     }
 
     impl WasmExecutionCanvasRenderer {
+        /// Install immutable Scene-authored navigation labels for this host.
+        /// This neither changes execution time nor bypasses seek admission.
+        pub fn set_section_navigation(&mut self, navigation: noon::SceneSectionNavigation) {
+            self.section_navigation = navigation;
+        }
+
         /// Build the browser canvas host directly from the typed in-process execution session.
         ///
         /// This constructor is intentionally Rust-only: JavaScript may supply the canvas during
@@ -1329,6 +1602,11 @@ mod wasm {
             mut session: ExecutionSession,
             mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
+            if session.has_audio() && session.has_required_callbacks() {
+                return Err(js_message(
+                    "direct audio output currently requires a finite session without required callbacks",
+                ));
+            }
             let initial_time = session.frame().time;
             callbacks
                 .advance_to(&mut session, initial_time)
@@ -1404,6 +1682,10 @@ mod wasm {
             self.sync_camera(camera)?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
+            self.stop_audio();
+            if self.source.session().has_audio() {
+                self.direct_paused = true;
+            }
             Ok(pending)
         }
 
@@ -1489,9 +1771,105 @@ mod wasm {
             Ok(())
         }
 
+        fn ensure_direct_transport_profile(&self) -> Result<(), JsValue> {
+            if !matches!(self.source.authority, DirectSourceAuthority::Session { .. }) {
+                return Err(js_message(
+                    "direct transport controls currently require a pre-authored execution session",
+                ));
+            }
+            if self.source.session().has_required_callbacks() {
+                return Err(js_message(
+                    "direct transport controls currently require a session without required callbacks",
+                ));
+            }
+            Ok(())
+        }
+
+        fn ensure_audio_profile(&self) -> Result<(), JsValue> {
+            self.ensure_direct_transport_profile()?;
+            if self.source.session().replay_scope_active() {
+                return Err(js_message(
+                    "direct audio output does not yet support retained source history",
+                ));
+            }
+            Ok(())
+        }
+
+        fn stop_audio(&mut self) {
+            if let Some(output) = &mut self.audio_output {
+                output.stop();
+            }
+        }
+
+        fn pause_audio_for_host_failure(&mut self) {
+            if self.source.session().has_audio() {
+                self.stop_audio();
+                self.direct_paused = true;
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+            }
+        }
+
+        fn bound_audio_target(&self, target: f64) -> f64 {
+            self.finite_audio_end.map_or(target, |end| target.min(end))
+        }
+
+        fn require_ready_audio_device(&mut self) -> Result<(), JsValue> {
+            if !self.direct_paused
+                && self.source.session().has_audio()
+                && !self
+                    .audio_output
+                    .as_ref()
+                    .is_some_and(WebAudioOutput::is_ready)
+            {
+                self.stop_audio();
+                self.direct_paused = true;
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+                return Err(js_message(
+                    "audio device is suspended; enable audio again before resuming playback",
+                ));
+            }
+            Ok(())
+        }
+
+        fn start_audio_at_anchor(&mut self, plan: BrowserExecutionWakePlan) -> Result<(), JsValue> {
+            if self.direct_paused || !self.source.session().has_audio() {
+                return Ok(());
+            }
+            if matches!(plan.cadence(), BrowserExecutionCadence::Idle) {
+                self.stop_audio();
+                self.direct_paused = true;
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                self.sampled_scene_target = None;
+                return Ok(());
+            }
+            let output = self
+                .audio_output
+                .as_mut()
+                .ok_or_else(|| js_message("enable audio before starting direct audio playback"))?;
+            if !output.is_scheduled() {
+                if let Err(error) = output.start(self.source.session()) {
+                    self.stop_audio();
+                    self.direct_paused = true;
+                    self.direct_wake_clock = BrowserExecutionWakeClock::default();
+                    self.sampled_scene_target = None;
+                    return Err(error);
+                }
+            }
+            Ok(())
+        }
+
         fn direct_wake_observation(&self) -> (BrowserExecutionWakePlan, f64) {
             let direct = &self.source;
-            (direct.wake_plan(), direct.session().frame().time)
+            let plan = if self.direct_paused {
+                BrowserExecutionWakePlan::from_runtime(
+                    direct.session().wake_state().without_timeline_wake(),
+                )
+            } else {
+                direct.wake_plan()
+            };
+            (plan, direct.session().frame().time)
         }
 
         fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
@@ -1506,6 +1884,28 @@ mod wasm {
             camera_center: Vec2,
             camera_height: f32,
         ) -> Result<Self, JsValue> {
+            let has_audio = source.session().has_audio();
+            if has_audio
+                && (!matches!(source.authority, DirectSourceAuthority::Session { .. })
+                    || source.session().has_required_callbacks()
+                    || source.session().replay_scope_active())
+            {
+                return Err(js_message(
+                    "direct audio output requires a finite pre-authored session without callbacks or retained source history",
+                ));
+            }
+            let finite_audio_end = if has_audio {
+                if source.session().frame().time < 0.0 {
+                    return Err(js_message(
+                        "direct audio playback requires a nonnegative initial scene time",
+                    ));
+                }
+                Some(source.session().finite_timeline_end_time().ok_or_else(|| {
+                    js_message("direct audio output requires a finite immutable execution timeline")
+                })?)
+            } else {
+                None
+            };
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
             let InitializedGpu {
@@ -1536,6 +1936,11 @@ mod wasm {
                 drawable: true,
                 source,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
+                section_navigation: noon::SceneSectionNavigation::default(),
+                direct_paused: has_audio,
+                finite_audio_end,
+                audio_controls: ViewerAudioControls::default(),
+                audio_output: None,
                 sampled_scene_target: None,
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,

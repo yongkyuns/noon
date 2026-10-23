@@ -304,6 +304,10 @@ pub use noon_core::{
     YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_core::{
+    AudioClipDefinition, AudioClipError, AudioClipOptions, AudioResource, AudioResourceError,
+    AudioResourceHandle, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+};
+pub use noon_core::{
     CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshResource, SemanticCamera3D,
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
@@ -337,7 +341,7 @@ pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::{Scene, SceneSection, SectionNavigation, SectionType};
+pub use scene::{Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{
@@ -398,11 +402,13 @@ pub mod prelude {
         LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
         NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
-        RateFunction, Scene, SceneSection, SectionNavigation, SectionType, SemanticObjectState,
-        SemanticStyle, SpatialCompositionError, StoredGeometry, StyleUpdate, SvgAuthoringError,
-        SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker,
-        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        RateFunction, Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
+        SemanticObjectState, SemanticStyle, SpatialCompositionError, StoredGeometry, StyleUpdate,
+        SvgAuthoringError, SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature,
+        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
+        VectorFieldRanges2D, VectorPath,
     };
+    pub use crate::{AudioClipOptions, AudioResource, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET};
     #[cfg(feature = "code")]
     pub use crate::{
         Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,

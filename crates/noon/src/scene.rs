@@ -1,4 +1,5 @@
 //! Direct authoring scope over one family in the shared semantic store.
+mod audio;
 mod image;
 mod sections;
 use crate::{
@@ -10,7 +11,7 @@ use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
     SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
-pub use sections::SectionNavigation;
+pub use sections::{SceneSectionNavigation, SectionNavigation};
 use std::{cell::RefCell, rc::Rc};
 
 /// Presentation/export intent attached to one authored section boundary.
