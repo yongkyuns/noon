@@ -9,6 +9,10 @@
 use std::{error::Error, rc::Rc};
 
 mod inspection;
+#[cfg(feature = "prepared-prefix")]
+mod prepared;
+#[cfg(feature = "prepared-prefix")]
+pub use prepared::{PreparedSource, PreparedSourceError, PreparedSourceStatus};
 
 use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,

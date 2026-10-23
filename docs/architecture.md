@@ -712,8 +712,17 @@ An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
 policy.
 Family channels, spatial/glow plans, reactive/causal native input and host callbacks
-remain outside admission. Automatic source continuation/preparation remains separate
-from the bounded direct-canvas integration. Explicitly sealed
+remain outside admission. The opt-in cooperative `PreparedSource` may consume an
+ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
+call invokes at most one continuation and completes its actual admitted segment
+headlessly using the shared evaluator/completion path. One pending reader/batch
+applies backpressure; no further source invocation occurs until it is taken.
+Retention admits the producer publication, not a displayed-frame receipt. Failure
+is terminal and never retries user code; cancellation releases only source-owned
+state while already-delivered history remains usable. Zero-duration waits yield,
+and sources with no positive readable interval are explicitly unsupported here.
+This is a work-count bound, not preemption of a long user call or resource operation.
+Explicitly sealed
 source completion can publish a terminal batch; only reader adoption changes the
 ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
 presentation or establish physical-device performance. Implementation and
@@ -728,6 +737,12 @@ its last valid sample and sleeps until explicit delivery, without an epsilon see
 or a busy timer. Resume reanchors the existing host wake clock so buffered wall
 time is not charged to playback. This does not install the reader in the Python
 playground, admit arbitrary source continuations or change the default viewer.
+A browser task driver may schedule one cooperative Rust preparation call per
+macrotask and wake the existing presentation driver after typed delivery. It owns
+only task handles/cancellation, never authored time, source semantics or batches.
+The native path calls the same producer directly without browser infrastructure.
+Automatic scheduling of the Python interpreter, ahead-of-playback time budgets,
+heavy-source latency and restart/recovery policy remain separate qualifications.
 
 The reader distinguishes monotonic forward playback from an explicit seek.
 Direct, typed presentation effects use the existing Runtime's bounded Indicate
