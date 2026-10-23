@@ -437,7 +437,7 @@ mod tests {
                 .expect("the production graph retains the added vertex");
             assert!(matches!(state.content.geometry(),
                 Some(crate::StoredGeometry::Circle { radius: actual })
-                    if (f64::from(*actual) - radius).abs() < 1e-6));
+                    if (f64::from(actual) - radius).abs() < 1e-6));
             assert_eq!(state.style.fill, Some(noon_core::SemanticPaint::Solid(RED)));
             assert_eq!(
                 state.style.stroke,
