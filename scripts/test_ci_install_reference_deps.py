@@ -1,4 +1,4 @@
-"""Exercise dependency setup without sudo, APT, network, or package changes."""
+"""Exercise dependency setup without sudo, network, or package changes."""
 import json
 import importlib.util
 import shutil
@@ -184,6 +184,10 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
                                  'NoonFixture::Bootstrap "preserved";\n')
             originals = {path: path.read_bytes() for path in [source, fragment, main, bootstrap]}
             result_path, calls_path = root / "result.json", root / "calls.json"
+            # APT selects its Binary subtree from argv[0]. Exercise apt-get's
+            # effective configuration, rather than the unpromoted parser tree.
+            apt_get_config = root / "apt-get"
+            apt_get_config.symlink_to("/usr/bin/apt-config")
             if installed:
                 package = root / "node_modules/playwright"
                 package.mkdir(parents=True)
@@ -192,9 +196,9 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
                     "exports": {"./package.json": "./package.json"}}))
                 (package / "cli.js").write_text(
                     'const fs = require("node:fs"), cp = require("node:child_process");\n'
-                    'const query = cp.execFileSync("/usr/bin/apt-config", ["shell",\n'
-                    '"source", "Dir::Etc::sourcelist", "binarySource", "Binary::apt-get::Dir::Etc::sourcelist",\n'
-                    '"retries", "Binary::apt-get::Acquire::Retries", "parts", "Dir::Etc::parts",\n'
+                    'const query = cp.execFileSync(' + json.dumps(str(apt_get_config)) + ', ["shell",\n'
+                    '"source", "Dir::Etc::sourcelist", "root", "Dir", "etc", "Dir::Etc",\n'
+                    '"lists", "Dir::State::lists/d", "retries", "Acquire::Retries", "parts", "Dir::Etc::parts",\n'
                     '"main", "Dir::Etc::main", "fragment", "NoonFixture::Fragment",\n'
                     '"hostMain", "NoonFixture::Main", "bootstrap", "NoonFixture::Bootstrap"], {encoding:"utf8"});\n'
                     'const source = query.match(/^source=\x27(.*)\x27$/m)[1];\n'
@@ -237,7 +241,9 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
         self.assertEqual(evidence["args"], ["install-deps", "firefox"])
         settings = dict(item.split("=", 1) for item in shlex.split(evidence["query"]))
         self.assertEqual(settings["source"], evidence["source"])
-        self.assertEqual(settings["binarySource"], evidence["source"])
+        self.assertEqual(settings["root"], "/")
+        self.assertEqual(settings["etc"], "etc/apt")
+        self.assertEqual(settings["lists"], "/var/lib/apt/lists/")
         self.assertEqual(settings["retries"], "2")
         for key in ["fragment", "hostMain", "bootstrap"]:
             self.assertEqual(settings[key], "preserved")
@@ -271,6 +277,56 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertTrue(calls)
         self.assertIsNotNone(evidence)
+
+    def test_apt_get_finds_local_indexes_and_preferences_after_binary_overrides(self):
+        helper = Path(__file__).with_name("ci_reference_apt_sources.py").resolve()
+        for binary_paths in [False, True]:
+            with self.subTest(binary_paths=binary_paths), tempfile.TemporaryDirectory(prefix="noon-apt-paths-") as directory:
+                root = Path(directory)
+                apt_root, work = root / "apt-root", root / "work"
+                for name in ["etc/apt/apt.conf.d", "etc/apt/preferences.d", "var/lib/apt/lists/partial", "var/lib/dpkg"]:
+                    (apt_root / name).mkdir(parents=True, exist_ok=True)
+                work.mkdir()
+                status = apt_root / "var/lib/dpkg/status"
+                status.write_text("")
+                source = root / "ubuntu.sources"
+                source.write_text("Types: deb\nURIs: https://archive.ubuntu.com/ubuntu/\n"
+                                  "Suites: noble\nComponents: main\nArchitectures: amd64\n"
+                                  "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n")
+                packages = apt_root / "var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages"
+                packages.write_text("".join(
+                    "Package: noon-ci-apt-fixture\nVersion: " + version + "\nArchitecture: amd64\n"
+                    "Maintainer: Noon CI <ci@example.invalid>\nDescription: Local APT path fixture\n"
+                    "Filename: pool/noon-ci-apt-fixture_" + version + "_amd64.deb\nSize: 1\n\n"
+                    for version in ["1.0", "2.0"]))
+                (apt_root / "etc/apt/preferences").write_text(
+                    "Package: noon-ci-apt-fixture\nPin: version 1.0\nPin-Priority: 1001\n")
+                bootstrap = root / "bootstrap.conf"
+                bootstrap.write_text(
+                    'Dir "' + str(root / "unused" if binary_paths else apt_root) + '";\n'
+                    'Dir::Etc "' + ("unused-conf" if binary_paths else "etc/apt") + '";\n'
+                    'Dir::Etc::parts "' + str(apt_root / "etc/apt/apt.conf.d") + '";\n'
+                    'Dir::Etc::main "-";\nDir::State::status "' + str(status) + '";\n'
+                    'Dir::Cache::pkgcache "";\nDir::Cache::srcpkgcache "";\n'
+                    'APT::Architecture "amd64";\n' +
+                    ('Binary::apt-get::Dir "' + str(apt_root) + '";\n'
+                     'Binary::apt-get::Dir::Etc "etc/apt";\n' if binary_paths else ""))
+                environment = dict(os.environ, APT_CONFIG=str(bootstrap))
+                generated = subprocess.run(["python3", "-S", str(helper), "--playwright-config", str(source)],
+                                           env=environment, capture_output=True, text=True, timeout=10)
+                self.assertEqual(generated.returncode, 0, generated.stderr)
+                configuration = root / "generated.conf"
+                configuration.write_text(generated.stdout)
+                originals = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                # Simulation reads this fixture's index and pinning. It neither
+                # downloads archives nor installs packages or touches host APT.
+                result = subprocess.run(["/usr/bin/apt-get", "--simulate", "install", "noon-ci-apt-fixture"],
+                                        cwd=work, env=dict(environment, APT_CONFIG=str(configuration)),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Inst noon-ci-apt-fixture (1.0 ", result.stdout)
+                self.assertNotIn("W:", result.stderr)
+                self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, originals)
 
 
 class OfficialUbuntuSourcesTests(unittest.TestCase):
