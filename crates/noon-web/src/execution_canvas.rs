@@ -77,6 +77,9 @@ mod wasm {
     /// only drive its current segment, consume a renderer publication, admit that
     /// exact publication after presentation, and forward typed platform input.
     trait DirectLiveProgram: BrowserPointerTarget {
+        // Live authoring hosts retain their own read-only orchestration view.
+        // Browser input itself no longer requires access to a source session.
+        fn session(&self) -> &ExecutionSession;
         fn refresh_pointer_hover(
             &mut self,
             frame: &noon::integration::PointerFrameSnapshot,
@@ -152,6 +155,9 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
+        fn session(&self) -> &ExecutionSession {
+            self.program.session()
+        }
         fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue> {
             self.program
                 .advance_interactions(wall_time_seconds)
@@ -289,8 +295,38 @@ mod wasm {
     where
         C::Error: std::fmt::Display,
     {
-        fn session(&self) -> &ExecutionSession {
-            self.program.session()
+        fn has_native_pointer_subscribers(&self) -> bool {
+            BrowserPointerTarget::has_native_pointer_subscribers(&self.program)
+        }
+        fn translation_drag_active(&self) -> bool {
+            BrowserPointerTarget::translation_drag_active(&self.program)
+        }
+        fn inspection_camera(
+            &self,
+        ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+            BrowserPointerTarget::inspection_camera(&self.program)
+        }
+        fn capture_pointer_frame(
+            &self,
+            view: noon::integration::PointerFrameView,
+        ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError>
+        {
+            BrowserPointerTarget::capture_pointer_frame(&self.program, view)
+        }
+        fn validate_pointer_frame(
+            &self,
+            frame: &noon::integration::PointerFrameSnapshot,
+            view: noon::integration::PointerFrameView,
+            validation: crate::browser_pointer_input::PointerFrameValidation,
+        ) -> Result<(), noon::integration::PointerFrameError> {
+            BrowserPointerTarget::validate_pointer_frame(&self.program, frame, view, validation)
+        }
+        fn pointer_input_token_for_frame(
+            &self,
+            frame: &noon::integration::PointerFrameSnapshot,
+            view: noon::integration::PointerFrameView,
+        ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
+            BrowserPointerTarget::pointer_input_token_for_frame(&self.program, frame, view)
         }
         fn observe_pointer_frame(
             &mut self,

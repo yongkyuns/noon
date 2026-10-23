@@ -6,6 +6,7 @@ use crate::browser_pointer_input::{
     BrowserPointerTarget,
 };
 use noon::integration::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
+#[cfg(test)]
 use noon::ExecutionSession;
 use noon_core::{Camera2DState, Vec2};
 
@@ -67,7 +68,7 @@ impl DirectPointerPresentation {
         // A registered DOM view alone is not input interest. The explicit Rust
         // input API retains its callback barrier; a dormant platform collector
         // simply retires its unbound source without creating publication work.
-        if binding.is_none() && !target.session().has_native_pointer_subscribers() {
+        if binding.is_none() && !target.has_native_pointer_subscribers() {
             return Ok(false);
         }
         if let Some(frame) = self.presented.as_ref() {
@@ -93,12 +94,16 @@ impl DirectPointerPresentation {
     /// normal host wake when pointer input is interested; a registered but
     /// dormant view does not need receipt-only redraws. Callback barriers are
     /// not display races.
-    pub(crate) fn needs_refresh(&self, session: &ExecutionSession) -> bool {
+    pub(crate) fn needs_refresh(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
         self.refresh_pending
-            || (session.has_native_pointer_subscribers()
+            || (target.has_native_pointer_subscribers()
                 && self.presented.as_ref().is_some_and(|frame| {
-                    frame
-                        .validate_current(session, frame.view())
+                    target
+                        .validate_pointer_frame(
+                            frame,
+                            frame.view(),
+                            crate::browser_pointer_input::PointerFrameValidation::Input,
+                        )
                         .is_err_and(|error| recoverable_frame_error(&error))
                 }))
     }
@@ -110,14 +115,14 @@ impl DirectPointerPresentation {
 
     pub(crate) fn capture(
         &self,
-        session: &ExecutionSession,
+        target: &(impl BrowserPointerTarget + ?Sized),
         camera: Camera2DState,
     ) -> Result<Option<PointerFrameSnapshot>, PointerFrameError> {
         let Some(viewport) = self.view else {
             return Ok(None);
         };
         let view = PointerFrameView::new(self.revision, viewport, camera)?;
-        match session.capture_pointer_frame(view) {
+        match target.capture_pointer_frame(view) {
             Ok(frame) => Ok(Some(frame)),
             // A low-level manual camera override may render, but must not grant
             // positional input against a different effective execution camera.

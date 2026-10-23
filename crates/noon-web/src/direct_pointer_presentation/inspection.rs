@@ -26,7 +26,6 @@ impl DirectPointerPresentation {
             );
         }
         let view = target
-            .session()
             .inspection_pointer_view(revision, viewport)
             .map_err(|error| error.to_string())?;
         let Some(frame) = self.presented.as_ref() else {
@@ -39,7 +38,11 @@ impl DirectPointerPresentation {
             self.refresh_pending = true;
             return Ok(None);
         }
-        match frame.validate_current(target.session(), view) {
+        match target.validate_pointer_frame(
+            frame,
+            view,
+            crate::browser_pointer_input::PointerFrameValidation::Input,
+        ) {
             Ok(()) => {}
             Err(error) if recoverable_frame_error(&error) => {
                 self.refresh_pending = true;

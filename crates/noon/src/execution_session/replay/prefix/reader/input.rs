@@ -71,6 +71,23 @@ impl PrefixReader {
     ) -> Result<Option<PointerHoverTransition>, PointerFrameError> {
         self.session.refresh_pointer_hover(displayed, view)
     }
+    /// Check the displayed frame before configuring a browser input source.
+    /// This does not require a binding, retag a stale receipt, or admit input.
+    pub fn validate_pointer_frame(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        displayed.validate_current(&self.session, view)
+    }
+    /// Read-only presentation observation; input still uses its stricter gate.
+    pub fn validate_pointer_presentation(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        displayed.validate_presentation(&self.session, view)
+    }
     pub fn capture_pointer_frame(
         &self,
         view: PointerFrameView,
