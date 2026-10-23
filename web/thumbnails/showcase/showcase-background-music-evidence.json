@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "0088a7a6f7e58f027a570d6841c0c2637beb3c1e",
-  "checkoutRevision": "0088a7a6f7e58f027a570d6841c0c2637beb3c1e",
+  "captureRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
+  "checkoutRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "0088a7a6f7e58f027a570d6841c0c2637beb3c1e",
+    "sourceRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -14,18 +14,18 @@
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "f77d49fa3ee348838fa4f8f1570ab94d15ef47e2f448cce165cf24fecf8ec62f"
+        "sha256": "2c2e3dda0fa73b0c8a80e97e6b45c880bd7ab20ad56c82f789a43888166bb591"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "3b56aa897ea2484f97506737ff7d3602791c2113f1efa7f984018f61b49fc2a8"
+        "sha256": "d18c6227e4628be8c64b77124418b034c454001a2d6cc4801da69b6419f74280"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "3809dc0bd8d894553f55a2e30c2ab9fc2a0e5e6cdf292db078f0f4a532f0f65c"
+    "buildId": "a3a28a1752e5915adc669fe357b866829285e152b75adcb33266f26737493d75"
   },
   "qualification": {
     "script": "scripts/python-background-audio-smoke.mjs",
@@ -37,7 +37,7 @@
   "posters": [
     {
       "id": "showcase-background-music",
-      "captureBuildId": "3809dc0bd8d894553f55a2e30c2ab9fc2a0e5e6cdf292db078f0f4a532f0f65c",
+      "captureBuildId": "a3a28a1752e5915adc669fe357b866829285e152b75adcb33266f26737493d75",
       "sourceSha256": "b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40",
       "thumbnailTime": 8,
       "image": {
