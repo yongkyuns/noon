@@ -4,7 +4,6 @@ pub use glow_publication::{RetainedGlowStats, DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDG
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
-    mem::{size_of, size_of_val},
     sync::Arc,
 };
 
@@ -649,7 +648,7 @@ impl From<VisibleRenderError> for RetainedPrepareError {
 pub(super) struct OutlineKey {
     pub(super) font: FontResourceHandle,
     glyph_id: GlyphId,
-    pub(super) size_bits: u32,
+    pub(super) size_bits: u64,
     pub(super) outline_fingerprint: u64,
 }
 
@@ -831,7 +830,7 @@ impl GlyphOutlineCache {
     }
 
     fn admit(&mut self, key: OutlineResidencyKey, path: Arc<VectorPath>) {
-        let retained_bytes = vector_path_retained_bytes(path.as_ref());
+        let retained_bytes = path.retained_bytes();
         if self.limits.max_entries == 0 || retained_bytes > self.limits.max_retained_bytes {
             self.rejected_admissions = self.rejected_admissions.saturating_add(1);
             self.remove_unreferenced_face(match key {
@@ -984,7 +983,7 @@ impl GlyphOutlineCache {
             .scaler(
                 font,
                 resource.key.face_index,
-                run.font_size,
+                run.font_size as f32,
                 &variations,
                 run.outline_profile,
             )
@@ -1013,15 +1012,6 @@ impl GlyphOutlineCache {
         self.admit_stroked(key, path.clone());
         path
     }
-}
-
-fn vector_path_retained_bytes(path: &VectorPath) -> usize {
-    let own = size_of::<VectorPath>() + size_of_val(path.commands());
-    own.saturating_add(
-        path.morph_target()
-            .map(vector_path_retained_bytes)
-            .unwrap_or(0),
-    )
 }
 
 #[derive(Clone, Debug)]
@@ -3256,8 +3246,9 @@ fn push_geometry_item(
 pub(super) fn transform_path(
     path: &VectorPath,
     transform: TextAffineTransform,
-    offset: Vec2,
+    offset: impl Into<noon_core::DVec2>,
 ) -> VectorPath {
+    let offset = offset.into();
     let mut result = append_transformed_path(VectorPath::new(), path, transform, offset);
     if let Some(target) = path.morph_target() {
         result = result.with_morph_target(transform_path(target, transform, offset));
@@ -3269,9 +3260,14 @@ pub(super) fn append_transformed_path(
     mut target: VectorPath,
     source: &VectorPath,
     transform: TextAffineTransform,
-    offset: Vec2,
+    offset: impl Into<noon_core::DVec2>,
 ) -> VectorPath {
-    let point = |value: Vec2| transform.transform_point(value + offset);
+    let offset = offset.into();
+    // Derived renderer geometry is the explicit compact projection of retained metrics.
+    let point = |value: Vec2| {
+        let value = transform.transform_point(noon_core::DVec2::from(value) + offset);
+        Vec2::new(value.x as f32, value.y as f32)
+    };
     for command in source.commands() {
         target = match *command {
             PathCommand::MoveTo { to } => target.move_to(point(to)),
@@ -4226,6 +4222,7 @@ fn retained_sample_count(items: &[RetainedRenderItem], spatial_paths: bool) -> u
 
 #[cfg(test)]
 mod tests {
+    use std::mem::{size_of, size_of_val};
     #[test]
     fn mixed_path_batch_lookup_preserves_first_match_and_sparse_ranges() {
         let batches = vec![
@@ -4577,7 +4574,7 @@ mod tests {
                         z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
-                        text_bounds: Some(bounds),
+                        text_bounds: Some(bounds.lower_f32().unwrap()),
                         transform: Transform2D::default(),
                         style: Style::default(),
                         appearance: 1.0,
@@ -4631,7 +4628,7 @@ mod tests {
                         z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
-                        text_bounds: Some(bounds),
+                        text_bounds: Some(bounds.lower_f32().unwrap()),
                         transform: Transform2D::default(),
                         style: Style::default(),
                         appearance: 1.0,
@@ -4975,7 +4972,7 @@ mod tests {
                 version: 0,
             },
             glyph_id,
-            size_bits: 24.0_f32.to_bits(),
+            size_bits: 24.0_f64.to_bits(),
             outline_fingerprint: 0,
         }
     }
@@ -5023,7 +5020,7 @@ mod tests {
         let make_key = |font, glyph| OutlineKey {
             font,
             glyph_id: GlyphId::try_from(glyph).unwrap(),
-            size_bits: 24.0_f32.to_bits(),
+            size_bits: 24.0_f64.to_bits(),
             outline_fingerprint: 0,
         };
 
@@ -5103,9 +5100,29 @@ mod tests {
     }
 
     #[test]
+    fn canonical_outline_controls_count_towards_the_cache_budget() {
+        let path = Arc::new(VectorPath::from_manim_corners_f64(&[
+            (0.0, 0.0),
+            (1.0 / 7.0, 1.0),
+        ]));
+        let compact_only = size_of::<VectorPath>() + size_of_val(path.commands());
+        assert_eq!(
+            path.retained_bytes(),
+            compact_only + size_of_val(path.manim_points().unwrap())
+        );
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(
+            8,
+            path.retained_bytes() - 1,
+        ));
+        cache.admit_outline(outline_key(1), path);
+        assert_eq!(cache.stats().outline_entries, 0);
+        assert_eq!(cache.stats().rejected_admissions, 1);
+    }
+
+    #[test]
     fn oversized_outline_is_returnable_but_not_resident() {
         let path = test_path(1.0, 8);
-        let bytes = vector_path_retained_bytes(path.as_ref());
+        let bytes = path.retained_bytes();
         assert!(bytes > 0);
         let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(8, bytes - 1));
         cache.admit_outline(outline_key(1), path);

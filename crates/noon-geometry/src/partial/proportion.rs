@@ -169,7 +169,7 @@ impl PathProportionPlan {
         if !scale.0.is_finite() || !scale.1.is_finite() {
             return Err(PathProportionError::InvalidMetric);
         }
-        let curves = match path.manim_points() {
+        let curves = match path.manim_points_xy() {
             Some(points) => MeasuredCurves::Raw(points.as_chunks::<4>().0.to_vec()),
             None => MeasuredCurves::Commands(collect_curves(path)),
         };

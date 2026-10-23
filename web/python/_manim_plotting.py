@@ -303,7 +303,8 @@ def _number_label_style(font_size, direction, buff, decimal_config, name):
     font_size = _finite_axis_option(font_size, f"{name}.font_size")
     if font_size <= 0:
         raise ValueError(f"{name}.font_size must be positive")
-    direction = _base._as_vec2(direction)
+    planar = _base._as_vec2(direction)
+    direction = _base._Direction3(planar.x, planar.y, 0.0)
     buff = _finite_axis_option(buff, f"{name}.line_to_number_buff")
     infer_precision = decimal_config is None
     normalized = _decimal_number_options(decimal_config, f"{name}.decimal_number_config")

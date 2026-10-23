@@ -40,6 +40,9 @@ def register_fonts():
         import manimpango
         if family not in manimpango.list_fonts():
             raise RuntimeError(f"reference default font is unavailable: {family}")
+        if fonts and os.environ.get("PANGOCAIRO_BACKEND") == "fc":
+            from manim_reference_fonts import verify_fontconfig_reference
+            verify_fontconfig_reference(family, fonts)
         from manim import MarkupText, Text
         # Process-local reference configuration, shared by semantic and PNG runs.
         # Original scene classes and explicit per-object font arguments stay intact.

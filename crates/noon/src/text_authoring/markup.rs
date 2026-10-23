@@ -283,7 +283,7 @@ mod tests {
             .iter()
             .map(|run| run.transform.ty)
             .collect::<Vec<_>>();
-        baselines.sort_by(f32::total_cmp);
+        baselines.sort_by(f64::total_cmp);
         baselines.dedup_by(|left, right| (*left - *right).abs() < 1e-4);
         assert_eq!(baselines.len(), 2);
         assert!((baselines[1] - baselines[0] - 13.581054 * 3.6).abs() < 0.01);
@@ -311,8 +311,8 @@ mod tests {
 
         // Manim's semantic reference reports 6.24296875 x 1.13139645 scene
         // units. Its SVG-to-scene scale is 0.05; Noon's point scale is 1/72.
-        assert!((f64::from(artifact.resource.bounds.width()) - 6.24296875 * 72.0).abs() < 0.05);
-        assert!((f64::from(artifact.resource.bounds.height()) - 1.13139645 * 72.0).abs() < 0.1);
+        assert!((artifact.resource.bounds.width() - 6.24296875 * 72.0).abs() < 0.05);
+        assert!((artifact.resource.bounds.height() - 1.13139645 * 72.0).abs() < 0.1);
     }
 
     #[test]

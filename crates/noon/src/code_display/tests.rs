@@ -51,7 +51,7 @@ fn counts(scene: &Scene) -> (usize, usize, usize, usize) {
 
 fn baseline(object: &Mobject) -> f64 {
     let (state, text) = resource(object);
-    state.transform.translation.y + f64::from(text.baseline) * state.transform.scale.y
+    state.transform.translation.y + text.baseline * state.transform.scale.y
 }
 
 fn glyph_x(object: &Mobject, source_offset: usize) -> f64 {
@@ -67,19 +67,19 @@ fn glyph_x(object: &Mobject, source_offset: usize) -> f64 {
         })
         .expect("the requested source column has a glyph");
     state.transform.translation.x
-        + f64::from(run.transform.transform_point(glyph.origin).x) * state.transform.scale.x
+        + run.transform.transform_point(glyph.origin).x * state.transform.scale.x
 }
 
 fn logical_right(object: &Mobject) -> f64 {
     let (state, text) = resource(object);
-    let advance: f32 = text
+    let advance: f64 = text
         .runs
         .iter()
         .flat_map(|run| run.glyphs.iter())
         .map(|glyph| glyph.advance.x)
         .sum();
     state.transform.translation.x
-        + f64::from(text.runs.first().map_or(0.0, |run| run.transform.tx) + advance)
+        + (text.runs.first().map_or(0.0, |run| run.transform.tx) + advance)
             * state.transform.scale.x
 }
 
@@ -113,7 +113,7 @@ fn nested_indentation_moves_glyphs_by_full_monospace_columns() {
     let mut scene = Scene::new();
     let code = Code::new(&mut scene, "x\n    x\n\t\tx", plain()).unwrap();
     let (_, text) = resource(&code.line(1).unwrap());
-    let space_advance = text.runs[0].glyphs[0].advance.x as f64 / 72.0;
+    let space_advance = text.runs[0].glyphs[0].advance.x / 72.0;
     assert!(space_advance > 0.0);
     let first = glyph_x(&code.line(0).unwrap(), 0);
     close(

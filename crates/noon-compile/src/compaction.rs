@@ -469,7 +469,7 @@ mod tests {
             }]),
             render_items: Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
             baseline: 0.0,
             layout_artifact: None,
         };
@@ -597,7 +597,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: Arc::from([]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO).into(),
             baseline: 0.0,
             layout_artifact: None,
         });

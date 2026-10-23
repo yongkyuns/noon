@@ -70,6 +70,8 @@ pub enum UnsupportedAuthoringOperation {
     ApplyMatrixNonPlanar,
     /// CyclicReplace currently requires one non-empty flat family of object members.
     CyclicReplaceFamilyTopology,
+    /// Own-point promotion cannot discard structured root dependencies.
+    PointPromotionStructuredRoot,
     /// Updater suspension requires the ordered host callback phase for scene-owned nodes.
     UpdaterSuspensionLive,
 }
@@ -107,12 +109,19 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
             Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
             Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
+            Self::PointPromotionStructuredRoot => "own-point promotion requires an ordinary root without structured dependencies",
             Self::UpdaterSuspensionLive => "updater suspension on scene-owned objects requires the ordered callback phase",
         })
     }
 }
 
 impl std::error::Error for UnsupportedAuthoringOperation {}
+
+impl From<noon_core::PointArrayShapeError> for AuthoringError {
+    fn from(error: noon_core::PointArrayShapeError) -> Self {
+        Self::PointArrayShape(error)
+    }
+}
 
 /// Failure of a shared authored object, value, layout or membership operation.
 ///
@@ -234,6 +243,7 @@ pub enum AuthoringError {
     ZeroMatchWidth,
     /// A point-coordinate dimension is outside the supplied point width.
     InvalidPointDimension(u32),
+    PointArrayShape(noon_core::PointArrayShapeError),
     /// An operation requires finite bounds for this node.
     MissingLayoutBounds(noon_core::SemanticNodeId),
     /// The requested direct family member index does not exist.
@@ -288,6 +298,11 @@ pub enum AuthoringError {
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
     GeometryResource(noon_core::GeometryResourceError),
+    /// A nonempty point array has no complete subpath for a closing line.
+    NoSubpathForClose {
+        point_count: usize,
+        stride: i32,
+    },
     /// A path observation received invalid geometry or sampling parameters.
     PathQuery(noon_geometry::PathProportionError),
     /// Current path controls cannot be observed with the active correspondence.
@@ -440,7 +455,10 @@ impl std::fmt::Display for AuthoringError {
             Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
+            Self::NoSubpathForClose { point_count, stride } => write!(f,
+                "path with {point_count} points and stride {stride} has no complete subpath to close"),
             Self::PathQuery(error) => error.fmt(f),
+            Self::PointArrayShape(error) => error.fmt(f),
             Self::MorphQuery(error) => error.fmt(f),
             Self::Boolean(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
@@ -470,6 +488,7 @@ impl std::error::Error for AuthoringError {
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
+            Self::PointArrayShape(error) => Some(error),
             Self::MorphQuery(error) => Some(error),
             Self::Boolean(error) => Some(error),
             Self::Arc(error) => Some(error),

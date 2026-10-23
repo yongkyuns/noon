@@ -19,7 +19,7 @@ use std::{
 const MAX_ENTRIES: usize = 128;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 #[cfg(feature = "native-text")]
-const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-cairo-v3";
+const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-cairo-v5-f64-lines";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct TextCompileKey(Arc<[u8]>, Arc<[Arc<[u8]>]>);
@@ -591,7 +591,7 @@ fn recenter_latex_artifact(artifact: &mut noon_text::latex::LatexDviArtifact) {
     for vector in Arc::make_mut(&mut artifact.resource.vector_items) {
         vector.transform = vector.transform.then(recenter);
     }
-    artifact.resource.bounds = noon_core::Rect::new(
+    artifact.resource.bounds = noon_core::DRect::new(
         artifact.resource.bounds.min - center,
         artifact.resource.bounds.max - center,
     );

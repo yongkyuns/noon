@@ -103,6 +103,14 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                     store.entities[self.identity] = self
                     self.members = []
 
+                def shift(self, x, y, z=0.0):
+                    self.store.shift_by.append((float(x), float(y)))
+                    for key in self.members:
+                        member = self.store.entities[key]
+                        member.shift(float(x), float(y))
+                        self.store.applied.append(member.identity)
+                    self.store.finishes += 1
+
                 def layout(self):
                     return FakeLayoutObservation(self.store, [self.store.entities[key] for key in self.members])
 
@@ -148,6 +156,7 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
 
             family.shift(RIGHT)
             assert store.shift_by == [(1.0, 0.0)]
+            assert store.layout_queries == 0
             assert store.applied == ids
             assert first._semantic_handle.shift_calls == [(1.0, 0.0)]
             assert second._semantic_handle.shift_calls == [(1.0, 0.0)]

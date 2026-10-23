@@ -1056,9 +1056,9 @@ mod tests {
                         cluster_ordinal: 0,
                         semantic_key: None,
                     },
-                    origin: Vec2::ZERO,
-                    advance: Vec2::new(1.0, 0.0),
-                    bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+                    origin: Vec2::ZERO.into(),
+                    advance: Vec2::new(1.0, 0.0).into(),
+                    bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)).into(),
                 }]),
             }]),
             vector_items: Arc::from([TextVectorItem {
@@ -1077,7 +1077,7 @@ mod tests {
                 vector_count: 1,
                 semantic_key: None,
             }]),
-            bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+            bounds: noon_core::Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)).into(),
             baseline: 0.0,
             layout_artifact: None,
         }

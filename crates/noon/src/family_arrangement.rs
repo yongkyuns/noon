@@ -220,10 +220,9 @@ impl FamilyArrangePlan {
     ) -> Result<SemanticMutationTransaction, E> {
         let placement = self.resolve().map_err(E::from)?;
         translation_transaction(
-            placement
-                .deltas
-                .into_iter()
-                .filter_map(|(id, (x, y))| (x != 0.0 || y != 0.0).then_some((id, x, y))),
+            placement.deltas.into_iter().filter_map(|(id, (x, y))| {
+                (x != 0.0 || y != 0.0).then_some((id, SemanticVec3::new(x, y, 0.0)))
+            }),
             authored_translation,
         )
     }

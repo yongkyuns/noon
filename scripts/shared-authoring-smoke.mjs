@@ -122,7 +122,7 @@ scene.add(circle)
 # Empty/cleared updater metadata must not disable ordinary typed mutations.
 circle.clear_updaters()
 circle.shift(RIGHT)
-assert circle.get_center() == (1.0, 0.0)
+assert tuple(circle.get_center()) == (1.0, 0.0, 0.0)
 circle.shift(LEFT)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
@@ -162,7 +162,7 @@ assert untyped._scene is None
 assert scene._binding_handles == bindings_before
 assert scene._next_object_id == next_id
 assert len(scene._binding_handles) == 1
-assert circle.get_center() == (0.0, 0.0)
+assert tuple(circle.get_center()) == (0.0, 0.0, 0.0)
 builtins.__noon_persisted_scene = scene
 builtins.__noon_persisted_circle = circle
 result = scene
@@ -179,8 +179,8 @@ circle.set_fill(BLUE, opacity=0.4)
 center = circle.get_center()
 assert abs(circle.width - 3.0) < 1e-9
 assert abs(circle.height - 1.0) < 1e-9
-assert abs(center.x - 2.0) < 1e-9
-assert abs(center.y + 1.0) < 1e-9
+assert abs(center[0] - 2.0) < 1e-9
+assert abs(center[1] + 1.0) < 1e-9
 result = scene
 `;
 
@@ -839,6 +839,7 @@ try {
     { filename: "manim_parity_object_members.py", objectCount: 6, expectedDuration: 0.5, endpointTime: null },
     { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
+    { filename: "live_masked_placement.py", objectCount: 2, expectedDuration: 1.25, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_circle_surround.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
@@ -1270,7 +1271,7 @@ def author(scene):
     circle = Circle(0.4).set_fill(BLUE, opacity=1)
     scene.add(circle)
     scene.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)
-    assert abs(circle.get_center().x - 1) < 1e-6
+    assert abs(circle.get_center()[0] - 1) < 1e-6
     assert scene.time == 0.75
     scene.wait(0.25)
 author(result)
@@ -1807,11 +1808,11 @@ class ArrangedOptions(Scene):
             member.next_to = reject_python_placement
             member.get_critical_point = reject_python_placement
         family.shift(RIGHT)
-        assert abs(first.get_center().x - 1) < 1e-6
-        assert abs(second.get_center().x - 3) < 1e-6
+        assert abs(first.get_center()[0] - 1) < 1e-6
+        assert abs(second.get_center()[0] - 3) < 1e-6
         family.arrange(RIGHT, buff=0.2, aligned_edge=UP)
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x - 1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] - 1) < 1e-6
         self.add(first, second)
         self.wait(0.1)
         try:
@@ -1821,12 +1822,12 @@ class ArrangedOptions(Scene):
             assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("late invalid arrangement index was accepted")
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x - 1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] - 1) < 1e-6
         selected.arrange(RIGHT, buff=0.5, center=False,
                          index_of_submobject_to_align=-1, submobject_to_align=second)
-        assert abs(first.get_center().x + 1) < 1e-6
-        assert abs(second.get_center().x + 0.1) < 1e-6
+        assert abs(first.get_center()[0] + 1) < 1e-6
+        assert abs(second.get_center()[0] + 0.1) < 1e-6
         self.wait(0.1)
 `;
   await startSampledSource(page, arrangedOptionsSource, "scene-arrange-options");
@@ -1856,13 +1857,13 @@ class SelectedAlignment(Scene):
             value.get_critical_point = reject_python_bounds
         family.next_to(target, index_of_submobject_to_align=0,
                        submobject_to_align=second, buff=0.25)
-        assert abs(first.get_center().x - 5.75) < 1e-6
-        assert abs(second.get_center().x - 7.75) < 1e-6
+        assert abs(first.get_center()[0] - 5.75) < 1e-6
+        assert abs(second.get_center()[0] - 7.75) < 1e-6
         self.add(first, second, target)
         self.wait(0.1)
         family.next_to(ORIGIN, index_of_submobject_to_align=-1, buff=0.25)
-        assert abs(first.get_center().x + 1.25) < 1e-6
-        assert abs(second.get_center().x - 0.75) < 1e-6
+        assert abs(first.get_center()[0] + 1.25) < 1e-6
+        assert abs(second.get_center()[0] - 0.75) < 1e-6
         try:
             family.next_to(ORIGIN, index_of_submobject_to_align=-3)
         except NoonValueError as error:
@@ -1870,10 +1871,10 @@ class SelectedAlignment(Scene):
             assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("invalid family index was accepted")
-        assert abs(first.get_center().x + 1.25) < 1e-6
+        assert abs(first.get_center()[0] + 1.25) < 1e-6
         first.next_to(2 * RIGHT, submobject_to_align=second, buff=0.25)
-        assert abs(first.get_center().x - 0.75) < 1e-6
-        assert abs(second.get_center().x - 0.75) < 1e-6
+        assert abs(first.get_center()[0] - 0.75) < 1e-6
+        assert abs(second.get_center()[0] - 0.75) < 1e-6
         self.wait(0.1)
 `;
   await startSampledSource(page, selectedAlignmentSource, "scene-selected-alignment");

@@ -26,20 +26,20 @@ class OrdinaryValueTrackerContinuation(Scene):
         )
         assert self.time == 2.0
         assert progress.get_value() == 2.0
-        assert circle.get_center() == (0.0, 0.0)
+        assert tuple(circle.get_center()) == (0.0, 0.0, 0.0)
 
         progress.set_value(3.0)
         assert progress.get_value() == 3.0
-        assert circle.get_center() == (1.0, 0.0)
+        assert tuple(circle.get_center()) == (1.0, 0.0, 0.0)
 
         await self.wait(1.0)
         assert self.time == 3.0
         assert progress.get_value() == 3.0
-        assert circle.get_center() == (1.0, 0.0)
+        assert tuple(circle.get_center()) == (1.0, 0.0, 0.0)
 
         await self.play(
             progress.animate(run_time=1.0, rate_func=linear).set_value(5.0)
         )
         assert self.time == 4.0
         assert progress.get_value() == 5.0
-        assert circle.get_center() == (3.0, 0.0)
+        assert tuple(circle.get_center()) == (3.0, 0.0, 0.0)

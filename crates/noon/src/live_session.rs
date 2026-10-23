@@ -13,6 +13,7 @@ mod coordinates;
 mod family_layout;
 mod image;
 mod path_editing;
+mod point_promotion;
 mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
@@ -1483,6 +1484,34 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Capture full-coordinate owned points and ordered child occurrences from
+    /// this session's coherent publication, retaining recursive alias order.
+    pub fn point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointReductionTree, LiveSessionError> {
+        crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
+    pub fn point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointArrayObservation, LiveSessionError> {
+        crate::path_queries::effective_point_array(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
+    /// Choose existing point versus retained-content boundary semantics from
+    /// this publication, without consulting host wrapper types.
+    pub fn requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, LiveSessionError> {
+        crate::path_queries::effective_requires_content_boundary(self.store, self.session, target)
+            .map_err(Into::into)
+    }
+
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
     pub fn effective_layout(
@@ -2770,13 +2799,22 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_3d(mobject, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_3d(
+        &mut self,
+        mobject: &Mobject,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
-        if !x.is_finite() || !y.is_finite() {
+        if !delta.is_finite() {
             // Invalid live property values use the canonical publication validator
             // and its structured diagnostic, before any root/descendant edit.
             let mut translation = self.authored(mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
             return self.set_property(mobject, SemanticObjectProperty::Translation, translation);
         }
         crate::family_layout::publish_shift_root(
@@ -2784,8 +2822,7 @@ impl<'a> LiveSession<'a> {
             self.root,
             self.session,
             mobject.node_id(),
-            x,
-            y,
+            delta,
         )
         .map_err(|error| match error {
             // The shared authoring helper retains the publication cause; the
@@ -2808,13 +2845,20 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.shift_family_3d(family, SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_family_3d(
+        &mut self,
+        family: &MobjectFamily,
+        delta: SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         crate::family_layout::publish_shift_family(
             self.store,
             self.root,
             self.session,
             family,
-            x,
-            y,
+            delta,
         )
         .map_err(LiveSessionError::from)
     }

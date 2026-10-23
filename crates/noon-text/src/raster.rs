@@ -60,7 +60,7 @@ pub struct GlyphRasterKey {
     pub phase: GlyphRasterPhase,
     pub outline_profile: GlyphOutlineProfile,
     /// Authored size affects Cairo geometry; natural font images remain size-independent.
-    pub outline_size_bits: u32,
+    pub outline_size_bits: u64,
 }
 
 impl GlyphRasterKey {
@@ -492,7 +492,7 @@ impl GlyphRasterCache {
                 .scaler(
                     font,
                     resource.key.face_index,
-                    run.font_size,
+                    run.font_size as f32,
                     &variations,
                     run.outline_profile,
                 )
@@ -505,7 +505,7 @@ impl GlyphRasterCache {
                 return Ok(GlyphRaster::Empty);
             }
             let commands: Vec<_> = crate::outline::path_commands(&path).collect();
-            let scale = pixel_size / run.font_size;
+            let scale = (f64::from(pixel_size) / run.font_size) as f32;
             if !scale.is_finite() {
                 return Err(GlyphRasterError::InvalidPixelSize);
             }
@@ -759,7 +759,7 @@ mod tests {
             .scaler(
                 face,
                 font.key.face_index,
-                run.font_size,
+                run.font_size as f32,
                 &[],
                 run.outline_profile,
             )
@@ -767,9 +767,9 @@ mod tests {
         let mut cache = GlyphRasterCache::new();
         for glyph in run.glyphs.iter() {
             let path = scaler.outline(glyph.glyph_id as u16).unwrap();
-            for size in [10.0, 48.0, 96.0] {
+            for size in [10.0_f32, 48.0, 96.0] {
                 for phase in [GlyphRasterPhase::ZERO, GlyphRasterPhase::new(3, 5).unwrap()] {
-                    let scale = size / run.font_size;
+                    let scale = (f64::from(size) / run.font_size) as f32;
                     let transform = Transform::scale(scale, scale);
                     let commands: Vec<_> = crate::outline::path_commands(&path)
                         .map(|command| command.transform(&transform))

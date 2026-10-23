@@ -14,10 +14,37 @@ fn split_ids(root: &Mobject) -> Result<Vec<noon_core::SemanticNodeId>, crate::Au
     })
 }
 
+fn assert_depth(
+    live: &LiveSession<'_>,
+    root: &Mobject,
+    own: f64,
+    minimum: f64,
+    maximum: f64,
+) -> Result<(), LiveSessionError> {
+    let snapshot = live.point_reduction_tree(root.into())?;
+    assert!(!snapshot.points.is_empty());
+    assert!(snapshot.points.iter().all(|point| point.z == own));
+    let coordinates = snapshot
+        .flattened_points_3d()
+        .into_iter()
+        .flat_map(|point| [point.x, point.y, point.z])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        crate::reduce_point_extremum(&coordinates, 3, 2, -1.)?,
+        minimum
+    );
+    assert_eq!(
+        crate::reduce_point_extremum(&coordinates, 3, 2, 1.)?,
+        maximum
+    );
+    Ok(())
+}
+
 pub struct ObjectMembershipQueries {
     root: Mobject,
     a: Mobject,
     b: Mobject,
+    c: Mobject,
     stage: u8,
 }
 
@@ -29,8 +56,14 @@ impl LiveContinuation for ObjectMembershipQueries {
             return Ok(ContinuationStep::Finished);
         }
         let step = (|| -> Result<_, LiveSessionError> {
+            if self.stage == 0 {
+                assert_depth(live, &self.root, 1.125, -3.5, 4.75)?;
+            }
             if self.stage == 1 {
                 live.replace_members((&self.root).into(), &[(&self.a).into(), (&self.b).into()])?;
+                live.shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
+                assert_depth(live, &self.root, 1.625, -3., 2.75)?;
+                assert_depth(live, &self.c, 4.75, 4.75, 4.75)?;
                 // The Python metadata alias points to the same copied child.
                 let copied = live.copy_mobject_with_references(&self.root, &[(&self.b).into()])?;
                 let copied_root = copied.root();
@@ -51,6 +84,7 @@ impl LiveContinuation for ObjectMembershipQueries {
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]
                 );
                 live.add(copied_root)?;
+                assert_depth(live, copied_root, 1.625, -3., 2.75)?;
             }
             self.stage += 1;
             live.wait_segment(0.25).map(ContinuationStep::Await)
@@ -63,13 +97,41 @@ impl LiveContinuation for ObjectMembershipQueries {
 pub fn program() -> Result<LiveProgram<ObjectMembershipQueries>, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
-        let root = scene.geometry(ManimGeometryOptions::circle(0.4)?)?;
+        #[cfg(feature = "native-text")]
+        {
+            let mut text = scene.text(crate::Text::new("I"))?;
+            let mut circle = scene.geometry(ManimGeometryOptions::circle(0.2)?)?;
+            text.shift_3d(crate::SemanticVec3::new(-3., 0., 1.125))?;
+            circle.shift_3d(crate::SemanticVec3::new(2., 0., -3.5))?;
+            let family = scene.family(&[(&text).into(), (&circle).into()])?;
+            let text_anchor = crate::LayoutAnchor::from(&text);
+            let family_anchor = crate::LayoutAnchor::from(&family);
+            for direction in [-1., 1.] {
+                assert_eq!(
+                    text_anchor
+                        .critical_point_3d(crate::SemanticVec3::new(0., 0., direction))?
+                        .z,
+                    1.125
+                );
+                assert_eq!(
+                    family_anchor
+                        .critical_point_3d(crate::SemanticVec3::new(0., 0., direction))?
+                        .z,
+                    if direction < 0. { -3.5 } else { 1.125 }
+                );
+            }
+        }
+        let mut root = scene.geometry(ManimGeometryOptions::circle(0.4)?)?;
         let mut a = scene.geometry(ManimGeometryOptions::square(0.3)?)?;
         let mut b = scene.geometry(ManimGeometryOptions::circle(0.3)?)?;
         let mut c = scene.geometry(ManimGeometryOptions::square(0.4)?)?;
         a.shift(-1.0, 0.0)?;
         b.shift(1.0, 0.0)?;
         c.shift(0.0, 1.0)?;
+        root.shift_3d(noon_core::SemanticVec3::new(0., 0., 1.125))?;
+        a.shift_3d(noon_core::SemanticVec3::new(0., 0., 2.25))?;
+        b.shift_3d(noon_core::SemanticVec3::new(0., 0., -3.5))?;
+        c.shift_3d(noon_core::SemanticVec3::new(0., 0., 4.75))?;
         let original_root = root.node_id();
         root.add_many(&[(&a).into(), (&b).into(), (&a).into()])?;
         assert_eq!(split_ids(&root)?, [original_root, b.node_id(), a.node_id()]);
@@ -91,6 +153,7 @@ pub fn program() -> Result<LiveProgram<ObjectMembershipQueries>, String> {
             root,
             a,
             b,
+            c,
             stage: 0,
         })?)
     };

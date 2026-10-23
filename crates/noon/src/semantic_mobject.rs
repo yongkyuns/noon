@@ -20,7 +20,8 @@ use bounds::transform_layout_xy;
 #[cfg(feature = "latex")]
 pub(crate) use bounds::transformed_rect_layout_bounds;
 pub(crate) use bounds::{
-    boundary_center, boundary_for_content, layout_for_content, transformed_path_layout_bounds,
+    boundary_center, boundary_depth_for_leaves, boundary_for_content, depth_for_content,
+    layout_for_content, transformed_path_layout_bounds,
 };
 pub(crate) use style::{
     edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
@@ -59,12 +60,18 @@ pub struct ManimGeometryOptions {
     style: SemanticStyle,
     sheen_direction: SemanticSheenDirection,
     z_index: f64,
+    draw_enabled: bool,
     role: noon_core::SemanticObjectRole,
     explicit_angle_radius: Option<f64>,
     resolved_start_angle: Option<f64>,
 }
 
 impl ManimGeometryOptions {
+    /// Select root drawing eligibility before the constructor publishes anything.
+    pub fn set_draw_enabled(&mut self, enabled: bool) {
+        self.draw_enabled = enabled;
+    }
+
     /// Attach shared semantic query metadata before this inert request is published.
     pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
         self.role = role;
@@ -235,6 +242,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction: SemanticSheenDirection::DEFAULT,
             z_index: 0.0,
+            draw_enabled: true,
             role: noon_core::SemanticObjectRole::Ordinary,
             explicit_angle_radius: None,
             resolved_start_angle: None,
@@ -437,6 +445,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction,
             z_index,
+            draw_enabled,
             role,
             explicit_angle_radius: _,
             resolved_start_angle: _,
@@ -456,6 +465,7 @@ impl ManimGeometryOptions {
                     role,
                 );
                 state.sheen_direction = sheen_direction;
+                state.set_draw_enabled(draw_enabled);
                 publish(store, state)
             }),
             GeometryRef::External(_) => Err(AuthoringError::Unsupported(
@@ -488,6 +498,7 @@ impl ManimGeometryOptions {
             style,
             sheen_direction,
             z_index,
+            draw_enabled,
             role,
             explicit_angle_radius: _,
             resolved_start_angle: _,
@@ -504,6 +515,9 @@ impl ManimGeometryOptions {
         let node = transaction.create_node(SemanticNodeCreation::pending_path_object(
             resource, transform, style, z_index, role,
         ));
+        if !draw_enabled {
+            transaction.set_draw_enabled(node, false);
+        }
         if sheen_direction != SemanticSheenDirection::DEFAULT {
             transaction.set_sheen_direction(node, sheen_direction);
         }
@@ -551,6 +565,7 @@ impl ManimGeometryOptions {
             self.role,
         );
         state.sheen_direction = self.sheen_direction;
+        state.set_draw_enabled(self.draw_enabled);
         Ok(Some(state))
     }
 
@@ -733,6 +748,7 @@ impl Mobject {
                 style,
                 sheen_direction: SemanticSheenDirection::DEFAULT,
                 z_index: 0.0,
+                draw_enabled: true,
                 role: noon_core::SemanticObjectRole::Ordinary,
                 explicit_angle_radius: None,
                 resolved_start_angle: None,
@@ -1151,9 +1167,17 @@ impl Mobject {
 
     /// Shift own content and every unique descendant in one validated transaction.
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.shift_3d(SemanticVec3::new(x, y, 0.0))
+    }
+
+    /// Translate all three semantic coordinates without changing planar orientation.
+    pub fn shift_3d(&mut self, delta: SemanticVec3) -> Result<(), AuthoringError> {
         self.validate()?;
-        let translation =
-            crate::family_authoring::FamilyTranslation::begin(&self.store.borrow(), self.id, x, y)?;
+        let translation = crate::family_authoring::FamilyTranslation::begin_3d(
+            &self.store.borrow(),
+            self.id,
+            delta,
+        )?;
         translation.apply(&mut self.store.borrow_mut())
     }
 
@@ -1252,11 +1276,15 @@ pub(crate) fn semantic_transform_with_effective_affine(
     mut authored: SemanticTransform2_5D,
     effective: Transform2D,
 ) -> SemanticTransform2_5D {
-    authored.translation.x = f64::from(effective.translation.x);
-    authored.translation.y = f64::from(effective.translation.y);
-    authored.scale.x = f64::from(effective.scale.x);
-    authored.scale.y = f64::from(effective.scale.y);
-    authored.rotation_z = f64::from(effective.rotation);
+    for (authored, effective) in [
+        (&mut authored.translation.x, effective.translation.x),
+        (&mut authored.translation.y, effective.translation.y),
+        (&mut authored.scale.x, effective.scale.x),
+        (&mut authored.scale.y, effective.scale.y),
+        (&mut authored.rotation_z, effective.rotation),
+    ] {
+        crate::effective_capture::preserve_or_capture_f32(authored, effective);
+    }
     authored
 }
 
