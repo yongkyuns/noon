@@ -17,8 +17,14 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/playground-stress-observation.mjs"
+      - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/ci_reference_apt_sources.py"
+      - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
@@ -58,8 +64,14 @@ on:
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/playground-stress-observation.mjs"
+      - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/ci_reference_apt_sources.py"
+      - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
       - "scripts/showcase-viewport.mjs"
       - "scripts/playground-python-family-transform-smoke.mjs"
@@ -130,8 +142,10 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Verify the complete gallery sharding inventory
-        run: node --test scripts/gallery-shards.test.mjs
+      - name: Verify gallery inventory, dependency setup and edit observations
+        run: |
+          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs
+          python3 -S scripts/test_ci_install_playwright_browser.py
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
@@ -191,7 +205,7 @@ jobs:
         run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
-        run: npx playwright install --with-deps ${{ matrix.browser }}
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
       - name: Test examples browser presentation
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
@@ -411,7 +425,7 @@ jobs:
         run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
-        run: npx playwright install --with-deps ${{ matrix.browser }}
+        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
       - name: Qualify the full gallery shard, including portable no-JSPI controls
         timeout-minutes: 20
         env:
