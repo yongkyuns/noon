@@ -1,11 +1,12 @@
 //! Atomic affine edits over the authoritative family's unique semantic leaves.
+mod depth;
+#[cfg(test)]
+mod scaling_tests;
+
 use crate::AuthoringError;
 use crate::{
     family_layout::bounds_critical_point,
-    semantic_mobject::{
-        authoring_render_f64, rotate_affine_about_point, scale_state_about_center,
-        stage_state_changes, state_center,
-    },
+    semantic_mobject::{authoring_render_f64, rotate_affine_about_point, stage_state_changes},
     LayoutAnchor, ManimRotationPivot, Mobject, MobjectFamily, SemanticVec3,
 };
 use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticStore};
@@ -13,11 +14,39 @@ use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, Semanti
 #[derive(Clone, Copy)]
 pub(crate) enum FamilyAffine {
     Scale(f64, f64, ManimRotationPivot),
+    Scale3d(SemanticVec3, ManimRotationPivot),
+    StretchDepth(f64, ManimRotationPivot),
     Rotate(f64, ManimRotationPivot),
     Flip(SemanticVec3, ManimRotationPivot),
 }
 
 impl FamilyAffine {
+    fn scale_factors(self) -> Option<(SemanticVec3, ManimRotationPivot)> {
+        match self {
+            Self::Scale(x, y, pivot) => Some((SemanticVec3::new(x, y, 1.0), pivot)),
+            Self::Scale3d(factors, pivot) => Some((factors, pivot)),
+            Self::StretchDepth(z, pivot) => Some((SemanticVec3::new(1.0, 1.0, z), pivot)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn needs_xy_bounds(self) -> bool {
+        if let Some((factors, pivot)) = self.scale_factors() {
+            return (matches!(self, Self::Scale(..)) || factors.x != 1.0 || factors.y != 1.0)
+                && !matches!(
+                    pivot,
+                    ManimRotationPivot::Point(..) | ManimRotationPivot::Point3d(..)
+                );
+        }
+        !matches!(
+            self,
+            Self::Rotate(
+                _,
+                ManimRotationPivot::Point(..) | ManimRotationPivot::Point3d(..)
+            )
+        )
+    }
+
     /// Prepare one affine edit for an addressed root.  A Table's spacing is an
     /// authored declaration on its own family root, so only a scale addressed
     /// at that root changes its buffers. Scaling an enclosing family still uses
@@ -29,11 +58,18 @@ impl FamilyAffine {
         bounds: Option<Bounds2D64>,
         scope: Option<SemanticNodeId>,
     ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+        let depth_pivot = if let Self::Scale3d(_, pivot) | Self::StretchDepth(_, pivot) = self {
+            depth::resolve_pivot(store, leaves, pivot)?
+        } else {
+            0.0
+        };
         let mut affine_leaves = Vec::new();
         let mut replacements = Vec::new();
         for &leaf in leaves {
             let state = store.semantic_object_state_checked(leaf)?;
-            if let Self::Scale(x, y, pivot) = self {
+            if let Some((factors, pivot)) = self.scale_factors() {
+                factors.lower_xy_f32().map_err(AuthoringError::from)?;
+                let (x, y) = (factors.x, factors.y);
                 authoring_render_f64("scale.x", x)?;
                 authoring_render_f64("scale.y", y)?;
                 if crate::dimension_fit::world_scale_factors(
@@ -48,14 +84,19 @@ impl FamilyAffine {
                 {
                     let pivot =
                         resolve_pivot(bounds, bounds_critical_point(bounds, 0.0, 0.0), pivot)?;
-                    let path = world_scaled_path(store, state, x, y, pivot, pivot)?;
-                    replacements.push((leaf, state.clone(), path));
+                    let (baked, path) = world_scaled_replacement(store, state, x, y, pivot, pivot)?;
+                    let path = path.transformed_semantic(noon_core::SemanticTransform2_5D {
+                        translation: SemanticVec3::new(0.0, 0.0, depth_pivot * (1.0 - factors.z)),
+                        scale: SemanticVec3::new(1.0, 1.0, factors.z),
+                        rotation_z: 0.0,
+                    });
+                    replacements.push((leaf, baked, path));
                     continue;
                 }
             }
             affine_leaves.push(leaf);
         }
-        let transaction = self.transaction(store, &affine_leaves, bounds, scope)?;
+        let transaction = self.transaction(store, &affine_leaves, bounds, scope, depth_pivot)?;
         Ok(
             crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
                 .with_transaction(transaction),
@@ -68,6 +109,7 @@ impl FamilyAffine {
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
         scope: Option<SemanticNodeId>,
+        depth_pivot: f64,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let center = bounds_critical_point(bounds, 0.0, 0.0);
         if let Self::Flip(axis, _) = self {
@@ -85,7 +127,11 @@ impl FamilyAffine {
             }
         }
         let pivot = match self {
-            Self::Scale(x, y, pivot) => {
+            Self::StretchDepth(..) => (0.0, 0.0),
+            Self::Scale3d(factors, _) if factors.x == 1.0 && factors.y == 1.0 => (0.0, 0.0),
+            Self::Scale(_, _, pivot) | Self::Scale3d(_, pivot) => {
+                let (factors, _) = self.scale_factors().expect("scale variant");
+                let (x, y) = (factors.x, factors.y);
                 authoring_render_f64("family scale.x", x)?;
                 authoring_render_f64("family scale.y", y)?;
                 resolve_pivot(bounds, center, pivot)?
@@ -104,21 +150,38 @@ impl FamilyAffine {
                 .map_err(AuthoringError::from)?;
             let mut next = previous.clone();
             match self {
-                Self::Scale(x, y, _) => {
+                Self::Scale(..) | Self::Scale3d(..) | Self::StretchDepth(..) => {
+                    let (factors, _) = self.scale_factors().expect("scale variant");
+                    factors.lower_xy_f32().map_err(AuthoringError::from)?;
                     let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
                         previous
                             .transform
                             .planar_rotation()
                             .ok_or(AuthoringError::NonFiniteObjectState)?,
-                        x,
-                        y,
+                        factors.x,
+                        factors.y,
                     )?;
-                    let old_center = state_center(store, previous)?;
-                    let target_center = (
-                        pivot.0 + (old_center.0 - pivot.0) * x,
-                        pivot.1 + (old_center.1 - pivot.1) * y,
-                    );
-                    scale_state_about_center(store, &mut next, local_x, local_y, target_center)?;
+                    next.transform.scale.x *= local_x;
+                    next.transform.scale.y *= local_y;
+                    if factors.z != 1.0
+                        && depth::scale_changes_local_depth(store, previous.content)?
+                    {
+                        next.transform.scale.z *= factors.z;
+                    }
+                    next.transform.translation.x =
+                        (previous.transform.translation.x - pivot.0) * factors.x + pivot.0;
+                    next.transform.translation.y =
+                        (previous.transform.translation.y - pivot.1) * factors.y + pivot.1;
+                    next.transform.translation.z =
+                        (previous.transform.translation.z - depth_pivot) * factors.z + depth_pivot;
+                    next.transform
+                        .scale
+                        .lower_xy_f32()
+                        .map_err(AuthoringError::from)?;
+                    next.transform
+                        .translation
+                        .lower_xy_f32()
+                        .map_err(AuthoringError::from)?;
                 }
                 Self::Flip(axis, _) if axis.z == 0.0 => {
                     let norm = axis.x.hypot(axis.y);
@@ -174,7 +237,8 @@ impl FamilyAffine {
             }
             stage_state_changes(&mut transaction, leaf, previous, &next);
         }
-        if let (Self::Scale(x, y, _), Some(scope)) = (self, scope) {
+        if let (Some((factors, _)), Some(scope)) = (self.scale_factors(), scope) {
+            let (x, y) = (factors.x, factors.y);
             if matches!(
                 store.node(scope).map(|node| node.kind()),
                 Some(noon_core::SemanticNodeKind::Family(_))
@@ -194,14 +258,14 @@ impl FamilyAffine {
 /// Bake a world-axis deformation only when the ordinary affine cannot express it.
 /// Object-scaled stroke outlines need a full affine representation; retain the
 /// explicit unsupported result instead of changing their visible thickness.
-pub(crate) fn world_scaled_path(
+pub(crate) fn world_scaled_replacement(
     store: &SemanticStore,
     state: &noon_core::SemanticObjectState,
     x: f64,
     y: f64,
     source: (f64, f64),
     destination: (f64, f64),
-) -> Result<noon_core::VectorPath, AuthoringError> {
+) -> Result<(noon_core::SemanticObjectState, noon_core::VectorPath), AuthoringError> {
     if state.style.stroke.is_some()
         && state.style.stroke_width != 0.0
         && state.style.stroke_width_mode == noon_core::StrokeWidthMode::ScaleWithObject
@@ -210,19 +274,32 @@ pub(crate) fn world_scaled_path(
             crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
         ));
     }
-    let transform = noon_core::Transform2D {
-        translation: noon_core::Vec2::new(
-            authoring_render_f64("stretch translation.x", destination.0 - source.0 * x)? as f32,
-            authoring_render_f64("stretch translation.y", destination.1 - source.1 * y)? as f32,
+    let transform = noon_core::SemanticTransform2_5D {
+        translation: SemanticVec3::new(
+            authoring_render_f64("stretch translation.x", destination.0 - source.0 * x)?,
+            authoring_render_f64("stretch translation.y", destination.1 - source.1 * y)?,
+            0.0,
         ),
-        scale: noon_core::Vec2::new(x as f32, y as f32),
-        rotation: 0.0,
+        scale: SemanticVec3::new(
+            authoring_render_f64("stretch scale.x", x)?,
+            authoring_render_f64("stretch scale.y", y)?,
+            1.0,
+        ),
+        rotation_z: 0.0,
     };
-    let path = crate::path_editing::world_path(store, state)?.transformed(transform);
+    // Capture semantic cubic controls before applying an f64 world transform,
+    // including when the source has only planar drawing commands.
+    let path =
+        crate::path_editing::canonical_world_path(store, state)?.transformed_semantic(transform);
     if !path.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }
-    Ok(path)
+    // Return the pose matching the baked XYZ resource, so no caller can
+    // accidentally apply the original depth pose a second time.
+    let mut replacement = crate::path_editing::path_replacement_state(state.clone())?;
+    replacement.transform.translation.z = 0.0;
+    replacement.transform.scale.z = 1.0;
+    Ok((replacement, path))
 }
 
 fn resolve_pivot(
@@ -231,6 +308,19 @@ fn resolve_pivot(
     pivot: ManimRotationPivot,
 ) -> Result<(f64, f64), AuthoringError> {
     match pivot {
+        ManimRotationPivot::Point3d(point) | ManimRotationPivot::Edge3d(point) => {
+            if !point.is_finite() {
+                return Err(AuthoringError::NonFiniteObjectState);
+            }
+            resolve_pivot(
+                bounds,
+                center,
+                match pivot {
+                    ManimRotationPivot::Point3d(_) => ManimRotationPivot::Point(point.x, point.y),
+                    _ => ManimRotationPivot::Edge(point.x, point.y),
+                },
+            )
+        }
         ManimRotationPivot::Center => Ok(center),
         ManimRotationPivot::Point(x, y) => Ok((
             authoring_render_f64("pivot.x", x)?,
@@ -279,6 +369,17 @@ impl LayoutAnchor {
         self.apply_affine(FamilyAffine::Scale(x, y, pivot))
     }
 
+    /// Scale all three semantic coordinates around one shared family pivot.
+    /// Scalar Manim scaling uses the same factor on each axis; axis factors
+    /// also reuse the ordinary atomic affine and world-baking paths.
+    pub fn scale_3d(
+        &self,
+        factors: SemanticVec3,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        self.apply_affine(FamilyAffine::Scale3d(factors, pivot))
+    }
+
     /// Rotate all selected leaves around one shared center, edge or explicit point.
     pub fn rotate(&self, angle: f64, pivot: ManimRotationPivot) -> Result<(), AuthoringError> {
         self.apply_affine(FamilyAffine::Rotate(angle, pivot))
@@ -312,11 +413,20 @@ impl LayoutAnchor {
         operation: FamilyAffine,
         table_layout_scope: Option<SemanticNodeId>,
     ) -> Result<(), AuthoringError> {
-        let layout = self.layout()?;
+        let (leaves, bounds) = if operation.needs_xy_bounds() {
+            let layout = self.layout()?;
+            (layout.leaves().to_vec(), layout.boundary_bounds())
+        } else {
+            let root = self.resolve()?;
+            (
+                self.integration_store().borrow().ordered_leaf_nodes(root)?,
+                None,
+            )
+        };
         let prepared = operation.prepare_for_scope(
             &self.integration_store().borrow(),
-            layout.leaves(),
-            layout.boundary_bounds(),
+            &leaves,
+            bounds,
             table_layout_scope,
         )?;
         prepared.publish(

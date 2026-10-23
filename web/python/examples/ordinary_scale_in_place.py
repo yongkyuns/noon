@@ -10,5 +10,5 @@ class OrdinaryScaleInPlace(Scene):
         deferred = ScaleInPlace(square, 2.0, run_time=0.75, rate_func=linear)
         self.play(square.animate.shift((1.5, -0.25)), run_time=0.25, rate_func=linear)
         self.play(deferred)
-        assert tuple(square.get_center()) == (1.0, 0.0)
+        assert tuple(square.get_center()) == (1.0, 0.0, 0.0)
         assert abs(square.width - 2.0) < 1e-6

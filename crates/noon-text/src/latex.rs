@@ -8,14 +8,14 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, GeometryResourceArena, GlyphRun, PositionedGlyph,
-    Rect, TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact, TextPart,
-    TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle,
-    Vec2, VectorPath,
+    Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, GeometryResourceArena, GlyphRun,
+    PositionedGlyph, TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact,
+    TextPart, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, TextVectorItem,
+    TextVectorStyle, VectorPath,
 };
 use swash::{FontRef, GlyphId};
 
-pub const LATEX_DVI_BACKEND_VERSION: &str = "dvi-v2-tfm-v1";
+pub const LATEX_DVI_BACKEND_VERSION: &str = "dvi-v3-f64-tfm-v1";
 pub const DEFAULT_MAX_DVI_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_MAX_COMMANDS: usize = 200_000;
 const DEFAULT_MAX_FONTS: usize = 256;
@@ -290,7 +290,7 @@ pub fn normalize_dvi(
     let mut vectors = Vec::new();
     let mut order = Vec::new();
     let mut parts = Vec::new();
-    let mut vector_bounds: Option<Rect> = None;
+    let mut vector_bounds: Option<DRect> = None;
     let mut page_nonempty = false;
     let mut seen_nonempty_page = false;
     let mut in_page = false;
@@ -576,8 +576,8 @@ pub fn normalize_dvi(
             semantic_key: None,
         });
     }
-    let bounds =
-        resource_bounds(&runs, vector_bounds).unwrap_or_else(|| Rect::new(Vec2::ZERO, Vec2::ZERO));
+    let bounds = resource_bounds(&runs, vector_bounds)
+        .unwrap_or_else(|| DRect::new(DVec2::ZERO, DVec2::ZERO));
     let resource = TextResource {
         source: Arc::from(source),
         kind,
@@ -687,12 +687,9 @@ fn set_char(
     fonts
         .intern_face(&font.face, font.resource.ttf.clone())
         .map_err(|_| LatexDviError::InvalidDvi("conflicting font resource"))?;
-    let origin = Vec2::new(
-        (state.h as f64 * scale) as f32,
-        -(state.v as f64 * scale) as f32,
-    );
-    let advance_x = (movement as f64 * scale) as f32;
-    let font_size = (font.scale as f64 * scale) as f32;
+    let origin = DVec2::new(state.h as f64 * scale, -(state.v as f64 * scale));
+    let advance_x = movement as f64 * scale;
+    let font_size = font.scale as f64 * scale;
     let bounds = glyph_bounds(
         font.resource.ttf.as_ref(),
         glyph_id,
@@ -723,7 +720,7 @@ fn set_char(
                 semantic_key: key,
             },
             origin,
-            advance: Vec2::new(advance_x, 0.0),
+            advance: DVec2::new(advance_x, 0.0),
             bounds,
         }]),
     });
@@ -741,7 +738,13 @@ fn fixed_mul(fix: i32, scale: i64) -> Result<i64, LatexDviError> {
 }
 /// Reads `head`/`loca`/`glyf` table boxes directly, retaining lazy outlines for
 /// the renderer. CFF-only fonts are deliberately unsupported by this DVI path.
-fn glyph_bounds(ttf: &[u8], glyph: GlyphId, size: f32, origin: Vec2, advance: f32) -> Option<Rect> {
+fn glyph_bounds(
+    ttf: &[u8],
+    glyph: GlyphId,
+    size: f64,
+    origin: DVec2,
+    advance: f64,
+) -> Option<DRect> {
     fn table(bytes: &[u8], tag: &[u8; 4]) -> Option<usize> {
         let count = u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?) as usize;
         for i in 0..count {
@@ -757,7 +760,7 @@ fn glyph_bounds(ttf: &[u8], glyph: GlyphId, size: f32, origin: Vec2, advance: f3
     let head = table(ttf, b"head")?;
     let loca = table(ttf, b"loca")?;
     let glyf = table(ttf, b"glyf")?;
-    let upem = u16::from_be_bytes(ttf.get(head + 18..head + 20)?.try_into().ok()?) as f32;
+    let upem = u16::from_be_bytes(ttf.get(head + 18..head + 20)?.try_into().ok()?) as f64;
     let format = i16::from_be_bytes(ttf.get(head + 50..head + 52)?.try_into().ok()?);
     let id = glyph as usize;
     let loc = |n: usize| -> Option<usize> {
@@ -776,7 +779,7 @@ fn glyph_bounds(ttf: &[u8], glyph: GlyphId, size: f32, origin: Vec2, advance: f3
     };
     let start = loc(id)?;
     if start == loc(id + 1)? {
-        return Some(Rect::new(origin, origin + Vec2::new(advance, 0.0)));
+        return Some(DRect::new(origin, origin + DVec2::new(advance, 0.0)));
     }
     let p = glyf + start;
     let read = |at: usize| -> Option<i16> {
@@ -785,9 +788,9 @@ fn glyph_bounds(ttf: &[u8], glyph: GlyphId, size: f32, origin: Vec2, advance: f3
         ))
     };
     let factor = size / upem;
-    Some(Rect::new(
-        origin + Vec2::new(read(2)? as f32 * factor, read(4)? as f32 * factor),
-        origin + Vec2::new(read(6)? as f32 * factor, read(8)? as f32 * factor),
+    Some(DRect::new(
+        origin + DVec2::new(f64::from(read(2)?) * factor, f64::from(read(4)?) * factor),
+        origin + DVec2::new(f64::from(read(6)?) * factor, f64::from(read(8)?) * factor),
     ))
 }
 // DVI opcode helpers receive explicit decoder state and bounded output sinks.
@@ -805,21 +808,19 @@ fn push_rule(
     span: TextSourceSpan,
     key: Option<Arc<str>>,
     fill: Option<Color>,
-) -> Rect {
+) -> DRect {
     let x = h as f64 * scale;
     let base = -(v as f64 * scale);
     let w = width as f64 * scale;
     let height = height as f64 * scale;
-    let bounds = Rect::new(
-        Vec2::new(x as f32, base as f32),
-        Vec2::new((x + w) as f32, (base + height) as f32),
-    );
-    let path = VectorPath::new()
-        .move_to(Vec2::new(x as f32, base as f32))
-        .line_to(Vec2::new((x + w) as f32, base as f32))
-        .line_to(Vec2::new((x + w) as f32, (base + height) as f32))
-        .line_to(Vec2::new(x as f32, (base + height) as f32))
-        .close();
+    let bounds = DRect::new(DVec2::new(x, base), DVec2::new(x + w, base + height));
+    let path = VectorPath::from_manim_corners_f64(&[
+        (x, base),
+        (x + w, base),
+        (x + w, base + height),
+        (x, base + height),
+        (x, base),
+    ]);
     let index = vectors.len() as u32;
     vectors.push(TextVectorItem {
         geometry: geometries.insert_path(path),
@@ -834,7 +835,7 @@ fn push_rule(
     order.push(TextRenderItem::Vector(index));
     bounds
 }
-fn resource_bounds(runs: &[GlyphRun], vector_bounds: Option<Rect>) -> Option<Rect> {
+fn resource_bounds(runs: &[GlyphRun], vector_bounds: Option<DRect>) -> Option<DRect> {
     runs.iter()
         .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.bounds))
         .fold(vector_bounds, |out, b| {

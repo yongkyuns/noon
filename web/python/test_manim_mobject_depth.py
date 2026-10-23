@@ -1,53 +1,57 @@
+"""Depth observations and fitting route through opaque shared Rust anchors."""
+import types
 import unittest
-
+from unittest.mock import patch
 import noon
+import _manim_semantic_handles as semantic
 
 
 class ManimMobjectDepthTests(unittest.TestCase):
-    def test_planar_depth_fitting_is_a_receiver_preserving_noop(self):
-        class RecordingMobject(noon.Mobject):
-            def rescale_to_fit(self, *args, **kwargs):
-                self.rescale_calls.append((args, kwargs))
-                return self
-
-        square = object.__new__(RecordingMobject)
-        square.rescale_calls = []
-        square.layout_metadata = {"width": 2.0, "height": 2.0, "center": (0, 0)}
-
-        self.assertEqual(square.depth, 0.0)
-        self.assertIs(
-            square.scale_to_fit_depth(3.0, about_point=object()), square
-        )
-        self.assertIs(
-            square.stretch_to_fit_depth(4.0, about_edge=object()), square
-        )
-        square.depth = 5.0
-
-        self.assertEqual(square.depth, 0.0)
-        self.assertEqual(square.rescale_calls, [])
-        self.assertEqual(
-            square.layout_metadata,
-            {"width": 2.0, "height": 2.0, "center": (0, 0)},
+    def setUp(self):
+        self.calls = []
+        self.anchor = types.SimpleNamespace(
+            dimensionLength=lambda dim: 0.0,
+            rescaleToFit=lambda *args: self.calls.append(("fit", args)),
+            matchDimSize=lambda *args: self.calls.append(("match", args)),
         )
 
-    def test_group_depth_reflects_the_planar_member_profile(self):
-        group = object.__new__(noon.Group)
+    def wrapper(self, cls=noon.Mobject):
+        value = object.__new__(cls)
+        value._scene = None
+        value._object = None
+        value._semantic_handle_fresh = True
+        value._semantic_handle = types.SimpleNamespace(layoutAnchor=lambda index: self.anchor)
+        return value
 
-        self.assertEqual(group.depth, 0.0)
-        self.assertIs(group.scale_to_fit_depth(2.0), group)
-        self.assertEqual(group.depth, 0.0)
+    def test_planar_depth_fitting_preserves_receiver_without_coercing_pivots(self):
+        value = self.wrapper()
+        self.assertEqual(value.depth, 0.0)
+        self.assertIs(value.scale_to_fit_depth(object(), about_point=object()), value)
+        self.assertIs(value.stretch_to_fit_depth(object(), about_edge=object()), value)
+        value.depth = object()
+        self.assertEqual(self.calls, [("fit", (0., 2, False, 0., 0., 0., False)),
+                                     ("fit", (0., 2, True, 0., 0., 0., False)),
+                                     ("fit", (0., 2, False, 0., 0., 0., False))])
 
-    def test_matching_depth_is_a_noop_for_planar_objects(self):
-        mobject = object.__new__(noon.Mobject)
-        target = object.__new__(noon.Group)
-        rescale_calls = []
-        mobject.rescale_to_fit = lambda *args, **kwargs: rescale_calls.append(
-            (args, kwargs)
-        )
+    def test_group_depth_reads_the_shared_anchor(self):
+        group = self.wrapper(noon.VGroup)
+        group._semantic_family_handle = object()
+        self.anchor.dimensionLength = lambda dim: 6.25
+        with patch.object(semantic, "_layout_anchor", return_value=self.anchor), \
+             patch.object(semantic, "_group_live_layout_context", return_value=None):
+            self.assertEqual(group.depth, 6.25)
+            self.assertIs(group.scale_to_fit_depth(7.), group)
+        self.assertEqual(self.calls, [("fit", (7., 2, False, 0., 0., 0., False))])
 
-        self.assertEqual(target.depth, 0.0)
-        self.assertIs(mobject.match_depth(target, about_point=object()), mobject)
-        self.assertEqual(rescale_calls, [])
+    def test_matching_depth_forwards_both_opaque_anchors(self):
+        value, target = self.wrapper(), self.wrapper()
+        self.assertIs(value.match_depth(target, about_point=object()), value)
+        self.assertEqual(self.calls, [("match", (self.anchor, 2, False, 0., 0., 0., False))])
+
+    def test_nonzero_leaf_depth_comes_from_rust(self):
+        value = self.wrapper()
+        self.anchor.dimensionLength = lambda dim: 70.75
+        self.assertEqual(value.depth, 70.75)
 
 
 if __name__ == "__main__":

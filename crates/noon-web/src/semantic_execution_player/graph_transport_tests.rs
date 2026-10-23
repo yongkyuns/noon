@@ -103,7 +103,7 @@ fn copied_graph_ordinary_motion_is_local_and_reuses_endpoint_content() {
     assert!(initial.resource_additions.is_some());
     mirror.apply_family(initial.clone()).unwrap();
 
-    player.live_shift(&copied_start, -0.5, 0.25).unwrap();
+    player.live_shift(&copied_start, -0.5, 0.25, 0.0).unwrap();
     let delta = player.delta(false).unwrap().unwrap();
 
     assert_transform_only_graph_delta(&delta, copied_ids, &initial);

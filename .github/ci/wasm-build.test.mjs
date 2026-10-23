@@ -325,6 +325,35 @@ test("cache identity separates dependencies, compiler, flags, and build inputs",
   await assert.rejects(prepare(root, env, compiler.replaceAll("1.98.0", "1.99.0")), /compiler does not match/);
 });
 
+test("compiler seed fallback survives changed build inputs without admitting an old artifact", async (t) => {
+  const { root, put, git } = await stamped(t);
+  const original = await prepare(root, env, compiler);
+  await put(".github/actions/dev-wasm-build/action.yml", "name: changed setup\n");
+  git("add", ".github/actions/dev-wasm-build/action.yml");
+  git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid", "commit", "-qm", "change setup");
+  const changed = await prepare(root, env, compiler);
+  assert.notEqual(changed.key, original.key);
+  assert.ok(changed.restoreKeys.slice(0, 2).every(prefix => !original.key.startsWith(prefix)),
+    "exact configuration lookups cannot find the previous seed");
+  assert.ok(original.key.startsWith(changed.restoreKeys.at(-1)),
+    "the last compiler hint still finds a same-platform seed after configuration changes");
+  const changedCompiler = await prepare(root, env, `${compiler}\ncommit-hash: different`);
+  assert.notEqual(changedCompiler.key, changed.key);
+  assert.equal(changedCompiler.restoreKeys.at(-1), changed.restoreKeys.at(-1));
+  await assert.rejects(verify(root, env), /not from this checkout/,
+    "compiler fallback must not admit the previous source's generated artifact");
+});
+
+test("compiler seed fallback keeps host OS and architecture isolated", async (t) => {
+  const { root } = await fixture(t);
+  const original = await prepare(root, env, compiler);
+  for (const host of [{ ...env, RUNNER_ARCH: "ARM64" }, { ...env, RUNNER_OS: "macOS" }]) {
+    const other = await prepare(root, host, compiler);
+    assert.notEqual(other.restoreKeys.at(-1), original.restoreKeys.at(-1));
+    assert.ok(other.restoreKeys.every(prefix => !original.key.startsWith(prefix)));
+  }
+});
+
 test("cache base selects only a compiler seed, not the artifact source", async (t) => {
   const { root } = await fixture(t);
   const base = "b".repeat(40);

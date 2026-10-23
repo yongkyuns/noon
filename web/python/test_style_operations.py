@@ -450,7 +450,7 @@ class StyleOperationsTests(unittest.TestCase):
         )
         with patch.object(handles, "_style_target", return_value=(family, None, "Family")):
             self.assertIs(group.set_sheen(0.0, compat._base.DOWN, family=False), group)
-            family.setSheenDirection.assert_called_once_with(0.0, -1.0, 0.0, 2, False)
+            family.setSheenDirection.assert_called_once_with(0.0, -1.0, 0.0, 3, False)
             self.assertIs(group.rotate_sheen_direction(1.0, axis=(0, 1), family=True), group)
             family.rotateSheenDirection.assert_called_once_with(1.0, 0.0, 1.0, 0.0, True)
             self.assertEqual(list(group.get_sheen_direction()), [1.0, 0.0, 0.0])
@@ -461,7 +461,7 @@ class StyleOperationsTests(unittest.TestCase):
             self.assertIs(obj.set_sheen_direction(compat._base.RIGHT), obj)
             self.assertIs(obj.rotate_sheen_direction(0.25), obj)
         live.liveSetMobjectSheenDirection.assert_called_once_with(
-            detached, 1.0, 0.0, 0.0, 2, True
+            detached, 1.0, 0.0, 0.0, 3, True
         )
         live.liveRotateMobjectSheenDirection.assert_called_once_with(
             detached, 0.25, 0.0, 0.0, 1.0, True
@@ -473,7 +473,7 @@ class StyleOperationsTests(unittest.TestCase):
             self.assertIs(group.set_sheen_direction(compat._base.UP, family=False), group)
             self.assertIs(group.rotate_sheen_direction(-0.5, family=False), group)
         family_live.liveSetFamilySheenDirection.assert_called_once_with(
-            family, 0.0, 1.0, 0.0, 2, False
+            family, 0.0, 1.0, 0.0, 3, False
         )
         family_live.liveRotateFamilySheenDirection.assert_called_once_with(
             family, -0.5, 0.0, 0.0, 1.0, False

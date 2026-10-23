@@ -175,7 +175,7 @@ mod tests {
                 context
                     .active_live_player()
                     .unwrap()
-                    .live_shift_family(line.family(), 2.0, -1.0)
+                    .live_shift_family(line.family(), 2.0, -1.0, 0.0)
                     .unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
                 near(frame.number_to_point(first).unwrap(), [1.0, -1.0]);

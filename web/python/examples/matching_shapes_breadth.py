@@ -42,7 +42,7 @@ class MatchingShapesBreadth(Scene):
         assert roots[0] is target
         assert tuple(source.submobjects) == (source_first, source_second, source_leftover)
         assert tuple(target.submobjects) == (target_first, target_second, target_padded, target_leftover)
-        assert abs(target_first.get_center().x + 4) < 1e-6
-        assert abs(target_second.get_center().x + 1) < 1e-6
-        assert abs(target_padded.get_center().x - 2) < 1e-6
-        assert abs(target_leftover.get_center().x - 4) < 1e-6
+        assert abs(target_first.get_center()[0] + 4) < 1e-6
+        assert abs(target_second.get_center()[0] + 1) < 1e-6
+        assert abs(target_padded.get_center()[0] - 2) < 1e-6
+        assert abs(target_leftover.get_center()[0] - 4) < 1e-6

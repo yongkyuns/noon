@@ -103,9 +103,9 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.calls.append("layout")
                     return self
 
-                def shiftBy(self, x, y):
+                def shift(self, x, y, z=0.0):
                     # This double observes forwarding, not shared Rust semantics.
-                    self.calls.append(("shiftBy", float(x), float(y)))
+                    self.calls.append(("shift", float(x), float(y), float(z)))
 
                 def setFill(self, *arguments):
                     self.calls.append(("setFill", arguments))
@@ -175,7 +175,7 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             assert second._current_raw().to_ir() == source_second
             # Shared Rust owns family translation and paint. The test double
             # records a single family dispatch; no leaf fallback may run here.
-            assert target._semantic_family_handle.calls[:2] == ["layout", ("shiftBy", 1.0, 0.0)]
+            assert target._semantic_family_handle.calls[:1] == [("shift", 1.0, 0.0, 0.0)]
             assert not any(isinstance(call, tuple) and call[0] == "shift"
                            for handle in (target_first._semantic_handle, target_second._semantic_handle)
                            for call in handle.calls)

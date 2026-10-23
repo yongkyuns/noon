@@ -51,7 +51,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
                     return [f"{member.semanticSlot}:{member.semanticGeneration}" for member in self.members]
                 def layout(self):
                     return self
-                def shiftBy(self, x, y):
+                def shift(self, x, y, z=0.0):
                     calls.append(("family_shift", float(x), float(y)))
                 def scale(self, x, y):
                     calls.append(("family_scale", float(x), float(y)))

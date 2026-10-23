@@ -57,6 +57,9 @@ class FakeGeometryOptions:
             },
         }
 
+    def setDrawEnabled(self, enabled):
+        self.draw_enabled = bool(enabled)
+
     @staticmethod
     def circle(radius):
         value = FakeGeometryOptions({"circle": {"radius": radius}})
@@ -206,4 +209,4 @@ def identity_only_wrapper(cls, **metadata):
 def empty_path_query():
     """An empty owned-root observation at the typed Rust test boundary."""
     from types import SimpleNamespace
-    return SimpleNamespace(pointCount=0, points=lambda: [], anchors=lambda: [], free=lambda: None)
+    return SimpleNamespace(pointCount=0, points=lambda: [], points3D=lambda: [], anchors=lambda: [], anchors3D=lambda: [], free=lambda: None)

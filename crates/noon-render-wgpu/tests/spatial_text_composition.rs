@@ -96,17 +96,18 @@ fn attach(store: &mut SemanticStore, state: SemanticObjectState) -> noon_core::S
 
 fn fitted_text(
     handle: noon_core::TextResourceHandle,
-    bounds: noon_core::Rect,
+    bounds: impl Into<noon_core::DRect>,
     center: SemanticVec3,
     size: [f64; 2],
 ) -> SemanticObjectState {
+    let bounds = bounds.into();
     let mut state = SemanticObjectState::new(handle);
-    let scale_x = size[0] / f64::from(bounds.width());
-    let scale_y = size[1] / f64::from(bounds.height());
+    let scale_x = size[0] / bounds.width();
+    let scale_y = size[1] / bounds.height();
     let local_center = bounds.center();
     state.transform.translation = SemanticVec3::new(
-        center.x - f64::from(local_center.x) * scale_x,
-        center.y - f64::from(local_center.y) * scale_y,
+        center.x - local_center.x * scale_x,
+        center.y - local_center.y * scale_y,
         center.z,
     );
     state.transform.scale = SemanticVec3::new(scale_x, scale_y, 1.0);

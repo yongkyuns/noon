@@ -18,8 +18,8 @@ class OrdinaryMixedScalarComposition(Scene):
             rate_func=linear,
         ))
         assert abs(tracker.get_value() - 4) < 1e-6
-        assert abs(circle.get_center().x - 2) < 1e-6
+        assert abs(circle.get_center()[0] - 2) < 1e-6
         self.wait(0.25)
         tracker.set_value(3)
         self.wait(0.25)
-        assert abs(circle.get_center().x - 1) < 1e-6
+        assert abs(circle.get_center()[0] - 1) < 1e-6

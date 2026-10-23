@@ -9,7 +9,11 @@ pub struct VectorPath {
     /// point array. Commands remain an explicitly lowered drawable prefix; this preserves
     /// incomplete trailing points that Manim retains for point-array queries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    manim_points: Option<Vec<(f64, f64)>>,
+    manim_points: Option<Vec<SemanticVec3>>,
+    /// Noncanonical zero-row storage has observable rank and dimensions even
+    /// though there are no coordinates. This is semantic resource data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    empty_point_array_shape: Option<Box<crate::PointArrayShape>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     morph_target: Option<Box<VectorPath>>,
 }
@@ -91,19 +95,14 @@ impl VectorPath {
     /// Bake one authored planar transform without quantizing raw coordinates.
     /// Drawable commands continue to use the explicit renderer representation.
     pub fn transformed_semantic(&self, transform: SemanticTransform2_5D) -> Self {
-        let mut result = if let Some(points) = self.manim_points() {
+        let mut result = if self.empty_point_array_shape.is_some() {
+            self.clone()
+        } else if let Some(points) = self.manim_points() {
             let points = points
                 .iter()
-                .map(|&(x, y)| transform.transform_xy(x, y))
+                .map(|&point| transform.transform_xyz(point))
                 .collect();
-            let line_segments = !self.commands().iter().any(|command| {
-                matches!(
-                    command,
-                    PathCommand::QuadraticTo { .. } | PathCommand::CubicTo { .. }
-                )
-            });
-            let closed = matches!(self.commands().last(), Some(PathCommand::Close));
-            Self::from_manim_points_drawing(points, line_segments, closed)
+            Self::from_transformed_manim_points(points, self.commands())
         } else {
             self.transformed(Transform2D {
                 translation: Vec2::new(
@@ -123,7 +122,11 @@ impl VectorPath {
     /// Whether every point, including morph targets, is finite.
     pub fn is_finite(&self) -> bool {
         let vec2_is_finite = |value: Vec2| value.x.is_finite() && value.y.is_finite();
-        self.commands().iter().all(|command| match *command {
+        self.empty_point_array_shape.as_ref().is_none_or(|shape| {
+            shape.rows() == 0
+                && self.commands.is_empty()
+                && self.manim_points.as_ref().is_some_and(Vec::is_empty)
+        }) && self.commands().iter().all(|command| match *command {
             PathCommand::MoveTo { to } | PathCommand::LineTo { to } => vec2_is_finite(to),
             PathCommand::QuadraticTo { control, to } => {
                 vec2_is_finite(control) && vec2_is_finite(to)
@@ -135,8 +138,8 @@ impl VectorPath {
             } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
             PathCommand::Close => true,
         }) && self.manim_points().is_none_or(|points| {
-            points.iter().all(|&(x, y)| {
-                x.is_finite() && y.is_finite() && (x as f32).is_finite() && (y as f32).is_finite()
+            points.iter().all(|point| {
+                point.is_finite() && (point.x as f32).is_finite() && (point.y as f32).is_finite()
             })
         }) && self.morph_target().is_none_or(VectorPath::is_finite)
     }
@@ -162,9 +165,9 @@ impl VectorPath {
             } => finite_output(control1) && finite_output(control2) && finite_output(to),
             PathCommand::Close => true,
         }) && self.manim_points().is_none_or(|points| {
-            points
-                .iter()
-                .all(|&(x, y)| finite_output(Vec2::new(x as f32, y as f32)))
+            points.iter().all(|point| {
+                point.is_finite() && finite_output(Vec2::new(point.x as f32, point.y as f32))
+            })
         }) && self
             .morph_target()
             .is_none_or(|target| target.has_finite_transformed_output(transform, offset))
@@ -174,103 +177,35 @@ impl VectorPath {
         Self {
             commands: Vec::new(),
             manim_points: None,
+            empty_point_array_shape: None,
             morph_target: None,
         }
     }
 
-    /// Build drawable cubic commands from complete groups of four while
-    /// retaining the input point sequence, including an incomplete tail.
-    pub fn from_manim_points(points: Vec<Vec2>) -> Self {
-        Self::from_manim_points_f64(
-            points
-                .into_iter()
-                .map(|p| (p.x as f64, p.y as f64))
-                .collect(),
-        )
-    }
-
-    /// Retain authored planar coordinates at semantic precision. Drawable
-    /// commands are an explicitly lowered prefix; queries use the raw array.
-    pub fn from_manim_points_f64(points: Vec<(f64, f64)>) -> Self {
-        Self::from_manim_points_drawing(points, false, false)
-    }
-
-    fn from_manim_points_drawing(
-        points: Vec<(f64, f64)>,
-        line_segments: bool,
-        closed: bool,
-    ) -> Self {
-        if points.is_empty() {
-            return Self::new();
-        }
-        let lower = |(x, y): (f64, f64)| Vec2::new(x as f32, y as f32);
-        let mut path = Self::new();
-        let mut previous_end = None;
-        for curve in points.as_chunks::<4>().0 {
-            let [start, control1, control2, end] = *curve;
-            if previous_end != Some(start) {
-                path = path.move_to(lower(start));
-            }
-            path = if line_segments {
-                path.line_to(lower(end))
-            } else {
-                path.cubic_to(lower(control1), lower(control2), lower(end))
-            };
-            previous_end = Some(end);
-        }
-        if let Some(&start) = points.get(points.len() / 4 * 4) {
-            path = path.move_to(lower(start));
-        }
-        if closed {
-            path = path.close();
-        }
-        path.manim_points = Some(points);
-        path
-    }
-
-    /// Retain CE's canonical cubic controls for line corners while preserving
-    /// their compact drawable polyline, including its closing contour flag.
-    /// Semantic queries use the original f64 controls; rendering lowers only
-    /// the supplied corner coordinates to Vec2.
-    pub fn from_manim_corners_f64(corners: &[(f64, f64)]) -> Self {
-        let mut raw = Vec::with_capacity(corners.len().saturating_sub(1) * 4);
-        for pair in corners.windows(2) {
-            let (start, end) = (pair[0], pair[1]);
-            for t in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
-                raw.push((
-                    (1.0 - t) * start.0 + t * end.0,
-                    (1.0 - t) * start.1 + t * end.1,
-                ));
-            }
-        }
-        Self::from_manim_points_drawing(raw, true, corners.first() == corners.last())
-    }
-
-    /// Raw authored coordinates, including any incomplete cubic tail.
-    pub fn manim_points(&self) -> Option<&[(f64, f64)]> {
-        self.manim_points.as_deref()
-    }
-
     pub fn move_to(mut self, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::MoveTo { to });
         self
     }
 
     pub fn line_to(mut self, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::LineTo { to });
         self
     }
 
     pub fn quadratic_to(mut self, control: Vec2, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::QuadraticTo { control, to });
         self
     }
 
     pub fn cubic_to(mut self, control1: Vec2, control2: Vec2, to: Vec2) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::CubicTo {
             control1,
             control2,
@@ -281,6 +216,7 @@ impl VectorPath {
 
     pub fn close(mut self) -> Self {
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         self.commands.push(PathCommand::Close);
         self
     }
@@ -322,6 +258,7 @@ impl VectorPath {
             });
         self.commands.pop();
         self.manim_points = None;
+        self.empty_point_array_shape = None;
         if let (Some(start), Some((_, last))) = (start, self.endpoints()) {
             if last != start {
                 self.commands.push(PathCommand::LineTo { to: start });
@@ -343,8 +280,39 @@ impl VectorPath {
         self.morph_target.as_deref()
     }
 
+    /// Owned path payload by logical length, including canonical controls and morphs.
+    /// Allocator capacity and bookkeeping are excluded, as with resource arena stats.
+    pub fn retained_bytes(&self) -> usize {
+        let own = std::mem::size_of::<Self>()
+            + std::mem::size_of_val(self.commands())
+            + self.manim_points().map_or(0, std::mem::size_of_val);
+        own.saturating_add(self.morph_target().map_or(0, Self::retained_bytes))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+
+    /// High-precision control bounds for semantic layout and retained resources.
+    /// Compact command-only paths contain explicitly authored f32 coordinates.
+    pub fn semantic_control_bounds(&self) -> Option<crate::Bounds2D64> {
+        if let Some(points) = self.manim_points() {
+            let mut bounds: Option<crate::Bounds2D64> = None;
+            for point in points {
+                if let Some(bounds) = &mut bounds {
+                    bounds.include(point.x, point.y);
+                } else {
+                    bounds = Some(crate::Bounds2D64::point(point.x, point.y));
+                }
+            }
+            return bounds;
+        }
+        self.conservative_bounds().map(|bounds| crate::Bounds2D64 {
+            min_x: f64::from(bounds.min.x),
+            min_y: f64::from(bounds.min.y),
+            max_x: f64::from(bounds.max.x),
+            max_y: f64::from(bounds.max.y),
+        })
     }
 
     pub fn conservative_bounds(&self) -> Option<Rect> {
@@ -382,7 +350,7 @@ impl VectorPath {
         }
         if let Some(points) = self.manim_points() {
             for point in points.iter().copied() {
-                include(Vec2::new(point.0 as f32, point.1 as f32));
+                include(Vec2::new(point.x as f32, point.y as f32));
             }
         }
         bounds
@@ -392,10 +360,17 @@ impl VectorPath {
 fn semantic_transform(transform: Transform2D) -> SemanticTransform2_5D {
     SemanticTransform2_5D {
         translation: SemanticVec3::from_vec2(transform.translation),
-        scale: SemanticVec3::from_vec2(transform.scale),
+        scale: SemanticVec3::new(
+            f64::from(transform.scale.x),
+            f64::from(transform.scale.y),
+            1.0,
+        ),
         rotation_z: transform.rotation as f64,
     }
 }
+
+mod raw_points;
+pub use raw_points::SemanticPathSegment;
 
 #[cfg(test)]
 mod corner_tests;

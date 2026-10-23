@@ -1,5 +1,6 @@
 """Own root points and constructor intent across ordinary continuations."""
 from noon import *
+import numpy as np
 
 
 class FamilyRootPoints(Scene):
@@ -11,7 +12,8 @@ class FamilyRootPoints(Scene):
         def exercise(group, vector):
             for count in (0, 1, 4, 5):
                 assert group.set_points(points[:count]) is group
-                assert vector.set_points(points[:count]) is vector
+                assert vector.clear_points() is vector
+                assert vector.append_points(np.array(points[:count]).reshape((-1, 3))) is vector
                 assert group.get_num_points() == vector.get_num_points() == count
                 assert group.has_points() is vector.has_points() is (count != 0)
                 assert group.submobjects == vector.submobjects == [first, second]
