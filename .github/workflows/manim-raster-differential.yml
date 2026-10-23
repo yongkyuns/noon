@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
       - "scripts/ci-install-reference-deps.sh"
+      - "scripts/ci_reference_apt_sources.py"
       - "scripts/test_ci_install_reference_deps.py"
       - "crates/noon/src/code_display/highlight.rs"
       - "fixtures/code/pygments-2.19.2-code-colors.json"

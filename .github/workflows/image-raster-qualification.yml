@@ -4,6 +4,7 @@ on:
     paths:
       - ".github/ci/manim-reference-constraints.txt"
       - "scripts/ci-install-reference-deps.sh"
+      - "scripts/ci_reference_apt_sources.py"
       - "scripts/test_ci_install_reference_deps.py"
       - "scripts/ci-setup-rust.sh"
       - "scripts/test_ci_setup_rust.py"
