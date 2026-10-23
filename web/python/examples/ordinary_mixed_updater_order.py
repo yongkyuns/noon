@@ -20,9 +20,9 @@ class OrdinaryMixedUpdaterOrder(Scene):
 
         def write_after_native(mobject, _dt):
             nonlocal writes
-            assert abs(mobject.get_center().x - 1.0) < 1e-6
+            assert abs(mobject.get_center()[0] - 1.0) < 1e-6
             second.move_to((-2.0, 0.0, 0.0))
-            assert abs(second.get_center().x + 2.0) < 1e-6
+            assert abs(second.get_center()[0] + 2.0) < 1e-6
             if not pending:
                 created = Circle(radius=0.15).shift((0.0, 1.0, 0.0))
                 self.add(created)
@@ -34,8 +34,8 @@ class OrdinaryMixedUpdaterOrder(Scene):
 
         def read_after_native(mobject, _dt):
             nonlocal reads
-            assert abs(mobject.get_center().x - 3.0) < 1e-6
-            assert abs(pending[0].get_center().y - 1.0) < 1e-6
+            assert abs(mobject.get_center()[0] - 3.0) < 1e-6
+            assert abs(pending[0].get_center()[1] - 1.0) < 1e-6
             pending[0].set_fill(Color(0.2, 0.8, 0.4), opacity=1.0)
             assert pending[0] in self.mobjects
             reads += 1
@@ -45,4 +45,4 @@ class OrdinaryMixedUpdaterOrder(Scene):
         await self.wait(0.25)
         assert reads == writes and reads >= 2
         assert len(self.mobjects) == 3
-        assert abs(pending[0].get_center().y - 1.0) < 1e-6
+        assert abs(pending[0].get_center()[1] - 1.0) < 1e-6

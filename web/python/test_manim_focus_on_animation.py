@@ -50,6 +50,21 @@ class ManimFocusOnAnimationTests(unittest.TestCase):
             observed = FocusOn(target)
             assert observed.focus_point == (3.0, -2.0)
             assert observed.focus_mobject is target
+            target.get_center = lambda: [3.0, -2.0, 0.0]
+            observed_xyz = FocusOn(target)
+            assert observed_xyz.focus_point == (3.0, -2.0)
+            assert _manim_rotate._points_close(target.get_center(), observed_xyz.focus_point)
+            target.get_center = lambda: [3.0, -2.0, 1.125]
+            for operation in (
+                lambda: FocusOn(target),
+                lambda: _manim_rotate._points_close(target.get_center(), observed_xyz.focus_point),
+            ):
+                try:
+                    operation()
+                except NotImplementedError:
+                    pass
+                else:
+                    raise AssertionError("planar focus request silently dropped query depth")
             for kwargs in ({"opacity": -0.1}, {"opacity": float("nan")}, {"run_time": 0.0}):
                 try:
                     FocusOn((0.0, 0.0), **kwargs)

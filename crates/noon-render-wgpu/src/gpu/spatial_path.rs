@@ -39,7 +39,7 @@ pub(super) struct SpatialPathVertex {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum SourceKey {
     Resource(GeometryResourceHandle),
-    TextGlyphRun(TextResourceHandle, u32, u8, FontResourceHandle, u32, u64),
+    TextGlyphRun(TextResourceHandle, u32, u8, FontResourceHandle, u64, u64),
     TextVector(TextResourceHandle, u32, GeometryResourceHandle),
     Inline(u64),
 }
@@ -2218,7 +2218,7 @@ mod tests {
             vector_items: std::sync::Arc::from([vector]),
             render_items: std::sync::Arc::from([TextRenderItem::Vector(0)]),
             parts: std::sync::Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+            bounds: Rect::new(Vec2::ZERO, Vec2::new(1.0, 1.0)).into(),
             baseline: 0.0,
             layout_artifact: None,
         };

@@ -51,6 +51,7 @@ pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
 pub mod raster_image;

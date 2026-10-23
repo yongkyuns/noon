@@ -14,6 +14,18 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
+  "requiresContentBoundary(",
+  "queryFamilyRequiresContentBoundary(",
+  "queryMobjectRequiresContentBoundary(",
+  "pointArray(",
+  "setEmptyPointArray(",
+  "queryFamilyPointArray(",
+  "queryMobjectPointArray(",
+  "liveSetFamilyEmptyPointArray(",
+  "liveSetEmptyPointArray(",
+  "promoteOwnPoints(",
+  "livePromoteFamilyOwnPoints(",
+  "livePromoteMobjectOwnPoints(",
   // Generated bindings must match the optional Python effects facade. Checking
   // the exact class token avoids mistaking WasmGlowUpdate for WasmGlow.
   "export class WasmGlow {",
@@ -51,6 +63,20 @@ const expectedJavascriptSurface = [
   "proportionFromPointForRanges(",
   "queryMobjectPointCount(",
   "vectorBoundaryPoints(",
+  "queryFamilyVectorBoundaryPoints3D(",
+  "queryMobjectPathBoundaryPoints3D(",
+  "vectorBoundaryPoints3D(",
+  "pathBoundaryPoints3D(",
+  "startAnchors3D(",
+  "firstHandles3D(",
+  "secondHandles3D(",
+  "endAnchors3D(",
+  "anchors3D(",
+  "criticalPoint3D(",
+  "queryFamilyCriticalPoint3D(",
+  "queryMobjectCriticalPoint3D(",
+  "contentCriticalPoint3D(",
+  "queryLayoutContentCriticalPoint3D(",
   "queryFamilyVectorBoundaryPoints(",
   "get pointCount()",
   "createManimGeometry(",
@@ -178,6 +204,10 @@ const expectedJavascriptSurface = [
   "debugFrameJson(",
   "liveTargetEditor(",
   "liveShiftFamily(",
+  "liveStretchLayout(",
+  "liveScaleLayout3d(",
+  "scale3d(",
+  "stretch(",
   "liveArrangeFamily(",
   "liveCreateManimArrow(",
   "liveCreateManimGeometry(",
@@ -230,6 +260,7 @@ const expectedJavascriptSurface = [
   "setTranslation(",
   "setScale(",
   "setRotation(",
+  "setDrawEnabled(",
   "setStrokeWidthMode(",
   "setStrokeJoin(",
   "setStrokeCap(",
@@ -248,6 +279,15 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "requiresContentBoundary(): boolean",
+  "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
+  "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
+  "pointArray(): Array<any>",
+  "setEmptyPointArray(dimensions: Float64Array): void",
+  "queryFamilyPointArray(handle: WasmAuthoringFamilyHandle): Array<any>",
+  "queryMobjectPointArray(handle: WasmAuthoringMobjectHandle): Array<any>",
+  "liveSetFamilyEmptyPointArray(source: WasmAuthoringFamilyHandle, dimensions: Float64Array): void",
+  "liveSetEmptyPointArray(source: WasmAuthoringMobjectHandle, dimensions: Float64Array): void",
   "constructor()",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
@@ -420,7 +460,17 @@ const expectedTypeSurface = [
   "beginOrdinaryWait(",
   "liveExecutionOwnership(): string",
   "liveTargetEditor(",
-  "liveShiftFamily(handle: WasmAuthoringFamilyHandle, x: number, y: number): void",
+  "liveShiftFamily(handle: WasmAuthoringFamilyHandle, x: number, y: number, z?: number | null): void",
+  "liveShift(handle: WasmAuthoringMobjectHandle, x: number, y: number, z?: number | null): void",
+  "liveStretchLayout(source: WasmLayoutAnchor, factor: number, dimension: number, x: number, y: number, z: number, about_point: boolean): void",
+  "scale3d(scale_x: number, scale_y: number, scale_z: number, x: number, y: number, z: number, about_point: boolean): void",
+  "liveScaleLayout3d(source: WasmLayoutAnchor, scale_x: number, scale_y: number, scale_z: number, x: number, y: number, z: number, about_point: boolean): void",
+  "rescaleToFit(length: number, dimension: number, stretch: boolean, x: number, y: number, z: number, about_point: boolean): void",
+  "matchDimSize(target: WasmLayoutAnchor, dimension: number, stretch: boolean, x: number, y: number, z: number, about_point: boolean): void",
+  "liveRescaleToFit(source: WasmLayoutAnchor, length: number, dimension: number, stretch: boolean, x: number, y: number, z: number, about_point: boolean): void",
+  "liveMatchDimSize(source: WasmLayoutAnchor, target: WasmLayoutAnchor, dimension: number, stretch: boolean, x: number, y: number, z: number, about_point: boolean): void",
+  "stretch(factor: number, dimension: number, x: number, y: number, z: number, about_point: boolean): void",
+  "shift(x: number, y: number, z?: number | null): void",
   "liveArrangeFamily(handle: WasmAuthoringFamilyHandle, options: WasmFamilyArrangeOptions): void",
   "liveCreateManimArrow(",
   "liveCreateManimGeometry(",
@@ -453,6 +503,9 @@ const expectedTypeSurface = [
   "memberKeys(): string[]",
   "export class WasmFamilyCopy",
   "copyFamily(references: WasmSceneMembershipBatch): WasmFamilyCopy",
+  "promoteOwnPoints(references: WasmSceneMembershipBatch): WasmFamilyCopy",
+  "livePromoteFamilyOwnPoints(source: WasmAuthoringFamilyHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
+  "livePromoteMobjectOwnPoints(source: WasmAuthoringMobjectHandle, references: WasmSceneMembershipBatch): WasmFamilyCopy",
   "pathQuery(): WasmPathQuery",
   "localPathQuery(): WasmPathQuery",
   "queryMobjectPath(handle: WasmAuthoringMobjectHandle): WasmPathQuery",
@@ -461,6 +514,20 @@ const expectedTypeSurface = [
   "alignPathPoints(other: WasmLayoutAnchor): void",
   "liveAlignRootPoints(left: WasmLayoutAnchor, right: WasmLayoutAnchor): void",
   "liveClearFamilyPoints(source: WasmAuthoringFamilyHandle): void",
+  "queryFamilyVectorBoundaryPoints3D(handle: WasmAuthoringFamilyHandle): Float64Array",
+  "queryMobjectPathBoundaryPoints3D(handle: WasmAuthoringMobjectHandle): Float64Array",
+  "vectorBoundaryPoints3D(): Float64Array",
+  "pathBoundaryPoints3D(): Float64Array",
+  "startAnchors3D(): Float64Array",
+  "firstHandles3D(): Float64Array",
+  "secondHandles3D(): Float64Array",
+  "endAnchors3D(): Float64Array",
+  "anchors3D(): Float64Array",
+  "criticalPoint3D(direction_x: number, direction_y: number, direction_z: number, vector_boundary: boolean): Float64Array",
+  "queryFamilyCriticalPoint3D(handle: WasmAuthoringFamilyHandle, direction_x: number, direction_y: number, direction_z: number, vector_boundary: boolean): Float64Array",
+  "queryMobjectCriticalPoint3D(handle: WasmAuthoringMobjectHandle, direction_x: number, direction_y: number, direction_z: number, vector_boundary: boolean): Float64Array",
+  "contentCriticalPoint3D(direction_x: number, direction_y: number, direction_z: number): Float64Array",
+  "queryLayoutContentCriticalPoint3D(source: WasmLayoutAnchor, direction_x: number, direction_y: number, direction_z: number): Float64Array",
   "queryFamilyVectorBoundaryPoints(handle: WasmAuthoringFamilyHandle): Float64Array",
   "pointFromProportion(alpha: number): Float64Array",
   "proportionFromPointForRanges(ranges: Uint32Array, x: number, y: number, z: number): number | undefined",
@@ -472,7 +539,7 @@ const expectedTypeSurface = [
   "liveCreateFamily(batch: WasmSceneMembershipBatch, z_index: number, draw_enabled?: boolean | null): WasmAuthoringFamilyHandle",
   "liveEditFamilyMembership(handle: WasmAuthoringFamilyHandle, batch: WasmSceneMembershipBatch): Uint8Array",
   "arrange(options: WasmFamilyArrangeOptions): void",
-  "shiftBy(delta_x: number, delta_y: number): void",
+  "shiftBy(delta_x: number, delta_y: number, delta_z?: number | null): void",
   "moveToPoint(",
   "moveToMobject(",
   "moveToFamily(",
@@ -501,6 +568,7 @@ const expectedTypeSurface = [
   "setTranslation(x: number, y: number): void",
   "setScale(x: number, y: number): void",
   "setRotation(angle: number): void",
+  "setDrawEnabled(enabled: boolean): void",
   "setStrokeWidthMode(mode: string): void",
   "setStrokeJoin(join: string): void",
   "setStrokeCap(cap: string): void",
@@ -557,6 +625,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectDimensionFittingSmokeRenderer(",
     "export function createDirectObjectMembershipSmokeRenderer(",
     "export function createDirectObjectMembershipQueriesRenderer(",
+    "export function createDirectPointPromotionRenderer(",
     "export function createDirectFamilyReplacementSmokeRenderer(",
     "export function createDirectCircleSurroundSmokeRenderer(",
     "export function createDirectFamilyAffineSmokeRenderer(",
@@ -646,6 +715,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectDimensionFittingSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectObjectMembershipSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectObjectMembershipQueriesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectPointPromotionRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyReplacementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectCircleSurroundSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -736,6 +806,13 @@ if (!geometryOptionsDeclaration.includes(
 )) {
   throw new Error("WASM declarations are missing typed VMobject sheen-direction constructor support");
 }
+for (const name of ["WasmAuthoringMobjectHandle", "WasmAuthoringFamilyHandle"]) {
+  const declaration = classDeclaration(name);
+  for (const signature of ["pointArray(): Array<any>;", "setEmptyPointArray(dimensions: Float64Array): void;", "requiresContentBoundary(): boolean;"]) {
+    if (!declaration.includes(signature)) throw new Error(`${name} is missing ${signature}`);
+  }
+}
+
 for (const fragment of expectedTypeSurface) {
   if (!declarations.includes(fragment)) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
@@ -792,7 +869,7 @@ for (const retired of [
 const objectStart = declarations.indexOf("export class WasmAuthoringMobjectHandle");
 const objectEnd = declarations.indexOf("export class ", objectStart + 1);
 const objectSurface = declarations.slice(objectStart, objectEnd < 0 ? undefined : objectEnd);
-for (const method of ["memberView(): WasmFamilyMemberView", "memberKeys(): string[]", "editMembership(batch: WasmSceneMembershipBatch): Uint8Array", "prependMembers(batch: WasmSceneMembershipBatch): void", "insertMember(index: number, batch: WasmSceneMembershipBatch): void", "replaceMembers(batch: WasmSceneMembershipBatch): void", "copyFamily(references: WasmSceneMembershipBatch): WasmFamilyCopy", "splitCount(include_self?: boolean | null): number", "splitAt(index: number, include_self?: boolean | null): any", "splitKeys(include_self?: boolean | null): string[]", "splitIterator(include_self?: boolean | null): WasmFamilyIterator", "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan"]) {
+for (const method of ["memberView(): WasmFamilyMemberView", "memberKeys(): string[]", "editMembership(batch: WasmSceneMembershipBatch): Uint8Array", "prependMembers(batch: WasmSceneMembershipBatch): void", "insertMember(index: number, batch: WasmSceneMembershipBatch): void", "replaceMembers(batch: WasmSceneMembershipBatch): void", "copyFamily(references: WasmSceneMembershipBatch): WasmFamilyCopy", "promoteOwnPoints(references: WasmSceneMembershipBatch): WasmFamilyCopy", "splitCount(include_self?: boolean | null): number", "splitAt(index: number, include_self?: boolean | null): any", "splitKeys(include_self?: boolean | null): string[]", "splitIterator(include_self?: boolean | null): WasmFamilyIterator", "prepareSlice(include_self?: boolean | null): WasmFamilySlicePlan"]) {
   if (objectStart < 0 || !objectSurface.includes(method)) throw new Error(`Object member-query ABI is missing ${method}`);
 }
 if (wasmStats.size === 0) {

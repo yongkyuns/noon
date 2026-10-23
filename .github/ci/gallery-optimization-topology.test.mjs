@@ -77,7 +77,7 @@ test("cross-browser matrix covers all browsers using exactly three gallery shard
   assert.ok(yaml.includes("shard: [0, 1, 2]"));
   assert.ok(yaml.includes('NOON_GALLERY_SHARD_INDEX: "${{ matrix.shard }}"'));
   assert.ok(yaml.includes('NOON_GALLERY_SHARD_COUNT: "3"'));
-  assert.ok(yaml.includes("node --test scripts/gallery-shards.test.mjs"));
+  assert.ok(yaml.includes("node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs"));
   assert.ok(yaml.includes("node scripts/playground-gallery-runtime-smoke.mjs"));
   assert.ok(yaml.includes("name: playground-gallery-${{ matrix.browser }}-shard-${{ matrix.shard }}"));
   assert.doesNotMatch(yaml, /^      - name: Test every selectable gallery example$/m,

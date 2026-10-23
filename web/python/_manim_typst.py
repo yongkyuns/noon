@@ -351,15 +351,6 @@ def _as_color(value: object) -> _base.Color:
     raise TypeError("text color must be a Noon/Manim Color")
 
 
-def _native_layout_handle(handle: object):
-    required = ("centerX", "centerY", "width", "height", "criticalX", "criticalY")
-    if not all(hasattr(handle, name) for name in required):
-        raise NotImplementedError(
-            "native Text layout queries require the shared Rust authoring handle"
-        )
-    return handle
-
-
 def _in_canonical_callback_phase(mobject: _base.Mobject) -> bool:
     """Inspect the existing property overlay without creating Text-local state."""
 
@@ -475,7 +466,7 @@ class _RetainedTextMobject(_base.Mobject):
         del raw
         raise TypeError("semantic text objects cannot be lowered through legacy geometry")
 
-    def get_center(self) -> _base.Vec2:
+    def get_center(self) -> Any:
         return _base.Mobject.get_center(self)
 
     def shift(self, direction: object) -> _RetainedTextMobject:
@@ -681,7 +672,7 @@ class Text(_RetainedTextMobject):
     def line_spacing(self) -> float:
         return self._line_spacing
 
-    def get_center(self) -> _base.Vec2:
+    def get_center(self) -> Any:
         return _base.Mobject.get_center(self)
 
     @property
@@ -720,13 +711,8 @@ class Text(_RetainedTextMobject):
             raise ValueError("cannot set height of zero-height Text")
         self.scale(target / current)
 
-    def get_critical_point(self, direction: object) -> _base.Vec2:
-        axis = _base._as_vec2(direction)
-        handle = _native_layout_handle(self._semantic_handle)
-        return _base.Vec2(
-            float(engine_call(handle.criticalX, float(axis.x), float(axis.y))),
-            float(engine_call(handle.criticalY, float(axis.x), float(axis.y))),
-        )
+    def get_critical_point(self, direction: object) -> Any:
+        return _base.Mobject.get_critical_point(self, direction)
 
 
 class MarkupText(Text):

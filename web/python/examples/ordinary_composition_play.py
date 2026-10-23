@@ -19,8 +19,8 @@ class OrdinaryCompositionPlay(Scene):
             rate_func=linear,
         )
         assert self.time == 2.0
-        assert tuple(left.get_center()) == (-2.0, 1.0)
-        assert tuple(right.get_center()) == (2.0, -1.0)
+        assert tuple(left.get_center()) == (-2.0, 1.0, 0.0)
+        assert tuple(right.get_center()) == (2.0, -1.0, 0.0)
 
         self.play(
             Succession(
@@ -31,8 +31,8 @@ class OrdinaryCompositionPlay(Scene):
             rate_func=linear,
         )
         assert self.time == 4.0
-        assert tuple(left.get_center()) == (-2.0, 1.0)
-        assert tuple(right.get_center()) == (2.0, -1.0)
+        assert tuple(left.get_center()) == (-2.0, 1.0, 0.0)
+        assert tuple(right.get_center()) == (2.0, -1.0, 0.0)
 
         # Root completion releases both mapped drivers before this normal edit.
         left.set_fill(green, opacity=1.0)

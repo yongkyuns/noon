@@ -3,7 +3,6 @@
 mod path_admission;
 pub(crate) use path_admission::publish_path_family_with;
 
-use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
@@ -24,20 +23,19 @@ use std::{
 #[doc(hidden)]
 pub(crate) struct FamilyTranslation {
     source_members: Vec<SemanticNodeId>,
-    delta: (f64, f64),
+    delta: SemanticVec3,
 }
 
 impl FamilyTranslation {
-    pub fn begin(
+    pub fn begin_3d(
         store: &SemanticStore,
         source: SemanticNodeId,
-        delta_x: f64,
-        delta_y: f64,
+        delta: SemanticVec3,
     ) -> Result<Self, AuthoringError> {
         let source_members = store
             .ordered_leaf_nodes(source)
             .map_err(AuthoringError::from)?;
-        Self::from_members(source_members, delta_x, delta_y)
+        Self::from_members_3d(source_members, delta)
     }
 
     pub fn from_members(
@@ -45,10 +43,17 @@ impl FamilyTranslation {
         delta_x: f64,
         delta_y: f64,
     ) -> Result<Self, AuthoringError> {
-        let delta = semantic_xy_f64(delta_x, delta_y)?;
+        Self::from_members_3d(source_members, SemanticVec3::new(delta_x, delta_y, 0.0))
+    }
+
+    pub fn from_members_3d(
+        source_members: Vec<SemanticNodeId>,
+        delta: SemanticVec3,
+    ) -> Result<Self, AuthoringError> {
+        delta.lower_xy_f32().map_err(AuthoringError::from)?;
         Ok(Self {
             source_members,
-            delta: (delta.x, delta.y),
+            delta,
         })
     }
 
@@ -83,7 +88,7 @@ impl FamilyTranslation {
         store: &SemanticStore,
     ) -> Result<(), AuthoringError> {
         let mut translations = BTreeMap::new();
-        for (leaf, x, y) in self.into_shifts() {
+        for (leaf, delta) in self.into_shifts() {
             if let std::collections::btree_map::Entry::Vacant(entry) = translations.entry(leaf) {
                 let translation = store
                     .semantic_object_state_checked(leaf)
@@ -93,25 +98,27 @@ impl FamilyTranslation {
                 entry.insert(translation);
             }
             let translation = translations.get_mut(&leaf).expect("inserted above");
-            translation.x += x;
-            translation.y += y;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
         }
         for (leaf, translation) in translations {
+            translation.lower_xy_f32().map_err(AuthoringError::from)?;
             transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
         }
         Ok(())
     }
 
-    pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {
+    pub fn into_shifts(self) -> Vec<(SemanticNodeId, SemanticVec3)> {
         self.source_members
             .into_iter()
-            .map(|member| (member, self.delta.0, self.delta.1))
+            .map(|member| (member, self.delta))
             .collect()
     }
 }
 
 pub(crate) fn translation_transaction<F, E>(
-    shifts: impl IntoIterator<Item = (SemanticNodeId, f64, f64)>,
+    shifts: impl IntoIterator<Item = (SemanticNodeId, SemanticVec3)>,
     mut authored_translation: F,
 ) -> Result<SemanticMutationTransaction, E>
 where
@@ -121,13 +128,14 @@ where
     // Accumulate staged operations before publishing one final property per
     // identity. A single family translation supplies each semantic leaf once.
     let mut translations = BTreeMap::new();
-    for (leaf, x, y) in shifts {
+    for (leaf, delta) in shifts {
         let translation = match translations.entry(leaf) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => entry.insert(authored_translation(leaf)?),
         };
-        translation.x += x;
-        translation.y += y;
+        translation.x += delta.x;
+        translation.y += delta.y;
+        translation.z += delta.z;
     }
     let mut transaction = SemanticMutationTransaction::new();
     for (leaf, translation) in translations {

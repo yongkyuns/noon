@@ -94,9 +94,9 @@ fn convex_hull(mut points: Vec<noon_core::Vec2>) -> Vec<noon_core::Vec2> {
     lower
 }
 
-/// Cached local planar bounds widened to f64 for world-space family-anchor
-/// calculations. Source paths currently provide f32 coordinates, but all pose
-/// composition and bounds accumulation remains in the semantic precision lane.
+/// Cached canonical local bounds for world-space family-anchor calculations.
+/// Retained text and path controls keep their semantic precision; compact analytic
+/// geometry inputs are widened before pose composition and bounds accumulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompiledLocalBounds2D64 {
     pub min_x: f64,
@@ -243,26 +243,38 @@ impl CompiledScene {
         object_index: usize,
     ) -> Option<CompiledLocalBounds2D64> {
         let object = self.objects.get(object_index)?;
-        let bounds = object
-            .content
-            .geometry()
-            .and_then(|geometry| match geometry {
-                GeometryRef::External(id) => self
-                    .resources
-                    .current_handle(*id)
-                    .and_then(|handle| GeometryResourceLookup::get(&self.resources, handle))
-                    .and_then(|resource| match resource {
-                        GeometryResource::VectorPath(path) => path.conservative_bounds(),
-                        GeometryResource::Mesh(_) => None,
-                    }),
-                geometry => geometry.local_bounds(),
-            })
-            .or(object.text_bounds)?;
+        let bounds = if let Some(handle) = object.content.text() {
+            // The row's compact text_bounds serves rendering and spatial culling;
+            // family pivots must use the retained resource's canonical bounds.
+            noon_core::TextResourceLookup::get(&self.resources, handle)?.bounds
+        } else {
+            object
+                .content
+                .geometry()
+                .and_then(|geometry| match geometry {
+                    GeometryRef::External(id) => self
+                        .resources
+                        .current_handle(*id)
+                        .and_then(|handle| GeometryResourceLookup::get(&self.resources, handle))
+                        .and_then(|resource| match resource {
+                            GeometryResource::VectorPath(path) => {
+                                path.semantic_control_bounds().map(|b| {
+                                    noon_core::DRect::new(
+                                        noon_core::DVec2::new(b.min_x, b.min_y),
+                                        noon_core::DVec2::new(b.max_x, b.max_y),
+                                    )
+                                })
+                            }
+                            GeometryResource::Mesh(_) => None,
+                        }),
+                    geometry => geometry.local_bounds().map(Into::into),
+                })?
+        };
         Some(CompiledLocalBounds2D64 {
-            min_x: f64::from(bounds.min.x),
-            min_y: f64::from(bounds.min.y),
-            max_x: f64::from(bounds.max.x),
-            max_y: f64::from(bounds.max.y),
+            min_x: bounds.min.x,
+            min_y: bounds.min.y,
+            max_x: bounds.max.x,
+            max_y: bounds.max.y,
         })
     }
 

@@ -12,4 +12,4 @@ class SequentialTransformTargets(Scene):
             Transform(circle, first, run_time=1, rate_func=linear),
             Transform(circle, second, run_time=1, rate_func=linear),
         ), rate_func=linear)
-        assert circle.get_center() == (4.0, 0.0)
+        assert tuple(circle.get_center()) == (4.0, 0.0, 0.0)

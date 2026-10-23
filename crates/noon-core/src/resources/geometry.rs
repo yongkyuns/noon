@@ -1,5 +1,5 @@
 use std::{
-    mem::{size_of, size_of_val},
+    mem::size_of_val,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -41,7 +41,7 @@ pub enum GeometryResource {
 impl GeometryResource {
     pub fn retained_bytes(&self) -> usize {
         match self {
-            Self::VectorPath(path) => vector_path_retained_bytes(path),
+            Self::VectorPath(path) => path.retained_bytes(),
             Self::Mesh(mesh) => mesh.retained_bytes(),
         }
     }
@@ -334,19 +334,6 @@ fn geometry_resource_slot(id: GeometryId) -> usize {
     (id.get() & GEOMETRY_RESOURCE_SLOT_MASK) as usize
 }
 
-fn vector_path_retained_bytes(path: &VectorPath) -> usize {
-    // Count owned commands and raw coordinates by logical length, including
-    // incomplete cubic tails. Morph targets own the same payload recursively;
-    // allocator capacity and bookkeeping are excluded from these statistics.
-    let own = size_of::<VectorPath>()
-        + size_of_val(path.commands())
-        + path.manim_points().map_or(0, size_of_val);
-    own + path
-        .morph_target()
-        .map(vector_path_retained_bytes)
-        .unwrap_or(0)
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeometryResourceError {
     /// A path rejected before resource allocation contains non-finite points.
@@ -378,6 +365,7 @@ impl std::error::Error for GeometryResourceError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::size_of;
 
     fn large_path(count: usize) -> VectorPath {
         let mut path = VectorPath::new().move_to(Vec2::ZERO);
