@@ -12,7 +12,6 @@ import urllib.request
 
 EVIDENCE = Path('/tmp/noon-prefix-session')
 EVIDENCE.mkdir(exist_ok=True)
-ROOT = Path.cwd()
 payload = b''.join(Path(f'.github/diagnostics/prefix-session.part{i}').read_bytes() for i in (1, 2))
 assert hashlib.sha256(payload).hexdigest() == 'a1f1899201a75696d2a00ef577d6cc797a43da7c38e11a5214d60f46cd979f50'
 recipe = json.loads(lzma.decompress(payload))
@@ -36,6 +35,14 @@ if mode == 'apply':
         assert hashlib.sha256(result).hexdigest() == entry['result'], path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(result)
+    fixes = Path('.github/diagnostics/prefix-session-fixes.json')
+    if fixes.exists():
+        for fix in json.loads(fixes.read_text()):
+            assert fix['path'] in paths
+            path = Path(fix['path'])
+            text = path.read_text()
+            assert text.count(fix['old']) == 1, fix['path']
+            path.write_text(text.replace(fix['old'], fix['new']))
     (EVIDENCE / 'source-commit.txt').write_bytes(subprocess.check_output(['git', 'rev-parse', 'HEAD']))
     (EVIDENCE / 'product-base.txt').write_text(recipe['product_base'] + '\n')
     (EVIDENCE / 'paths.json').write_text(json.dumps(paths, indent=2))
