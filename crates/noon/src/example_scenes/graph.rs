@@ -79,13 +79,11 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("d", (-3.5, -2.4), added_vertex_options)],
         [("a", "d", added_edge_options)],
     )?;
-    let standalone_vertex_options = GraphOptions {
-        vertex_radius: 0.16,
-        vertex_fill: YELLOW,
-        vertex_stroke_width: 0.05,
-        vertex_stroke_opacity: 0.2,
-        ..Default::default()
-    };
+    let mut standalone_vertex_options = options.clone();
+    standalone_vertex_options.vertex_radius = 0.16;
+    standalone_vertex_options.vertex_fill = YELLOW;
+    standalone_vertex_options.vertex_stroke_width = 0.05;
+    standalone_vertex_options.vertex_stroke_opacity = 0.2;
     graph
         .add_vertices_with_options(&mut scene, [("e", (-5.5, -2.4), standalone_vertex_options)])?;
     let mut digraph_options = options.clone();
@@ -121,11 +119,9 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
             ..Default::default()
         },
     )?;
-    let added_vertex_options = GraphOptions {
-        vertex_fill: YELLOW,
-        vertex_stroke: YELLOW,
-        ..Default::default()
-    };
+    let mut added_vertex_options = options.clone();
+    added_vertex_options.vertex_fill = YELLOW;
+    added_vertex_options.vertex_stroke = YELLOW;
     let mut added_edge_options = options.clone();
     added_edge_options.edge_color = PURPLE;
     added_edge_options.edge_stroke_width = 0.03;
@@ -134,12 +130,10 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [("x", (5.0, -2.3), added_vertex_options)],
         [("w", "x", added_edge_options)],
     )?;
-    let standalone_vertex_options = GraphOptions {
-        vertex_radius: 0.16,
-        vertex_fill: YELLOW,
-        vertex_stroke: YELLOW,
-        ..Default::default()
-    };
+    let mut standalone_vertex_options = options.clone();
+    standalone_vertex_options.vertex_radius = 0.16;
+    standalone_vertex_options.vertex_fill = YELLOW;
+    standalone_vertex_options.vertex_stroke = YELLOW;
     digraph
         .add_vertices_with_options(&mut scene, [("y", (2.0, -2.3), standalone_vertex_options)])?;
 

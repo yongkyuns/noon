@@ -868,9 +868,15 @@ class _GraphBase(_compat.Group):
             for key, label in label_mobjects.items():
                 if (
                     "radius" not in global_config
+                    and "radius" not in self._default_vertex_config
                     and "radius" not in keyed_config.get(key, {})
                 ):
                     keyed_config.setdefault(key, {})["radius"] = _labeled_dot_radius(label)
+        # Manim's _create_vertex merges constructor defaults into each keyed
+        # addition. Per-call non-keyed settings apply only to unkeyed vertices.
+        # Constructors themselves instead replace omitted keyed options.
+        for key in explicit_keyed_vertex_ids:
+            keyed_config[key] = {**self._default_vertex_config, **keyed_config[key]}
         _complete_keyed_vertex_styles(
             keyed_config, explicit_keyed_vertex_ids, label_mobjects,
             circle_vertices,

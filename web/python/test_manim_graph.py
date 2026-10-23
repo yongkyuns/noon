@@ -1037,7 +1037,7 @@ class GraphFacadeTests(unittest.TestCase):
             value.add_vertices({"c": (2, 0)})
         self.assertEqual(value._graph_key_ids, before)
 
-    def test_add_vertices_replaces_global_style_for_keyed_vertices(self):
+    def test_add_vertices_merges_constructor_defaults_for_keyed_vertices(self):
         value = graph.Graph(
             {"a": (0, 0)}, [], vertex_config={"color": "#112233", "stroke_width": 2}
         )
@@ -1061,10 +1061,10 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertEqual(overrides[1:5], [119 / 255, 136 / 255, 153 / 255, 1.0])
         self.assertEqual(overrides[5], 0.3)
         self.assertEqual(overrides[6:10], [68 / 255, 85 / 255, 102 / 255, 1.0])
-        self.assertEqual(overrides[10], 0.0)
+        self.assertEqual(overrides[10], 2.0)
         self.assertEqual(overrides[11], 0.25)
         self.assertEqual(overrides[12], 0.16)
-        self.assertEqual(overrides[13:17], [1.0, 1.0, 1.0, 1.0])
+        self.assertEqual(overrides[13:17], [17 / 255, 34 / 255, 51 / 255, 1.0])
         self.assertEqual(overrides[17], 1.0)
         self.assertEqual(overrides[18:22], [170 / 255, 187 / 255, 204 / 255, 1.0])
         self.assertEqual(overrides[22], 4)
@@ -1090,6 +1090,40 @@ class GraphFacadeTests(unittest.TestCase):
         self.assertIs(created[1], value["c"])
         self.assertEqual(self.context.add_vertex_calls[0][1:3], ([1, 2], [2.0, 3.0, 0.0, 0.0]))
         self.assertEqual(value.add_vertices(), [])
+
+    def test_constructor_replacement_and_mutation_inheritance_are_distinct(self):
+        # Pinned ManimCE 0.21: a keyed constructor Dot resets omitted paint,
+        # while the same keyed addition inherits the graph's default paint.
+        for constructor in (graph.Graph, graph.DiGraph):
+            with self.subTest(constructor=constructor.__name__):
+                value = constructor(
+                    {"a": (0, 0)}, [],
+                    vertex_config={
+                        "radius": 0.21, "fill_color": "#FC6255", "fill_opacity": 0.35,
+                        "stroke_color": "#58C4DD", "stroke_width": 3, "stroke_opacity": 0.45,
+                        "a": {"fill_color": "#F7D96F", "stroke_opacity": 0.2},
+                    },
+                )
+                initial = dict(self.context.options[-1].vertex_styles[0].calls)
+                self.assertEqual(initial["radius"], (0.08,))
+                self.assertEqual(initial["fill_opacity"], (1.0,))
+                self.assertEqual(initial["vertex_width"], (0.0,))
+                value.add_vertices("b", positions={"b": (1, 0)},
+                                   vertex_config={"b": {"fill_color": "#F7D96F",
+                                                        "stroke_opacity": 0.2}})
+                overrides = self.context.add_vertex_calls[-1][3]
+                self.assertEqual(overrides[0], 0.21)
+                self.assertEqual(overrides[5], 0.35)
+                self.assertEqual(overrides[6:10], [88 / 255, 196 / 255, 221 / 255, 1.0])
+                self.assertEqual(overrides[10:], [3.0, 0.2])
+                with (
+                    patch.object(graph._GraphBase, "_raw_vertex", return_value=_Vertex()),
+                    patch.object(graph._compat.Group, "add", return_value=value),
+                ):
+                    value.add_vertices("c", positions={"c": (2, 0)}, labels={"c": _Label()})
+                # An inherited explicit radius also wins over LabeledDot auto-sizing.
+                self.assertTrue(math.isnan(self.context.add_vertex_calls[-1][3][0]))
+                self.assertIn(("radius", (0.21,)), self.context.add_vertex_calls[-1][4].calls)
 
     def test_add_vertex_config_validation_precedes_publication(self):
         value = graph.Graph({"a": (0, 0)}, [])
