@@ -1,8 +1,9 @@
 //! Graph input planning and one Scene-owned publication. No graph runtime.
 
 use super::{
-    GraphAuthoringError, GraphEdge, GraphEdgeEntry, GraphEdgeMobject, GraphEndpoint, GraphOptions,
-    GraphTopology, GraphVertexEntry, GraphVertexId, RetainedGraph,
+    GraphAuthoringError, GraphEdge, GraphEdgeEntry, GraphEdgeMobject, GraphEdgeStyle,
+    GraphEndpoint, GraphOptions, GraphTopology, GraphVertexEntry, GraphVertexId, GraphVertexStyle,
+    RetainedGraph,
 };
 use crate::{
     arrow_authoring::{resolve_staged_arrow, stage_prepared_arrow, PreparedArrow, StagedArrow},
@@ -123,7 +124,7 @@ pub(super) fn build_graph<K, V, E, P>(
     vertices: V,
     edges: E,
     directed: bool,
-    options: GraphOptions,
+    mut options: GraphOptions,
 ) -> Result<RetainedGraph<K>, GraphAuthoringError>
 where
     K: Clone + Eq + Hash,
@@ -146,10 +147,24 @@ where
             return Err(GraphAuthoringError::DuplicateVertexKey { vertex_index });
         }
         let id = topology.add_vertex();
-        let options = vertex_options(position, &options)?;
+        let style = options
+            .vertex_styles
+            .get(&vertex_index)
+            .copied()
+            .unwrap_or_else(|| options.vertex_style());
+        let options = vertex_options_with_style(position, style)?;
         vertex_lookup.insert(key.clone(), planned_vertices.len());
         positions.push(position);
         planned_vertices.push(PlannedVertex { key, id, options });
+    }
+    if options
+        .vertex_styles
+        .keys()
+        .any(|&index| index >= planned_vertices.len())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "per-vertex style index must refer to an existing vertex",
+        ));
     }
 
     let mut planned_edges = Vec::new();
@@ -175,21 +190,41 @@ where
         }
         let id = topology.add_edge(start, end, directed)?;
         let edge = topology.edge(id).expect("new graph edge is present");
+        let style = options
+            .edge_styles
+            .get(&edge_index)
+            .copied()
+            .unwrap_or_else(|| options.edge_style());
         let geometry = if directed {
-            PlannedEdgeGeometry::Arrow(arrow_options(
+            PlannedEdgeGeometry::Arrow(arrow_options_with_style(
                 positions[start_index],
                 positions[end_index],
                 &options,
+                style,
             )?)
         } else {
-            PlannedEdgeGeometry::Line(line_options(
+            PlannedEdgeGeometry::Line(line_options_with_style(
                 positions[start_index],
                 positions[end_index],
-                &options,
+                style,
             )?)
         };
         planned_edges.push(PlannedEdge { edge, geometry });
     }
+    if options
+        .edge_styles
+        .keys()
+        .any(|&index| index >= planned_edges.len())
+    {
+        return Err(GraphAuthoringError::InvalidLayout(
+            "per-edge style index must refer to an existing edge",
+        ));
+    }
+    // Constructor overrides are already resolved into inert geometry requests.
+    // Keep only global defaults for later local edits; cloning those defaults
+    // must not copy a constructor-sized map on every vertex/edge mutation.
+    options.vertex_styles = HashMap::new();
+    options.edge_styles = HashMap::new();
 
     let store_rc = publication.graph_store();
     let (result, root, staged_vertices, staged_edges) =
@@ -365,24 +400,32 @@ pub(super) fn vertex_options(
     position: (f64, f64),
     options: &GraphOptions,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
-    let mut vertex = ManimGeometryOptions::circle(options.vertex_radius)?;
+    vertex_options_with_style(position, options.vertex_style())
+}
+
+fn vertex_options_with_style(
+    position: (f64, f64),
+    style: GraphVertexStyle,
+) -> Result<ManimGeometryOptions, AuthoringError> {
+    let mut vertex = ManimGeometryOptions::circle(style.radius)?;
     vertex.set_translation(position.0, position.1)?;
-    let fill = options.vertex_fill;
+    let fill = style.fill;
     vertex.set_fill(
         f64::from(fill.red),
         f64::from(fill.green),
         f64::from(fill.blue),
         f64::from(fill.alpha),
     )?;
-    vertex.set_fill_opacity(options.vertex_fill_opacity)?;
-    let stroke = options.vertex_stroke;
+    vertex.set_fill_opacity(style.fill_opacity)?;
+    let stroke = style.stroke;
     vertex.set_stroke(
         f64::from(stroke.red),
         f64::from(stroke.green),
         f64::from(stroke.blue),
         f64::from(stroke.alpha),
     )?;
-    vertex.set_stroke_width(options.vertex_stroke_width)?;
+    vertex.set_stroke_width(style.stroke_width)?;
+    vertex.set_stroke_opacity(style.stroke_opacity)?;
     Ok(vertex)
 }
 
@@ -391,16 +434,25 @@ pub(super) fn line_options(
     end: (f64, f64),
     options: &GraphOptions,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
+    line_options_with_style(start, end, options.edge_style())
+}
+
+fn line_options_with_style(
+    start: (f64, f64),
+    end: (f64, f64),
+    style: GraphEdgeStyle,
+) -> Result<ManimGeometryOptions, AuthoringError> {
     let mut line = ManimGeometryOptions::line(start.0, start.1, end.0, end.1)?;
     line.disable_fill();
-    let color = options.edge_color;
+    let color = style.color;
     line.set_stroke(
         f64::from(color.red),
         f64::from(color.green),
         f64::from(color.blue),
         f64::from(color.alpha),
     )?;
-    line.set_stroke_width(options.edge_stroke_width)?;
+    line.set_stroke_width(style.stroke_width)?;
+    line.set_stroke_opacity(style.stroke_opacity)?;
     Ok(line)
 }
 
@@ -409,15 +461,25 @@ pub(super) fn arrow_options(
     end: (f64, f64),
     options: &GraphOptions,
 ) -> Result<ManimArrowOptions, AuthoringError> {
+    arrow_options_with_style(start, end, options, options.edge_style())
+}
+
+fn arrow_options_with_style(
+    start: (f64, f64),
+    end: (f64, f64),
+    options: &GraphOptions,
+    style: GraphEdgeStyle,
+) -> Result<ManimArrowOptions, AuthoringError> {
     let mut arrow = ManimArrowOptions::arrow(start.0, start.1, end.0, end.1)?;
     arrow.set_buff(options.directed_edge_buff.unwrap_or(options.vertex_radius))?;
-    let color = options.edge_color;
+    let color = style.color;
     arrow.set_color(
         f64::from(color.red),
         f64::from(color.green),
         f64::from(color.blue),
         f64::from(color.alpha),
     )?;
-    arrow.set_stroke_width(options.edge_stroke_width)?;
+    arrow.set_stroke_width(style.stroke_width)?;
+    arrow.set_stroke_opacity(style.stroke_opacity)?;
     Ok(arrow)
 }

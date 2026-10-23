@@ -130,9 +130,10 @@ mod spatial_composition;
 pub mod triangle_example;
 mod world_affine;
 pub use graph_authoring::{
-    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
-    GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
-    DEFAULT_GRAPH_VERTEX_RADIUS, DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEdgeStyle, GraphEndpoint,
+    GraphLayout, GraphLayoutOptions, GraphMutationResult, GraphOptions, GraphVertexStyle,
+    DEFAULT_GRAPH_EDGE_STROKE_WIDTH, DEFAULT_GRAPH_VERTEX_RADIUS,
+    DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
 };
 pub use spatial_composition::SpatialCompositionError;
 mod implicit_plotting;
@@ -394,14 +395,14 @@ pub mod prelude {
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
         BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,
         DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
-        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
-        LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
-        ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
-        NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
-        RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
-        SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
-        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEdgeStyle,
+        GraphOptions, GraphVertexStyle, LiveContinuation, LiveProgram, LiveSession,
+        LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject,
+        MobjectFamily, MobjectTarget, NativeBoolSignal, NativeVectorSignal, PlotAuthoringError,
+        PlotSamplingOptions, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        SpatialCompositionError, StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle,
+        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
+        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     #[cfg(feature = "code")]
     pub use crate::{

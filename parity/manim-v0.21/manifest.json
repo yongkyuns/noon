@@ -10,9 +10,57 @@
     "source": "parity/manim-v0.21/quickstart.py"
   },
   "fixtures": [
-    {"id": "lingering", "scene": "LingeringRate", "source": "parity/manim-v0.21/core-examples/lingering.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.9666666666666667], "notes": "Original lingering early hold and reverse Create through one shared composition. 120fps represents unchanged sample times exactly; no arbitrary Python playback claim."},
-    {"id": "back-easings", "scene": "BackEasings", "source": "parity/manim-v0.21/core-examples/back_easings.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.125, 0.25, 0.375, 0.5, 0.75, 0.9666666666666667], "notes": "Three unchanged original back easings preserve negative and above-one overshoot. Existing requested sampling and tolerances are unchanged."},
-    {"id": "elastic-bounce-easings", "scene": "ElasticBounceEasings", "source": "parity/manim-v0.21/core-examples/elastic_bounce_easings.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.125, 0.25, 0.375, 0.5, 0.75, 0.9666666666666667], "notes": "Six original elastic and bounce rates preserve overshoot, exact endpoints and piecewise curves through shared Rust. Sampling and tolerances are unchanged."},
+    {
+      "id": "lingering",
+      "scene": "LingeringRate",
+      "source": "parity/manim-v0.21/core-examples/lingering.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        0.9,
+        0.9666666666666667
+      ],
+      "notes": "Original lingering early hold and reverse Create through one shared composition. 120fps represents unchanged sample times exactly; no arbitrary Python playback claim."
+    },
+    {
+      "id": "back-easings",
+      "scene": "BackEasings",
+      "source": "parity/manim-v0.21/core-examples/back_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Three unchanged original back easings preserve negative and above-one overshoot. Existing requested sampling and tolerances are unchanged."
+    },
+    {
+      "id": "elastic-bounce-easings",
+      "scene": "ElasticBounceEasings",
+      "source": "parity/manim-v0.21/core-examples/elastic_bounce_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Six original elastic and bounce rates preserve overshoot, exact endpoints and piecewise curves through shared Rust. Sampling and tolerances are unchanged."
+    },
     {
       "id": "exponential-circular-easings",
       "scene": "ExponentialCircularEasings",
@@ -200,7 +248,179 @@
       "scene": "GraphStyleExample",
       "source": "parity/manim-v0.21/core-examples/graph.py",
       "expected_duration": 0.2,
-      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+      "notes": "Pinned ManimCE raster fixture covers global and per-key vertex/edge stroke opacity plus caller-supplied DejaVu Sans Mono Text labels on the directed graph. The labels belong to one graph only: sharing the same mutable label Mobjects across independent Graph roots makes construction order move them between parents, so this fixture avoids that unrelated aliasing case. Undirected Graph label behavior is covered by graph-default-labels. A small fixture helper disables Manim's missing-font warning only when the upstream Text signature supports it; Noon resolves the bundled family. On macOS, the local raster runner registers the identical bundled DejaVu Sans Mono file through NOON_MANIM_REFERENCE_FONTS because the system fallback otherwise selects Andale Mono. ManimCE 0.21.0 raises when a nonempty labels mapping omits vertices, so partial label mappings are tested as a Noon extension without an upstream parity claim. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.39% maximum pixel difference with the exact bundled font registered); hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "graph-circle-vertex-type",
+      "scene": "GraphCircleVertexType",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned ManimCE raster fixture for the standard Circle vertex_type with its constructor-default radius, fill, and stroke. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.10% maximum pixel difference); hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "graph-circle-late-vertex",
+      "scene": "GraphCircleLateVertex",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned ManimCE raster fixture for adding a Circle vertex to an existing Graph; qualifies late-added Circle constructor defaults independently from constructor-wide vertex_type."
+    },
+    {
+      "id": "graph-default-labels",
+      "scene": "GraphDefaultLabels",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Pinned default MathTex vertex labels and label color on circular constructor placement, followed by add_vertices, graph copy, and labeled-vertex removal. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.19% maximum pixel difference), covering add/copy/remove; hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "digraph-custom-labels",
+      "scene": "DiGraphCustomLabels",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Pinned caller-supplied MathTex labels and DejaVu Sans Mono Text on every vertex through circular directed construction, add_vertices, copy, and removal. A small fixture helper disables Manim's missing-font warning only when the upstream Text signature supports it; Noon resolves its bundled family. On macOS, the local raster runner registers the identical bundled DejaVu Sans Mono file through NOON_MANIM_REFERENCE_FONTS because the system fallback otherwise selects Andale Mono. Partial label mappings remain a Noon extension because ManimCE 0.21.0 raises when the mapping omits a vertex. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.41% maximum pixel difference with the exact bundled font registered), covering caller-supplied MathTex/Text and add/copy/remove; hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "graph-default-spring",
+      "scene": "GraphDefaultSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 default Graph spring layout; exercises constructor-default placement against the pinned Cairo raster."
+    },
+    {
+      "id": "digraph-default-spring",
+      "scene": "DiGraphDefaultSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 default DiGraph spring layout with asymmetric edges; exercises directed constructor-default placement against the pinned Cairo raster."
+    },
+    {
+      "id": "graph-change-layout-scale",
+      "scene": "GraphChangeLayoutScale",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned vector-only Graph raster for the upstream change_layout layout_scale keyword, non-default center, and retained vertex placement. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.01% maximum pixel difference); hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "graph-weighted-spring",
+      "scene": "GraphWeightedSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "noon_source": "parity/manim-v0.21/noon_weighted_graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 weighted default Graph spring layout; edge data selects the non-default `strength` attribute against the pinned Cairo raster. The Noon-only source carries equivalent edge data through its supported edge triples instead of mutating ManimCE's private NetworkX graph. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.01% maximum pixel difference). The upstream scene refreshes static edge geometry after the layout change; Noon receives equivalent edge data through the supported edge-triple source. Hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "digraph-weighted-spring",
+      "scene": "DiGraphWeightedSpringLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "noon_source": "parity/manim-v0.21/noon_weighted_graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 weighted default DiGraph spring layout with asymmetric edges; edge data selects the non-default `strength` attribute against the pinned Cairo raster. The Noon-only source carries equivalent edge data through its supported edge triples instead of mutating ManimCE's private NetworkX graph. Local strict pinned-ManimCE 0.21.0 Cairo raster passed unchanged tolerances on WebGPU and WebGL2 (0.19% maximum pixel difference). The upstream scene refreshes static edge geometry after the layout change; Noon receives equivalent edge data through the supported edge-triple source. Hosted exact-PR-head workflow remains pending."
+    },
+    {
+      "id": "graph-seeded-random-layout",
+      "scene": "GraphSeededRandomLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 random Graph layout, compared with the pinned Cairo raster to verify reproducible NetworkX sampling."
+    },
+    {
+      "id": "digraph-seeded-random-layout",
+      "scene": "DiGraphSeededRandomLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Seeded ManimCE v0.21.0 random DiGraph layout with asymmetric edges, compared with the pinned Cairo raster to verify reproducible directed graph sampling."
+    },
+    {
+      "id": "graph-circular-layout",
+      "scene": "GraphCircularLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph circular-layout raster with non-origin center and 2D configuration."
+    },
+    {
+      "id": "digraph-circular-layout",
+      "scene": "DiGraphCircularLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph circular-layout raster with asymmetric edges and non-origin center."
+    },
+    {
+      "id": "graph-shell-layout",
+      "scene": "GraphShellLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph shell-layout raster for keyed shell membership, rotation, center and 2D options."
+    },
+    {
+      "id": "digraph-shell-layout",
+      "scene": "DiGraphShellLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph shell-layout raster for keyed shell membership, rotation, center and 2D options."
+    },
+    {
+      "id": "graph-spiral-layout",
+      "scene": "GraphSpiralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph spiral-layout raster for resolution, equidistant sampling, center and 2D options."
+    },
+    {
+      "id": "digraph-spiral-layout",
+      "scene": "DiGraphSpiralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph spiral-layout raster for resolution, equidistant sampling, center and 2D options."
+    },
+    {
+      "id": "graph-partite-layout",
+      "scene": "GraphPartiteLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph partite-layout raster for horizontal partition alignment and non-origin center. Integer vertex keys keep NetworkX 3.4.2's set-backed member ordering deterministic across PYTHONHASHSEED values."
+    },
+    {
+      "id": "digraph-partite-layout",
+      "scene": "DiGraphPartiteLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph partite-layout raster for vertical partition alignment and non-origin center. Integer vertex keys keep NetworkX 3.4.2's set-backed member ordering deterministic across PYTHONHASHSEED values."
+    },
+    {
+      "id": "graph-spectral-layout",
+      "scene": "GraphSpectralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph spectral-layout raster for non-default center and 2D options."
+    },
+    {
+      "id": "digraph-spectral-layout",
+      "scene": "DiGraphSpectralLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph spectral-layout raster for asymmetric edges and non-default center. Vertex order starts at a positive first eigenvector component so SciPy's arbitrary eigenvector sign is stable against Noon's canonical spectral-axis sign."
+    },
+    {
+      "id": "graph-kamada-kawai-layout",
+      "scene": "GraphKamadaKawaiLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph Kamada-Kawai-layout raster for unweighted shortest-path placement and non-default center."
+    },
+    {
+      "id": "digraph-kamada-kawai-layout",
+      "scene": "DiGraphKamadaKawaiLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned directed Graph Kamada-Kawai-layout raster for unweighted directed shortest-path placement and non-default center."
+    },
+    {
+      "id": "graph-tree-layout",
+      "scene": "GraphTreeLayout",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Pinned Graph tree-layout raster for root, orientation and two-axis vertex spacing."
     },
     {
       "id": "area-helpers",

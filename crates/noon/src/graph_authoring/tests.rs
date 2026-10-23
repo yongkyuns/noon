@@ -1,5 +1,8 @@
 use super::*;
-use noon_core::{SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED};
+use noon_core::{
+    SemanticMutationTransaction, SemanticPaint, StoredGeometry, BLUE, GREEN, RED, YELLOW,
+};
+use std::collections::HashMap;
 
 fn graph(scene: &mut Scene) -> Graph<&'static str> {
     scene
@@ -8,6 +11,44 @@ fn graph(scene: &mut Scene) -> Graph<&'static str> {
             [("a", "b"), ("b", "c")],
         )
         .unwrap()
+}
+
+#[test]
+fn labeled_dot_radius_matches_pinned_manim_and_builds_native_vertex() {
+    // Actual ManimCE 0.21 LabeledDot(Rectangle(...)) observations.
+    for (width, height, expected) in [
+        (0.0, 0.0, 0.1),
+        (0.6, 0.8, 0.6),
+        (0.4, 0.3, 0.35),
+        (6.0, 8.0, 5.1),
+        (3.0, 4.0, 2.6),
+    ] {
+        let radius = GraphVertexStyle::labeled_dot_radius(width, height, 0.1);
+        assert_eq!(radius, expected);
+        let mut scene = Scene::new();
+        let graph = scene
+            .graph_with_options(
+                [("label", (0.0, 0.0))],
+                [],
+                GraphOptions {
+                    vertex_radius: radius,
+                    ..GraphOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            graph.vertex(&"label").unwrap().state().unwrap().content.geometry(),
+            Some(StoredGeometry::Circle { radius: actual })
+                if (f64::from(actual) - expected).abs() < 1e-6
+        ));
+    }
+    // Preserve the reference's sum-of-squares overflow/underflow behavior;
+    // do not silently substitute a numerically rescaled hypot operation.
+    assert!(GraphVertexStyle::labeled_dot_radius(1e200, 1e200, 0.1).is_infinite());
+    assert_eq!(
+        GraphVertexStyle::labeled_dot_radius(1e-200, 1e-200, 0.1),
+        0.1
+    );
 }
 
 #[test]
@@ -211,6 +252,50 @@ fn invalid_keys_endpoints_duplicate_edges_and_self_loops_do_not_publish() {
 }
 
 #[test]
+fn graph_mutations_reject_self_edges_without_publishing_topology() {
+    let mut scene = Scene::new();
+    let mut graph = scene.graph([("a", (-1.0, 0.0))], []).unwrap();
+    let revision = scene.revision();
+
+    let error = graph.add_edges(&mut scene, [("a", "a")]).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(graph.topology().unwrap().edges().count(), 0);
+
+    let error = graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), GraphOptions::default())],
+            [("b", "b", GraphOptions::default())],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(graph.vertex_keys().copied().collect::<Vec<_>>(), vec!["a"]);
+    assert_eq!(graph.topology().unwrap().edges().count(), 0);
+
+    let mut digraph = scene.digraph([("u", (0.0, 1.0))], []).unwrap();
+    let directed_revision = scene.revision();
+    let error = digraph.add_edges(&mut scene, [("u", "u")]).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphAuthoringError::SelfEdgeUnsupported { edge_index: 0 }
+    ));
+    assert_eq!(scene.revision(), directed_revision);
+    assert_eq!(
+        digraph.vertex_keys().copied().collect::<Vec<_>>(),
+        vec!["u"]
+    );
+    assert_eq!(digraph.topology().unwrap().edges().count(), 0);
+}
+
+#[test]
 fn invalid_options_are_rejected_even_without_vertices_or_edges() {
     let bad_options = [
         GraphOptions {
@@ -222,7 +307,15 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
             ..GraphOptions::default()
         },
         GraphOptions {
+            vertex_stroke_opacity: f64::NAN,
+            ..GraphOptions::default()
+        },
+        GraphOptions {
             edge_stroke_width: f64::NAN,
+            ..GraphOptions::default()
+        },
+        GraphOptions {
+            edge_stroke_opacity: 1.1,
             ..GraphOptions::default()
         },
         GraphOptions {
@@ -249,6 +342,77 @@ fn invalid_options_are_rejected_even_without_vertices_or_edges() {
     }
 }
 
+#[test]
+fn per_vertex_styles_follow_constructor_insertion_order() {
+    let options = GraphOptions {
+        vertex_radius: 0.2,
+        vertex_styles: HashMap::from([(
+            1,
+            GraphVertexStyle {
+                radius: 0.31,
+                ..Default::default()
+            },
+        )]),
+        ..GraphOptions::default()
+    };
+    let mut scene = Scene::new();
+    let graph = scene
+        .graph_with_options(
+            [("left", (0.0, 0.0)), ("right", (1.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+            options.clone(),
+        )
+        .unwrap();
+    for (key, expected) in [("left", 0.2_f32), ("right", 0.31_f32)] {
+        assert!(matches!(
+            graph.vertex(&key).unwrap().state().unwrap().content.geometry(),
+            Some(StoredGeometry::Circle { radius }) if (radius - expected).abs() < f32::EPSILON
+        ));
+    }
+
+    let digraph = scene
+        .digraph_with_options(
+            [("u", (2.0, 0.0)), ("v", (3.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+            options,
+        )
+        .unwrap();
+    assert!(matches!(
+        digraph.vertex(&"v").unwrap().state().unwrap().content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.31).abs() < f32::EPSILON
+    ));
+}
+
+#[test]
+fn invalid_per_vertex_style_leaves_graph_unpublished() {
+    for override_index_and_radius in [(0, f64::NAN), (2, 0.3)] {
+        let mut scene = Scene::new();
+        let before = scene.revision();
+        let nodes_before = scene.integration_store().borrow().len();
+        let options = GraphOptions {
+            vertex_styles: HashMap::from([(
+                override_index_and_radius.0,
+                GraphVertexStyle {
+                    radius: override_index_and_radius.1,
+                    ..Default::default()
+                },
+            )]),
+            ..GraphOptions::default()
+        };
+
+        assert!(scene
+            .graph_with_options(
+                [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+                std::iter::empty::<(&str, &str)>(),
+                options,
+            )
+            .is_err());
+
+        assert_eq!(scene.revision(), before);
+        assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    }
+}
+
 fn styled_graph_options() -> GraphOptions {
     GraphOptions {
         vertex_radius: 0.21,
@@ -256,9 +420,139 @@ fn styled_graph_options() -> GraphOptions {
         vertex_fill_opacity: 0.35,
         vertex_stroke: BLUE,
         vertex_stroke_width: 0.07,
+        vertex_stroke_opacity: 0.4,
         edge_color: GREEN,
         edge_stroke_width: 0.09,
+        edge_stroke_opacity: 0.6,
         ..GraphOptions::default()
+    }
+}
+
+#[test]
+fn keyed_constructor_paint_replaces_globals_before_arrow_tips_are_prepared() {
+    for directed in [false, true] {
+        let mut options = styled_graph_options();
+        options.vertex_styles.insert(
+            1,
+            GraphVertexStyle {
+                radius: 0.28,
+                fill: YELLOW,
+                stroke_opacity: 0.2,
+                ..Default::default()
+            },
+        );
+        options.edge_styles.insert(
+            0,
+            GraphEdgeStyle {
+                color: crate::PURPLE,
+                stroke_opacity: 0.3,
+                ..Default::default()
+            },
+        );
+        let mut scene = Scene::new();
+        let before = scene.revision();
+        let graph = construction::build_graph(
+            &mut scene,
+            [("a", (-1.0, 0.0)), ("b", (1.0, 0.0)), ("c", (1.0, 1.0))],
+            [("a", "b"), ("b", "c")],
+            directed,
+            options,
+        )
+        .unwrap();
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
+        assert!(graph.options.vertex_styles.is_empty());
+        assert!(graph.options.edge_styles.is_empty());
+        assert_vertex_style(graph.vertex(&"a").unwrap());
+        let vertex = graph.vertex(&"b").unwrap().state().unwrap();
+        assert!(matches!(vertex.content.geometry(),
+            Some(StoredGeometry::Circle { radius }) if (radius - 0.28).abs() < f32::EPSILON));
+        assert_eq!(vertex.style.fill, Some(SemanticPaint::Solid(YELLOW)));
+        assert_eq!(vertex.style.fill_opacity, 1.0);
+        assert_eq!(vertex.style.stroke, Some(SemanticPaint::Solid(WHITE)));
+        assert_eq!(vertex.style.stroke_width, 0.0);
+        assert_eq!(vertex.style.stroke_opacity, 0.2);
+        let edge = graph.edge(&"a", &"b").unwrap();
+        let shaft = edge.line().state().unwrap();
+        assert_eq!(
+            shaft.style.stroke,
+            Some(SemanticPaint::Solid(crate::PURPLE))
+        );
+        assert_eq!(shaft.style.stroke_width, DEFAULT_GRAPH_EDGE_STROKE_WIDTH);
+        assert_eq!(shaft.style.stroke_opacity, 0.3);
+        if let Some(arrow) = edge.arrow() {
+            let tip = arrow.end_tip().state().unwrap();
+            assert_eq!(tip.style.fill, Some(SemanticPaint::Solid(crate::PURPLE)));
+            assert_eq!(tip.style.fill_opacity, 1.0);
+            assert_eq!(tip.style.stroke_width, 0.0);
+            assert_eq!(tip.style.stroke_opacity, 1.0);
+        }
+        assert_edge_style(graph.edge(&"b", &"c").unwrap());
+    }
+}
+
+#[test]
+fn invalid_keyed_constructor_styles_never_publish_partial_graphs() {
+    let mut invalid_options = Vec::new();
+    for (index, style) in [
+        (
+            1,
+            GraphVertexStyle {
+                fill_opacity: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        (
+            1,
+            GraphVertexStyle {
+                stroke_width: -1.0,
+                ..Default::default()
+            },
+        ),
+        (2, GraphVertexStyle::default()),
+    ] {
+        invalid_options.push(GraphOptions {
+            vertex_styles: HashMap::from([(index, style)]),
+            ..Default::default()
+        });
+    }
+    for (index, style) in [
+        (
+            0,
+            GraphEdgeStyle {
+                stroke_width: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        (
+            0,
+            GraphEdgeStyle {
+                stroke_opacity: 2.0,
+                ..Default::default()
+            },
+        ),
+        (1, GraphEdgeStyle::default()),
+    ] {
+        invalid_options.push(GraphOptions {
+            edge_styles: HashMap::from([(index, style)]),
+            ..Default::default()
+        });
+    }
+    for directed in [false, true] {
+        for options in &invalid_options {
+            let mut scene = Scene::new();
+            let revision = scene.revision();
+            let nodes = scene.integration_store().borrow().len();
+            assert!(construction::build_graph(
+                &mut scene,
+                [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+                [("a", "b")],
+                directed,
+                options.clone(),
+            )
+            .is_err());
+            assert_eq!(scene.revision(), revision);
+            assert_eq!(scene.integration_store().borrow().len(), nodes);
+        }
     }
 }
 
@@ -272,11 +566,13 @@ fn assert_vertex_style(vertex: &Mobject) {
     assert_eq!(state.style.fill_opacity, 0.35);
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(BLUE)));
     assert_eq!(state.style.stroke_width, 0.07);
+    assert_eq!(state.style.stroke_opacity, 0.4);
 }
 
 fn assert_edge_style(edge: &GraphEdgeMobject) {
     let state = edge.line().state().unwrap();
     assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(GREEN)));
+    assert_eq!(state.style.stroke_opacity, 0.6);
     if let Some(arrow) = edge.arrow() {
         // Directed edges retain Arrow's length cap, including after graph copy
         // and topology edits. The requested width stays in its semantic policy.
@@ -332,6 +628,213 @@ fn global_options_preserve_graph_and_digraph_style_through_copy_and_mutation() {
     digraph.add_edges(&mut scene, [("b", "c")]).unwrap();
     assert_vertex_style(digraph.vertex(&"c").unwrap());
     assert_edge_style(digraph.edge(&"b", &"c").unwrap());
+}
+
+#[test]
+fn per_vertex_add_options_publish_styled_geometry_with_topology_once() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        vertex_radius: 0.31,
+        vertex_fill: GREEN,
+        vertex_fill_opacity: 0.6,
+        vertex_stroke: RED,
+        vertex_stroke_width: 0.12,
+        vertex_stroke_opacity: 0.25,
+        ..GraphOptions::default()
+    };
+
+    graph
+        .add_vertices_with_options(&mut scene, [("b", (1.0, 0.0), options)])
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 1);
+    let state = graph.vertex(&"b").unwrap().state().unwrap();
+    assert!(matches!(
+        state.content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.31).abs() < f32::EPSILON
+    ));
+    assert_eq!(state.style.fill, Some(SemanticPaint::Solid(GREEN)));
+    assert_eq!(state.style.fill_opacity, 0.6);
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(RED)));
+    assert_eq!(state.style.stroke_width, 0.12);
+    assert_eq!(state.style.stroke_opacity, 0.25);
+}
+
+#[test]
+fn per_edge_add_options_publish_styled_geometry_with_topology_once() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph(
+            [("a", (0.0, 0.0)), ("b", (1.0, 0.0)), ("c", (2.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+        )
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        edge_color: YELLOW,
+        edge_stroke_width: 0.12,
+        edge_stroke_opacity: 0.35,
+        ..GraphOptions::default()
+    };
+
+    graph
+        .add_edges_with_options(&mut scene, [("a", "b", options)])
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 2);
+    let edge = graph.edge(&"a", &"b").unwrap();
+    let state = edge.line().state().unwrap();
+    assert_eq!(state.style.stroke, Some(SemanticPaint::Solid(YELLOW)));
+    assert_eq!(state.style.stroke_width, 0.12);
+    assert_eq!(state.style.stroke_opacity, 0.35);
+    assert!(graph.edge(&"b", &"c").is_none());
+}
+
+#[test]
+fn adding_vertices_and_edges_publishes_one_atomic_mutation() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let vertex_options = GraphOptions {
+        vertex_radius: 0.24,
+        vertex_fill: GREEN,
+        ..GraphOptions::default()
+    };
+    let edge_options = GraphOptions {
+        edge_color: YELLOW,
+        edge_stroke_width: 0.1,
+        ..GraphOptions::default()
+    };
+
+    let mutation = graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), vertex_options)],
+            [("a", "b", edge_options)],
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(mutation.added_vertices.len(), 1);
+    assert_eq!(mutation.added_edges.len(), 1);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before + 3);
+    assert!(matches!(
+        graph.vertex(&"b").unwrap().state().unwrap().content.geometry(),
+        Some(StoredGeometry::Circle { radius }) if (radius - 0.24).abs() < f32::EPSILON
+    ));
+    let edge_state = graph.edge(&"a", &"b").unwrap().line().state().unwrap();
+    assert_eq!(edge_state.style.stroke, Some(SemanticPaint::Solid(YELLOW)));
+    assert_eq!(edge_state.style.stroke_width, 0.1);
+
+    let mut digraph = scene
+        .digraph([("u", (2.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let mutation = digraph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("v", (3.0, 0.0), GraphOptions::default())],
+            [("u", "v", GraphOptions::default())],
+        )
+        .unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(mutation.added_vertices.len(), 1);
+    assert_eq!(mutation.added_edges.len(), 1);
+    assert!(digraph.edge(&"u", &"v").unwrap().arrow().is_some());
+}
+
+#[test]
+fn invalid_compound_add_rejects_vertices_and_edges_without_publication() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+
+    assert!(graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("b", (1.0, 0.0), GraphOptions::default())],
+            [("missing", "b", GraphOptions::default())],
+        )
+        .is_err());
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"b").is_none());
+
+    let invalid_edge_options = GraphOptions {
+        edge_stroke_width: f64::NAN,
+        ..GraphOptions::default()
+    };
+    assert!(graph
+        .add_vertices_and_edges_with_options(
+            &mut scene,
+            [("c", (2.0, 0.0), GraphOptions::default())],
+            [("a", "c", invalid_edge_options)],
+        )
+        .is_err());
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"c").is_none());
+}
+
+#[test]
+fn invalid_per_edge_add_options_leave_graph_unpublished() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph(
+            [("a", (0.0, 0.0)), ("b", (1.0, 0.0))],
+            std::iter::empty::<(&str, &str)>(),
+        )
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        edge_stroke_width: f64::NAN,
+        ..GraphOptions::default()
+    };
+
+    assert!(graph
+        .add_edges_with_options(&mut scene, [("a", "b", options)])
+        .is_err());
+
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.edge(&"a", &"b").is_none());
+}
+
+#[test]
+fn invalid_per_vertex_add_options_leave_graph_unpublished() {
+    let mut scene = Scene::new();
+    let mut graph = scene
+        .graph([("a", (0.0, 0.0))], std::iter::empty::<(&str, &str)>())
+        .unwrap();
+    let before = scene.revision();
+    let nodes_before = scene.integration_store().borrow().len();
+    let options = GraphOptions {
+        vertex_radius: f64::NAN,
+        ..GraphOptions::default()
+    };
+
+    assert!(graph
+        .add_vertices_with_options(&mut scene, [("b", (1.0, 0.0), options)])
+        .is_err());
+
+    assert_eq!(scene.revision(), before);
+    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert!(graph.vertex(&"b").is_none());
 }
 
 #[test]
@@ -654,10 +1157,29 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
     let options = GraphLayoutOptions {
         layout: GraphLayout::Spring,
         scale: 3.0,
+        scale_y: None,
         center: (1.0, -2.0),
         seed: 42,
         iterations: 24,
         threshold: 0.0,
+        shells: Vec::new(),
+        rotate: None,
+        resolution: 0.35,
+        equidistant: false,
+        partitions: Vec::new(),
+        align_horizontal: false,
+        spring_k: None,
+        edge_weights: None,
+        spring_positions: None,
+        kamada_kawai_distances: None,
+        kamada_kawai_positions: None,
+        spring_fixed: None,
+        spring_rescale: true,
+        directed: false,
+        random_positions: None,
+        tree_root: None,
+        tree_orientation_up: false,
+        tree_vertex_spacing: None,
     };
     let mut first_scene = Scene::new();
     let mut first = graph(&mut first_scene);
@@ -715,6 +1237,802 @@ fn author_time_layouts_are_seeded_deterministic_and_persistent() {
         })
         .collect::<Vec<_>>();
     assert_eq!(explicit, vec![(-3.0, 2.0), (0.0, -1.0), (4.0, 3.0)]);
+}
+
+#[test]
+fn networkx_spring_layout_preserves_fixed_points_and_skips_rescaling() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 9.0,
+        center: (4.0, -3.0),
+        iterations: 8,
+        threshold: 0.0,
+        spring_positions: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+        spring_fixed: Some(vec![0]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .unwrap();
+    assert_eq!(positions[0], (1.0, 2.0));
+
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 9.0,
+        center: (4.0, -3.0),
+        iterations: 0,
+        spring_positions: Some(vec![(1.0, 2.0), (3.0, 4.0)]),
+        spring_fixed: Some(Vec::new()),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(1.0, 2.0), (3.0, 4.0)]);
+}
+
+#[test]
+fn networkx_random_layout_uses_manim_scale_after_centered_numpy_samples() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Random,
+        scale: 0.5,
+        random_positions: Some(vec![(1.25, 0.25)]),
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(0.75, -0.25)]);
+}
+
+#[test]
+fn spectral_layout_uses_the_unnormalized_laplacian_and_stable_axis_signs() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 2.0,
+        center: (1.25, -0.75),
+        ..Default::default()
+    };
+    let undirected = options.positions(4, &[(0, 1), (1, 2), (2, 3)]).unwrap();
+    let expected_x = [2.0, 0.828_427_124_746_190_1, -0.828_427_124_746_190_1, -2.0];
+    let expected_y = [
+        1.530_733_729_460_359_8,
+        -1.530_733_729_460_359_8,
+        -1.530_733_729_460_359_8,
+        1.530_733_729_460_359_8,
+    ];
+    for (index, &(x, y)) in undirected.iter().enumerate() {
+        assert!((x - (expected_x[index] + 1.25)).abs() < 1e-10);
+        assert!((y - (expected_y[index] - 0.75)).abs() < 1e-10);
+    }
+
+    let directed = GraphLayoutOptions {
+        directed: true,
+        ..options
+    }
+    .positions(4, &[(0, 1), (2, 1), (2, 3)])
+    .unwrap();
+    for (actual, expected) in directed.iter().zip(undirected) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn spectral_layout_preserves_networkx_zero_through_two_vertex_special_cases() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 0.25,
+        center: (2.0, -1.0),
+        ..Default::default()
+    };
+    assert!(options.positions(0, &[]).unwrap().is_empty());
+    assert_eq!(options.positions(1, &[]).unwrap(), vec![(2.0, -1.0)]);
+    assert_eq!(
+        options.positions(2, &[(0, 1)]).unwrap(),
+        vec![(0.0, 0.0), (4.0, -2.0)]
+    );
+}
+
+#[test]
+fn kamada_kawai_layout_uses_shortest_paths_custom_inputs_and_final_rescaling() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        scale: 2.0,
+        center: (1.0, -0.5),
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    assert_eq!(positions.len(), 3);
+    // Pinned NetworkX 3.4.2 `kamada_kawai_layout` (SciPy 1.18.1, L-BFGS-B)
+    // path-graph reference; the tolerance accommodates optimizer termination.
+    let networkx_reference = [
+        (3.0, 0.646_456_73),
+        (0.992_701_04, -0.487_358_32),
+        (-0.992_701_04, -1.659_098_41),
+    ];
+    for (actual, expected) in positions.iter().zip(networkx_reference) {
+        assert!((actual.0 - expected.0).abs() < 0.02);
+        assert!((actual.1 - expected.1).abs() < 0.02);
+    }
+    assert!((positions.iter().map(|point| point.0).sum::<f64>() / 3.0 - 1.0).abs() < 1e-8);
+    assert!((positions.iter().map(|point| point.1).sum::<f64>() / 3.0 + 0.5).abs() < 1e-8);
+    let adjacent = (positions[0].0 - positions[1].0).hypot(positions[0].1 - positions[1].1);
+    let next_adjacent = (positions[1].0 - positions[2].0).hypot(positions[1].1 - positions[2].1);
+    let endpoints = (positions[0].0 - positions[2].0).hypot(positions[0].1 - positions[2].1);
+    assert!((adjacent - next_adjacent).abs() < 1e-4);
+    assert!((endpoints - adjacent * 2.0).abs() < 1e-3);
+
+    let custom = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0, 1.0, 5.0, 1.0, 0.0, 1.0, 5.0, 1.0, 0.0]),
+        kamada_kawai_positions: Some(vec![(-2.0, 0.0), (0.0, 2.0), (3.0, -1.0)]),
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert!(custom.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
+    let baseline = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert_ne!(custom, baseline);
+    let directed = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        directed: true,
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    assert_ne!(directed, baseline);
+}
+
+#[test]
+fn directed_kamada_kawai_matches_networkx_default_lbfgsb_termination() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        directed: true,
+        scale: 2.0,
+        center: (-0.3, 0.25),
+        ..Default::default()
+    };
+    let positions = options.positions(4, &[(0, 1), (2, 1), (2, 3)]).unwrap();
+    // Pinned NetworkX 3.4.2 directed fixture. Its default SciPy L-BFGS-B
+    // projected-gradient tolerance (1e-5) stops in a different basin than
+    // an over-solved 1e-9 run on this asymmetric distance matrix.
+    let networkx_reference = [
+        (1.7, 0.712_138_04),
+        (-0.270_191_71, 1.817_670_3),
+        (-1.867_670_42, 0.220_191_6),
+        (-0.762_137_87, -1.749_999_94),
+    ];
+    for (actual, expected) in positions.iter().zip(networkx_reference) {
+        assert!((actual.0 - expected.0).abs() < 0.01);
+        assert!((actual.1 - expected.1).abs() < 0.01);
+    }
+}
+
+#[test]
+fn kamada_kawai_layout_rejects_malformed_custom_inputs() {
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_positions: Some(vec![(f64::NAN, 0.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_distances: Some(vec![0.0, 0.0, 1.0, 0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        kamada_kawai_positions: Some(vec![(1.0, 2.0), (1.0, 2.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+}
+
+#[test]
+fn manim_layout_scale_tuples_apply_per_axis_for_networkx_and_tree_layouts() {
+    let circular = GraphLayoutOptions {
+        layout: GraphLayout::Circular,
+        scale: 1.0,
+        scale_y: Some(0.5),
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    assert!((circular[0].0 - 1.0).abs() < 1e-12);
+    assert!(circular[0].1.abs() < 1e-12);
+    assert!(circular[1].0.abs() < 1e-12);
+    assert!((circular[1].1 - 0.5).abs() < 1e-7);
+
+    let spiral_uniform = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 1.0,
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    let spiral_anisotropic = GraphLayoutOptions {
+        scale_y: Some(0.5),
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Spiral,
+            scale: 1.0,
+            ..Default::default()
+        }
+    }
+    .positions(4, &[])
+    .unwrap();
+    for (uniform, anisotropic) in spiral_uniform.iter().zip(spiral_anisotropic) {
+        assert!((uniform.0 - anisotropic.0).abs() < 1e-12);
+        assert!((uniform.1 * 0.5 - anisotropic.1).abs() < 1e-12);
+    }
+
+    let partite_vertical = GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        scale: 1.0,
+        scale_y: Some(0.5),
+        partitions: vec![vec![0, 1], vec![2]],
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    let partite_horizontal = GraphLayoutOptions {
+        align_horizontal: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Partite,
+            scale: 1.0,
+            scale_y: Some(0.5),
+            partitions: vec![vec![0, 1], vec![2]],
+            ..Default::default()
+        }
+    }
+    .positions(3, &[])
+    .unwrap();
+    for (vertical, horizontal) in partite_vertical.iter().zip(partite_horizontal) {
+        assert!((vertical.0 - horizontal.1).abs() < 1e-12);
+        assert!((vertical.1 - horizontal.0).abs() < 1e-12);
+    }
+
+    let random = GraphLayoutOptions {
+        layout: GraphLayout::Random,
+        scale: 0.75,
+        scale_y: Some(0.25),
+        random_positions: Some(vec![(1.25, 0.25)]),
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .unwrap();
+    assert_eq!(random, vec![(1.125, -0.125)]);
+
+    let spring = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 1.0,
+        scale_y: Some(3.0),
+        iterations: 0,
+        spring_positions: Some(vec![(0.0, 0.0), (2.0, 4.0)]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .unwrap();
+    assert_eq!(spring, vec![(-0.5, -3.0), (0.5, 3.0)]);
+
+    let tree = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        scale: 0.75,
+        scale_y: Some(0.25),
+        tree_root: Some(0),
+        ..Default::default()
+    }
+    .positions(5, &[(0, 1), (0, 2), (1, 3), (1, 4)])
+    .unwrap();
+    let x_extent = tree.iter().map(|&(x, _)| x.abs()).fold(0.0_f64, f64::max);
+    let y_extent = tree.iter().map(|&(_, y)| y.abs()).fold(0.0_f64, f64::max);
+    assert!((x_extent - 0.75).abs() < 1e-12);
+    assert!((y_extent - 0.25).abs() < 1e-12);
+}
+
+#[test]
+fn networkx_random_layout_rejects_invalid_prepared_positions() {
+    for prepared in [vec![(0.5, 0.5)], vec![(f64::NAN, 0.5), (0.5, 0.5)]] {
+        assert!(GraphLayoutOptions {
+            layout: GraphLayout::Random,
+            random_positions: Some(prepared),
+            ..Default::default()
+        }
+        .positions(2, &[])
+        .is_err());
+    }
+}
+
+#[test]
+fn manim_tree_layout_matches_depth_first_spacing_and_orientation() {
+    let edges = [(0, 1), (0, 2), (1, 3), (1, 4)];
+    let down = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        scale: 0.5,
+        tree_root: Some(0),
+        ..Default::default()
+    }
+    .positions(5, &edges)
+    .unwrap();
+    assert_eq!(
+        down,
+        vec![
+            (-0.125, 0.5),
+            (0.125, 0.0),
+            (-0.375, 0.0),
+            (0.375, -0.5),
+            (-0.125, -0.5)
+        ]
+    );
+
+    let up = GraphLayoutOptions {
+        tree_orientation_up: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Tree,
+            scale: 0.5,
+            tree_root: Some(0),
+            ..Default::default()
+        }
+    }
+    .positions(5, &edges)
+    .unwrap();
+    for ((down_x, down_y), (up_x, up_y)) in down.iter().zip(up) {
+        assert_eq!(*down_x, up_x);
+        assert_eq!(-*down_y, up_y);
+    }
+
+    let spaced = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        tree_root: Some(0),
+        tree_vertex_spacing: Some((1.0, 2.0)),
+        ..Default::default()
+    }
+    .positions(5, &edges)
+    .unwrap();
+    let x_bounds = (
+        spaced.iter().map(|&(x, _)| x).fold(f64::INFINITY, f64::min),
+        spaced
+            .iter()
+            .map(|&(x, _)| x)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    let y_bounds = (
+        spaced.iter().map(|&(_, y)| y).fold(f64::INFINITY, f64::min),
+        spaced
+            .iter()
+            .map(|&(_, y)| y)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    assert!((x_bounds.0 + 0.75).abs() < 1e-12 && (x_bounds.1 - 0.75).abs() < 1e-12);
+    assert!((y_bounds.0 + 2.0).abs() < 1e-12 && (y_bounds.1 - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn manim_tree_layout_rejects_non_trees_and_invalid_options() {
+    let options = GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        tree_root: Some(0),
+        ..Default::default()
+    };
+    assert!(options.positions(3, &[(0, 1)]).is_err());
+    assert!(options.positions(3, &[(0, 1), (1, 2), (2, 0)]).is_err());
+    assert!(GraphLayoutOptions {
+        tree_root: None,
+        ..options.clone()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        tree_root: Some(3),
+        ..options.clone()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        tree_vertex_spacing: Some((1.0, f64::NAN)),
+        ..options
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Tree,
+        directed: true,
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .is_err());
+}
+
+#[test]
+fn networkx_spring_layout_respects_directed_adjacency() {
+    let base = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        iterations: 2,
+        threshold: 0.0,
+        spring_positions: Some(vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]),
+        spring_rescale: false,
+        ..Default::default()
+    };
+    let undirected = base.positions(3, &[(0, 1)]).unwrap();
+    let directed = GraphLayoutOptions {
+        directed: true,
+        ..base
+    }
+    .positions(3, &[(0, 1)])
+    .unwrap();
+    assert_ne!(undirected, directed);
+}
+
+#[test]
+fn networkx_spring_layout_matches_seeded_reference_coordinates() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 0.65,
+        center: (-3.5, 2.6),
+        iterations: 50,
+        threshold: 1e-4,
+        spring_positions: Some(vec![
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+        ]),
+        ..Default::default()
+    }
+    .positions(3, &[(0, 1), (1, 2)])
+    .unwrap();
+    let expected = [
+        (-3.4161118363604746, 3.249287412673379),
+        (-3.499907760828529, 2.6007125873266213),
+        (-3.583980402810997, 1.9500000000000002),
+    ];
+    for (actual, expected) in positions.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn networkx_spring_layout_matches_pinned_multivertex_and_digraph_coordinates() {
+    // Pinned NetworkX 3.4.2 `spring_layout` references using the NumPy
+    // RandomState initial positions for seeds 42 and 7, respectively.
+    let path = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 2.0,
+        scale_y: Some(1.25),
+        center: (1.0, -2.0),
+        iterations: 50,
+        threshold: 1e-4,
+        spring_positions: Some(vec![
+            (0.3745401188473625, 0.9507143064099162),
+            (0.7319939418114051, 0.5986584841970366),
+            (0.15601864044243652, 0.15599452033620265),
+            (0.05808361216819946, 0.8661761457749352),
+            (0.6011150117432088, 0.7080725777960455),
+        ]),
+        ..Default::default()
+    }
+    .positions(5, &[(0, 1), (1, 2), (2, 3), (3, 4)])
+    .unwrap();
+    let path_reference = [
+        (3.0, -1.9453931433601155),
+        (2.06361978791608, -1.9758266129423419),
+        (0.9985033322178558, -2.006092893623233),
+        (-0.06357397532063591, -2.028_462_903_362_837),
+        (-0.9985491448133004, -2.0442244467114725),
+    ];
+    for (actual, expected) in path.iter().zip(path_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+
+    let directed = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        directed: true,
+        scale: 1.7,
+        center: (-0.5, 0.75),
+        spring_k: Some(0.63),
+        iterations: 73,
+        threshold: 0.0,
+        spring_positions: Some(vec![
+            (0.07630828937395717, 0.7799187922401146),
+            (0.4384092314408935, 0.7234651778309412),
+            (0.9779895119966027, 0.5384958704104337),
+            (0.5011204636599379, 0.07205113335976154),
+        ]),
+        ..Default::default()
+    }
+    .positions(4, &[(0, 1), (0, 2), (2, 1), (2, 3), (3, 0)])
+    .unwrap();
+    let directed_reference = [
+        (-0.3059420956467281, 1.1902530786888847),
+        (1.0806868557705473, 1.0077426406959196),
+        (-0.5747447601238205, 0.2588213071066179),
+        (-2.2, 0.5431829735085794),
+    ];
+    for (actual, expected) in directed.iter().zip(directed_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn weighted_networkx_layouts_use_selected_edge_data_in_shared_rust() {
+    let edges = [(0, 1), (1, 2), (2, 3)];
+    let weights = vec![2.5, 4.0, 1.25];
+    let spring = GraphLayoutOptions {
+        layout: GraphLayout::Spring,
+        scale: 1.5,
+        scale_y: Some(0.8),
+        center: (0.5, -1.0),
+        iterations: 60,
+        threshold: 0.0,
+        spring_k: None,
+        edge_weights: Some(weights.clone()),
+        spring_positions: Some(vec![
+            (0.5172978838465893, 0.9469626038148141),
+            (0.7654597593969069, 0.2823958439671127),
+            (0.22104536326165258, 0.6862220852374669),
+            (0.16713920310005626, 0.39244246646503067),
+        ]),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    let spring_reference = [
+        (1.8672682556016835, -0.464_641_451_848_663),
+        (0.9700694905218645, -0.8159430284538818),
+        (0.1626622538764519, -1.132_086_010_750_578),
+        (-1.0, -1.5873295089468775),
+    ];
+    for (actual, expected) in spring.iter().zip(spring_reference) {
+        assert!((actual.0 - expected.0).abs() < 1e-10);
+        assert!((actual.1 - expected.1).abs() < 1e-10);
+    }
+
+    let spectral = GraphLayoutOptions {
+        layout: GraphLayout::Spectral,
+        scale: 1.4,
+        center: (0.25, -0.5),
+        edge_weights: Some(weights.clone()),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    // The x eigenvector sign is arbitrary in NetworkX's LAPACK path. Rust
+    // canonicalizes it to make native/WASM output deterministic, reflecting
+    // the centered NetworkX coordinates across the selected axis.
+    let spectral_reference = [
+        (1.1749289665469258, 0.6140386707421335),
+        (0.7062459650299819, -1.0674666301091018),
+        (0.2688250684230923, -1.5830814645392155),
+        (-1.15, 0.03650942390618395),
+    ];
+    for (actual, expected) in spectral.iter().zip(spectral_reference) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-10,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.1 - expected.1).abs() < 1e-10,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    let kamada_kawai = GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        scale: 1.5,
+        scale_y: Some(0.8),
+        center: (0.5, -1.0),
+        edge_weights: Some(weights),
+        kamada_kawai_positions: Some(vec![(-1.0, 0.0), (0.0, 1.0), (1.0, 0.0), (0.0, -1.0)]),
+        ..Default::default()
+    }
+    .positions(4, &edges)
+    .unwrap();
+    let kamada_kawai_reference = [
+        (-1.0, -0.3334610669043988),
+        (-0.1140510979850262, -0.7375262912463174),
+        (1.3261118081841214, -1.3696891976564902),
+        (1.787939289800905, -1.5593234441927935),
+    ];
+    for (actual, expected) in kamada_kawai.iter().zip(kamada_kawai_reference) {
+        assert!(
+            (actual.0 - expected.0).abs() < 0.025,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.1 - expected.1).abs() < 0.025,
+            "{actual:?} != {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn weighted_networkx_layouts_reject_invalid_shared_edge_weights() {
+    for layout in [
+        GraphLayout::Spring,
+        GraphLayout::Spectral,
+        GraphLayout::KamadaKawai,
+    ] {
+        for edge_weights in [vec![], vec![f64::INFINITY]] {
+            assert!(GraphLayoutOptions {
+                layout,
+                edge_weights: Some(edge_weights),
+                ..Default::default()
+            }
+            .positions(3, &[(0, 1), (1, 2)])
+            .is_err());
+        }
+    }
+
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::KamadaKawai,
+        edge_weights: Some(vec![0.0]),
+        ..Default::default()
+    }
+    .positions(2, &[(0, 1)])
+    .is_err());
+}
+
+#[test]
+fn two_vertex_circular_layout_applies_scale_and_center() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Circular,
+        scale: 1.4,
+        center: (3.0, -1.0),
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .unwrap();
+    assert!((positions[0].0 - 4.4).abs() < 1e-12);
+    assert!((positions[0].1 + 1.0).abs() < 1e-12);
+    assert!((positions[1].0 - 1.6).abs() < 1e-12);
+    assert!((positions[1].1 + 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn shell_layout_preserves_membership_order_scale_rotation_and_center() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Shell,
+        scale: 2.0,
+        center: (1.0, -2.0),
+        shells: vec![vec![0, 1], vec![2, 3]],
+        rotate: Some(0.0),
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .unwrap();
+    let expected = [(2.0, -2.0), (0.0, -2.0), (3.0, -2.0), (-1.0, -2.0)];
+    for (actual, expected) in positions.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-6);
+        assert!((actual.1 - expected.1).abs() < 1e-6);
+    }
+    for shells in [vec![vec![0], vec![0]], vec![vec![0]], vec![vec![0, 4]]] {
+        assert!(GraphLayoutOptions {
+            layout: GraphLayout::Shell,
+            shells,
+            ..Default::default()
+        }
+        .positions(2, &[])
+        .is_err());
+    }
+}
+
+#[test]
+fn spiral_layout_rescales_to_networkx_extent_and_supports_equidistant_spacing() {
+    let positions = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 2.0,
+        center: (3.0, 4.0),
+        resolution: 0.0,
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    assert_eq!(positions, vec![(1.0, 4.0), (3.0, 4.0), (5.0, 4.0)]);
+
+    let equidistant = GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        scale: 1.5,
+        equidistant: true,
+        ..Default::default()
+    }
+    .positions(5, &[])
+    .unwrap();
+    assert_eq!(equidistant.len(), 5);
+    assert!(equidistant
+        .iter()
+        .all(|(x, y)| x.is_finite() && y.is_finite()));
+    let extent = equidistant
+        .iter()
+        .fold(0.0_f64, |extent, (x, y)| extent.max(x.abs()).max(y.abs()));
+    assert!((extent - 1.5).abs() < 1e-12);
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Spiral,
+        equidistant: true,
+        resolution: 0.0,
+        ..Default::default()
+    }
+    .positions(4, &[])
+    .is_err());
+}
+
+#[test]
+fn partite_layout_matches_networkx_layer_order_alignment_and_validation() {
+    let vertical = GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        scale: 2.0,
+        center: (3.0, 4.0),
+        partitions: vec![vec![0, 1], vec![2]],
+        ..Default::default()
+    }
+    .positions(3, &[])
+    .unwrap();
+    let expected = [(2.0, 2.5), (2.0, 5.5), (5.0, 4.0)];
+    for (actual, expected) in vertical.iter().zip(expected) {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+    }
+
+    let horizontal = GraphLayoutOptions {
+        align_horizontal: true,
+        ..GraphLayoutOptions {
+            layout: GraphLayout::Partite,
+            scale: 2.0,
+            center: (3.0, 4.0),
+            partitions: vec![vec![0, 1], vec![2]],
+            ..Default::default()
+        }
+    }
+    .positions(3, &[])
+    .unwrap();
+    for (actual, expected) in horizontal.iter().zip([(2.5, 2.0), (5.5, 2.0), (4.0, 5.0)]) {
+        assert!((actual.0 - expected.0).abs() < 1e-12);
+        assert!((actual.1 - expected.1).abs() < 1e-12);
+    }
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0, 0], vec![1]],
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0]],
+        ..Default::default()
+    }
+    .positions(2, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        partitions: vec![vec![0], vec![]],
+        ..Default::default()
+    }
+    .positions(1, &[])
+    .is_err());
+    assert!(GraphLayoutOptions {
+        layout: GraphLayout::Partite,
+        ..Default::default()
+    }
+    .positions(0, &[])
+    .unwrap()
+    .is_empty());
 }
 
 #[test]
@@ -965,4 +2283,201 @@ fn late_graph_admission_and_topology_edits_keep_endpoint_dependencies_live() {
     assert!(session
         .effective_semantic_object(&store.borrow(), shaft.node_id())
         .is_err());
+}
+
+#[test]
+fn kamada_kawai_matches_pinned_layouts_with_portable_initialization_and_search() {
+    // Actual ManimCE0.21.0 dependencies: NetworkX3.7/NumPy2.5.4/SciPy1.18.1.
+    // Independent fixture observations; not values calculated by this optimizer.
+    struct ReferenceCase {
+        name: &'static str,
+        count: usize,
+        edges: Vec<(usize, usize)>,
+        options: GraphLayoutOptions,
+        expected: Vec<(f64, f64)>,
+    }
+    let cases = vec![
+        ReferenceCase {
+            name: "path3",
+            count: 3,
+            edges: vec![(0, 1), (1, 2)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 2.0,
+                center: (1.0, -0.5),
+                ..Default::default()
+            },
+            expected: vec![
+                (3.0, 0.6464567300572741),
+                (0.992701035796347, -0.4873583185687529),
+                (-0.992701035796347, -1.6590984114885214),
+            ],
+        },
+        ReferenceCase {
+            name: "path4",
+            count: 4,
+            edges: vec![(0, 1), (1, 2), (2, 3)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 2.0,
+                center: (0.25, -0.3),
+                ..Default::default()
+            },
+            expected: vec![
+                (2.2499315442890566, 1.6873371335017873),
+                (0.9082708777600229, 0.37087654941693743),
+                (-0.42088668991331, -0.9582136829187249),
+                (-1.7373157321357695, -2.3),
+            ],
+        },
+        ReferenceCase {
+            name: "directed-fork4",
+            count: 4,
+            edges: vec![(0, 1), (2, 1), (2, 3)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 2.0,
+                center: (-0.3, 0.25),
+                directed: true,
+                ..Default::default()
+            },
+            expected: vec![
+                (1.7, 0.7121380434179947),
+                (-0.2701917101801079, 1.8176702971819645),
+                (-1.8676704168613465, 0.22019160343408892),
+                (-0.7621378729585457, -1.7499999440340477),
+            ],
+        },
+        ReferenceCase {
+            name: "weighted4",
+            count: 4,
+            edges: vec![(0, 1), (1, 2), (2, 3)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 1.5,
+                scale_y: Some(0.8),
+                center: (0.5, -1.0),
+                edge_weights: Some(vec![1.0, 2.0, 3.0]),
+                kamada_kawai_positions: Some(vec![
+                    (-1.0, 0.0),
+                    (0.0, 1.0),
+                    (1.0, 0.0),
+                    (0.0, -1.0),
+                ]),
+                ..Default::default()
+            },
+            expected: vec![
+                (-0.006272943541579257, -0.42655185090122427),
+                (0.191226611096188, -0.6571811305492443),
+                (0.5950454651335103, -1.1162670185495314),
+                (1.220000867311881, -1.8),
+            ],
+        },
+        ReferenceCase {
+            name: "directed-chain5",
+            count: 5,
+            edges: vec![(0, 1), (1, 2), (2, 3), (3, 4)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 2.0,
+                directed: true,
+                ..Default::default()
+            },
+            expected: vec![
+                (1.4325249496999872, 1.9999999999999998),
+                (0.7306110127545696, 0.9896918592603132),
+                (0.010364742523867628, -0.007538870804945679),
+                (-0.7130764651125628, -1.0024720154582272),
+                (-1.4604242398658616, -1.97968097299714),
+            ],
+        },
+        ReferenceCase {
+            name: "cycle6",
+            count: 6,
+            edges: vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0)],
+            options: GraphLayoutOptions {
+                layout: GraphLayout::KamadaKawai,
+                scale: 2.0,
+                ..Default::default()
+            },
+            expected: vec![
+                (2.0, 4.001692466698576e-08),
+                (0.9999999717294016, 1.7320508993702983),
+                (-1.0000000796951742, 1.732050814467133),
+                (-1.9999999980296788, -8.523570721884436e-08),
+                (-0.9999999924545278, -1.7320508706168662),
+                (1.0000000984499793, -1.7320507980017823),
+            ],
+        },
+    ];
+    for case in cases {
+        let actual = case.options.positions(case.count, &case.edges).unwrap();
+        assert_eq!(actual.len(), case.expected.len());
+        for (actual, expected) in actual.iter().zip(case.expected) {
+            assert!(
+                (actual.0 - expected.0).abs() <= 1e-5 && (actual.1 - expected.1).abs() <= 1e-5,
+                "{}: {actual:?} != {expected:?}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn edge_key_projection_preserves_supplied_order_after_mutations() {
+    let mut scene = Scene::new();
+    let mut graph = Graph::new(
+        &mut scene,
+        [
+            (10, (0.0, 0.0)),
+            (20, (1.0, 0.0)),
+            (30, (2.0, 0.0)),
+            (40, (3.0, 0.0)),
+        ],
+        [(30, 10), (20, 40), (10, 20)],
+    )
+    .unwrap();
+    let keys = |graph: &Graph<i32>| {
+        graph
+            .edge_keys()
+            .unwrap()
+            .into_iter()
+            .map(|(a, b)| (*a, *b))
+            .collect::<Vec<_>>()
+    };
+    let before = scene.revision();
+    assert_eq!(keys(&graph), vec![(30, 10), (20, 40), (10, 20)]);
+    assert_eq!(scene.revision(), before);
+    graph.add_edges(&mut scene, [(30, 40), (20, 30)]).unwrap();
+    assert_eq!(
+        keys(&graph),
+        vec![(30, 10), (20, 40), (10, 20), (30, 40), (20, 30)]
+    );
+    graph.remove_edges(&mut scene, [(10, 20)]).unwrap();
+    assert_eq!(keys(&graph), vec![(30, 10), (20, 40), (30, 40), (20, 30)]);
+}
+
+#[test]
+fn directed_edge_key_projection_preserves_orientation_and_store_admission() {
+    let mut scene = Scene::new();
+    let graph = DiGraph::new(
+        &mut scene,
+        [(10, (0.0, 0.0)), (20, (1.0, 0.0)), (30, (2.0, 0.0))],
+        [(30, 10), (10, 30)],
+    )
+    .unwrap();
+    let keys = graph
+        .edge_keys()
+        .unwrap()
+        .into_iter()
+        .map(|(a, b)| (*a, *b))
+        .collect::<Vec<_>>();
+    assert_eq!(keys, vec![(30, 10), (10, 30)]);
+    let store = scene.integration_store().borrow_mut();
+    assert!(matches!(
+        graph.edge_keys(),
+        Err(GraphAuthoringError::StoreBorrowed)
+    ));
+    drop(store);
+    assert_eq!(graph.edge_keys().unwrap().len(), 2);
 }
