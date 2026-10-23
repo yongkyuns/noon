@@ -21,12 +21,11 @@ class SharedFamilyAffineTests(unittest.TestCase):
                     self.assertIs(family.scale((2, 3)), family)
                     self.assertIs(family.rotate(0.5, about_edge=(1, -1)), family)
                     self.assertIs(family.rotate(0.25, about_point=(4, 5)), family)
-                owner = context if live else family._semantic_family_handle
-                prefix = (family._semantic_family_handle,) if live else ()
-                getattr(owner, "liveScaleFamily" if live else "scale").assert_called_once_with(*prefix, 2.0, 3.0)
                 anchor = family._semantic_family_handle.layoutAnchor.return_value
                 owner = context if live else anchor
                 prefix = (anchor,) if live else ()
+                getattr(owner, "liveScaleLayout3d" if live else "scale3d").assert_called_once_with(
+                    *prefix, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, False)
                 self.assertEqual(getattr(owner, "liveRotateLayout" if live else "rotate").call_args_list,
                                  [unittest.mock.call(*prefix, 0.5, 1.0, -1.0, False),
                                   unittest.mock.call(*prefix, 0.25, 4.0, 5.0, True)])

@@ -173,9 +173,9 @@ mod tests {
                 cluster_ordinal: ordinal,
                 semantic_key: None,
             },
-            origin: Vec2::new(x, 0.0),
-            advance: Vec2::new(1.0, 0.0),
-            bounds: Rect::new(Vec2::new(x, 0.0), Vec2::new(x + 1.0, 1.0)),
+            origin: Vec2::new(x, 0.0).into(),
+            advance: Vec2::new(1.0, 0.0).into(),
+            bounds: Rect::new(Vec2::new(x, 0.0), Vec2::new(x + 1.0, 1.0)).into(),
         }
     }
 
@@ -210,7 +210,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: render_items.into(),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ONE).into(),
             baseline: 0.0,
             layout_artifact: Some(TextLayoutArtifact {
                 backend: TextLayoutBackend {

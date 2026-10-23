@@ -191,6 +191,13 @@ class ManimBraceFacadeTests(unittest.TestCase):
 
             assert brace.get_tip() == noon.Vec2(0.0, -2.0)
             assert brace.get_direction() == noon.DOWN
+            try:
+                import numpy as np
+            except ImportError:
+                pass
+            else:
+                brace.get_center = lambda: np.zeros(3)
+                np.testing.assert_array_equal(brace.get_direction(), [0., -1., 0.])
 
             placements = []
             label = object.__new__(noon.Mobject)

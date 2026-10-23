@@ -63,6 +63,22 @@ class DifferentialReportTests(unittest.TestCase):
         self.assertEqual(mismatch["status"], "mismatch")
         self.assertTrue(mismatch["differences"])
 
+    @unittest.skipIf(differential.manim is None, "pinned CE reference is not installed")
+    def test_point_append_matrix_matches_every_original_case_and_hook(self):
+        fixture = json.loads((SOURCE.parent.parent / "fixtures/manim-v0.21/point-append.json").read_text())
+        profile = differential._point_append_argument_profiles(differential.manim)
+        self.assertEqual(profile["values"]["VMobject"], fixture["cases"])
+        self.assertEqual(profile["values"]["VGroup"], fixture["familyCases"])
+        self.assertEqual(profile["hooks"], fixture["hookCases"])
+        for batch in profile["ordinary_batch"].values():
+            self.assertEqual(batch["output"], {
+                "kind": "raised", "type": "ValueError",
+                "message": "could not broadcast input array from shape (24,) into shape (24,3)",
+            })
+            self.assertEqual(batch["pointsXYZ"], [])
+            self.assertEqual(batch["numPoints"], 0)
+            self.assertTrue(batch["inputUnchanged"])
+
     def test_complete_matches_succeed_without_reference_errors(self):
         fixture = differential.Fixture("matching", lambda: None, lambda: [1.0, 2.0])
         code, report = self.run_comparison([fixture], {"matching": [1.0, 2.0]})

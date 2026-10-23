@@ -92,6 +92,15 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-path-keyword-reference.test.mjs
   node --test scripts/manim-point-list-insertion-reference.test.mjs
   node --test scripts/manim-scalar-path-precision-reference.test.mjs
+  node --test scripts/manim-point-append-reference.test.mjs
+  node --test scripts/manim-scalar-xyz-reference.test.mjs
+  node --test scripts/manim-depth-affine-reference.test.mjs
+  node --test scripts/manim-fitting-xyz-reference.test.mjs
+  node --test scripts/manim-rotated-xyz-reference.test.mjs
+  node --test scripts/manim-scale-xyz-reference.test.mjs
+  node --test scripts/manim-xyz-queries-reference.test.mjs
+  node --check scripts/xyz-queries-qualification.mjs
+  node --check scripts/point-promotion-qualification.mjs
   node --test scripts/manim-query-hooks-reference.test.mjs
   node --check scripts/table-qualification.mjs
   node --check scripts/table-position-checks.mjs

@@ -131,8 +131,8 @@ class TypstAnimation(Scene):
             run_time=1.0,
             rate_func=linear,
         )
-        assert abs(label.get_center().x + 1.0) < 1e-5
-        assert abs(equation.get_center().x - 1.0) < 1e-5
+        assert abs(label.get_center()[0] + 1.0) < 1e-5
+        assert abs(equation.get_center()[0] - 1.0) < 1e-5
 
         self.play(
             FadeOut(label, shift=UP),

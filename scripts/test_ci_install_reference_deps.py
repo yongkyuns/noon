@@ -128,7 +128,7 @@ class ReferenceDependencyInstallTests(unittest.TestCase):
                 if name != "native-export-output.yml":
                     self.assertRegex(source, r"--constraint \.github/ci/manim-reference-constraints\.txt.*manim(?:\[typst\])?==0\.21\.0")
 
-    def test_browser_workflows_keep_downloads_unprivileged_and_macos_unchanged(self):
+    def test_browser_workflows_reuse_the_shared_bounded_installer(self):
         workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
         source = (workflows / "playground-cross-browser.yml").read_text()
         setup = [step for step in source.split("      - name: ")
@@ -136,12 +136,9 @@ class ReferenceDependencyInstallTests(unittest.TestCase):
         self.assertEqual(len(setup), 2)
         for step in setup:
             self.assertIn("        timeout-minutes: 15\n", step)
-            self.assertIn('if [[ "$RUNNER_OS" == "Linux" ]]; then', step)
-            self.assertIn("python3 -S scripts/test_ci_install_reference_deps.py", step)
-            self.assertIn('bash scripts/ci-install-reference-deps.sh --playwright "${{ matrix.browser }}"\n'
-                          '            npx playwright install "${{ matrix.browser }}"', step)
-            self.assertIn('else\n            npx playwright install --with-deps "${{ matrix.browser }}"', step)
+            self.assertIn('run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}', step)
             self.assertNotIn("sudo", step)
+        self.assertIn("python3 -S scripts/test_ci_install_reference_deps.py", source)
         for path in ["ci-install-reference-deps.sh", "ci_reference_apt_sources.py", "test_ci_install_reference_deps.py"]:
             self.assertEqual(source.count('      - "scripts/' + path + '"'), 2)
         image = (workflows / "image-raster-qualification.yml").read_text()

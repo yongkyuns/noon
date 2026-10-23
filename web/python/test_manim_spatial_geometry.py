@@ -360,9 +360,12 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         context.queryMobjectDimension.side_effect = lambda handle, dim: (2.5, 1.25)[dim]
         live_layout.criticalX.return_value = 0.75
         live_layout.criticalY.return_value = -0.5
+        context.queryLayoutContentCriticalPoint3D.return_value = (0.75, -0.5, 3.0)
         self.assertEqual(surface.width, 2.5)
         self.assertEqual(surface.height, 1.25)
-        self.assertEqual(surface.get_critical_point(noon.RIGHT), noon.Vec2(0.75, -0.5))
+        self.assertEqual(list(surface.get_critical_point(noon.RIGHT)), [0.75, -0.5, 3.0])
+        context.queryLayoutContentCriticalPoint3D.assert_called_once_with(
+            mesh_handle.layoutAnchor.return_value, 1.0, 0.0, 0.0)
         self.assertEqual(surface.id, 42)
 
         raw = SimpleNamespace(geometry={"mesh": True}, transform={"scale": 2},

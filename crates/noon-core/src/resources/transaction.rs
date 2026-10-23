@@ -10,7 +10,7 @@ use crate::{
 pub enum TextResourceTransactionMutation {
     Replace {
         expected: TextResourceHandle,
-        resource: TextResource,
+        resource: Box<TextResource>,
     },
     Remove {
         expected: TextResourceHandle,
@@ -37,7 +37,10 @@ impl TextResourceMutationTransaction {
 
     pub fn replace(&mut self, expected: TextResourceHandle, resource: TextResource) -> &mut Self {
         self.mutations
-            .push(TextResourceTransactionMutation::Replace { expected, resource });
+            .push(TextResourceTransactionMutation::Replace {
+                expected,
+                resource: Box::new(resource),
+            });
         self
     }
 
@@ -67,7 +70,7 @@ impl TextResourceMutationTransaction {
         for mutation in self.mutations {
             match mutation {
                 TextResourceTransactionMutation::Replace { expected, resource } => {
-                    let current = replace_text_if_current(texts, expected, resource).expect(
+                    let current = replace_text_if_current(texts, expected, *resource).expect(
                         "preflighted text resource replacement must remain valid while transaction owns the arena",
                     );
                     applied.push(AppliedTextResourceMutation::Replaced(current));
@@ -247,7 +250,7 @@ mod tests {
             vector_items: Arc::from([]),
             render_items: Arc::from([]),
             parts: Arc::from([]),
-            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO).into(),
             baseline: 0.0,
             layout_artifact: None,
         }

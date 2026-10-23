@@ -30,9 +30,9 @@ class OrdinaryCallbackSparseReads(Scene):
             assert phase_counts[phase_time] == 1
             # Nested aliases must move once, retaining the preceding leaf edit.
             mobject.shift((0.25, 0.0))
-            prior_x = mobject.get_center().x
+            prior_x = mobject.get_center()[0]
             family.shift((1.0, 0.0))
-            assert abs(mobject.get_center().x - (prior_x + 1.0)) < 1e-5
+            assert abs(mobject.get_center()[0] - (prior_x + 1.0)) < 1e-5
             shifted = mobject.get_center()
             try:
                 invalid_family.shift((1.0, 0.0))
@@ -40,9 +40,9 @@ class OrdinaryCallbackSparseReads(Scene):
                 pass
             else:
                 raise AssertionError("family translation accepted a non-live member")
-            assert mobject.get_center() == shifted
+            assert tuple(mobject.get_center()) == tuple(shifted)
             family.shift((-1.0, 0.0))
-            assert abs(mobject.get_center().x - prior_x) < 1e-5
+            assert abs(mobject.get_center()[0] - prior_x) < 1e-5
             # One Rust-selected family read fetches the missing anchor row.
             # Recolor must observe the preceding family alpha edit, not authored alpha.
             family.set_fill(opacity=0.6)
@@ -62,7 +62,7 @@ class OrdinaryCallbackSparseReads(Scene):
                 raise AssertionError("family paint accepted a non-live member")
             assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
             anchor_center = anchor.get_center()
-            mobject.move_to((anchor_center.x + tracker.get_value(), anchor_center.y, 0.0))
+            mobject.move_to((anchor_center[0] + tracker.get_value(), anchor_center[1], 0.0))
 
         self.add(anchor, circle)
         circle.add_updater(follow_sparse_values)
@@ -72,7 +72,7 @@ class OrdinaryCallbackSparseReads(Scene):
         # touched signal rows.
         await self.wait(0.25)
         center = circle.get_center()
-        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center
+        assert abs(center[0] + 1.0) < 1e-5 and abs(center[1] - 1.0) < 1e-5, center
         await self.play(tracker.animate.set_value(2.0), run_time=1.0, rate_func=linear)
 
         # The timed track has completed. Rust appends the persistent hold, and
@@ -84,4 +84,4 @@ class OrdinaryCallbackSparseReads(Scene):
         assert phase_counts.get(0.0) == 1
         assert self.time == 1.5
         center = circle.get_center()
-        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center
+        assert abs(center[0] - 2.0) < 1e-5 and abs(center[1] - 1.0) < 1e-5, center

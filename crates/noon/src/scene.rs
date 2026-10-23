@@ -799,22 +799,28 @@ impl Scene {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.shift_family_3d(family, noon_core::SemanticVec3::new(x, y, 0.0))
+    }
+
+    pub fn shift_family_3d(
+        &mut self,
+        family: &MobjectFamily,
+        delta: noon_core::SemanticVec3,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         if let Some(execution) = self.execution.as_mut() {
             return crate::family_layout::publish_shift_family(
                 &self.store,
                 self.root,
                 execution,
                 family,
-                x,
-                y,
+                delta,
             );
         }
         MobjectTarget::Family(family).require_store(&self.store)?;
-        let transaction = crate::family_authoring::FamilyTranslation::begin(
+        let transaction = crate::family_authoring::FamilyTranslation::begin_3d(
             &self.store.borrow(),
             family.node_id(),
-            x,
-            y,
+            delta,
         )?
         .transaction(&self.store.borrow())?;
         self.apply_semantic_transaction(transaction)
