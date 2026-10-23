@@ -146,6 +146,12 @@ pub enum SemanticNodeCreation {
         name: std::sync::Arc<str>,
         definition: crate::EffectDefinition,
     },
+    /// Audio declaration outside painter membership. A pending family scope
+    /// must precede this clip in the transaction.
+    AudioClip {
+        scope: super::SemanticTransactionNodeRef,
+        definition: crate::AudioClipDefinition,
+    },
 }
 
 impl SemanticNodeCreation {
@@ -231,7 +237,7 @@ impl SemanticNodeCreation {
                 source_identity: source,
                 ..
             } => *source = Some(source_identity),
-            Self::Signal { .. } | Self::Effect { .. } => {}
+            Self::Signal { .. } | Self::Effect { .. } | Self::AudioClip { .. } => {}
         }
         self
     }
@@ -247,7 +253,7 @@ impl SemanticNodeCreation {
             | Self::Family {
                 source_identity, ..
             } => source_identity.as_ref(),
-            Self::Signal { .. } | Self::Effect { .. } => None,
+            Self::Signal { .. } | Self::Effect { .. } | Self::AudioClip { .. } => None,
         }
     }
 }
@@ -296,6 +302,9 @@ pub(super) fn preflight_add_node(
     }
 
     match creation {
+        SemanticNodeCreation::AudioClip { definition, .. } => {
+            validate_audio_clip_definition(store, definition, index)?;
+        }
         SemanticNodeCreation::PendingPathObject { state, .. } => {
             // Retained-path construction is intentionally the ordinary-object
             // slice. Roles with extra content/binding invariants are admitted
@@ -412,6 +421,21 @@ pub(super) fn validate_spatial_material_resource(
     }
 }
 
+pub(super) fn validate_audio_clip_definition(
+    store: &SemanticStore,
+    definition: &crate::AudioClipDefinition,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    let handle = definition.resource();
+    let resource = store
+        .audio_resources()
+        .get(handle)
+        .ok_or(SemanticMutationTransactionError::InvalidAudioResource { index, handle })?;
+    definition
+        .validate_resource(resource)
+        .map_err(|error| SemanticMutationTransactionError::AudioClipDefinition { index, error })
+}
+
 pub(super) fn commit_add_node(
     store: &mut SemanticStore,
     creation: SemanticNodeCreation,
@@ -440,6 +464,13 @@ pub(super) fn commit_add_node(
             source_identity,
         ),
         SemanticNodeCreation::Signal { state } => (store.insert_semantic_signal_state(state), None),
+        SemanticNodeCreation::AudioClip { scope, definition } => {
+            let scope = match scope {
+                super::SemanticTransactionNodeRef::Existing(id) => id,
+                super::SemanticTransactionNodeRef::Pending(token) => committed[&token],
+            };
+            (store.insert_semantic_audio_clip(scope, definition), None)
+        }
         SemanticNodeCreation::Effect {
             owner,
             name,

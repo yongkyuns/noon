@@ -1079,6 +1079,7 @@ fn point_reduction_node(
         SemanticNodeKind::Family(_) => node.semantic_object_state().is_some().then_some(root),
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::AudioClip(_)
         | SemanticNodeKind::Effect(_) => return Ok((None, Vec::new())),
     };
     Ok((object, node.members_iter().collect()))

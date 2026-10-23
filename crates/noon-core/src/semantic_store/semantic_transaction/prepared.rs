@@ -720,6 +720,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     SemanticNodeCreation::PendingPathObject { .. }
                     | SemanticNodeCreation::Family { state: None, .. }
                     | SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::AudioClip { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotObject(object)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -1124,9 +1125,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(SemanticNodeCreation::Effect { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotFamily(family))
-                }
+                Some(
+                    SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::Signal { .. }
+                    | SemanticNodeCreation::AudioClip { .. },
+                ) => Err(SemanticTransactionReadError::NotFamily(family)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
@@ -1412,6 +1415,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
+                    if let Some(clip) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_audio_clip_state)
+                    {
+                        written_slots.insert(clip.scope());
+                    }
                     if let Some(effect) = store
                         .node(node)
                         .and_then(crate::SemanticNode::semantic_effect_state)
@@ -1445,6 +1454,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 continue;
             }
             match mutation {
+                SemanticMutation::ReplaceAudioClip { clip, definition } => {
+                    let scope = store
+                        .semantic_audio_clip_state(clip)
+                        .expect("preflighted audio clip")
+                        .scope();
+                    store.replace_audio_clip_definition(clip, definition);
+                    written_slots.insert(clip);
+                    impacts.push(SemanticMutationImpact::AudioClip { scope, clip });
+                }
                 SemanticMutation::UpdateEffect { effect, update } => {
                     let previous = store
                         .semantic_effect_state(effect)
@@ -1907,6 +1925,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::AddNode { token, .. } => {
                     let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
+                    if let Some(clip) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_audio_clip_state)
+                    {
+                        impacts.push(SemanticMutationImpact::AudioClip {
+                            scope: clip.scope(),
+                            clip: node,
+                        });
+                    }
                     if let Some(effect) = store
                         .node(node)
                         .and_then(crate::SemanticNode::semantic_effect_state)
@@ -1938,6 +1965,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.extend(outcome.written_slots().iter().copied());
                     for effect in outcome.effects() {
                         match effect {
+                            SemanticRemoveNodeEffect::AudioClipChanged { scope, clip } => {
+                                impacts.push(SemanticMutationImpact::AudioClip {
+                                    scope: *scope,
+                                    clip: *clip,
+                                });
+                            }
                             SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect } => {
                                 impacts.push(SemanticMutationImpact::EffectAttachment {
                                     owner: *owner,

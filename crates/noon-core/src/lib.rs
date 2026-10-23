@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod animation;
+mod audio;
 mod camera_motion;
 mod graph_topology;
 mod manim_camera3d;
@@ -26,6 +27,7 @@ mod point_array_shape;
 pub use point_array_shape::{PointArrayShape, PointArrayShapeError};
 
 pub use animation::*;
+pub use audio::*;
 pub use camera_motion::*;
 pub use graph_topology::*;
 pub use manim_camera3d::*;

@@ -1013,6 +1013,7 @@ fn target_node_checked(
         SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::AudioClip(_)
         | SemanticNodeKind::Effect(_) => false,
     };
     if !is_target {

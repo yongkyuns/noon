@@ -103,6 +103,7 @@ impl SemanticExecutionIndex {
                     self.update_spatial_anchor_owner(store, node);
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::AudioClip { .. }
                 | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
@@ -281,6 +282,24 @@ impl SemanticExecutionIndex {
         // Scene entrypoint retains its admission guard until effect animation,
         // live publication and every host consumer support this column (#1897).
         let roots = roots.into_iter().collect::<Vec<_>>();
+        // Audio declarations use the semantic arena now, but execution/output is
+        // not implemented yet (#2263). A visual-only projection must not silently
+        // discard a soundtrack. Detached scopes belonging to another root do not
+        // prevent this root from running. The ordinary no-audio path is O(1).
+        if store.has_audio_clips() {
+            for &root in &roots {
+                for scope in store.ordered_authoring_nodes(root)? {
+                    if let Some(clip) = store
+                        .node(scope)
+                        .expect("validated authoring traversal")
+                        .scoped_audio_clips()
+                        .next()
+                    {
+                        return Err(SemanticLoweringError::AudioOutputUnavailable { clip });
+                    }
+                }
+            }
+        }
         let mut pending = Vec::new();
         let mut inset_2d_views = std::collections::BTreeMap::new();
         let mut seen = HashSet::new();
@@ -490,6 +509,10 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
+    /// An authored clip cannot be omitted by a visual-only execution backend.
+    AudioOutputUnavailable {
+        clip: SemanticNodeId,
+    },
     UnsupportedGlowProfile {
         owner: SemanticNodeId,
     },
@@ -554,6 +577,12 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioOutputUnavailable { clip } => write!(
+                formatter,
+                "audio clip {}:{} requires audio execution/output support, which is not available yet (#2263)",
+                clip.slot(),
+                clip.generation()
+            ),
             Self::UnsupportedGlowProfile { owner } => write!(
                 formatter,
                 "glow on {}:{} requires one attachment on ordinary planar 2D content",

@@ -43,7 +43,10 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::SemanticPendingPathObject;
-use node_addition::{commit_add_node, preflight_add_node, validate_spatial_material_resource};
+use node_addition::{
+    commit_add_node, preflight_add_node, validate_audio_clip_definition,
+    validate_spatial_material_resource,
+};
 
 mod provisional;
 use provisional::{
@@ -67,6 +70,12 @@ pub use provisional::{
 /// rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
+    /// Replace one complete validated clip definition without changing its
+    /// semantic identity or family/root scope.
+    ReplaceAudioClip {
+        clip: SemanticNodeId,
+        definition: crate::AudioClipDefinition,
+    },
     UpdateEffect {
         effect: SemanticNodeId,
         update: crate::GlowUpdate,
@@ -329,6 +338,11 @@ impl SemanticMutation {
                 creation: SemanticNodeCreation::Effect { owner, .. },
                 ..
             } => vec![*owner],
+            Self::AddNode {
+                creation: SemanticNodeCreation::AudioClip { scope, .. },
+                ..
+            } => vec![*scope],
+            Self::ReplaceAudioClip { clip, .. } => vec![(*clip).into()],
             Self::UpdateEffect { effect, .. } => vec![(*effect).into()],
             Self::SetSignal { .. }
             | Self::AddScalarSignalTrack { .. }
@@ -351,6 +365,7 @@ impl SemanticMutation {
     /// space without reserving or manufacturing semantic identity before preflight.
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
+            Self::ReplaceAudioClip { clip, .. } => Some(*clip),
             Self::UpdateEffect { effect, .. } => Some(*effect),
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
@@ -394,6 +409,7 @@ impl SemanticMutation {
 
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
+            Self::ReplaceAudioClip { clip, .. } => Some(SemanticMutationKey::AudioClip(*clip)),
             Self::UpdateEffect { .. } => None, // each explicit parameter has its own key
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
             Self::AddScalarSignalTrack { .. } | Self::SetScalarSignalAt { .. } => None,
@@ -478,6 +494,7 @@ impl SemanticMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum SemanticMutationKey {
+    AudioClip(SemanticNodeId),
     EffectParameter {
         effect: SemanticNodeId,
         parameter: crate::GlowParameter,
@@ -526,6 +543,11 @@ pub(super) enum SemanticMutationKey {
 /// is introduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
+    /// Scope-local audio creation, replacement, or retirement.
+    AudioClip {
+        scope: SemanticNodeId,
+        clip: SemanticNodeId,
+    },
     /// Structural attachment/order/lifetime change on one owner.
     EffectAttachment {
         owner: SemanticNodeId,
@@ -703,6 +725,29 @@ impl Default for SemanticMutationTransaction {
 }
 
 impl SemanticMutationTransaction {
+    /// Author a clip in a family/root scope using the scene-global allocator.
+    /// PCM and timing are validated before any transaction changes publish.
+    pub fn create_audio_clip(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        definition: crate::AudioClipDefinition,
+    ) -> SemanticLocalNodeToken {
+        self.create_node(SemanticNodeCreation::AudioClip {
+            scope: scope.into(),
+            definition,
+        })
+    }
+
+    pub fn replace_audio_clip(
+        &mut self,
+        clip: SemanticNodeId,
+        definition: crate::AudioClipDefinition,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceAudioClip { clip, definition });
+        self
+    }
+
     /// Build an ordered membership program, including remove/re-add of an edge.
     ///
     /// This reuses the same sparse ordered preflight as staged membership edits.
@@ -2250,6 +2295,10 @@ impl SemanticMutationTransaction {
                     SemanticNodeCreation::Effect {
                         owner: SemanticTransactionNodeRef::Pending(owner),
                         ..
+                    }
+                    | SemanticNodeCreation::AudioClip {
+                        scope: SemanticTransactionNodeRef::Pending(owner),
+                        ..
                     },
             } = mutation
             {
@@ -3493,6 +3542,13 @@ impl SemanticMutationTransaction {
                 } => {
                     changed.push(family_edges.reorder(&catalog, *family, *member, *before, index)?);
                 }
+                SemanticMutation::ReplaceAudioClip { clip, definition } => {
+                    let state = store
+                        .semantic_audio_clip_state(*clip)
+                        .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
+                    validate_audio_clip_definition(store, definition, index)?;
+                    changed.push(state.definition() != definition);
+                }
                 SemanticMutation::UpdateEffect { effect, update } => {
                     let state = store
                         .semantic_effect_state(*effect)
@@ -3512,6 +3568,25 @@ impl SemanticMutationTransaction {
                     staged_effects.insert(*effect, next);
                 }
                 SemanticMutation::AddNode { token, creation } => {
+                    if let SemanticNodeCreation::AudioClip { scope, .. } = creation {
+                        catalog.ensure_family(*scope, index)?;
+                        match scope {
+                            SemanticTransactionNodeRef::Existing(scope) => {
+                                if removed_nodes.contains(scope) {
+                                    return Err(SemanticMutationTransactionError::NodeCreationUsesRemovedNode { index, node: *scope });
+                                }
+                            }
+                            SemanticTransactionNodeRef::Pending(scope) => {
+                                if !available_pending_owners.contains(scope) {
+                                    return Err(
+                                        SemanticMutationTransactionError::AudioClipScopeOrder {
+                                            index,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
                         catalog.ensure_object(*owner, index)?;
                         if name.is_empty() {
@@ -3610,6 +3685,7 @@ impl SemanticMutationTransaction {
                         }
                         SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Signal { .. }
+                        | SemanticNodeCreation::AudioClip { .. }
                         | SemanticNodeCreation::Effect { .. } => {}
                     }
                     changed.push(!removed_pending.contains(token));
@@ -4327,6 +4403,17 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    InvalidAudioResource {
+        index: usize,
+        handle: crate::AudioResourceHandle,
+    },
+    AudioClipDefinition {
+        index: usize,
+        error: crate::AudioClipError,
+    },
+    AudioClipScopeOrder {
+        index: usize,
+    },
     DuplicateEffectParameter {
         index: usize,
         effect: SemanticNodeId,
@@ -4762,6 +4849,9 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidAudioResource { index, handle } => write!(formatter, "mutation {index}: unknown or foreign audio resource {handle:?}"),
+            Self::AudioClipDefinition { index, error } => write!(formatter, "mutation {index}: audio clip: {error}"),
+            Self::AudioClipScopeOrder { index } => write!(formatter, "mutation {index}: audio clip scope must precede its declaration"),
             Self::DuplicateEffectParameter { index, effect, parameter } => write!(formatter, "mutation {index}: duplicate write to effect {effect:?} parameter {parameter:?}"),
             Self::InvalidEffectAttachment { index, reason } => write!(formatter, "mutation {index}: {reason}"),
             Self::EffectParameter { index, effect, error } => write!(formatter, "mutation {index}: effect {effect:?}: {error}"),

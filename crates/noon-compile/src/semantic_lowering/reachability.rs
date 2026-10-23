@@ -287,6 +287,7 @@ impl SemanticExecutionReachability {
                     }
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::AudioClip { .. }
                 | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
@@ -448,6 +449,7 @@ impl SemanticExecutionReachability {
             SemanticNodeKind::Family(_) => node.semantic_object_state().is_some(),
             SemanticNodeKind::Signal(_)
             | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::AudioClip(_)
             | SemanticNodeKind::Effect(_) => return Ok(false),
         };
 

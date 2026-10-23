@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     GraphEdgeId, ObjectId, PreparedSemanticMutationTransaction, SemanticGraphEdgeDependency,
-    SemanticMutation, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticMutation, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
     SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
     SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
@@ -30,6 +30,9 @@ pub struct CompiledNumericTextDriverRevisionEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
+    AudioOutputUnavailable {
+        index: usize,
+    },
     Resource(crate::CompiledResourceError),
     UnsupportedMutation {
         index: usize,
@@ -84,6 +87,10 @@ pub enum SemanticPublicationLoweringError {
 impl std::fmt::Display for SemanticPublicationLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AudioOutputUnavailable { index } => write!(
+                f,
+                "audio mutation {index} requires audio execution/output support, which is not available yet (#2263)"
+            ),
             Self::Resource(error) => error.fmt(f),
             Self::UnsupportedMutation { index } => write!(
                 f,
@@ -477,6 +484,17 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
+        if matches!(
+            mutation,
+            SemanticMutation::AddNode {
+                creation: SemanticNodeCreation::AudioClip { .. },
+                ..
+            } | SemanticMutation::ReplaceAudioClip { .. }
+        ) {
+            return Err(SemanticPublicationLoweringError::AudioOutputUnavailable {
+                index: position,
+            });
+        }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
@@ -1123,6 +1141,22 @@ fn collect_prepared_entry_leaves(
     if !seen.insert(node) || prepared.node_is_removed(node) {
         return Ok(());
     }
+    // An existing detached family can carry clips before it is added to a live
+    // scene. Check only the entry subtree already visited by this publication,
+    // including empty families; painter leaves alone cannot discover audio.
+    if let Some(scope) = node.existing() {
+        if prepared.store().has_audio_clips() {
+            let scoped = prepared
+                .store()
+                .node(scope)
+                .ok_or(SemanticTransactionReadError::UnknownExistingNode(scope))?;
+            for clip in scoped.scoped_audio_clips() {
+                if !prepared.node_is_removed(clip) {
+                    return Err(SemanticLoweringError::AudioOutputUnavailable { clip }.into());
+                }
+            }
+        }
+    }
     match prepared.object_state(node) {
         Ok(_) => {
             if node
@@ -1188,6 +1222,7 @@ fn collect_existing_exit_leaves(
         }
         SemanticNodeKind::Signal(_)
         | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::AudioClip(_)
         | SemanticNodeKind::Effect(_) => {}
     }
     for member in semantic.members_iter() {

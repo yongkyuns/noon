@@ -769,6 +769,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                         SemanticNodeCreation::PendingPathObject { .. }
                         | SemanticNodeCreation::Family { state: None, .. }
                         | SemanticNodeCreation::Effect { .. }
+                        | SemanticNodeCreation::AudioClip { .. }
                         | SemanticNodeCreation::Signal { .. },
                     )
                     | PendingSemanticNode::Animation(_) => {
@@ -870,7 +871,9 @@ pub(super) fn duplicate_mutation_error(
                 SemanticTransactionNodeRef::Existing(_) => None,
             })
         }
-        SemanticMutationKey::EffectParameter { .. } | SemanticMutationKey::Signal(_) => None,
+        SemanticMutationKey::EffectParameter { .. }
+        | SemanticMutationKey::AudioClip(_)
+        | SemanticMutationKey::Signal(_) => None,
     };
     if let Some(node) = pending {
         return SemanticMutationTransactionError::DuplicatePendingMutation { index, node };
@@ -883,7 +886,7 @@ pub(super) fn duplicate_mutation_error(
                 parameter,
             }
         }
-        SemanticMutationKey::Signal(target) => {
+        SemanticMutationKey::AudioClip(target) | SemanticMutationKey::Signal(target) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
         SemanticMutationKey::ObjectProperty {
