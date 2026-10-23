@@ -299,7 +299,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::CameraMotions { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
-                | SemanticMutationImpact::ClickIndicate { .. }
+                | SemanticMutationImpact::ClickAction { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }

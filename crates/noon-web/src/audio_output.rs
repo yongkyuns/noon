@@ -120,6 +120,8 @@ mod wasm {
         graph: Option<DeviceGraph>,
         controls: ViewerAudioControls,
         interrupted: Rc<Cell<bool>>,
+        unlock_pending: Rc<Cell<bool>>,
+        unlock_promise: Option<js_sys::Promise>,
         state_change: Closure<dyn FnMut(web_sys::Event)>,
     }
 
@@ -166,17 +168,33 @@ mod wasm {
                 graph: None,
                 controls,
                 interrupted,
+                unlock_pending: Rc::new(Cell::new(false)),
+                unlock_promise: None,
                 state_change,
             })
         }
 
-        /// Return the browser promise directly. It owns no borrowed renderer,
-        /// callback, playback command, or capability to revive a retired run.
+        /// Reuse one outstanding native device operation. Its completion owns
+        /// no renderer, playback command, or capability to revive a retired run.
         pub(crate) fn unlock(&mut self) -> Result<js_sys::Promise, JsValue> {
             self.stop();
             self.interrupted.set(false);
             self.master.gain().set_value(self.controls.device_gain());
-            self.context.resume()
+            if self.unlock_pending.get() {
+                return Ok(self.unlock_promise.as_ref().unwrap().clone());
+            }
+            let promise = self.context.resume()?;
+            self.unlock_pending.set(true);
+            self.unlock_promise = Some(promise.clone());
+            let pending = self.unlock_pending.clone();
+            let completion = wasm_bindgen_futures::JsFuture::from(promise.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                // Observe rejection even if the host retires before attaching
+                // its handler. Only the original caller decides what to do.
+                let _ = completion.await;
+                pending.set(false);
+            });
+            Ok(promise)
         }
 
         pub(crate) fn is_ready(&self) -> bool {

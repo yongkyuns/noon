@@ -169,6 +169,13 @@ impl Scene {
                 },
             );
         }
+        if execution.has_playback_controls() {
+            return Err(
+                noon_compile::SemanticExecutionLoweringError::PlaybackControlsExecutionUnavailable {
+                    operation: "live source continuation",
+                },
+            );
+        }
         self.install_execution(execution);
         Ok(LiveProgram {
             scene: self,

@@ -5,7 +5,9 @@ use crate::browser_pointer_input::{
     self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
     BrowserPointerTarget,
 };
-use noon::integration::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
+use noon::integration::{
+    NativePointerInputPublication, PointerFrameError, PointerFrameSnapshot, PointerFrameView,
+};
 use noon::ExecutionSession;
 use noon_core::{Camera2DState, Vec2};
 
@@ -54,27 +56,29 @@ impl DirectPointerPresentation {
         binding: &mut Option<BrowserPointerBinding>,
         sequence: &mut u64,
         input: BrowserPointerInput,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<NativePointerInputPublication>, String> {
         // Bad records are not recoverable display races, even before first paint.
         input.needs_binding(*binding)?;
         sequence
             .checked_add(1)
             .ok_or("native input event sequence exhausted")?;
         if input.cancellation().is_some() {
-            browser_pointer_input::submit_browser_pointer_input(target, binding, sequence, input)?;
-            return Ok(true);
+            return browser_pointer_input::submit_browser_pointer_input(
+                target, binding, sequence, input,
+            )
+            .map(Some);
         }
         // A registered DOM view alone is not input interest. The explicit Rust
         // input API retains its callback barrier; a dormant platform collector
         // simply retires its unbound source without creating publication work.
         if binding.is_none() && !target.session().has_native_pointer_subscribers() {
-            return Ok(false);
+            return Ok(None);
         }
         if let Some(frame) = self.presented.as_ref() {
             match browser_pointer_input::submit_presented_browser_pointer_input(
                 target, binding, sequence, input, frame,
             ) {
-                Ok(()) => return Ok(true),
+                Ok(publication) => return Ok(Some(publication)),
                 Err(BrowserPointerAdmissionError::Frame(error))
                     if recoverable_frame_error(&error) => {}
                 Err(error) => return Err(error.to_string()),
@@ -85,7 +89,7 @@ impl DirectPointerPresentation {
         // this gesture after the next frame. There is no automatic replay.
         browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
         self.refresh_pending = true;
-        Ok(false)
+        Ok(None)
     }
 
     /// Publication identity can change without dirty renderer rows (for example,

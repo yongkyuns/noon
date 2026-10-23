@@ -10,15 +10,15 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, ManimCamera3DProfile, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticBarMetadata, SemanticClickIndicate, SemanticDecimalNumber, SemanticFadeDirection,
-    SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticSpatialCompositionDomain,
-    SemanticSpatialMaterial, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
+    SemanticBarMetadata, SemanticClickAction, SemanticClickIndicate, SemanticDecimalNumber,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectRole,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticStore, SemanticStoreError,
+    SemanticStyle, SemanticTransactionGraphDeclaration, SemanticTransactionGraphEdgeDependency,
     SemanticTransactionTableLayout, SemanticTransform, SemanticTransformInterpolation,
     SemanticUpdaterEndpointPolicy, SemanticUpdaterRegistration, SemanticVec3, StoredGeometry,
     TextPresentationBaseline, VectorPath,
@@ -106,10 +106,10 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         transform: SemanticTransform,
     },
-    /// Replace or clear one object-owned click indication declaration.
-    SetClickIndicate {
+    /// Replace or clear one object-owned click action declaration.
+    SetClickAction {
         object: SemanticTransactionNodeRef,
-        binding: Option<SemanticClickIndicate>,
+        binding: Option<SemanticClickAction>,
     },
     SetInset2DView {
         object: SemanticTransactionNodeRef,
@@ -282,7 +282,7 @@ impl SemanticMutation {
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
-            | Self::SetClickIndicate { object, .. }
+            | Self::SetClickAction { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -378,7 +378,7 @@ impl SemanticMutation {
             | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
-            | Self::SetClickIndicate { object, .. }
+            | Self::SetClickAction { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -422,9 +422,7 @@ impl SemanticMutation {
             Self::SetObjectTransform { object, .. } => {
                 Some(SemanticMutationKey::ObjectTransform(*object))
             }
-            Self::SetClickIndicate { object, .. } => {
-                Some(SemanticMutationKey::ClickIndicate(*object))
-            }
+            Self::SetClickAction { object, .. } => Some(SemanticMutationKey::ClickAction(*object)),
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
@@ -507,7 +505,7 @@ pub(super) enum SemanticMutationKey {
     ObjectTransform(SemanticTransactionNodeRef),
     CameraMotions(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
-    ClickIndicate(SemanticTransactionNodeRef),
+    ClickAction(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
     SpatialCompositionDomain(SemanticTransactionNodeRef),
@@ -589,7 +587,7 @@ pub enum SemanticMutationImpact {
     ObjectContent {
         object: SemanticNodeId,
     },
-    ClickIndicate {
+    ClickAction {
         object: SemanticNodeId,
     },
     /// Retained BarChart source metadata changed without changing render data.
@@ -933,18 +931,27 @@ impl SemanticMutationTransaction {
         self.replace_style(object, style)
     }
 
-    /// Replace the one authored primary-click indication on an object. `None`
+    /// Replace the one authored primary-click action on an object. `None`
     /// clears the declaration without creating a second interaction registry.
+    pub fn set_click_action(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        binding: Option<SemanticClickAction>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetClickAction {
+            object: object.into(),
+            binding,
+        });
+        self
+    }
+
+    /// Author a restoring indication through the common click-action mutation.
     pub fn set_click_indicate(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
         binding: Option<SemanticClickIndicate>,
     ) -> &mut Self {
-        self.mutations.push(SemanticMutation::SetClickIndicate {
-            object: object.into(),
-            binding,
-        });
-        self
+        self.set_click_action(object, binding.map(SemanticClickAction::Indicate))
     }
 
     /// Bind ordinary rectangles as an inset display and camera in one publication.
@@ -2725,7 +2732,7 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
-                SemanticMutation::SetClickIndicate { object, binding } => {
+                SemanticMutation::SetClickAction { object, binding } => {
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
@@ -2743,14 +2750,14 @@ impl SemanticMutationTransaction {
                                 )
                             )
                     }) {
-                        return Err(SemanticMutationTransactionError::InvalidClickIndicate {
+                        return Err(SemanticMutationTransactionError::InvalidClickAction {
                             index,
                             object: *object,
                         });
                     }
-                    let did_change = state.click_indicate() != *binding;
+                    let did_change = state.click_action() != *binding;
                     if did_change {
-                        state.set_click_indicate(*binding);
+                        state.set_click_action(*binding);
                     }
                     changed.push(did_change);
                 }
@@ -3780,7 +3787,7 @@ impl SemanticMutationTransaction {
                     object: *object,
                 });
             }
-            if state.click_indicate().is_some_and(|binding| {
+            if state.click_action().is_some_and(|binding| {
                 !binding.is_valid()
                     || !state.signal_bindings().is_empty()
                     || !matches!(
@@ -3788,12 +3795,12 @@ impl SemanticMutationTransaction {
                         Some(StoredGeometry::Circle { .. } | StoredGeometry::Rectangle { .. })
                     )
             }) {
-                return Err(SemanticMutationTransactionError::InvalidClickIndicate {
+                return Err(SemanticMutationTransactionError::InvalidClickAction {
                     index: self
                         .mutations
                         .iter()
                         .position(|mutation| {
-                            matches!(mutation, SemanticMutation::SetClickIndicate { object: target, .. } if target == object)
+                            matches!(mutation, SemanticMutation::SetClickAction { object: target, .. } if target == object)
                         })
                         .unwrap_or(0),
                     object: *object,
@@ -4587,7 +4594,7 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticNodeId,
     },
-    DuplicateClickIndicate {
+    DuplicateClickAction {
         index: usize,
         object: SemanticNodeId,
     },
@@ -4790,7 +4797,7 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
-    InvalidClickIndicate {
+    InvalidClickAction {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
@@ -5051,9 +5058,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
-            Self::DuplicateClickIndicate { index, object } => write!(
+            Self::DuplicateClickAction { index, object } => write!(
                 formatter,
-                "semantic transaction mutation {index} repeats click Indicate on object {}:{}",
+                "semantic transaction mutation {index} repeats click action on object {}:{}",
                 object.slot(),
                 object.generation()
             ),
@@ -5373,9 +5380,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot assign invalid BarChart metadata to object {object:?}"
             ),
-            Self::InvalidClickIndicate { index, object } => write!(
+            Self::InvalidClickAction { index, object } => write!(
                 formatter,
-                "semantic transaction mutation {index} cannot assign click Indicate to unsupported or invalid object {object:?}"
+                "semantic transaction mutation {index} cannot assign click action to unsupported or invalid object {object:?}"
             ),
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,

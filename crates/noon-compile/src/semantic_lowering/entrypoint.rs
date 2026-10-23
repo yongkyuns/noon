@@ -72,6 +72,9 @@ impl SemanticExecutionLoweringOutput {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticExecutionLoweringError {
+    PlaybackControlsExecutionUnavailable {
+        operation: &'static str,
+    },
     AudioExecutionUnavailable {
         operation: &'static str,
     },
@@ -109,6 +112,10 @@ impl From<SemanticCompiledSceneError> for SemanticExecutionLoweringError {
 impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PlaybackControlsExecutionUnavailable { operation } => write!(
+                formatter,
+                "scene playback controls do not support {operation} yet (#2263)"
+            ),
             Self::AudioExecutionUnavailable { operation } => write!(
                 formatter,
                 "audio execution does not support {operation} yet (#2263)"

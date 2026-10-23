@@ -281,7 +281,6 @@ pub use matrix_display::{
     DEFAULT_MATRIX_V_BUFF,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
-pub use noon_core::RasterImageSampling;
 pub use noon_core::SemanticNumberLineScale;
 #[cfg(feature = "latex")]
 pub use noon_core::{format_decimal, DecimalFormat, NumericFormatError};
@@ -312,7 +311,7 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
-pub use noon_core::{PointArrayShape, PointArrayShapeError};
+pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
@@ -408,7 +407,9 @@ pub mod prelude {
         TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
         VectorFieldRanges2D, VectorPath,
     };
-    pub use crate::{AudioClipOptions, AudioResource, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET};
+    pub use crate::{
+        AudioClipOptions, AudioResource, PlaybackControl, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    };
     #[cfg(feature = "code")]
     pub use crate::{
         Code, CodeAuthoringError, CodeBackground, CodeBackgroundConfig, CodeOptions,

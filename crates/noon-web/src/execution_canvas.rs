@@ -25,7 +25,8 @@ mod wasm {
     };
     use noon_core::{
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativePointerId,
-        NativePointerInput, NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
+        NativePointerInput, NativeStateSource, PlaybackControl, PublicationContext, ReactiveValue,
+        Rect, SemanticNodeId, Vec2,
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
@@ -60,6 +61,15 @@ mod wasm {
         present_now: bool,
         cadence: &'static str,
         delay_ms: Option<f64>,
+    }
+
+    /// One admitted play request waiting on the platform audio device. Its
+    /// identity is the existing input sequence and committed publication; it is
+    /// not another command queue, playhead, or semantic identity space.
+    struct PendingSceneControl {
+        sequence: u64,
+        publication: PublicationContext,
+        unlock: js_sys::Promise,
     }
 
     struct InitializedGpu {
@@ -515,7 +525,7 @@ mod wasm {
             &mut self,
             input: BrowserPointerInput,
             presentation: &mut DirectPointerPresentation,
-        ) -> Result<bool, JsValue> {
+        ) -> Result<Option<NativePointerInputPublication>, JsValue> {
             let binding = &mut self.browser_pointer_binding;
             let sequence = &mut self.next_native_event_sequence;
             match &mut self.authority {
@@ -622,13 +632,14 @@ mod wasm {
         direct_wake_clock: BrowserExecutionWakeClock,
         section_navigation: noon::SceneSectionNavigation,
         /// Explicit viewer transport control over the existing wake mapping.
-        /// Audio-bearing scenes start paused; preparation remains silent.
+        /// Audio and scene-control sessions start paused; preparation is silent.
         direct_paused: bool,
         /// Admission-time bound borrowed from the immutable Runtime timeline.
-        /// Non-audio hosts retain their existing unbounded wake behavior.
-        finite_audio_end: Option<f64>,
+        /// Hosts without audio or controls retain their unbounded wake behavior.
+        finite_transport_end: Option<f64>,
         audio_controls: ViewerAudioControls,
         audio_output: Option<WebAudioOutput>,
+        pending_scene_control: Option<PendingSceneControl>,
         /// One observed wall-time target, not a second semantic scheduler.
         sampled_scene_target: Option<f64>,
         direct_preparer: RetainedFramePreparer,
@@ -1017,7 +1028,7 @@ mod wasm {
             } else {
                 self.direct_wake_clock
                     .scene_time_at(wall_time_ms)
-                    .map(|time| self.bound_audio_target(time).max(self.time()))
+                    .map(|time| self.bound_transport_target(time).max(self.time()))
                     .unwrap_or_else(|| self.time())
             };
             let target = self
@@ -1045,11 +1056,11 @@ mod wasm {
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
             if self
-                .finite_audio_end
+                .finite_transport_end
                 .is_some_and(|end| !time.is_finite() || time < 0.0 || time > end)
             {
                 return Err(js_message(
-                    "direct audio seek time must lie within the admitted finite timeline",
+                    "direct seek time must lie within the admitted finite timeline",
                 ));
             }
             let (pending, camera) = {
@@ -1067,6 +1078,7 @@ mod wasm {
                     session.inspection_camera().map_err(js_error),
                 )
             };
+            self.pending_scene_control = None;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
             self.stop_audio();
@@ -1122,6 +1134,7 @@ mod wasm {
             let target = (!self.direct_paused)
                 .then(|| self.direct_wake_clock.scene_time_at(wall_time_ms))
                 .flatten();
+            self.pending_scene_control = None;
             // Silence immediately even if a pending presentation prevents a
             // newer observation. Its committed frame remains the resume point.
             self.direct_paused = true;
@@ -1130,8 +1143,9 @@ mod wasm {
             self.sampled_scene_target = None;
             if let Some(target) = target {
                 if !self.source.session().wake_state().frame_pending() {
-                    let target = self
-                        .bound_audio_target(self.source.session().bounded_realtime_target(target));
+                    let target = self.bound_transport_target(
+                        self.source.session().bounded_realtime_target(target),
+                    );
                     self.source.drive_to(target)?;
                     let camera = self
                         .source
@@ -1149,6 +1163,7 @@ mod wasm {
         #[wasm_bindgen(js_name = resumeDirect)]
         pub fn resume_direct(&mut self) -> Result<(), JsValue> {
             self.ensure_direct_transport_profile()?;
+            self.pending_scene_control = None;
             if !self.direct_paused {
                 return Ok(());
             }
@@ -1226,6 +1241,7 @@ mod wasm {
         /// Retire every device node and pending unlock capability immediately.
         #[wasm_bindgen(js_name = disposeAudio)]
         pub fn dispose_audio(&mut self) {
+            self.pending_scene_control = None;
             self.audio_output = None;
             if self.source.session().has_audio() {
                 self.direct_paused = true;
@@ -1309,9 +1325,9 @@ mod wasm {
             };
             // Hold the original wall-derived sample across required endpoint
             // admissions. Initial work still clips at its first publication.
-            let wall_sample_target = self.bound_audio_target(target_time);
-            let target_time =
-                self.bound_audio_target(self.source.session().bounded_realtime_target(target_time));
+            let wall_sample_target = self.bound_transport_target(target_time);
+            let target_time = self
+                .bound_transport_target(self.source.session().bounded_realtime_target(target_time));
             let (pending, camera) = {
                 let direct = &mut self.source;
                 direct.drive_to(target_time)?;
@@ -1388,15 +1404,74 @@ mod wasm {
                     .gpu_diagnostics
                     .device_loss_pending(self.gpu_generation)
             {
+                self.pending_scene_control = None;
                 self.pointer_presentation.invalidate();
             }
-            let admitted = self
+            let publication = self
                 .source
                 .submit_browser_pointer(input, &mut self.pointer_presentation)?;
             let pending = self.finish_direct_native_input()?;
+            if publication.is_none() {
+                self.pending_scene_control = None;
+            }
+            if let Some(publication) = publication {
+                if input.cancellation().is_some() {
+                    self.pending_scene_control = None;
+                }
+                if let Some(control) = publication.playback_control() {
+                    self.dispatch_scene_control(control, publication)?;
+                }
+            }
             // Undefined is a recoverable rejection, not an admitted clean sample.
             // The synchronous DOM caller retires the contact and requests redraw.
-            Ok(admitted.then_some(pending))
+            Ok(publication.map(|_| pending || self.source.session().wake_state().frame_pending()))
+        }
+
+        /// Existing input sequence of the single device-unlock request, if any.
+        /// JavaScript only carries this receipt across the native Promise.
+        #[wasm_bindgen(js_name = pendingSceneControlSequence)]
+        pub fn pending_scene_control_sequence(&self) -> Option<u64> {
+            self.pending_scene_control
+                .as_ref()
+                .map(|request| request.sequence)
+        }
+
+        #[wasm_bindgen(js_name = sceneControlAudioUnlock)]
+        pub fn scene_control_audio_unlock(&self) -> Option<js_sys::Promise> {
+            self.pending_scene_control
+                .as_ref()
+                .map(|request| request.unlock.clone())
+        }
+
+        /// Complete only the same admitted gesture against its unchanged
+        /// publication. Pause, seek, another scene action, resize, retirement or an
+        /// observed host failure invalidates it before a delayed Promise returns.
+        #[wasm_bindgen(js_name = completeSceneControl)]
+        pub fn complete_scene_control(&mut self, sequence: u64) -> Result<bool, JsValue> {
+            let Some(request) = self.pending_scene_control.as_ref() else {
+                return Ok(false);
+            };
+            if request.sequence != sequence {
+                return Ok(false);
+            }
+            let publication = request.publication;
+            self.pending_scene_control = None;
+            if publication != self.source.session().publication_context()
+                || !self.direct_paused
+                || !self.drawable
+                || self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
+                || self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+                || web_sys::window()
+                    .and_then(|window| window.document())
+                    .is_some_and(|document| document.hidden())
+            {
+                return Ok(false);
+            }
+            self.resume_scene_playback()?;
+            Ok(true)
         }
 
         /// Explicit viewer scroll opt-in. No semantic wheel event, animation
@@ -1453,6 +1528,7 @@ mod wasm {
             {
                 return Ok(false);
             }
+            self.pending_scene_control = None;
             self.source.cancel_browser_pointer(true)?;
             self.update_camera()?;
             Ok(true)
@@ -1679,6 +1755,7 @@ mod wasm {
                 let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
+            self.pending_scene_control = None;
             self.sync_camera(camera)?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
             self.sampled_scene_target = None;
@@ -1761,6 +1838,61 @@ mod wasm {
                 != self.last_selection_presentation
         }
 
+        fn dispatch_scene_control(
+            &mut self,
+            control: PlaybackControl,
+            publication: NativePointerInputPublication,
+        ) -> Result<(), JsValue> {
+            self.ensure_direct_transport_profile()?;
+            self.pending_scene_control = None;
+            let wall_time = web_sys::window()
+                .and_then(|window| window.performance())
+                .ok_or_else(|| {
+                    js_message("scene playback controls require a Window performance clock")
+                })?
+                .now();
+            match control {
+                PlaybackControl::TogglePlayback => {
+                    if self.is_direct_playing() {
+                        self.pause_direct(wall_time)?;
+                    } else if self.source.session().has_audio() && !self.audio_enabled() {
+                        // Start resume synchronously while the release still has
+                        // browser user activation. Never retain a mutable borrow
+                        // across the asynchronous device operation.
+                        let unlock = self.enable_audio()?;
+                        self.pending_scene_control = Some(PendingSceneControl {
+                            sequence: publication.input().sequence(),
+                            publication: publication.publication(),
+                            unlock,
+                        });
+                    } else {
+                        self.resume_scene_playback()?;
+                    }
+                }
+                PlaybackControl::Restart => {
+                    self.seek(0.0)?;
+                }
+                PlaybackControl::PreviousSection => {
+                    self.seek_section(true, wall_time)?;
+                }
+                PlaybackControl::NextSection => {
+                    self.seek_section(false, wall_time)?;
+                }
+                PlaybackControl::ToggleAudioMuted => self.set_audio_muted(!self.audio_muted()),
+            }
+            Ok(())
+        }
+
+        fn resume_scene_playback(&mut self) -> Result<(), JsValue> {
+            if self
+                .finite_transport_end
+                .is_some_and(|end| self.time() >= end)
+            {
+                self.seek(0.0)?;
+            }
+            self.resume_direct()
+        }
+
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
             let session = self.source.session();
             if session.wake_state().frame_pending() {
@@ -1802,7 +1934,8 @@ mod wasm {
         }
 
         fn pause_audio_for_host_failure(&mut self) {
-            if self.source.session().has_audio() {
+            self.pending_scene_control = None;
+            if self.source.session().has_audio() || self.source.session().has_playback_controls() {
                 self.stop_audio();
                 self.direct_paused = true;
                 self.direct_wake_clock = BrowserExecutionWakeClock::default();
@@ -1810,8 +1943,9 @@ mod wasm {
             }
         }
 
-        fn bound_audio_target(&self, target: f64) -> f64 {
-            self.finite_audio_end.map_or(target, |end| target.min(end))
+        fn bound_transport_target(&self, target: f64) -> f64 {
+            self.finite_transport_end
+                .map_or(target, |end| target.min(end))
         }
 
         fn require_ready_audio_device(&mut self) -> Result<(), JsValue> {
@@ -1885,23 +2019,24 @@ mod wasm {
             camera_height: f32,
         ) -> Result<Self, JsValue> {
             let has_audio = source.session().has_audio();
-            if has_audio
+            let has_controls = source.session().has_playback_controls();
+            if (has_audio || has_controls)
                 && (!matches!(source.authority, DirectSourceAuthority::Session { .. })
                     || source.session().has_required_callbacks()
                     || source.session().replay_scope_active())
             {
                 return Err(js_message(
-                    "direct audio output requires a finite pre-authored session without callbacks or retained source history",
+                    "direct audio and scene controls require a finite pre-authored session without callbacks or retained source history",
                 ));
             }
-            let finite_audio_end = if has_audio {
+            let finite_transport_end = if has_audio || has_controls {
                 if source.session().frame().time < 0.0 {
                     return Err(js_message(
-                        "direct audio playback requires a nonnegative initial scene time",
+                        "direct controlled playback requires a nonnegative initial scene time",
                     ));
                 }
                 Some(source.session().finite_timeline_end_time().ok_or_else(|| {
-                    js_message("direct audio output requires a finite immutable execution timeline")
+                    js_message("direct audio and scene controls require a finite immutable execution timeline")
                 })?)
             } else {
                 None
@@ -1937,10 +2072,11 @@ mod wasm {
                 source,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
                 section_navigation: noon::SceneSectionNavigation::default(),
-                direct_paused: has_audio,
-                finite_audio_end,
+                direct_paused: has_audio || has_controls,
+                finite_transport_end,
                 audio_controls: ViewerAudioControls::default(),
                 audio_output: None,
+                pending_scene_control: None,
                 sampled_scene_target: None,
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
@@ -2292,6 +2428,7 @@ mod wasm {
         /// delivered before the replacement frame. Keep the physical source so
         /// its real release remains harmless instead of faulting the collector.
         fn invalidate_pointer_surface(&mut self) -> Result<(), JsValue> {
+            self.pending_scene_control = None;
             self.pointer_presentation.invalidate();
             self.apply_direct_native_input(|source| source.cancel_browser_pointer(false))?;
             Ok(())

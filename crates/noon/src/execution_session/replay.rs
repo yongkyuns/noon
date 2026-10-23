@@ -10,9 +10,9 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
-        // Immutable audio plans already support direct seek. Live revision
-        // retention needs its own audio resource/history qualification (#2263).
-        if self.has_audio() {
+        // Immutable audio/control plans support direct seek. Live revision
+        // retention needs its own resource/binding history qualification (#2263).
+        if self.has_audio() || self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
         }
         if self.pending_segment_completion.is_some()
@@ -34,6 +34,9 @@ impl ExecutionSession {
     /// Admit backward playback only after all retained revisions and completion
     /// barriers are coherent. Failure never changes the current authored scene.
     pub fn seal_replay(&mut self) -> Result<(), ReplayError> {
+        if self.has_playback_controls() {
+            return Err(ReplayError::UnsupportedDomain);
+        }
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()
             || self.translation_drag_active()

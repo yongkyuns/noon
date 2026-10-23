@@ -60,7 +60,7 @@ pub(crate) fn click_indicate_declaration(
         || options.remover.unwrap_or(false)
         || options.introducer.unwrap_or(false)
     {
-        return Err(AuthoringError::InvalidClickIndicateOptions);
+        return Err(AuthoringError::InvalidClickActionOptions);
     }
     Ok(SemanticClickIndicate::new(
         indication.scale_factor,
@@ -1088,6 +1088,27 @@ impl Scene {
         );
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
+    /// Bind a visible analytic Circle or Rectangle to a viewer playback action.
+    ///
+    /// The common Rust input/picking path emits the typed request only after a
+    /// successful click transaction. The playback owner applies it using the
+    /// same admitted transport as its external controls. This declaration does
+    /// not advance the authoring cursor or change the authored audio gain.
+    /// Initial output support is the finite direct Rust/WASM profile (#2263).
+    pub fn on_click_playback(
+        &mut self,
+        target: &Mobject,
+        control: crate::PlaybackControl,
+    ) -> Result<(), crate::AuthoringError> {
+        self.require_object(target)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_click_action(
+            target.node_id(),
+            Some(noon_core::SemanticClickAction::Playback(control)),
+        );
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.
     pub fn can_ordinary_transform_to(

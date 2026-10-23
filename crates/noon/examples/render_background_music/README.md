@@ -98,6 +98,42 @@ the direct Rust/WASM example supplies browser audio output. Live clip edits,
 Python worker output, native device output and movie audio muxing are explicitly
 outside this initial execution profile.
 
+## Put playback buttons in the scene
+
+The direct background-audio example includes five ordinary filled rectangles
+bound to shared Rust playback actions. For example:
+
+```rust
+use noon::PlaybackControl;
+
+let mut button = scene.rectangle(1.7, 0.65)?;
+button.set_fill(0.09, 0.17, 0.20, 1.0)?;
+scene.add(&button)?;
+scene.on_click_playback(&button, PlaybackControl::TogglePlayback)?;
+```
+
+`PreviousSection`, `NextSection`, `Restart` and `ToggleAudioMuted` use the same
+declaration. The existing Rust picker recognizes a completed primary-button
+click on the displayed object. The input publication returns a typed request;
+the direct host applies it through its normal playback commands after input
+commits. Dragging away, cancelling a gesture or clicking the background does
+not activate a button. Previous/Next/Restart preserve the current play/pause
+state, and mute changes the viewer's output without editing the authored gain.
+
+The example keeps stroke-only icons inside each button and scene text captions
+below it. The current picker supports analytic circle/rectangle fills and
+deliberately reports unsupported topmost fills, including Text. A text label
+placed over a button would therefore block that fill; this example does not
+introduce a separate frontend hit-test rule. The equivalent HTML controls remain
+available for keyboard use.
+
+These controls currently run in the finite direct Rust/WASM Window profile.
+The first Play requires an ordinary browser user gesture to enable audio.
+Native host controls, Python/render-worker controls and live-history integration
+remain owned by #2263. The rectangles themselves are authored visual content;
+they are part of a rendered frame unless the author omits them from an export
+scene. Their viewer input is not replayed as an authored animation.
+
 ## Composition and audio dedication
 
 **CC0 1.0 Universal (CC0-1.0)** applies specifically to the original musical

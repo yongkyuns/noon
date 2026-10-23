@@ -812,6 +812,11 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 "publication.audio_execution_immutable",
                 message,
             ),
+            E::PlaybackControlsExecutionImmutable => Self::new(
+                "unsupported",
+                "publication.playback_controls_execution_immutable",
+                message,
+            ),
             E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
@@ -859,6 +864,7 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
     fn from(error: noon_compile::SemanticPublicationLoweringError) -> Self {
         use noon_compile::SemanticPublicationLoweringError as E;
         let code = match &error {
+            E::PlaybackControlUnavailable { .. } => "lowering.playback_control_unavailable",
             E::UnsupportedMutation { .. } => "lowering.unsupported_mutation",
             E::UnsupportedReactiveMembership { .. } => "lowering.unsupported_reactive_membership",
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",

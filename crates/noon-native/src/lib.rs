@@ -77,6 +77,7 @@ impl Default for NativeViewportConfig {
 #[derive(Debug)]
 pub enum NativeHostError {
     AudioOutputUnavailable,
+    PlaybackControlsUnavailable,
     Platform(String),
     Gpu(String),
     Runtime(EvaluationError),
@@ -93,6 +94,9 @@ impl std::fmt::Display for NativeHostError {
         match self {
             Self::AudioOutputUnavailable => formatter.write_str(
                 "native device audio output is not available yet; this scene requires an audio-capable host (#2263)",
+            ),
+            Self::PlaybackControlsUnavailable => formatter.write_str(
+                "native in-scene playback controls are not available yet; use the finite direct Rust/WASM playback host (#2263)",
             ),
             Self::Platform(message) => write!(formatter, "native platform error: {message}"),
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
@@ -231,9 +235,13 @@ fn run_source(
     source: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
-    // Fail before window/device allocation rather than silently omit a soundtrack.
+    // Profile admission precedes window/device allocation. The host must not
+    // silently omit authored audio or consume a click without its control action.
     if source.session().has_audio() {
         return Err(NativeHostError::AudioOutputUnavailable);
+    }
+    if source.session().has_playback_controls() {
+        return Err(NativeHostError::PlaybackControlsUnavailable);
     }
     if config.width == 0 || config.height == 0 {
         return Err(NativeHostError::Platform(
@@ -1178,6 +1186,52 @@ mod tests {
             run(scene.execution_session().unwrap()),
             Err(NativeHostError::AudioOutputUnavailable)
         ));
+    }
+
+    #[test]
+    fn native_host_rejects_scene_controls_without_audio_before_opening_a_window() {
+        let mut scene = Scene::new();
+        let mut button = scene.rectangle(1.7, 0.65).unwrap();
+        button.set_fill(0.2, 0.4, 0.5, 1.0).unwrap();
+        scene.add(&button).unwrap();
+        scene
+            .on_click_playback(&button, noon::PlaybackControl::TogglePlayback)
+            .unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(!session.has_audio());
+        assert!(session.has_playback_controls());
+        assert!(matches!(
+            run(session),
+            Err(NativeHostError::PlaybackControlsUnavailable)
+        ));
+    }
+
+    #[test]
+    fn native_profile_gate_preserves_existing_click_indicate_admission() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(0.5).unwrap();
+        scene.add(&circle).unwrap();
+        scene
+            .on_click_indicate(
+                &circle,
+                noon::IndicateOptions::default(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(!session.has_playback_controls());
+        // The pre-existing configuration error proves this supported interaction
+        // passes profile admission without requiring a real event loop/window.
+        let error = run_with_config(
+            session,
+            NativeViewportConfig {
+                width: 0,
+                ..NativeViewportConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, NativeHostError::Platform(ref message)
+            if message == "initial viewport dimensions must be positive"));
     }
 
     struct NativeWaitContinuation {

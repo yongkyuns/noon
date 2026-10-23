@@ -59,6 +59,8 @@ pub(super) struct PreparedScalarPublicationContract {
 pub enum ExecutionSessionPublicationError {
     /// The first audio execution profile is a finite, pre-authored plan.
     AudioExecutionImmutable,
+    /// Scene controls currently belong to the same finite pre-authored profile.
+    PlaybackControlsExecutionImmutable,
     RequiredCallbackPending,
     SegmentCompletionPending,
     TranslationDragActive,
@@ -82,6 +84,9 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
         match self {
             Self::AudioExecutionImmutable => f.write_str(
                 "audio execution currently requires a pre-authored immutable scene; declare all clips and animation before execution (#2263)",
+            ),
+            Self::PlaybackControlsExecutionImmutable => f.write_str(
+                "scene playback controls currently require a pre-authored immutable scene (#2263)",
             ),
             Self::ReplaySealed => f.write_str("discard sealed replay before authored mutation"),
             Self::RequiredCallbackPending => {
@@ -127,6 +132,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             Self::Geometry(error) => Some(error),
             Self::ExecutionSlot(error) => Some(error),
             Self::AudioExecutionImmutable
+            | Self::PlaybackControlsExecutionImmutable
             | Self::RequiredCallbackPending
             | Self::ReplaySealed
             | Self::SegmentCompletionPending
@@ -195,6 +201,9 @@ impl ExecutionSession {
         // Reject the whole batch before resource admission or semantic staging.
         if self.runtime.has_audio() {
             return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
+        }
+        if self.has_playback_controls() {
+            return Err(ExecutionSessionPublicationError::PlaybackControlsExecutionImmutable);
         }
         if self.runtime.replay_is_sealed() {
             return Err(ExecutionSessionPublicationError::ReplaySealed);
